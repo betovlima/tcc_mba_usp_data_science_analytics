@@ -25,6 +25,9 @@ env/
 # Jupyter
 .ipynb_checkpoints/
 
+# Frozen historical MCT runtime checkout bootstrapped by backtest.py
+.mct_reference/
+
 # Local data and database artifacts
 data/
 *.csv
