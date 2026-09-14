@@ -1,20 +1,21 @@
-# Core numerical and data stack
+# Numerical and data stack
 numpy>=2.2,<3
 pandas>=2.2,<4
 scipy>=1.15,<2
 scikit-learn>=1.6,<2
 threadpoolctl>=3.5,<4
 
-# Market calendar and plotting
+# Market calendar and diagnostics
 exchange-calendars>=4.11,<5
 matplotlib>=3.9,<4
 
-# Models used by the backtest lineage
+# Certified strategy model lineage
 lightgbm>=4.6,<5
 xgboost>=3.0,<4
 
-# Local persistence and configuration
+# Local MongoDB, configuration and frozen MCT source imports
 pymongo>=4.10,<5
 python-dotenv>=1.0,<2
 pydantic>=2.10,<3
 requests>=2.32,<3
+alpaca-py==0.43.5
