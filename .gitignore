@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Spyder
+.spyproject/
+.spyderproject
+.spyderworkspace
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Local data and database artifacts
+data/
+*.csv
+*.parquet
+*.feather
+*.sqlite
+*.db
+*.bson
+*.gz
+*.zip
+
+# Generated outputs
+output/
+outputs/
+results/
+artifacts/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
