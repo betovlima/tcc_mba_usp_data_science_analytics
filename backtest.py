@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
-import math
 import os
 import platform
 import subprocess
@@ -100,11 +99,12 @@ def _log(message: str) -> None:
 
 
 def _canonical_sha256(value: Any) -> str:
+    # This exactly mirrors the canonicalization used when Strategy #10 was
+    # checked before the certified reproduction run.
     payload = json.dumps(
         value,
         sort_keys=True,
         separators=(",", ":"),
-        ensure_ascii=False,
         default=str,
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
