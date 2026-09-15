@@ -53,7 +53,11 @@ class StandaloneBacktestConfig:
     timeframe: str = "1Day"
 
     initial_capital: float = 10_000.0
+    # The historical engine exposes both names in different simulation paths.
+    # They must remain logical opposites so legacy single-position execution and
+    # allocation/benchmark execution use identical share semantics.
     whole_shares: bool = False
+    fractional_shares: bool = True
     slippage_bps: float = 0.0
     commission_rate: float = 0.0
     sec_fee_rate: float = 2.06e-5
@@ -125,6 +129,12 @@ class StandaloneBacktestConfig:
     allocation_turnover_penalty: float = 0.0025
     allocation_minimum_utility: float = 0.0
     allocation_signal_scale: float = 1.0
+
+    def __post_init__(self) -> None:
+        if bool(self.whole_shares) == bool(self.fractional_shares):
+            raise ValueError(
+                "whole_shares and fractional_shares must be logical opposites."
+            )
 
     def model_copy(self, *, update: dict[str, Any] | None = None) -> "StandaloneBacktestConfig":
         """Small Pydantic-compatible adapter required by the historical engine."""
