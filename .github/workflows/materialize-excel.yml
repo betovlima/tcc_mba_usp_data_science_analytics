@@ -1,0 +1,33 @@
+name: Materialize Excel audit workbook
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'analysis/tcc_backtest_output_analysis.xlsx.base64'
+      - '.github/workflows/materialize-excel.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Decode workbook
+        shell: bash
+        run: |
+          base64 --decode analysis/tcc_backtest_output_analysis.xlsx.base64 > analysis/tcc_backtest_output_analysis.xlsx
+          echo '7516f6397b602895a99fc35eb4776e643247209d4770ca88791cc574889049c8  analysis/tcc_backtest_output_analysis.xlsx' | sha256sum --check --strict
+
+      - name: Commit workbook
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add analysis/tcc_backtest_output_analysis.xlsx
+          git rm analysis/tcc_backtest_output_analysis.xlsx.base64
+          git commit -m 'docs: add Excel audit workbook'
+          git push
