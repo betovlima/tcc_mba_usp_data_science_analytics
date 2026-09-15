@@ -1,4 +1,4 @@
-"""Pure execution-cost helpers used by the standalone TCC engine."""
+"""Funções puras de custos de execução usadas pelo motor do TCC."""
 from __future__ import annotations
 
 import math
@@ -7,19 +7,21 @@ from typing import Any
 import numpy as np
 
 
-def round_fee_to_cent(value: float) -> float:
-    if not np.isfinite(value) or value <= 0:
+def arredondar_taxa_para_centavo(valor: float) -> float:
+    """Arredonda uma taxa positiva para cima no centavo mais próximo."""
+    if not np.isfinite(valor) or valor <= 0:
         return 0.0
-    return math.ceil((value - 1e-12) * 100.0) / 100.0
+    return math.ceil((valor - 1e-12) * 100.0) / 100.0
 
 
-def calculate_reference_fees(
-    side: str,
-    quantity: float,
-    price: float,
-    config: Any,
+def calcular_taxas_referencia(
+    lado: str,
+    quantidade: float,
+    preco: float,
+    configuracao: Any,
 ) -> dict[str, float]:
-    if quantity <= 0 or price <= 0:
+    """Calcula as taxas aplicadas a uma compra ou venda simulada."""
+    if quantidade <= 0 or preco <= 0:
         return {
             "commission_fee": 0.0,
             "sec_fee": 0.0,
@@ -27,28 +29,45 @@ def calculate_reference_fees(
             "cat_fee": 0.0,
             "total_fee": 0.0,
         }
-    normalized_side = side.upper()
-    trade_value = quantity * price
-    commission = round_fee_to_cent(trade_value * config.commission_rate)
-    cat = round_fee_to_cent(quantity * config.cat_fee_per_share)
-    sec = 0.0
-    taf = 0.0
-    if normalized_side == "SELL":
-        sec = round_fee_to_cent(trade_value * config.sec_fee_rate)
-        taf = round_fee_to_cent(
-            min(quantity * config.taf_fee_per_share, config.taf_fee_cap)
+
+    lado_normalizado = lado.upper()
+    valor_operacao = quantidade * preco
+    comissao = arredondar_taxa_para_centavo(
+        valor_operacao * configuracao.commission_rate
+    )
+    taxa_cat = arredondar_taxa_para_centavo(
+        quantidade * configuracao.cat_fee_per_share
+    )
+    taxa_sec = 0.0
+    taxa_taf = 0.0
+
+    if lado_normalizado == "SELL":
+        taxa_sec = arredondar_taxa_para_centavo(
+            valor_operacao * configuracao.sec_fee_rate
         )
-    elif normalized_side != "BUY":
-        raise ValueError(f"Unsupported side: {side}")
+        taxa_taf = arredondar_taxa_para_centavo(
+            min(
+                quantidade * configuracao.taf_fee_per_share,
+                configuracao.taf_fee_cap,
+            )
+        )
+    elif lado_normalizado != "BUY":
+        raise ValueError(f"Lado de operação não suportado: {lado}")
+
     return {
-        "commission_fee": commission,
-        "sec_fee": sec,
-        "taf_fee": taf,
-        "cat_fee": cat,
-        "total_fee": commission + sec + taf + cat,
+        "commission_fee": comissao,
+        "sec_fee": taxa_sec,
+        "taf_fee": taxa_taf,
+        "cat_fee": taxa_cat,
+        "total_fee": comissao + taxa_sec + taxa_taf + taxa_cat,
     }
 
 
-def apply_slippage(price: float, side: str, config: Any) -> float:
-    adjustment = config.slippage_bps / 10_000
-    return price * (1 + adjustment if side == "BUY" else 1 - adjustment)
+def aplicar_deslizamento(
+    preco: float,
+    lado: str,
+    configuracao: Any,
+) -> float:
+    """Aplica o deslizamento configurado ao preço de execução."""
+    ajuste = configuracao.slippage_bps / 10_000
+    return preco * (1 + ajuste if lado == "BUY" else 1 - ajuste)
