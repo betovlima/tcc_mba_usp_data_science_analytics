@@ -1,6 +1,6 @@
 name: Validar simulação Yahoo e atualizar Excel
 
-# Validação temporária da padronização em português.
+# Validação final da padronização em português.
 on:
   push:
     branches: [main]
@@ -26,7 +26,7 @@ jobs:
         run: python -m pip install -r requirements.txt
 
       - name: Validar sintaxe
-        run: python -m py_compile backtest.py analysis/build_excel.py
+        run: python -m py_compile backtest.py analysis/build_excel.py tcc_engine/config.py tcc_engine/execution.py
 
       - name: Executar simulação com Yahoo
         run: python backtest.py
