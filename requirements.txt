@@ -1,15 +1,15 @@
-# Numerical and data stack
+# Bibliotecas numéricas e de dados
 numpy>=2.2,<3
 pandas>=2.2,<4
 scipy>=1.15,<2
 scikit-learn>=1.6,<2
 threadpoolctl>=3.5,<4
 
-# Model used by the experiment
+# Modelo usado pelo experimento
 lightgbm>=4.6,<5
 
-# Yahoo Finance historical OHLCV
+# Séries históricas OHLCV do Yahoo Finance
 yfinance>=1.7,<2
 
-# Excel audit workbook
+# Geração da planilha de auditoria
 openpyxl>=3.1,<4
