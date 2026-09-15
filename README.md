@@ -129,7 +129,7 @@ output/trades.csv
 output/summary.txt
 ```
 
-`market_data.csv` contém a cópia das séries usadas pelo motor. `backtest_result.json` registra também o SHA-256 desse conjunto de dados.
+`market_data.csv` contém as séries históricas usadas pelo backtest e também alimenta a planilha de análise.
 
 ## Planilha de auditoria
 
