@@ -1,23 +1,20 @@
-"""Backtest academico reproduzivel para o TCC MBA USP.
+"""Backtest acadêmico reproduzível para o TCC MBA USP.
 
-A unica entrada externa do experimento e o historico diario OHLCV armazenado
-na collection local ``alpaca_market_bars``. Features, targets, folds
-walk-forward, treinamento LightGBM, politica de rotacao, operacoes, curva de
-capital e metricas sao reconstruidos a cada execucao.
+A entrada externa do experimento é o histórico diário OHLCV baixado do Yahoo
+Finance via yfinance. Features, targets, folds walk-forward, treinamento
+LightGBM, política de rotação, operações, curva de capital e métricas são
+reconstruídos a cada execução.
 
-O arquivo e organizado em celulas Spyder ``# %%``. F5 executa o script completo;
-Ctrl+Enter executa somente a celula atual, mantendo as variaveis no namespace
-para inspecao no Variable Explorer.
-
-Nao sao lidos Strategy documents, modelos treinados, previsoes persistidas,
-resultados anteriores ou configuracoes de runtime do Market Cycle Trader.
+O arquivo é organizado em células Spyder ``# %%``. F5 executa o script completo;
+Ctrl+Enter executa somente a célula atual e mantém as variáveis disponíveis no
+Variable Explorer.
 """
 
-# %% 0 - Imports e configuracao
+# %% 0 - Imports e configuração
 from __future__ import annotations
 
+import hashlib
 import json
-import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -25,8 +22,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from dotenv import load_dotenv
-from pymongo import MongoClient
+import yfinance as yf
 
 from tcc_engine.capital_rotation import run_rotation_models
 from tcc_engine.config import ASSETS, CONFIG, END_DATE, START_DATE
@@ -35,15 +31,8 @@ from tcc_engine.execution import apply_slippage, calculate_reference_fees
 PROJECT_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_ROOT / "output"
 
-DEFAULT_MONGO_URI = "mongodb://localhost:27017"
-DEFAULT_MONGO_DATABASE = "extrema_backtest"
-MARKET_COLLECTION = "alpaca_market_bars"
-
-
-# Funcoes auxiliares pequenas permanecem aqui porque sao callbacks/serializadores
-# exigidos pelas APIs usadas pelo script. As etapas do experimento sao celulas.
-def log(message: str) -> None:
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}", flush=True)
+YAHOO_INTERVAL = "1d"
+YAHOO_AUTO_ADJUST = True
 
 
 def json_default(value: Any) -> Any:
@@ -63,91 +52,62 @@ def json_default(value: Any) -> Any:
     return str(value)
 
 
-def progress_callback(percent: float, stage: str, completed_runs: int) -> None:
-    log(f"[5/8] {percent:5.1f}% | {stage}")
-
-
-def technical_log_callback(message: str) -> None:
-    log(f"[motor] {message}")
-
-
-# %% 1 - Inicio da execucao
+# %% 1 - Início da execução
 started = time.perf_counter()
 
-log("TCC MBA USP — backtest reconstruido passo a passo")
-log("Entrada externa permitida: somente candles OHLCV do MongoDB local")
-log(f"Periodo: {START_DATE} -> {END_DATE} | ativos={len(ASSETS)}")
+print("TCC MBA USP — backtest reconstruído passo a passo")
+print("Fonte de mercado: Yahoo Finance via yfinance")
+print(f"Período solicitado: {START_DATE} -> {END_DATE} | ativos={len(ASSETS)}")
 
-load_dotenv(PROJECT_ROOT / ".env", override=False)
-
-mongo_uri = str(os.getenv("TCC_MONGO_URI") or DEFAULT_MONGO_URI).strip()
-database_name = str(os.getenv("TCC_MONGO_DATABASE") or DEFAULT_MONGO_DATABASE).strip()
-
-lowered_mongo_uri = mongo_uri.lower()
-if not any(host in lowered_mongo_uri for host in ("localhost", "127.0.0.1", "::1")):
-    raise RuntimeError(
-        "O TCC aceita somente MongoDB local. Defina TCC_MONGO_URI para localhost."
-    )
-
-start_timestamp = pd.Timestamp(START_DATE, tz="UTC").to_pydatetime()
-end_timestamp = (
-    pd.Timestamp(END_DATE, tz="UTC") + pd.Timedelta(days=1)
-).to_pydatetime()
+# yfinance trata `end` como exclusivo. Somamos um dia para incluir END_DATE.
+yahoo_end = (pd.Timestamp(END_DATE) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
 
-# %% 2 - Carregamento e validacao do OHLCV bruto
-log(f"[1/8] Carregando OHLCV bruto de {len(ASSETS)} ativos")
-log(f"[1/8] Fonte: {database_name}.{MARKET_COLLECTION}")
-
-client = MongoClient(
-    mongo_uri,
-    serverSelectionTimeoutMS=3_000,
-    connectTimeoutMS=3_000,
-    retryWrites=False,
-)
-try:
-    client.admin.command("ping")
-    collection = client[database_name][MARKET_COLLECTION]
-    rows = list(
-        collection.find(
-            {
-                "symbol": {"$in": list(ASSETS)},
-                "interval": CONFIG.timeframe,
-                "feed": CONFIG.alpaca_historical_feed,
-                "adjustment": CONFIG.alpaca_adjustment,
-                "timestamp": {"$gte": start_timestamp, "$lt": end_timestamp},
-            },
-            {
-                "_id": 0,
-                "symbol": 1,
-                "timestamp": 1,
-                "open": 1,
-                "high": 1,
-                "low": 1,
-                "close": 1,
-                "volume": 1,
-            },
-        ).sort([("symbol", 1), ("timestamp", 1)])
-    )
-finally:
-    client.close()
-
-if not rows:
-    raise RuntimeError("Nenhum candle OHLCV foi encontrado no MongoDB local.")
-
-raw = pd.DataFrame(rows)
-raw["symbol"] = raw["symbol"].astype(str).str.upper()
-raw["timestamp"] = pd.to_datetime(raw["timestamp"], utc=True)
-
+# %% 2 - Download e validação das séries temporais OHLCV
 frames: dict[str, pd.DataFrame] = {}
-for symbol, group in raw.groupby("symbol", sort=False):
-    frame = group.drop(columns=["symbol"]).set_index("timestamp").sort_index()
+
+for position, symbol in enumerate(ASSETS, start=1):
+    print(f"[{position:02d}/{len(ASSETS)}] Yahoo Finance: {symbol}")
+
+    frame = yf.download(
+        symbol,
+        start=START_DATE,
+        end=yahoo_end,
+        interval=YAHOO_INTERVAL,
+        auto_adjust=YAHOO_AUTO_ADJUST,
+        actions=False,
+        progress=False,
+        threads=False,
+        repair=False,
+        keepna=False,
+        multi_level_index=False,
+    )
+
+    if frame is None or frame.empty:
+        raise RuntimeError(f"Yahoo Finance não retornou histórico para {symbol}.")
+
+    frame = frame.rename(columns={str(column): str(column).lower() for column in frame.columns})
+    required_columns = ["open", "high", "low", "close", "volume"]
+    missing_columns = [column for column in required_columns if column not in frame.columns]
+    if missing_columns:
+        raise RuntimeError(
+            f"{symbol}: colunas ausentes no Yahoo Finance: {', '.join(missing_columns)}"
+        )
+
+    frame = frame[required_columns].copy()
+    frame.index = pd.to_datetime(frame.index)
+    if frame.index.tz is None:
+        frame.index = frame.index.tz_localize("UTC")
+    else:
+        frame.index = frame.index.tz_convert("UTC")
+    frame.index.name = "timestamp"
+    frame = frame.sort_index()
     frame = frame[~frame.index.duplicated(keep="last")]
 
-    for column in ("open", "high", "low", "close", "volume"):
+    for column in required_columns:
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
 
-    frame = frame.dropna(subset=["open", "high", "low", "close", "volume"])
+    frame = frame.dropna(subset=required_columns)
     valid = (
         (frame["open"] > 0)
         & (frame["high"] > 0)
@@ -155,40 +115,60 @@ for symbol, group in raw.groupby("symbol", sort=False):
         & (frame["close"] > 0)
         & (frame["volume"] >= 0)
     )
-    frames[str(symbol)] = frame.loc[valid].copy()
+    frame = frame.loc[valid].copy()
 
-missing_assets = [
-    symbol for symbol in ASSETS
-    if symbol not in frames or frames[symbol].empty
+    if frame.empty:
+        raise RuntimeError(f"{symbol}: histórico vazio após validação OHLCV.")
+
+    frames[symbol] = frame
+    print(
+        f"    {len(frame)} sessões | "
+        f"{frame.index.min().date()} -> {frame.index.max().date()}"
+    )
+
+# Snapshot exato das séries usadas pelo motor.
+market_parts: list[pd.DataFrame] = []
+for symbol in ASSETS:
+    part = frames[symbol].reset_index().copy()
+    part.insert(0, "symbol", symbol)
+    market_parts.append(part)
+
+market_data = pd.concat(market_parts, ignore_index=True)
+market_data = market_data[
+    ["symbol", "timestamp", "open", "high", "low", "close", "volume"]
 ]
-if missing_assets:
-    raise RuntimeError("Historico ausente para: " + ", ".join(missing_assets))
 
-for position, symbol in enumerate(ASSETS, start=1):
-    if position == 1 or position % 5 == 0 or position == len(ASSETS):
-        frame = frames[symbol]
-        log(
-            f"[1/8] {position:02d}/{len(ASSETS)} {symbol} | "
-            f"{len(frame)} candles | "
-            f"{frame.index.min().date()} -> {frame.index.max().date()}"
-        )
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+market_csv = market_data.to_csv(index=False)
+(OUTPUT_DIR / "market_data.csv").write_text(market_csv, encoding="utf-8")
+market_data_sha256 = hashlib.sha256(market_csv.encode("utf-8")).hexdigest()
+
+print(f"Snapshot: {len(market_data):,} linhas")
+print(f"SHA-256: {market_data_sha256}")
 
 
-# %% 3 - Preparacao metodologica
-# As features, targets e folds sao construidos pelo tcc_engine a partir de
-# ``frames``. Esta celula deixa explicito o protocolo antes do processamento.
-log("[2/8] Construindo features tecnicas a partir do OHLCV")
-log(
-    "[3/8] Construindo targets multi-horizonte: "
+# %% 3 - Preparação metodológica
+print("Construindo features técnicas a partir do OHLCV")
+print(
+    "Targets multi-horizonte: "
     + ", ".join(str(value) for value in CONFIG.rotation_target_horizons)
 )
-log("[4/8] Criando folds temporais walk-forward com purge")
+print("Validação walk-forward com purge")
 
 experiment_context = {
     "assets": list(ASSETS),
     "asset_count": len(ASSETS),
     "history_start": START_DATE,
     "history_end": END_DATE,
+    "market_data": {
+        "provider": "yahoo_finance",
+        "library": "yfinance",
+        "interval": YAHOO_INTERVAL,
+        "auto_adjust": YAHOO_AUTO_ADJUST,
+        "snapshot_file": "market_data.csv",
+        "snapshot_rows": len(market_data),
+        "snapshot_sha256": market_data_sha256,
+    },
     "model_family": CONFIG.research_model_family,
     "target_horizons": list(CONFIG.rotation_target_horizons),
     "minimum_training_rows": CONFIG.rotation_minimum_training_rows,
@@ -199,32 +179,25 @@ experiment_context = {
 }
 
 
-# %% 4 - Treinamento LightGBM, previsoes OOS e politica de rotacao
-log("[5/8] Treinando LightGBM do zero em cada fold e ativo")
+# %% 4 - Treinamento LightGBM, previsões OOS e política de rotação
+print("Treinando LightGBM do zero em cada fold e ativo")
 
 results = run_rotation_models(
     frames,
     CONFIG,
     calculate_reference_fees,
     apply_slippage,
-    progress_callback=progress_callback,
-    technical_log_callback=technical_log_callback,
 )
 
 if not results:
-    raise RuntimeError("O motor nao retornou resultado.")
+    raise RuntimeError("O motor não retornou resultado.")
 if len(results) != 1:
-    raise RuntimeError(
-        f"Esperava uma execucao; foram retornadas {len(results)}."
-    )
+    raise RuntimeError(f"Esperava uma execução; foram retornadas {len(results)}.")
 
 result = results[0]
 
-log("[6/8] Aplicando a politica de rotacao somente nas sessoes fora da amostra")
-log("[7/8] Reconstruindo trades, custos e curva de capital")
 
-
-# %% 5 - Objetos de resultado para inspecao no Spyder
+# %% 5 - Objetos de resultado para inspeção no Spyder
 predictions = result.predictions.copy()
 trades = result.trades.copy()
 folds = list(result.metrics.get("walk_forward_folds") or [])
@@ -247,17 +220,13 @@ equity_columns = [
     )
     if column in predictions.columns
 ]
-equity = (
-    predictions[equity_columns].copy()
-    if equity_columns
-    else predictions.copy()
-)
+equity = predictions[equity_columns].copy() if equity_columns else predictions.copy()
 
 elapsed = time.perf_counter() - started
 
 payload = {
-    "experiment": "mba_usp_reproducible_backtest",
-    "input_source": "local_mongodb_alpaca_market_bars_ohlcv_only",
+    "experiment": "mba_usp_yahoo_backtest",
+    "input_source": "yahoo_finance_ohlcv",
     **experiment_context,
     "walk_forward": {
         "minimum_training_rows": CONFIG.rotation_minimum_training_rows,
@@ -271,19 +240,14 @@ payload = {
 }
 
 
-# %% 6 - Gravacao dos artefatos
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+# %% 6 - Gravação dos artefatos
 
 equity_csv = equity.copy()
-if equity_csv.index.name is not None or not isinstance(
-    equity_csv.index, pd.RangeIndex
-):
+if equity_csv.index.name is not None or not isinstance(equity_csv.index, pd.RangeIndex):
     equity_csv = equity_csv.reset_index()
 
 trades_csv = trades.copy()
-if trades_csv.index.name is not None or not isinstance(
-    trades_csv.index, pd.RangeIndex
-):
+if trades_csv.index.name is not None or not isinstance(trades_csv.index, pd.RangeIndex):
     trades_csv = trades_csv.reset_index()
 
 for dataframe in (equity_csv, trades_csv):
@@ -307,13 +271,7 @@ trades_csv.to_csv(OUTPUT_DIR / "trades.csv", index=False)
 pd.DataFrame(folds).to_csv(OUTPUT_DIR / "folds.csv", index=False)
 
 (OUTPUT_DIR / "backtest_result.json").write_text(
-    json.dumps(
-        payload,
-        indent=2,
-        ensure_ascii=False,
-        default=json_default,
-    )
-    + "\n",
+    json.dumps(payload, indent=2, ensure_ascii=False, default=json_default) + "\n",
     encoding="utf-8",
 )
 (OUTPUT_DIR / "summary.txt").write_text(
@@ -322,15 +280,14 @@ pd.DataFrame(folds).to_csv(OUTPUT_DIR / "folds.csv", index=False)
 )
 
 
-# %% 7 - Metricas finais
-log("[8/8] Calculando e salvando metricas finais")
-log(f"Capital inicial : US$ {CONFIG.initial_capital:,.2f}")
-log(f"Capital final   : US$ {float(metrics['strategy_ending_capital']):,.2f}")
-log(f"Retorno         : {float(metrics['strategy_return']):.2%}")
-log(f"CAGR            : {float(metrics['strategy_cagr']):.2%}")
-log(f"Sharpe          : {float(metrics['strategy_sharpe']):.3f}")
-log(f"Max Drawdown    : {float(metrics['strategy_maximum_drawdown']):.2%}")
-log(f"Rotacoes        : {int(metrics.get('capital_rotations') or 0)}")
-log(f"CASH days       : {int(metrics.get('cash_days') or 0)}")
-log(f"Tempo total     : {elapsed:.2f}s")
-log(f"Resultados      : {OUTPUT_DIR}")
+# %% 7 - Métricas finais
+print(f"Capital inicial : US$ {CONFIG.initial_capital:,.2f}")
+print(f"Capital final   : US$ {float(metrics['strategy_ending_capital']):,.2f}")
+print(f"Retorno         : {float(metrics['strategy_return']):.2%}")
+print(f"CAGR            : {float(metrics['strategy_cagr']):.2%}")
+print(f"Sharpe          : {float(metrics['strategy_sharpe']):.3f}")
+print(f"Max Drawdown    : {float(metrics['strategy_maximum_drawdown']):.2%}")
+print(f"Rotações        : {int(metrics.get('capital_rotations') or 0)}")
+print(f"CASH days       : {int(metrics.get('cash_days') or 0)}")
+print(f"Tempo total     : {elapsed:.2f}s")
+print(f"Resultados      : {OUTPUT_DIR}")
