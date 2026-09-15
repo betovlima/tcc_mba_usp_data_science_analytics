@@ -1,18 +1,18 @@
 """Configuração explícita do experimento acadêmico.
 
 Os parâmetros do modelo, da validação temporal e da simulação financeira ficam
-neste repositório. A fonte externa de mercado é o OHLCV diário baixado do Yahoo
-Finance pelo ``backtest.py``.
+neste repositório. A fonte externa de mercado é o histórico diário OHLCV baixado
+do Yahoo Finance pelo ``backtest.py``.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-START_DATE = "2016-01-01"
-END_DATE = "2026-09-04"
+DATA_INICIO = "2016-01-01"
+DATA_FIM = "2026-09-04"
 
-ASSETS = (
+ATIVOS = (
     "NVDA", "MSFT", "META", "TSLA", "AMD", "JPM", "SPY", "AVGO", "NFLX",
     "ORCL", "COST", "LLY", "XOM", "CAT", "WMT", "V", "HD", "ADC", "ADEA",
     "ADI", "ADM", "GKOS", "VNCE", "CORT", "UNFI", "DNN", "MKSI", "APD",
@@ -48,11 +48,11 @@ def _configuracoes_lightgbm() -> dict[str, Any]:
 
 
 @dataclass(frozen=True)
-class StandaloneBacktestConfig:
-    assets: tuple[str, ...] = ASSETS
+class ConfiguracaoBacktest:
+    assets: tuple[str, ...] = ATIVOS
     strategy_mode: str = "COMPOUND_ROTATION_SWING_XGBOOST"
-    start_date: str = START_DATE
-    end_date: str | None = END_DATE
+    start_date: str = DATA_INICIO
+    end_date: str | None = DATA_FIM
     timeframe: str = "1Day"
 
     # Fonte de mercado declarada pelo experimento.
@@ -68,7 +68,13 @@ class StandaloneBacktestConfig:
     rotation_models: tuple[str, ...] = ("xgboost_utility",)
     rotation_horizon_days: int = 40
     rotation_target_horizons: tuple[int, ...] = (5, 10, 20, 40, 60)
-    rotation_target_horizon_weights: tuple[float, ...] = (0.10, 0.15, 0.20, 0.30, 0.25)
+    rotation_target_horizon_weights: tuple[float, ...] = (
+        0.10,
+        0.15,
+        0.20,
+        0.30,
+        0.25,
+    )
     rotation_movement_capture_weight: float = 0.35
     rotation_trend_persistence_weight: float = 0.20
     rotation_minimum_training_rows: int = 700
@@ -85,9 +91,14 @@ class StandaloneBacktestConfig:
     rotation_min_expected_edge: float = 0.001
     rotation_cash_threshold: float = 0.0
     rotation_switch_margin: float = 0.0005
-    rotation_switch_margin_candidates: tuple[float, ...] = (0.0, 0.0025, 0.005, 0.01)
+    rotation_switch_margin_candidates: tuple[float, ...] = (
+        0.0,
+        0.0025,
+        0.005,
+        0.01,
+    )
 
-    # Nomes mantidos por compatibilidade com a interface interna do motor.
+    # Estes campos permanecem com os identificadores técnicos consumidos pelo motor.
     opportunity_utility_entry_threshold: float = 0.28
     opportunity_utility_exit_threshold: float = 0.27
     allocation_lookback_days: int = 126
@@ -126,24 +137,32 @@ class StandaloneBacktestConfig:
     numeric_thread_limit: int = 1
     random_state: int = 42
 
-    analysis_start_date: str = START_DATE
-    analysis_end_date: str | None = END_DATE
-    calendar_anchor_assets: tuple[str, ...] = ASSETS
-    research_reference_assets: tuple[str, ...] = ASSETS
+    analysis_start_date: str = DATA_INICIO
+    analysis_end_date: str | None = DATA_FIM
+    calendar_anchor_assets: tuple[str, ...] = ATIVOS
+    research_reference_assets: tuple[str, ...] = ATIVOS
     research_candidate_assets: tuple[str, ...] = ()
     research_model_family: str = "lightgbm_utility"
-    research_model_settings: dict[str, Any] = field(default_factory=_configuracoes_lightgbm)
+    research_model_settings: dict[str, Any] = field(
+        default_factory=_configuracoes_lightgbm
+    )
     research_market_data_mode: str = "yahoo_snapshot"
     expected_market_data_signature_sha256: str | None = None
     research_market_data_snapshot_id: str | None = None
     walk_forward_fold_count_override: int | None = None
 
     @property
-    def fractional_shares(self) -> bool:
+    def acoes_fracionarias(self) -> bool:
+        """Indica se a simulação permite quantidades fracionárias de ações."""
         return not self.whole_shares
 
-    def model_copy(self, *, update: dict[str, Any] | None = None) -> "StandaloneBacktestConfig":
-        return replace(self, **dict(update or {}))
+    def copiar_modelo(
+        self,
+        *,
+        atualizacoes: dict[str, Any] | None = None,
+    ) -> "ConfiguracaoBacktest":
+        """Cria uma cópia imutável da configuração com valores atualizados."""
+        return replace(self, **dict(atualizacoes or {}))
 
 
-CONFIG = StandaloneBacktestConfig()
+CONFIGURACAO = ConfiguracaoBacktest()
