@@ -1,7 +1,9 @@
 # Numerical and data stack
 numpy>=2.2,<3
 pandas>=2.2,<4
+scipy>=1.15,<2
 scikit-learn>=1.6,<2
+threadpoolctl>=3.5,<4
 
 # Model used by the experiment
 lightgbm>=4.6,<5
