@@ -1,8 +1,9 @@
 """Execução acadêmica reproduzível para o TCC MBA USP.
 
-A entrada externa é o histórico diário OHLCV obtido do Yahoo Finance. O motor
-reconstrói atributos, alvos, janelas walk-forward, modelos LightGBM, decisões,
-operações, curva de capital e métricas a cada execução.
+A entrada do experimento é um arquivo CSV com o histórico diário OHLCV
+certificado da Alpaca. O motor reconstrói atributos, alvos, janelas de
+validação temporal, modelos LightGBM, decisões, operações, curva de capital e
+métricas a cada execução.
 """
 from __future__ import annotations
 
@@ -14,16 +15,16 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
 
 from tcc_engine.configuracao import ATIVOS, CONFIGURACAO, DATA_FIM, DATA_INICIO
 from tcc_engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 from tcc_engine.rotacao_capital import executar_modelos_rotacao
 
 RAIZ_PROJETO = Path(__file__).resolve().parent
+DIRETORIO_DADOS = RAIZ_PROJETO / "dados"
+ARQUIVO_DADOS_CERTIFICADOS = DIRETORIO_DADOS / "mercado_certificado.csv"
 DIRETORIO_SAIDA = RAIZ_PROJETO / "output"
-INTERVALO_YAHOO = "1d"
-AJUSTE_AUTOMATICO_YAHOO = True
+COLUNAS_MERCADO = ["open", "high", "low", "close", "volume"]
 
 
 def serializar_json(valor: Any) -> Any:
@@ -44,48 +45,47 @@ def serializar_json(valor: Any) -> Any:
     return str(valor)
 
 
-def baixar_dados_mercado() -> dict[str, pd.DataFrame]:
-    """Baixa e valida as séries OHLCV usadas pelo experimento."""
-    data_fim_yahoo = (pd.Timestamp(DATA_FIM) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+def carregar_dados_mercado() -> dict[str, pd.DataFrame]:
+    """Carrega do CSV as séries OHLCV usadas pelo experimento certificado."""
+    if not ARQUIVO_DADOS_CERTIFICADOS.exists():
+        raise FileNotFoundError(
+            "O arquivo dados/mercado_certificado.csv ainda não existe. "
+            "Execute primeiro: python exportar_dados_certificados.py"
+        )
+
+    dados = pd.read_csv(ARQUIVO_DADOS_CERTIFICADOS)
+    colunas_necessarias = ["symbol", "timestamp", *COLUNAS_MERCADO]
+    ausentes = [coluna for coluna in colunas_necessarias if coluna not in dados.columns]
+    if ausentes:
+        raise RuntimeError(
+            "O arquivo de mercado não possui as colunas necessárias: "
+            + ", ".join(ausentes)
+        )
+
+    dados = dados[colunas_necessarias].copy()
+    dados["symbol"] = dados["symbol"].astype(str).str.upper().str.strip()
+    dados["timestamp"] = pd.to_datetime(dados["timestamp"], utc=True)
+
+    inicio = pd.Timestamp(DATA_INICIO, tz="UTC")
+    fim = pd.Timestamp(DATA_FIM, tz="UTC") + pd.Timedelta(days=1)
+    dados = dados.loc[
+        dados["symbol"].isin(ATIVOS)
+        & dados["timestamp"].ge(inicio)
+        & dados["timestamp"].lt(fim)
+    ].copy()
+
     quadros: dict[str, pd.DataFrame] = {}
-
     for posicao, ativo in enumerate(ATIVOS, start=1):
-        print(f"[{posicao:02d}/{len(ATIVOS)}] Yahoo Finance: {ativo}")
-        quadro = yf.download(
-            ativo,
-            start=DATA_INICIO,
-            end=data_fim_yahoo,
-            interval=INTERVALO_YAHOO,
-            auto_adjust=AJUSTE_AUTOMATICO_YAHOO,
-            actions=False,
-            progress=False,
-            threads=False,
-            repair=False,
-            keepna=False,
-            multi_level_index=False,
-        )
-        if quadro is None or quadro.empty:
-            raise RuntimeError(f"Yahoo Finance não retornou histórico para {ativo}.")
+        quadro = dados.loc[dados["symbol"].eq(ativo), ["timestamp", *COLUNAS_MERCADO]].copy()
+        if quadro.empty:
+            raise RuntimeError(f"Não existem dados certificados para {ativo}.")
 
-        quadro = quadro.rename(columns={str(c): str(c).lower() for c in quadro.columns})
-        colunas = ["open", "high", "low", "close", "volume"]
-        ausentes = [coluna for coluna in colunas if coluna not in quadro.columns]
-        if ausentes:
-            raise RuntimeError(f"{ativo}: colunas ausentes: {', '.join(ausentes)}")
-
-        quadro = quadro[colunas].copy()
-        quadro.index = pd.to_datetime(quadro.index)
-        quadro.index = (
-            quadro.index.tz_localize("UTC")
-            if quadro.index.tz is None
-            else quadro.index.tz_convert("UTC")
-        )
-        quadro.index.name = "timestamp"
-        quadro = quadro.sort_index()
+        quadro = quadro.set_index("timestamp").sort_index()
         quadro = quadro[~quadro.index.duplicated(keep="last")]
-        for coluna in colunas:
+        for coluna in COLUNAS_MERCADO:
             quadro[coluna] = pd.to_numeric(quadro[coluna], errors="coerce")
-        quadro = quadro.dropna(subset=colunas)
+        quadro = quadro.dropna(subset=COLUNAS_MERCADO)
+
         validas = (
             (quadro["open"] > 0)
             & (quadro["high"] > 0)
@@ -96,13 +96,19 @@ def baixar_dados_mercado() -> dict[str, pd.DataFrame]:
         quadro = quadro.loc[validas].copy()
         if quadro.empty:
             raise RuntimeError(f"{ativo}: histórico vazio após validação.")
+
         quadros[ativo] = quadro
-        print(f"    {len(quadro)} sessões | {quadro.index.min().date()} -> {quadro.index.max().date()}")
+        print(
+            f"[{posicao:02d}/{len(ATIVOS)}] {ativo}: "
+            f"{len(quadro)} sessões | "
+            f"{quadro.index.min().date()} -> {quadro.index.max().date()}"
+        )
+
     return quadros
 
 
 def salvar_dados_mercado(quadros: dict[str, pd.DataFrame]) -> int:
-    """Salva em CSV as séries usadas pelo backtest e pela planilha de análise."""
+    """Salva em output o mesmo conjunto de dados usado pelo backtest e pelo Excel."""
     partes: list[pd.DataFrame] = []
     for ativo in ATIVOS:
         parte = quadros[ativo].reset_index().copy()
@@ -110,7 +116,7 @@ def salvar_dados_mercado(quadros: dict[str, pd.DataFrame]) -> int:
         partes.append(parte)
 
     dados = pd.concat(partes, ignore_index=True)
-    dados = dados[["symbol", "timestamp", "open", "high", "low", "close", "volume"]]
+    dados = dados[["symbol", "timestamp", *COLUNAS_MERCADO]]
 
     DIRETORIO_SAIDA.mkdir(parents=True, exist_ok=True)
     dados.to_csv(DIRETORIO_SAIDA / "market_data.csv", index=False)
@@ -118,7 +124,7 @@ def salvar_dados_mercado(quadros: dict[str, pd.DataFrame]) -> int:
 
 
 def salvar_resultados(resultado: Any, contexto: dict[str, Any], tempo: float) -> None:
-    """Grava os artefatos canônicos do backtest."""
+    """Grava os artefatos do backtest."""
     previsoes = resultado.predictions.copy()
     operacoes = resultado.trades.copy()
     janelas = list(resultado.metrics.get("walk_forward_folds") or [])
@@ -143,11 +149,11 @@ def salvar_resultados(resultado: Any, contexto: dict[str, Any], tempo: float) ->
     operacoes_csv = operacoes.reset_index() if operacoes.index.name is not None else operacoes.copy()
     for tabela in (curva_csv, operacoes_csv):
         for coluna in tabela.columns:
-            if tabela[coluna].map(lambda v: isinstance(v, (dict, list, tuple))).any():
+            if tabela[coluna].map(lambda valor: isinstance(valor, (dict, list, tuple))).any():
                 tabela[coluna] = tabela[coluna].map(
-                    lambda v: json.dumps(v, ensure_ascii=False, default=serializar_json)
-                    if isinstance(v, (dict, list, tuple))
-                    else v
+                    lambda valor: json.dumps(valor, ensure_ascii=False, default=serializar_json)
+                    if isinstance(valor, (dict, list, tuple))
+                    else valor
                 )
 
     curva_csv.to_csv(DIRETORIO_SAIDA / "equity_curve.csv", index=False)
@@ -155,8 +161,8 @@ def salvar_resultados(resultado: Any, contexto: dict[str, Any], tempo: float) ->
     pd.DataFrame(janelas).to_csv(DIRETORIO_SAIDA / "folds.csv", index=False)
 
     dados_resultado = {
-        "experiment": "mba_usp_yahoo_backtest",
-        "input_source": "yahoo_finance_ohlcv",
+        "experiment": "mba_usp_backtest_certificado",
+        "input_source": "arquivo_csv_alpaca_certificado",
         **contexto,
         "walk_forward": {
             "minimum_training_rows": CONFIGURACAO.linhas_minimas_treinamento,
@@ -179,16 +185,16 @@ def salvar_resultados(resultado: Any, contexto: dict[str, Any], tempo: float) ->
 
 
 def principal() -> None:
-    """Executa todas as etapas do experimento."""
+    """Executa todas as etapas do experimento certificado."""
     inicio = time.perf_counter()
     print("TCC MBA USP — execução reconstruída passo a passo")
-    print("Fonte de mercado: Yahoo Finance por meio de yfinance")
+    print("Fonte de mercado: arquivo CSV certificado da Alpaca")
     print(f"Período solicitado: {DATA_INICIO} -> {DATA_FIM} | ativos={len(ATIVOS)}")
 
-    quadros = baixar_dados_mercado()
+    quadros = carregar_dados_mercado()
     quantidade_linhas = salvar_dados_mercado(quadros)
-    print(f"Dados de mercado salvos: {quantidade_linhas:,} linhas")
-    print("Construindo atributos, alvos e janelas walk-forward")
+    print(f"Dados de mercado carregados: {quantidade_linhas:,} linhas")
+    print("Construindo atributos, alvos e janelas de validação temporal")
     print("Treinando LightGBM do zero em cada janela e ativo")
 
     resultados = executar_modelos_rotacao(
@@ -208,11 +214,10 @@ def principal() -> None:
         "history_start": DATA_INICIO,
         "history_end": DATA_FIM,
         "market_data": {
-            "provider": "yahoo_finance",
-            "library": "yfinance",
-            "interval": INTERVALO_YAHOO,
-            "auto_adjust": AJUSTE_AUTOMATICO_YAHOO,
-            "file": "market_data.csv",
+            "provider": "alpaca",
+            "feed": "sip",
+            "adjustment": "all",
+            "file": "dados/mercado_certificado.csv",
             "rows": quantidade_linhas,
         },
         "model_family": "lightgbm_utility",
