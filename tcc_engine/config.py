@@ -1,12 +1,8 @@
-"""Configuracao explicita do experimento academico.
+"""Configuração explícita do experimento acadêmico.
 
-Este modulo contem somente os parametros necessarios para construir e executar
-o backtest dentro deste repositorio. Nenhuma Strategy, modelo treinado,
-parametrizacao persistida, previsao ou resultado do Market Cycle Trader e lido
-em tempo de execucao.
-
-A unica fonte externa permitida e o historico diario OHLCV dos ativos no
-MongoDB local.
+Os parâmetros do modelo, da validação temporal e da simulação financeira ficam
+neste repositório. A fonte externa de mercado é o OHLCV diário baixado do Yahoo
+Finance pelo ``backtest.py``.
 """
 from __future__ import annotations
 
@@ -25,7 +21,6 @@ ASSETS = (
 
 
 def _lightgbm_settings() -> dict[str, Any]:
-    """Hiperparametros declarados no proprio experimento."""
     return {
         "schema_version": 3,
         "settings_revision": 1,
@@ -53,24 +48,22 @@ def _lightgbm_settings() -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class StandaloneBacktestConfig:
-    """Parametros completos usados para reconstruir a estrategia do zero."""
-
     assets: tuple[str, ...] = ASSETS
     strategy_mode: str = "COMPOUND_ROTATION_SWING_XGBOOST"
     start_date: str = START_DATE
     end_date: str | None = END_DATE
     timeframe: str = "1Day"
 
-    market_data_provider: str = "alpaca"
-    alpaca_historical_feed: str = "sip"
-    alpaca_live_feed: str = "iex"
-    alpaca_adjustment: str = "all"
+    # Fonte de mercado declarada pelo experimento.
+    market_data_provider: str = "yahoo"
+    yahoo_interval: str = "1d"
+    yahoo_auto_adjust: bool = True
     market_data_history_backfill_enabled: bool = False
-    market_data_history_backfill_provider: str = "alpaca"
+    market_data_history_backfill_provider: str = "yahoo"
     market_data_history_start_tolerance_days: int = 10
     market_data_require_complete_history: bool = True
 
-    # Target e validacao temporal.
+    # Target e validação temporal.
     rotation_models: tuple[str, ...] = ("xgboost_utility",)
     rotation_horizon_days: int = 40
     rotation_target_horizons: tuple[int, ...] = (5, 10, 20, 40, 60)
@@ -84,7 +77,7 @@ class StandaloneBacktestConfig:
     rotation_walk_forward_min_test_days: int = 126
     rotation_purge_days: int = 60
 
-    # Politica de rotacao.
+    # Política de rotação.
     rotation_downside_penalty: float = 0.20
     rotation_drawdown_penalty: float = 0.35
     rotation_min_holding_days: int = 2
@@ -93,8 +86,7 @@ class StandaloneBacktestConfig:
     rotation_switch_margin: float = 0.0005
     rotation_switch_margin_candidates: tuple[float, ...] = (0.0, 0.0025, 0.005, 0.01)
 
-    # Campos mantidos porque o motor compartilhado acessa a interface completa
-    # de configuracao. Eles nao carregam qualquer dado persistido do MCT.
+    # Interface completa usada pelo motor.
     opportunity_utility_entry_threshold: float = 0.28
     opportunity_utility_exit_threshold: float = 0.27
     allocation_lookback_days: int = 126
@@ -113,7 +105,7 @@ class StandaloneBacktestConfig:
     rotation_xgb_repetitions: int = 1
     rotation_seed_step: int = 1000
 
-    # Simulacao financeira.
+    # Simulação financeira.
     initial_capital: float = 10_000.0
     whole_shares: bool = False
     slippage_bps: float = 0.0
@@ -131,11 +123,6 @@ class StandaloneBacktestConfig:
     xgb_n_jobs: int = -1
     deterministic_execution: bool = False
     numeric_thread_limit: int = 1
-
-    # Compatibilidade interna do motor; nao habilita leitura de caches Mongo.
-    mongo_cache_enabled: bool = False
-    mongo_refresh_overlap_days: int = 0
-    mongo_write_batch_size: int = 1000
     random_state: int = 42
 
     analysis_start_date: str = START_DATE
@@ -145,7 +132,7 @@ class StandaloneBacktestConfig:
     research_candidate_assets: tuple[str, ...] = ()
     research_model_family: str = "lightgbm_utility"
     research_model_settings: dict[str, Any] = field(default_factory=_lightgbm_settings)
-    research_market_data_mode: str = "database_only"
+    research_market_data_mode: str = "yahoo_snapshot"
     expected_market_data_signature_sha256: str | None = None
     research_market_data_snapshot_id: str | None = None
     walk_forward_fold_count_override: int | None = None
