@@ -43,3 +43,9 @@ A implementação do TCC deve chegar ao resultado por consequência das regras e
 ## Fonte de dados
 
 A execução acadêmica deve trabalhar com dados históricos brutos disponíveis localmente. Qualquer parâmetro metodológico herdado do experimento histórico precisa ser declarado explicitamente no código ou na documentação do TCC, de forma que a execução seja reproduzível sem acesso ao processamento do Market Cycle Trader.
+
+## Linhagem do motor reconstruído
+
+Durante o desenvolvimento, o commit histórico `17019d95bfce6f0fbcd153e097b1968d9cfce1ca` do Market Cycle Trader pode ser usado como especificação de referência para portar a lógica necessária para este repositório.
+
+Uma vez portada, a execução acadêmica deve usar exclusivamente os módulos locais do TCC. A presença de código derivado historicamente dentro deste repositório não autoriza dependência de runtime, import, checkout, clone, endpoint ou processamento externo do Market Cycle Trader.
