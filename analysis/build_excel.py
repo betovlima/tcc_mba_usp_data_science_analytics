@@ -109,7 +109,9 @@ def build_cycles(trades: pd.DataFrame) -> pd.DataFrame:
 def build_monthly(equity: pd.DataFrame) -> pd.DataFrame:
     frame = equity.copy()
     timestamp_column = frame.columns[0]
-    frame[timestamp_column] = pd.to_datetime(frame[timestamp_column], utc=True)
+    frame[timestamp_column] = (
+        pd.to_datetime(frame[timestamp_column], utc=True).dt.tz_localize(None)
+    )
     frame["month"] = frame[timestamp_column].dt.to_period("M").astype(str)
 
     monthly = frame.groupby("month", as_index=False).agg(
@@ -127,15 +129,16 @@ def build_monthly(equity: pd.DataFrame) -> pd.DataFrame:
 def build_asset_summary(market: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for symbol, frame in market.groupby("symbol", sort=False):
-        frame = frame.sort_values("timestamp")
+        frame = frame.sort_values("timestamp").copy()
+        timestamps = pd.to_datetime(frame["timestamp"], utc=True).dt.tz_localize(None)
         first_close = float(frame.iloc[0]["close"])
         last_close = float(frame.iloc[-1]["close"])
         rows.append(
             {
                 "asset": symbol,
                 "rows": len(frame),
-                "start": frame.iloc[0]["timestamp"],
-                "end": frame.iloc[-1]["timestamp"],
+                "start": timestamps.iloc[0],
+                "end": timestamps.iloc[-1],
                 "first_close": first_close,
                 "last_close": last_close,
                 "close_return": last_close / first_close - 1.0,
@@ -161,7 +164,6 @@ def style_asset_sheet(ws):
     ws.freeze_panes = "A2"
     ws.sheet_view.showGridLines = False
 
-    # Raw series: Date, Open, High, Low, Close, Volume.
     ws["G1"] = "Daily Return"
     ws["H1"] = "Running Peak"
     ws["I1"] = "Drawdown"
@@ -360,9 +362,9 @@ def main():
     config.destination.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(config.destination, engine="openpyxl") as writer:
         guide.to_excel(writer, sheet_name="00_Guia", index=False)
-        pd.DataFrame(columns=["Métrica", "Motor / JSON", "Excel", "Diferença", "Status", "Reconstrução"]).to_excel(
-            writer, sheet_name="01_KPIs", index=False
-        )
+        pd.DataFrame(
+            columns=["Métrica", "Motor / JSON", "Excel", "Diferença", "Status", "Reconstrução"]
+        ).to_excel(writer, sheet_name="01_KPIs", index=False)
         equity.to_excel(writer, sheet_name="02_Equity", index=False)
         folds.to_excel(writer, sheet_name="03_Folds", index=False)
         trades.to_excel(writer, sheet_name="04_Trades", index=False)
@@ -385,7 +387,6 @@ def main():
             series = series.sort_values("timestamp")
             series = series[["timestamp", "open", "high", "low", "close", "volume"]]
             series.columns = ["Date", "Open", "High", "Low", "Close", "Volume"]
-            # Excel does not support timezone-aware datetimes.
             series["Date"] = pd.to_datetime(series["Date"], utc=True).dt.tz_localize(None)
             series.to_excel(writer, sheet_name=symbol[:31], index=False)
 
