@@ -1,6 +1,6 @@
-name: Validate Yahoo backtest and materialize Excel
+name: Validar simulação Yahoo e atualizar Excel
 
-# One-time validation of the Yahoo workbook.
+# Validação temporária da padronização em português.
 on:
   push:
     branches: [main]
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  validate:
+  validar:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -22,56 +22,83 @@ jobs:
           python-version: '3.13'
           cache: pip
 
-      - name: Install dependencies
+      - name: Instalar dependências
         run: python -m pip install -r requirements.txt
 
-      - name: Run Yahoo backtest
+      - name: Validar sintaxe
+        run: python -m py_compile backtest.py analysis/build_excel.py
+
+      - name: Executar simulação com Yahoo
         run: python backtest.py
 
-      - name: Build Excel workbook
+      - name: Gerar planilha de auditoria
         run: python analysis/build_excel.py
 
-      - name: Validate asset worksheets
+      - name: Validar abas dos ativos
         shell: python
         run: |
           import json
           from openpyxl import load_workbook
 
-          with open('output/backtest_result.json', encoding='utf-8') as handle:
-              result = json.load(handle)
-          assets = list(result['assets'])
-          if len(assets) != 37:
-              raise SystemExit(f'Expected 37 assets, found {len(assets)}')
+          with open('output/backtest_result.json', encoding='utf-8') as arquivo:
+              resultado = json.load(arquivo)
 
-          path = 'analysis/tcc_backtest_output_analysis.xlsx'
-          wb = load_workbook(path, read_only=True, data_only=False)
-          missing = [symbol for symbol in assets if symbol not in wb.sheetnames]
-          if missing:
-              raise SystemExit('Missing asset worksheets: ' + ', '.join(missing))
+          ativos = list(resultado['assets'])
+          if len(ativos) != 37:
+              raise SystemExit(f'Eram esperados 37 ativos; foram encontrados {len(ativos)}')
 
-          expected = [
-              'Date', 'Open', 'High', 'Low', 'Close', 'Volume',
-              'Daily Return', 'Running Peak', 'Drawdown'
+          caminho = 'analysis/tcc_backtest_output_analysis.xlsx'
+          pasta = load_workbook(caminho, read_only=True, data_only=False)
+
+          abas_gerais = [
+              '00_Guia',
+              '01_Indicadores',
+              '02_Curva',
+              '03_Janelas',
+              '04_Operacoes',
+              '05_Ciclos',
+              '06_Ativos',
+              '07_Mensal',
+              '08_Dicionario',
+              '09_JSON',
+              '10_Reconciliacao',
+              '11_Lista_Ativos',
           ]
-          for symbol in assets:
-              ws = wb[symbol]
-              headers = [ws.cell(1, col).value for col in range(1, 10)]
-              if headers != expected:
-                  raise SystemExit(f'{symbol}: invalid headers: {headers}')
-              if ws.max_row != 2685:
-                  raise SystemExit(f'{symbol}: expected 2685 rows including header, found {ws.max_row}')
+          faltantes = [nome for nome in abas_gerais if nome not in pasta.sheetnames]
+          faltantes += [ativo for ativo in ativos if ativo not in pasta.sheetnames]
+          if faltantes:
+              raise SystemExit('Abas ausentes: ' + ', '.join(faltantes))
 
-          print(f'Validated {len(assets)} asset worksheets; total sheets={len(wb.sheetnames)}')
+          cabecalhos_esperados = [
+              'Data',
+              'Abertura',
+              'Máxima',
+              'Mínima',
+              'Fechamento',
+              'Volume',
+              'Retorno diário',
+              'Pico acumulado',
+              'Queda desde o pico',
+          ]
+          for ativo in ativos:
+              aba = pasta[ativo]
+              cabecalhos = [aba.cell(1, coluna).value for coluna in range(1, 10)]
+              if cabecalhos != cabecalhos_esperados:
+                  raise SystemExit(f'{ativo}: cabeçalhos inválidos: {cabecalhos}')
+              if aba.max_row < 2:
+                  raise SystemExit(f'{ativo}: aba sem dados')
 
-      - name: Commit generated workbook
+          print(f'Validadas {len(ativos)} abas de ativos; total de abas={len(pasta.sheetnames)}')
+
+      - name: Atualizar Excel versionado
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -f analysis/tcc_backtest_output_analysis.xlsx
           if git diff --cached --quiet; then
-            echo 'Workbook unchanged.'
+            echo 'A planilha não mudou.'
             exit 0
           fi
-          git commit -m 'docs: refresh Yahoo Excel audit workbook'
+          git commit -m 'docs: atualizar auditoria Excel em português'
           git push
