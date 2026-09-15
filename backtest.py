@@ -6,7 +6,6 @@ operações, curva de capital e métricas a cada execução.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import time
 from datetime import datetime
@@ -102,20 +101,20 @@ def baixar_dados_mercado() -> dict[str, pd.DataFrame]:
     return quadros
 
 
-def salvar_snapshot_mercado(quadros: dict[str, pd.DataFrame]) -> tuple[int, str]:
-    """Persiste o conjunto bruto utilizado e retorna linhas e SHA-256."""
+def salvar_dados_mercado(quadros: dict[str, pd.DataFrame]) -> int:
+    """Salva em CSV as séries usadas pelo backtest e pela planilha de análise."""
     partes: list[pd.DataFrame] = []
     for ativo in ATIVOS:
         parte = quadros[ativo].reset_index().copy()
         parte.insert(0, "symbol", ativo)
         partes.append(parte)
+
     dados = pd.concat(partes, ignore_index=True)
     dados = dados[["symbol", "timestamp", "open", "high", "low", "close", "volume"]]
-    csv = dados.to_csv(index=False)
+
     DIRETORIO_SAIDA.mkdir(parents=True, exist_ok=True)
-    (DIRETORIO_SAIDA / "market_data.csv").write_text(csv, encoding="utf-8")
-    resumo = hashlib.sha256(csv.encode("utf-8")).hexdigest()
-    return len(dados), resumo
+    dados.to_csv(DIRETORIO_SAIDA / "market_data.csv", index=False)
+    return len(dados)
 
 
 def salvar_resultados(resultado: Any, contexto: dict[str, Any], tempo: float) -> None:
@@ -187,9 +186,8 @@ def principal() -> None:
     print(f"Período solicitado: {DATA_INICIO} -> {DATA_FIM} | ativos={len(ATIVOS)}")
 
     quadros = baixar_dados_mercado()
-    linhas_snapshot, sha_snapshot = salvar_snapshot_mercado(quadros)
-    print(f"Snapshot: {linhas_snapshot:,} linhas")
-    print(f"SHA-256: {sha_snapshot}")
+    quantidade_linhas = salvar_dados_mercado(quadros)
+    print(f"Dados de mercado salvos: {quantidade_linhas:,} linhas")
     print("Construindo atributos, alvos e janelas walk-forward")
     print("Treinando LightGBM do zero em cada janela e ativo")
 
@@ -214,9 +212,8 @@ def principal() -> None:
             "library": "yfinance",
             "interval": INTERVALO_YAHOO,
             "auto_adjust": AJUSTE_AUTOMATICO_YAHOO,
-            "snapshot_file": "market_data.csv",
-            "snapshot_rows": linhas_snapshot,
-            "snapshot_sha256": sha_snapshot,
+            "file": "market_data.csv",
+            "rows": quantidade_linhas,
         },
         "model_family": "lightgbm_utility",
         "target_horizons": list(CONFIGURACAO.horizontes_alvo),
