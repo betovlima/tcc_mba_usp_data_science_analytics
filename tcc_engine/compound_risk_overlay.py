@@ -5,256 +5,331 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .optimized_allocation import AllocationDecision, _historical_return_scenarios, _safe_current_weights
+from .optimized_allocation import (
+    DecisaoAlocacao,
+    _cenarios_retorno_historico,
+    _pesos_atuais_seguros,
+)
 
-COMPOUND_RISK_OVERLAY_MODE = "COMPOUND_ROTATION_SWING_COMPOUND_RISK_OVERLAY"
-
-
-def compound_risk_overlay_enabled(config: Any) -> bool:
-    return str(getattr(config, "strategy_mode", "")) == COMPOUND_RISK_OVERLAY_MODE
-
-
-def allocation_execution_enabled(config: Any) -> bool:
-    from .concentrated_allocation import portfolio_allocation_enabled
-
-    return portfolio_allocation_enabled(config) or compound_risk_overlay_enabled(config)
+MODO_SOBREPOSICAO_RISCO_COMPOSTO = "COMPOUND_ROTATION_SWING_COMPOUND_RISK_OVERLAY"
 
 
-def _scenario_cvar(values: np.ndarray, confidence_level: float) -> float:
-    observations = np.asarray(values, dtype=float)
-    observations = observations[np.isfinite(observations)]
-    if len(observations) == 0:
+def sobreposicao_risco_composto_ativada(configuracao: Any) -> bool:
+    return (
+        str(getattr(configuracao, "strategy_mode", ""))
+        == MODO_SOBREPOSICAO_RISCO_COMPOSTO
+    )
+
+
+def execucao_alocacao_ativada(configuracao: Any) -> bool:
+    from .concentrated_allocation import alocacao_carteira_ativada
+
+    return (
+        alocacao_carteira_ativada(configuracao)
+        or sobreposicao_risco_composto_ativada(configuracao)
+    )
+
+
+def _cvar_cenario(valores: np.ndarray, nivel_confianca: float) -> float:
+    observacoes = np.asarray(valores, dtype=float)
+    observacoes = observacoes[np.isfinite(observacoes)]
+    if len(observacoes) == 0:
         return float("nan")
-    losses = -observations
-    level = float(np.quantile(losses, confidence_level, method="higher"))
-    tail = losses[losses >= level - 1e-15]
-    return max(0.0, float(np.mean(tail)) if len(tail) else level)
+    perdas = -observacoes
+    nivel = float(np.quantile(perdas, nivel_confianca, method="higher"))
+    cauda = perdas[perdas >= nivel - 1e-15]
+    return max(0.0, float(np.mean(cauda)) if len(cauda) else nivel)
 
 
-def _base_target(
-    symbols: list[str],
-    current: np.ndarray,
-    target_position: int,
-    target_score: float,
+def _alvo_base(
+    simbolos: list[str],
+    atual: np.ndarray,
+    posicao_alvo: int,
+    pontuacao_alvo: float,
     *,
-    status: str,
-    technical_fallback: bool,
-    current_cvar: float | None = None,
-    reference_cvar: float | None = None,
-) -> AllocationDecision:
-    weights = {symbol: 0.0 for symbol in symbols}
-    if target_position <= 0:
-        target = np.zeros(len(symbols) + 1, dtype=float)
-        target[-1] = 1.0
-        return AllocationDecision(
-            weights=weights,
+    estado: str,
+    fallback_tecnico: bool,
+    cvar_atual: float | None = None,
+    cvar_referencia: float | None = None,
+) -> DecisaoAlocacao:
+    pesos = {simbolo: 0.0 for simbolo in simbolos}
+    if posicao_alvo <= 0:
+        alvo = np.zeros(len(simbolos) + 1, dtype=float)
+        alvo[-1] = 1.0
+        return DecisaoAlocacao(
+            weights=pesos,
             cash_weight=1.0,
-            expected_utility=float(target_score) if np.isfinite(target_score) else 0.0,
+            expected_utility=(
+                float(pontuacao_alvo) if np.isfinite(pontuacao_alvo) else 0.0
+            ),
             expected_relative_alpha=0.0,
             confidence_adjusted_relative_alpha=0.0,
             allocation_reward=0.0,
             confidence_adjusted_allocation_reward=0.0,
             normalized_cvar=0.0,
-            risk_reference=reference_cvar,
+            risk_reference=cvar_referencia,
             estimated_cvar=0.0,
-            turnover=float(np.abs(target[:-1] - current[:-1]).sum()),
+            turnover=float(np.abs(alvo[:-1] - atual[:-1]).sum()),
             objective_value=0.0,
             eligible_assets=(),
-            optimizer_status=status,
+            optimizer_status=estado,
         )
-    index = int(target_position) - 1
-    weights[symbols[index]] = 1.0
-    target_risky = np.zeros(len(symbols), dtype=float)
-    target_risky[index] = 1.0
-    normalized = (
-        float(current_cvar) / float(reference_cvar)
-        if current_cvar is not None
-        and reference_cvar is not None
-        and np.isfinite(current_cvar)
-        and np.isfinite(reference_cvar)
-        and reference_cvar > 1e-12
+
+    indice = int(posicao_alvo) - 1
+    pesos[simbolos[indice]] = 1.0
+    alvo_risco = np.zeros(len(simbolos), dtype=float)
+    alvo_risco[indice] = 1.0
+    normalizado = (
+        float(cvar_atual) / float(cvar_referencia)
+        if cvar_atual is not None
+        and cvar_referencia is not None
+        and np.isfinite(cvar_atual)
+        and np.isfinite(cvar_referencia)
+        and cvar_referencia > 1e-12
         else None
     )
-    return AllocationDecision(
-        weights=weights,
+    return DecisaoAlocacao(
+        weights=pesos,
         cash_weight=0.0,
-        expected_utility=float(target_score) if np.isfinite(target_score) else 0.0,
+        expected_utility=(
+            float(pontuacao_alvo) if np.isfinite(pontuacao_alvo) else 0.0
+        ),
         expected_relative_alpha=0.0,
         confidence_adjusted_relative_alpha=0.0,
         allocation_reward=1.0,
         confidence_adjusted_allocation_reward=1.0,
-        normalized_cvar=normalized,
-        risk_reference=reference_cvar,
-        estimated_cvar=current_cvar,
-        turnover=float(np.abs(target_risky - current[:-1]).sum()),
-        objective_value=None if technical_fallback else 1.0,
-        eligible_assets=(symbols[index],),
-        optimizer_status=status,
+        normalized_cvar=normalizado,
+        risk_reference=cvar_referencia,
+        estimated_cvar=cvar_atual,
+        turnover=float(np.abs(alvo_risco - atual[:-1]).sum()),
+        objective_value=None if fallback_tecnico else 1.0,
+        eligible_assets=(simbolos[indice],),
+        optimizer_status=estado,
     )
 
 
-def _estimated_trade_cost_rates(frame: pd.DataFrame, timestamp: pd.Timestamp, config: Any) -> tuple[float, float]:
-    if timestamp not in frame.index:
+def _taxas_estimadas_custo_operacao(
+    quadro: pd.DataFrame,
+    instante: pd.Timestamp,
+    configuracao: Any,
+) -> tuple[float, float]:
+    if instante not in quadro.index:
         return (0.0, 0.0)
-    price = float(frame.loc[timestamp].get("close", float("nan")))
-    if not np.isfinite(price) or price <= 0:
+    preco = float(quadro.loc[instante].get("close", float("nan")))
+    if not np.isfinite(preco) or preco <= 0:
         return (0.0, 0.0)
-    slippage = max(0.0, float(getattr(config, "slippage_bps", 0.0))) / 10000.0
-    commission = max(0.0, float(getattr(config, "commission_rate", 0.0)))
-    cat = max(0.0, float(getattr(config, "cat_fee_per_share", 0.0))) / price
-    sec = max(0.0, float(getattr(config, "sec_fee_rate", 0.0)))
-    taf = max(0.0, float(getattr(config, "taf_fee_per_share", 0.0))) / price
-    return (slippage + commission + cat, slippage + commission + cat + sec + taf)
+    deslizamento = (
+        max(0.0, float(getattr(configuracao, "slippage_bps", 0.0))) / 10000.0
+    )
+    comissao = max(0.0, float(getattr(configuracao, "commission_rate", 0.0)))
+    cat = max(0.0, float(getattr(configuracao, "cat_fee_per_share", 0.0))) / preco
+    sec = max(0.0, float(getattr(configuracao, "sec_fee_rate", 0.0)))
+    taf = max(0.0, float(getattr(configuracao, "taf_fee_per_share", 0.0))) / preco
+    return (
+        deslizamento + comissao + cat,
+        deslizamento + comissao + cat + sec + taf,
+    )
 
 
-def optimize_compound_risk_overlay(
-    target_position: int,
-    target_score: float,
-    frames: dict[str, pd.DataFrame],
-    symbols: list[str],
-    timestamp: pd.Timestamp,
-    current_weights: dict[str, float] | None,
-    config: Any,
-) -> AllocationDecision:
-    current = _safe_current_weights(symbols, current_weights)
-    if target_position <= 0:
-        return _base_target(
-            symbols,
-            current,
+def otimizar_sobreposicao_risco_composto(
+    posicao_alvo: int,
+    pontuacao_alvo: float,
+    quadros: dict[str, pd.DataFrame],
+    simbolos: list[str],
+    instante: pd.Timestamp,
+    pesos_atuais: dict[str, float] | None,
+    configuracao: Any,
+) -> DecisaoAlocacao:
+    atual = _pesos_atuais_seguros(simbolos, pesos_atuais)
+    if posicao_alvo <= 0:
+        return _alvo_base(
+            simbolos,
+            atual,
             0,
-            target_score,
-            status="base_policy_cash",
-            technical_fallback=False,
+            pontuacao_alvo,
+            estado="base_policy_cash",
+            fallback_tecnico=False,
         )
 
-    target_index = int(target_position) - 1
-    if target_index < 0 or target_index >= len(symbols):
-        return _base_target(
-            symbols,
-            current,
-            target_position,
-            target_score,
-            status="technical_fallback_base_policy:invalid_target_position",
-            technical_fallback=True,
-        )
-    target_symbol = symbols[target_index]
-    frame = frames.get(target_symbol)
-    if frame is None or timestamp not in frame.index:
-        return _base_target(
-            symbols,
-            current,
-            target_position,
-            target_score,
-            status="technical_fallback_base_policy:missing_target_market_data",
-            technical_fallback=True,
+    indice_alvo = int(posicao_alvo) - 1
+    if indice_alvo < 0 or indice_alvo >= len(simbolos):
+        return _alvo_base(
+            simbolos,
+            atual,
+            posicao_alvo,
+            pontuacao_alvo,
+            estado="technical_fallback_base_policy:invalid_target_position",
+            fallback_tecnico=True,
         )
 
-    configured_lookback = max(20, int(getattr(config, "allocation_lookback_days", 126)))
-    current_lookback = max(252, configured_lookback)
-    reference_lookback = max(756, current_lookback * 3)
-    current_scenarios = _historical_return_scenarios(
-        {target_symbol: frame},
-        [target_symbol],
-        timestamp,
-        current_lookback,
-        config,
+    simbolo_alvo = simbolos[indice_alvo]
+    quadro = quadros.get(simbolo_alvo)
+    if quadro is None or instante not in quadro.index:
+        return _alvo_base(
+            simbolos,
+            atual,
+            posicao_alvo,
+            pontuacao_alvo,
+            estado="technical_fallback_base_policy:missing_target_market_data",
+            fallback_tecnico=True,
+        )
+
+    janela_configurada = max(
+        20,
+        int(getattr(configuracao, "allocation_lookback_days", 126)),
     )
-    reference_scenarios = _historical_return_scenarios(
-        {target_symbol: frame},
-        [target_symbol],
-        timestamp,
-        reference_lookback,
-        config,
+    janela_atual = max(252, janela_configurada)
+    janela_referencia = max(756, janela_atual * 3)
+    cenarios_atuais = _cenarios_retorno_historico(
+        {simbolo_alvo: quadro},
+        [simbolo_alvo],
+        instante,
+        janela_atual,
+        configuracao,
     )
-    minimum_current = max(60, min(126, current_lookback // 2))
-    minimum_reference = max(126, min(252, reference_lookback // 3))
-    if current_scenarios.shape[0] < minimum_current or reference_scenarios.shape[0] < minimum_reference:
-        return _base_target(
-            symbols,
-            current,
-            target_position,
-            target_score,
-            status=(
-                "technical_fallback_base_policy:insufficient_asset_risk_history"
-                f":current={current_scenarios.shape[0]}:reference={reference_scenarios.shape[0]}"
-            ),
-            technical_fallback=True,
-        )
-
-    confidence_level = float(getattr(config, "allocation_cvar_confidence", 0.95))
-    current_cvar = _scenario_cvar(current_scenarios[:, 0], confidence_level)
-    reference_cvar = _scenario_cvar(reference_scenarios[:, 0], confidence_level)
+    cenarios_referencia = _cenarios_retorno_historico(
+        {simbolo_alvo: quadro},
+        [simbolo_alvo],
+        instante,
+        janela_referencia,
+        configuracao,
+    )
+    minimo_atual = max(60, min(126, janela_atual // 2))
+    minimo_referencia = max(126, min(252, janela_referencia // 3))
     if (
-        not np.isfinite(current_cvar)
-        or not np.isfinite(reference_cvar)
-        or reference_cvar <= 1e-12
+        cenarios_atuais.shape[0] < minimo_atual
+        or cenarios_referencia.shape[0] < minimo_referencia
     ):
-        return _base_target(
-            symbols,
-            current,
-            target_position,
-            target_score,
-            status="technical_fallback_base_policy:invalid_asset_risk_estimate",
-            technical_fallback=True,
-            current_cvar=current_cvar if np.isfinite(current_cvar) else None,
-            reference_cvar=reference_cvar if np.isfinite(reference_cvar) else None,
+        return _alvo_base(
+            simbolos,
+            atual,
+            posicao_alvo,
+            pontuacao_alvo,
+            estado=(
+                "technical_fallback_base_policy:insufficient_asset_risk_history"
+                f":current={cenarios_atuais.shape[0]}"
+                f":reference={cenarios_referencia.shape[0]}"
+            ),
+            fallback_tecnico=True,
         )
 
-    normalized_risk = max(0.0, float(current_cvar) / float(reference_cvar))
-    risk_aversion = max(0.0, float(getattr(config, "allocation_cvar_penalty", 1.0)))
-    turnover_penalty = max(0.0, float(getattr(config, "allocation_turnover_penalty", 0.0025)))
-    reward = max(1e-12, float(getattr(config, "allocation_signal_scale", 1.0)))
-    max_weight = min(1.0, max(0.0, float(getattr(config, "allocation_max_asset_weight", 1.0))))
-    current_target_weight = float(current[target_index])
-    other_risky_weight = float(np.delete(current[:-1], target_index).sum())
-    buy_cost_rate, sell_cost_rate = _estimated_trade_cost_rates(frame, timestamp, config)
-
-    def objective(weight: float) -> float:
-        w = min(max_weight, max(0.0, float(weight)))
-        risk_cost = 0.5 * risk_aversion * (normalized_risk * w) ** 2
-        risky_turnover = other_risky_weight + abs(w - current_target_weight)
-        trade_cost = (
-            buy_cost_rate * max(0.0, w - current_target_weight)
-            + sell_cost_rate * max(0.0, current_target_weight - w)
+    nivel_confianca = float(
+        getattr(configuracao, "allocation_cvar_confidence", 0.95)
+    )
+    cvar_atual = _cvar_cenario(cenarios_atuais[:, 0], nivel_confianca)
+    cvar_referencia = _cvar_cenario(cenarios_referencia[:, 0], nivel_confianca)
+    if (
+        not np.isfinite(cvar_atual)
+        or not np.isfinite(cvar_referencia)
+        or cvar_referencia <= 1e-12
+    ):
+        return _alvo_base(
+            simbolos,
+            atual,
+            posicao_alvo,
+            pontuacao_alvo,
+            estado="technical_fallback_base_policy:invalid_asset_risk_estimate",
+            fallback_tecnico=True,
+            cvar_atual=cvar_atual if np.isfinite(cvar_atual) else None,
+            cvar_referencia=(
+                cvar_referencia if np.isfinite(cvar_referencia) else None
+            ),
         )
-        return reward * w - risk_cost - turnover_penalty * risky_turnover - trade_cost
 
-    candidates = {0.0, max_weight, min(max_weight, max(0.0, current_target_weight))}
-    curvature = risk_aversion * normalized_risk * normalized_risk
-    if curvature > 1e-12:
-        lower_stationary = (reward + turnover_penalty + sell_cost_rate) / curvature
-        upper_stationary = (reward - turnover_penalty - buy_cost_rate) / curvature
-        if 0.0 <= lower_stationary <= min(max_weight, current_target_weight):
-            candidates.add(float(lower_stationary))
-        if max(0.0, current_target_weight) <= upper_stationary <= max_weight:
-            candidates.add(float(upper_stationary))
-    best_weight = max(candidates, key=lambda value: (objective(value), value))
-    best_weight = min(max_weight, max(0.0, float(best_weight)))
+    risco_normalizado = max(0.0, float(cvar_atual) / float(cvar_referencia))
+    aversao_risco = max(
+        0.0,
+        float(getattr(configuracao, "allocation_cvar_penalty", 1.0)),
+    )
+    penalidade_giro = max(
+        0.0,
+        float(getattr(configuracao, "allocation_turnover_penalty", 0.0025)),
+    )
+    recompensa = max(
+        1e-12,
+        float(getattr(configuracao, "allocation_signal_scale", 1.0)),
+    )
+    peso_maximo = min(
+        1.0,
+        max(0.0, float(getattr(configuracao, "allocation_max_asset_weight", 1.0))),
+    )
+    peso_atual_alvo = float(atual[indice_alvo])
+    peso_outros_riscos = float(np.delete(atual[:-1], indice_alvo).sum())
+    taxa_compra, taxa_venda = _taxas_estimadas_custo_operacao(
+        quadro,
+        instante,
+        configuracao,
+    )
 
-    risky = np.zeros(len(symbols), dtype=float)
-    risky[target_index] = best_weight
-    cash_weight = max(0.0, 1.0 - best_weight)
-    risky_turnover = float(np.abs(risky - current[:-1]).sum())
-    portfolio_cvar = float(current_cvar) * best_weight
-    status = "optimal_compound_risk_overlay"
-    if best_weight >= max_weight - 1e-9:
-        status = "optimal_compound_risk_overlay_full_exposure"
-    elif best_weight <= 1e-9:
-        status = "optimal_compound_risk_overlay_cash"
+    def objetivo(peso: float) -> float:
+        valor = min(peso_maximo, max(0.0, float(peso)))
+        custo_risco = 0.5 * aversao_risco * (risco_normalizado * valor) ** 2
+        giro_risco = peso_outros_riscos + abs(valor - peso_atual_alvo)
+        custo_operacao = (
+            taxa_compra * max(0.0, valor - peso_atual_alvo)
+            + taxa_venda * max(0.0, peso_atual_alvo - valor)
+        )
+        return (
+            recompensa * valor
+            - custo_risco
+            - penalidade_giro * giro_risco
+            - custo_operacao
+        )
 
-    return AllocationDecision(
-        weights={symbol: float(risky[index]) for index, symbol in enumerate(symbols)},
-        cash_weight=float(cash_weight),
-        expected_utility=float(target_score) if np.isfinite(target_score) else 0.0,
+    candidatos = {
+        0.0,
+        peso_maximo,
+        min(peso_maximo, max(0.0, peso_atual_alvo)),
+    }
+    curvatura = aversao_risco * risco_normalizado * risco_normalizado
+    if curvatura > 1e-12:
+        estacionario_inferior = (
+            recompensa + penalidade_giro + taxa_venda
+        ) / curvatura
+        estacionario_superior = (
+            recompensa - penalidade_giro - taxa_compra
+        ) / curvatura
+        if 0.0 <= estacionario_inferior <= min(peso_maximo, peso_atual_alvo):
+            candidatos.add(float(estacionario_inferior))
+        if (
+            max(0.0, peso_atual_alvo)
+            <= estacionario_superior
+            <= peso_maximo
+        ):
+            candidatos.add(float(estacionario_superior))
+
+    melhor_peso = max(candidatos, key=lambda valor: (objetivo(valor), valor))
+    melhor_peso = min(peso_maximo, max(0.0, float(melhor_peso)))
+
+    risco = np.zeros(len(simbolos), dtype=float)
+    risco[indice_alvo] = melhor_peso
+    peso_caixa = max(0.0, 1.0 - melhor_peso)
+    giro_risco = float(np.abs(risco - atual[:-1]).sum())
+    cvar_carteira = float(cvar_atual) * melhor_peso
+    estado = "optimal_compound_risk_overlay"
+    if melhor_peso >= peso_maximo - 1e-9:
+        estado = "optimal_compound_risk_overlay_full_exposure"
+    elif melhor_peso <= 1e-9:
+        estado = "optimal_compound_risk_overlay_cash"
+
+    return DecisaoAlocacao(
+        weights={
+            simbolo: float(risco[indice])
+            for indice, simbolo in enumerate(simbolos)
+        },
+        cash_weight=float(peso_caixa),
+        expected_utility=(
+            float(pontuacao_alvo) if np.isfinite(pontuacao_alvo) else 0.0
+        ),
         expected_relative_alpha=0.0,
         confidence_adjusted_relative_alpha=0.0,
-        allocation_reward=float(best_weight),
-        confidence_adjusted_allocation_reward=float(best_weight),
-        normalized_cvar=float(normalized_risk),
-        risk_reference=float(reference_cvar),
-        estimated_cvar=float(portfolio_cvar),
-        turnover=risky_turnover,
-        objective_value=float(objective(best_weight)),
-        eligible_assets=(target_symbol,),
-        optimizer_status=status,
+        allocation_reward=float(melhor_peso),
+        confidence_adjusted_allocation_reward=float(melhor_peso),
+        normalized_cvar=float(risco_normalizado),
+        risk_reference=float(cvar_referencia),
+        estimated_cvar=float(cvar_carteira),
+        turnover=giro_risco,
+        objective_value=float(objetivo(melhor_peso)),
+        eligible_assets=(simbolo_alvo,),
+        optimizer_status=estado,
     )
