@@ -4,50 +4,61 @@ from dataclasses import dataclass
 from typing import Any
 
 
-ABSOLUTE_UTILITY_CASH_GATE_MODE = "COMPOUND_ROTATION_SWING_ABSOLUTE_UTILITY_CASH_GATE"
+MODO_FILTRO_CAIXA_UTILIDADE_ABSOLUTA = "COMPOUND_ROTATION_SWING_ABSOLUTE_UTILITY_CASH_GATE"
 
 
 @dataclass(frozen=True)
-class AbsoluteUtilityCashGateEvaluation:
-    best_score: float
-    active_threshold: float
-    accepted: bool
-    hysteresis_market_hold: bool
-    hysteresis_cash_block: bool
+class AvaliacaoFiltroCaixaUtilidadeAbsoluta:
+    melhor_pontuacao: float
+    limite_ativo: float
+    aceito: bool
+    histerese_manutencao_mercado: bool
+    histerese_bloqueio_caixa: bool
 
 
-def absolute_utility_cash_gate_enabled(config: Any) -> bool:
-    return str(getattr(config, "strategy_mode", "")) == ABSOLUTE_UTILITY_CASH_GATE_MODE
+def filtro_caixa_utilidade_absoluta_ativado(configuracao: Any) -> bool:
+    return (
+        str(getattr(configuracao, "strategy_mode", ""))
+        == MODO_FILTRO_CAIXA_UTILIDADE_ABSOLUTA
+    )
 
 
-def evaluate_absolute_utility_cash_gate(
-    config: Any,
+def avaliar_filtro_caixa_utilidade_absoluta(
+    configuracao: Any,
     *,
-    best_score: float,
-    current_position: int,
-) -> AbsoluteUtilityCashGateEvaluation:
-    """Decide MARKET vs CASH directly from the Champion Top-1 utility.
+    melhor_pontuacao: float,
+    posicao_atual: int,
+) -> AvaliacaoFiltroCaixaUtilidadeAbsoluta:
+    """Decide entre MERCADO e CAIXA pela utilidade Top-1 da estratégia.
 
-    This gate intentionally does not fit a second predictive model.  It treats
-    the Champion's absolute Top-1 utility as the opportunity signal and applies
-    a two-threshold hysteresis rule:
+    Este filtro não treina um segundo modelo preditivo. A utilidade absoluta
+    Top-1 é tratada como sinal de oportunidade e submetida a uma regra de
+    histerese com dois limites:
 
-    * while in CASH, enter only at/above the entry threshold;
-    * while invested, remain invested until utility falls below the exit threshold.
+    - em CAIXA, entra apenas ao alcançar ou superar o limite de entrada;
+    - investido, permanece no mercado até a utilidade cair abaixo do limite de saída.
 
-    The thresholds are Strategy parameters and can therefore be explored by the
-    existing probabilistic Model Tuning campaign without changing the protected
-    LightGBM snapshot.
+    Os limites são parâmetros da estratégia e podem ser explorados sem alterar
+    o modelo LightGBM utilizado pelo experimento.
     """
-    entry = float(getattr(config, "opportunity_utility_entry_threshold"))
-    exit_ = float(getattr(config, "opportunity_utility_exit_threshold"))
-    active = exit_ if int(current_position) > 0 else entry
-    accepted = float(best_score) >= active
-    inside_band = exit_ <= float(best_score) < entry
-    return AbsoluteUtilityCashGateEvaluation(
-        best_score=float(best_score),
-        active_threshold=float(active),
-        accepted=bool(accepted),
-        hysteresis_market_hold=bool(int(current_position) > 0 and inside_band),
-        hysteresis_cash_block=bool(int(current_position) <= 0 and inside_band),
+    limite_entrada = float(
+        getattr(configuracao, "opportunity_utility_entry_threshold")
+    )
+    limite_saida = float(
+        getattr(configuracao, "opportunity_utility_exit_threshold")
+    )
+    limite_ativo = limite_saida if int(posicao_atual) > 0 else limite_entrada
+    aceito = float(melhor_pontuacao) >= limite_ativo
+    dentro_faixa = limite_saida <= float(melhor_pontuacao) < limite_entrada
+
+    return AvaliacaoFiltroCaixaUtilidadeAbsoluta(
+        melhor_pontuacao=float(melhor_pontuacao),
+        limite_ativo=float(limite_ativo),
+        aceito=bool(aceito),
+        histerese_manutencao_mercado=bool(
+            int(posicao_atual) > 0 and dentro_faixa
+        ),
+        histerese_bloqueio_caixa=bool(
+            int(posicao_atual) <= 0 and dentro_faixa
+        ),
     )
