@@ -15,6 +15,7 @@ Open this file in Spyder and press F5, or run:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -29,7 +30,21 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 
 from tcc_engine.capital_rotation import run_rotation_models
-from tcc_engine.config import ASSETS, CONFIG, END_DATE, START_DATE
+from tcc_engine.config import (
+    ASSETS,
+    CONFIG,
+    END_DATE,
+    START_DATE,
+    HISTORICAL_ENDING_CAPITAL,
+    HISTORICAL_EXECUTION_REQUEST_SHA256,
+    HISTORICAL_MARKET_OHLCV_SHA256,
+    HISTORICAL_MODEL_SETTINGS_SHA256,
+    HISTORICAL_SOURCE_COMMIT,
+    HISTORICAL_STRATEGY_CONFIGURATION_SHA256,
+    HISTORICAL_STRATEGY_ID,
+    HISTORICAL_STRATEGY_REVISION_AT_CERTIFICATION,
+    HISTORICAL_STRATEGY_SEQUENCE,
+)
 from tcc_engine.execution import apply_slippage, calculate_reference_fees
 
 
@@ -39,6 +54,7 @@ OUTPUT_DIR = PROJECT_ROOT / "output"
 DEFAULT_MONGO_URI = "mongodb://localhost:27017"
 DEFAULT_MONGO_DATABASE = "extrema_backtest"
 MARKET_COLLECTION = "alpaca_market_bars"
+ENDING_CAPITAL_RELATIVE_TOLERANCE = 1e-6
 
 
 def log(message: str) -> None:
@@ -83,7 +99,7 @@ def load_market_data() -> dict[str, pd.DataFrame]:
     start = pd.Timestamp(START_DATE, tz="UTC").to_pydatetime()
     end = (pd.Timestamp(END_DATE, tz="UTC") + pd.Timedelta(days=1)).to_pydatetime()
 
-    log(f"[1/6] MongoDB local: {database_name}.{MARKET_COLLECTION}")
+    log(f"[1/7] MongoDB local: {database_name}.{MARKET_COLLECTION}")
     client = MongoClient(
         mongo_uri,
         serverSelectionTimeoutMS=3_000,
@@ -97,9 +113,9 @@ def load_market_data() -> dict[str, pd.DataFrame]:
             collection.find(
                 {
                     "symbol": {"$in": list(ASSETS)},
-                    "interval": "1Day",
-                    "feed": "sip",
-                    "adjustment": "all",
+                    "interval": CONFIG.timeframe,
+                    "feed": CONFIG.alpaca_historical_feed,
+                    "adjustment": CONFIG.alpaca_adjustment,
                     "timestamp": {"$gte": start, "$lt": end},
                 },
                 {
@@ -150,14 +166,61 @@ def load_market_data() -> dict[str, pd.DataFrame]:
         if position == 1 or position % 5 == 0 or position == len(ASSETS):
             frame = frames[symbol]
             log(
-                f"[1/6] Dados {position:02d}/{len(ASSETS)} | {symbol} | "
+                f"[1/7] Dados {position:02d}/{len(ASSETS)} | {symbol} | "
                 f"rows={len(frame)} | {frame.index.min().date()} -> {frame.index.max().date()}"
             )
     return frames
 
 
+def market_frames_sha256(frames: dict[str, pd.DataFrame]) -> str:
+    """Mirror the OHLCV fingerprint used by the certified historical replay."""
+    digest = hashlib.sha256()
+    for symbol in sorted(frames):
+        frame = frames[symbol].sort_index()
+        digest.update(symbol.encode("utf-8"))
+        digest.update(b"\n")
+        for timestamp, row in frame.iterrows():
+            stamp = pd.Timestamp(timestamp)
+            if stamp.tzinfo is None:
+                stamp = stamp.tz_localize("UTC")
+            else:
+                stamp = stamp.tz_convert("UTC")
+            values = [
+                stamp.isoformat(),
+                *[
+                    "" if pd.isna(row.get(column)) else format(float(row.get(column)), ".17g")
+                    for column in ("open", "high", "low", "close", "volume")
+                ],
+            ]
+            digest.update(("|".join(values) + "\n").encode("utf-8"))
+    return digest.hexdigest()
+
+
+def validate_runtime_fingerprints(frames: dict[str, pd.DataFrame]) -> tuple[str, str]:
+    """Fail before training if request or raw market snapshot differs from certification."""
+    request_hash = CONFIG.execution_request_sha256()
+    market_hash = market_frames_sha256(frames)
+
+    log(f"[2/7] Model snapshot SHA-256 : {CONFIG.model_settings_sha256()}")
+    log(f"[2/7] Execution request SHA-256: {request_hash}")
+    log(f"[2/7] Market OHLCV SHA-256     : {market_hash}")
+
+    if request_hash != HISTORICAL_EXECUTION_REQUEST_SHA256:
+        raise RuntimeError(
+            "O request standalone não corresponde ao request certificado: "
+            f"{request_hash} != {HISTORICAL_EXECUTION_REQUEST_SHA256}."
+        )
+    if market_hash != HISTORICAL_MARKET_OHLCV_SHA256:
+        raise RuntimeError(
+            "O snapshot OHLCV local não corresponde ao snapshot certificado: "
+            f"{market_hash} != {HISTORICAL_MARKET_OHLCV_SHA256}."
+        )
+    log("[2/7] Fingerprints certificados: OK")
+    return request_hash, market_hash
+
+
 def progress_callback(percent: float, stage: str, completed_runs: int) -> None:
-    log(f"[3/6] {percent:5.1f}% | {stage}")
+    log(f"[4/7] {percent:5.1f}% | {stage}")
 
 
 def technical_log_callback(message: str) -> None:
@@ -178,7 +241,13 @@ def _frame_for_csv(frame: pd.DataFrame) -> pd.DataFrame:
     return output
 
 
-def write_artifacts(result: Any, elapsed_seconds: float) -> dict[str, Any]:
+def write_artifacts(
+    result: Any,
+    elapsed_seconds: float,
+    *,
+    request_hash: str,
+    market_hash: str,
+) -> dict[str, Any]:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     predictions = result.predictions.copy()
@@ -192,6 +261,7 @@ def write_artifacts(result: Any, elapsed_seconds: float) -> dict[str, Any]:
             "buy_hold_equity",
             "selected_asset",
             "selected_score",
+            "decision_score",
             "trade_action",
             "trade_reason",
             "walk_forward_fold",
@@ -208,6 +278,10 @@ def write_artifacts(result: Any, elapsed_seconds: float) -> dict[str, Any]:
     pd.DataFrame(folds).to_csv(OUTPUT_DIR / "folds.csv", index=False)
 
     metrics = dict(result.metrics)
+    ending = float(metrics["strategy_ending_capital"])
+    relative_error = abs(ending / HISTORICAL_ENDING_CAPITAL - 1.0)
+    certified_capital_match = bool(relative_error <= ENDING_CAPITAL_RELATIVE_TOLERANCE)
+
     payload = {
         "experiment": "standalone_historical_rotation_engine",
         "runtime_source": "tcc_engine",
@@ -220,6 +294,25 @@ def write_artifacts(result: Any, elapsed_seconds: float) -> dict[str, Any]:
         "strategy_document_dependency": False,
         "persisted_model_dependency": False,
         "persisted_prediction_dependency": False,
+        "runtime_fingerprint": {
+            "historical_source_commit": HISTORICAL_SOURCE_COMMIT,
+            "historical_strategy_id": HISTORICAL_STRATEGY_ID,
+            "historical_strategy_sequence": HISTORICAL_STRATEGY_SEQUENCE,
+            "historical_strategy_revision_at_certification": HISTORICAL_STRATEGY_REVISION_AT_CERTIFICATION,
+            "historical_strategy_configuration_sha256": HISTORICAL_STRATEGY_CONFIGURATION_SHA256,
+            "model_settings_sha256": CONFIG.model_settings_sha256(),
+            "expected_model_settings_sha256": HISTORICAL_MODEL_SETTINGS_SHA256,
+            "execution_request_sha256": request_hash,
+            "expected_execution_request_sha256": HISTORICAL_EXECUTION_REQUEST_SHA256,
+            "market_ohlcv_sha256": market_hash,
+            "expected_market_ohlcv_sha256": HISTORICAL_MARKET_OHLCV_SHA256,
+        },
+        "historical_reference": {
+            "ending_capital": HISTORICAL_ENDING_CAPITAL,
+            "ending_capital_relative_tolerance": ENDING_CAPITAL_RELATIVE_TOLERANCE,
+            "ending_capital_relative_error": relative_error,
+            "ending_capital_match": certified_capital_match,
+        },
         "elapsed_seconds": float(elapsed_seconds),
         "metrics": metrics,
     }
@@ -241,7 +334,8 @@ def run_backtest() -> dict[str, Any]:
     )
 
     frames = load_market_data()
-    log("[2/6] Iniciando features, targets e folds pelo tcc_engine")
+    request_hash, market_hash = validate_runtime_fingerprints(frames)
+    log("[3/7] Iniciando features, targets e folds pelo tcc_engine")
 
     results = run_rotation_models(
         frames,
@@ -258,13 +352,22 @@ def run_backtest() -> dict[str, Any]:
 
     result = results[0]
     elapsed = time.perf_counter() - started
-    log("[4/6] Simulação concluída; gravando artefatos")
-    payload = write_artifacts(result, elapsed)
+    log("[5/7] Simulação concluída; gravando artefatos")
+    payload = write_artifacts(
+        result,
+        elapsed,
+        request_hash=request_hash,
+        market_hash=market_hash,
+    )
 
     metrics = result.metrics
-    log("[5/6] Resultado")
+    reference = payload["historical_reference"]
+    log("[6/7] Resultado")
     log(f"Capital inicial : US$ {CONFIG.initial_capital:,.2f}")
     log(f"Capital final   : US$ {float(metrics['strategy_ending_capital']):,.2f}")
+    log(f"Referência      : US$ {HISTORICAL_ENDING_CAPITAL:,.2f}")
+    log(f"Erro relativo   : {float(reference['ending_capital_relative_error']):.8%}")
+    log(f"Capital certific.: {'OK' if reference['ending_capital_match'] else 'DIVERGIU'}")
     log(f"Retorno         : {float(metrics['strategy_return']):.2%}")
     log(f"CAGR            : {float(metrics['strategy_cagr']):.2%}")
     log(f"Sharpe          : {float(metrics['strategy_sharpe']):.3f}")
@@ -272,7 +375,7 @@ def run_backtest() -> dict[str, Any]:
     log(f"Rotações        : {int(metrics.get('capital_rotations') or 0)}")
     log(f"CASH days       : {int(metrics.get('cash_days') or 0)}")
     log(f"Tempo           : {elapsed:.2f}s")
-    log(f"[6/6] Artefatos: {OUTPUT_DIR}")
+    log(f"[7/7] Artefatos: {OUTPUT_DIR}")
 
     if platform.system().lower() == "windows":
         try:
