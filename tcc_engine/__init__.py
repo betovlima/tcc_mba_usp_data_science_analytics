@@ -1,10 +1,16 @@
-"""Motor quantitativo de rotação usado no TCC MBA USP.
+"""Motor acadêmico do TCC MBA USP Data Science & Analytics.
 
-Origem técnica: commit histórico do projeto Market Cycle Trader
-17019d95bfce6f0fbcd153e097b1968d9cfce1ca.
-
-O código foi incorporado a este repositório apenas como base de migração durante
-o desenvolvimento. A execução do TCC não importa nem executa o Market Cycle Trader.
+A pasta contém somente a implementação necessária ao experimento atual.
 """
 
-COMMIT_FONTE = "17019d95bfce6f0fbcd153e097b1968d9cfce1ca"
+from .configuracao import ATIVOS, CONFIGURACAO, DATA_FIM, DATA_INICIO, ConfiguracaoBacktest
+from .rotacao_capital import executar_modelos_rotacao
+
+__all__ = [
+    "ATIVOS",
+    "CONFIGURACAO",
+    "DATA_FIM",
+    "DATA_INICIO",
+    "ConfiguracaoBacktest",
+    "executar_modelos_rotacao",
+]
