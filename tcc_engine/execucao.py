@@ -31,22 +31,16 @@ def calcular_taxas_referencia(
         }
     lado_normalizado = lado.upper()
     valor_operacao = quantidade * preco
-    comissao = arredondar_taxa_para_centavo(
-        valor_operacao * configuracao.commission_rate
-    )
-    taxa_cat = arredondar_taxa_para_centavo(
-        quantidade * configuracao.cat_fee_per_share
-    )
+    comissao = arredondar_taxa_para_centavo(valor_operacao * configuracao.comissao)
+    taxa_cat = arredondar_taxa_para_centavo(quantidade * configuracao.taxa_cat_por_acao)
     taxa_sec = 0.0
     taxa_taf = 0.0
     if lado_normalizado == "SELL":
-        taxa_sec = arredondar_taxa_para_centavo(
-            valor_operacao * configuracao.sec_fee_rate
-        )
+        taxa_sec = arredondar_taxa_para_centavo(valor_operacao * configuracao.taxa_sec)
         taxa_taf = arredondar_taxa_para_centavo(
             min(
-                quantidade * configuracao.taf_fee_per_share,
-                configuracao.taf_fee_cap,
+                quantidade * configuracao.taxa_taf_por_acao,
+                configuracao.limite_taxa_taf,
             )
         )
     elif lado_normalizado != "BUY":
@@ -60,11 +54,7 @@ def calcular_taxas_referencia(
     }
 
 
-def aplicar_deslizamento(
-    preco: float,
-    lado: str,
-    configuracao: Any,
-) -> float:
+def aplicar_deslizamento(preco: float, lado: str, configuracao: Any) -> float:
     """Aplica o deslizamento configurado ao preço da ordem simulada."""
-    ajuste = configuracao.slippage_bps / 10_000
-    return preco * (1 + ajuste if lado == "BUY" else 1 - ajuste)
+    ajuste = configuracao.deslizamento_bps / 10_000
+    return preco * (1 + ajuste if lado.upper() == "BUY" else 1 - ajuste)
