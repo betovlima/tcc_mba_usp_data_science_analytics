@@ -2,23 +2,67 @@
 
 Simulação histórica de rotação de capital com LightGBM e validação temporal progressiva.
 
+## Preparação dos dados certificados
+
+O resultado histórico certificado de aproximadamente US$ 43,76 milhões foi obtido com as barras diárias da Alpaca armazenadas na coleção local `alpaca_market_bars`, usando:
+
+```text
+intervalo   1Day
+fonte       sip
+ajuste      all
+período     2016-01-01 → 2026-09-04
+```
+
+Esses dados não estavam versionados no Git. Para retirar a dependência do MongoDB da execução normal do TCC, faça uma única exportação:
+
+```bash
+python -m pip install -r requirements.txt
+python exportar_dados_certificados.py
+```
+
+Por padrão, o exportador consulta:
+
+```text
+URI        mongodb://localhost:27017
+Banco      extrema_backtest
+Coleção    alpaca_market_bars
+```
+
+Se necessário, podem ser definidos:
+
+```text
+TCC_MONGO_URI
+TCC_MONGO_DATABASE
+```
+
+O arquivo criado será:
+
+```text
+dados/mercado_certificado.csv
+```
+
+Depois dessa exportação, o MongoDB não participa mais da execução do backtest.
+
 ## Execução
 
 ```bash
-git clone https://github.com/betovlima/tcc_mba_usp_data_science_analytics.git
-cd tcc_mba_usp_data_science_analytics
-python -m pip install -r requirements.txt
 python backtest.py
 ```
 
-A fonte de mercado é o Yahoo Finance, por meio da biblioteca `yfinance`.
+No Spyder, abra `backtest.py` e pressione `F5`.
+
+O `backtest.py` lê exclusivamente:
+
+```text
+dados/mercado_certificado.csv
+```
+
+Se esse arquivo não existir, a execução é interrompida. O projeto não troca silenciosamente para outra fonte de mercado.
 
 ## Fluxo do experimento
 
 ```text
-Yahoo Finance
-  ↓
-OHLCV diário
+CSV com OHLCV certificado da Alpaca
   ↓
 características técnicas
   ↓
@@ -45,6 +89,7 @@ Todas as etapas da estratégia são executadas pelo código deste repositório. 
 
 ```text
 backtest.py
+exportar_dados_certificados.py
 requirements.txt
 analysis/
 tcc_engine/
@@ -116,6 +161,22 @@ Período solicitado:
 2016-01-01 → 2026-09-04
 ```
 
+## Referência certificada
+
+A execução certificada preservada na tag `certified-43m-standalone` apresentou:
+
+```text
+Capital inicial        US$ 10.000,00
+Capital final          US$ 43.759.854,82
+CAGR                   293,82%
+Sharpe                 2,557
+Queda máxima           -28,19%
+Rotações               315
+Dias em caixa          0
+```
+
+Esse valor não é uma constante no código nem um alvo de ajuste. Ele é a referência para verificar se o mesmo conjunto de dados e a mesma metodologia foram reconstruídos corretamente.
+
 ## Arquivos gerados
 
 Cada execução grava:
@@ -129,7 +190,7 @@ output/trades.csv
 output/summary.txt
 ```
 
-`market_data.csv` contém as séries históricas usadas pelo backtest e também alimenta a planilha de análise.
+`market_data.csv` é uma cópia das séries realmente usadas pelo backtest e também alimenta a planilha de análise.
 
 ## Planilha de auditoria
 
@@ -144,16 +205,6 @@ Arquivo gerado:
 ```text
 analysis/tcc_backtest_output_analysis.xlsx
 ```
-
-## Referência histórica
-
-A reprodução certificada anterior foi preservada na tag:
-
-```text
-certified-43m-standalone
-```
-
-A `main` usa Yahoo Finance e representa o experimento acadêmico atual. O resultado histórico de US$ 43.759.854,82 não é usado como constante nem como alvo de ajuste.
 
 ## Limitação metodológica
 
