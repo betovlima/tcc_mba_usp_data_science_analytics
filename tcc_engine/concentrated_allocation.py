@@ -7,289 +7,389 @@ import pandas as pd
 from scipy.optimize import linprog
 
 from .optimized_allocation import (
-    OPTIMIZED_ALLOCATION_MODE,
-    AllocationDecision,
-    AllocationTechnicalError,
-    ExpectedReturnCalibrator,
-    _all_cash,
-    _historical_return_scenarios,
-    _safe_current_weights,
-    cross_sectional_relative_signal,
+    MODO_ALOCACAO_OTIMIZADA,
+    DecisaoAlocacao,
+    ErroTecnicoAlocacao,
+    CalibradorRetornoEsperado,
+    _tudo_caixa,
+    _cenarios_retorno_historico,
+    _pesos_atuais_seguros,
+    sinal_relativo_transversal,
 )
 
-CONCENTRATED_ALLOCATION_MODE = "COMPOUND_ROTATION_SWING_CONCENTRATED_ALLOCATION"
+MODO_ALOCACAO_CONCENTRADA = "COMPOUND_ROTATION_SWING_CONCENTRATED_ALLOCATION"
 
 
-def concentrated_allocation_enabled(config: Any) -> bool:
-    return str(getattr(config, "strategy_mode", "")) == CONCENTRATED_ALLOCATION_MODE
-
-
-def portfolio_allocation_enabled(config: Any) -> bool:
-    return str(getattr(config, "strategy_mode", "")) in {OPTIMIZED_ALLOCATION_MODE, CONCENTRATED_ALLOCATION_MODE}
-
-
-def concentrated_candidate_strength(utility: np.ndarray, *, candidate_limit: int = 3) -> tuple[np.ndarray, np.ndarray]:
-    values = np.asarray(utility, dtype=float)
-    strengths = np.zeros(values.shape, dtype=float)
-    finite_positions = np.flatnonzero(np.isfinite(values))
-    if len(finite_positions) == 0:
-        return np.asarray([], dtype=int), strengths
-    ranked = sorted(finite_positions.tolist(), key=lambda index: (-float(values[index]), int(index)))
-    selected = np.asarray(ranked[: max(1, int(candidate_limit))], dtype=int)
-    top_value = float(values[selected[0]])
-    finite_values = values[finite_positions]
-    center = float(np.median(finite_values))
-    scale = float(np.median(np.abs(finite_values - center))) * 1.4826
-    if not np.isfinite(scale) or scale <= 1e-12:
-        scale = float(np.std(finite_values, ddof=0))
-    if not np.isfinite(scale) or scale <= 1e-12:
-        scale = 1.0
-    for position in selected:
-        gap = max(0.0, (top_value - float(values[position])) / scale)
-        strengths[position] = float(np.exp(-0.5 * gap * gap))
-    strengths[selected[0]] = 1.0
-    return selected, strengths
-
-
-def optimize_concentrated_allocation(
-    utilities: np.ndarray,
-    frames: dict[str, pd.DataFrame],
-    symbols: list[str],
-    timestamp: pd.Timestamp,
-    current_weights: dict[str, float] | None,
-    config: Any,
-    *,
-    expected_return_calibrator: ExpectedReturnCalibrator | None = None,
-    opportunity: Any | None = None,
-    opportunity_threshold: float | None = None,
-) -> AllocationDecision:
-    current = _safe_current_weights(symbols, current_weights)
-    utility = np.asarray(utilities[1 : len(symbols) + 1], dtype=float)
-    finite = np.isfinite(utility)
-    if not finite.any():
-        return _all_cash(
-            symbols,
-            current,
-            status="no_finite_ranking_signal",
-            opportunity=opportunity,
-            opportunity_threshold=opportunity_threshold,
-        )
-
-    relative_signal = cross_sectional_relative_signal(utility)
-    selected, closeness = concentrated_candidate_strength(utility, candidate_limit=3)
-    if len(selected) == 0:
-        return _all_cash(
-            symbols,
-            current,
-            status="no_ranked_candidate",
-            opportunity=opportunity,
-            opportunity_threshold=opportunity_threshold,
-        )
-
-    minimum_relative_signal = float(getattr(config, "allocation_minimum_utility", 0.0))
-    primary_index = int(selected[0])
-    eligible = np.zeros(len(symbols), dtype=bool)
-    eligible[primary_index] = True
-    for index in selected[1:]:
-        if (
-            np.isfinite(relative_signal[index])
-            and float(relative_signal[index]) > minimum_relative_signal
-            and float(closeness[index]) > 1e-6
-        ):
-            eligible[index] = True
-
-    calibrated = (
-        expected_return_calibrator.predict(utility)
-        if expected_return_calibrator is not None
-        else np.full(utility.shape, np.nan, dtype=float)
+def alocacao_concentrada_ativada(configuracao: Any) -> bool:
+    return (
+        str(getattr(configuracao, "strategy_mode", ""))
+        == MODO_ALOCACAO_CONCENTRADA
     )
-    confidence = (
-        min(1.0, max(0.0, float(opportunity.confidence)))
-        if opportunity is not None and getattr(opportunity, "confidence", None) is not None
+
+
+def alocacao_carteira_ativada(configuracao: Any) -> bool:
+    return str(getattr(configuracao, "strategy_mode", "")) in {
+        MODO_ALOCACAO_OTIMIZADA,
+        MODO_ALOCACAO_CONCENTRADA,
+    }
+
+
+def forca_candidatos_concentrados(
+    utilidade: np.ndarray,
+    *,
+    limite_candidatos: int = 3,
+) -> tuple[np.ndarray, np.ndarray]:
+    valores = np.asarray(utilidade, dtype=float)
+    forcas = np.zeros(valores.shape, dtype=float)
+    posicoes_finitas = np.flatnonzero(np.isfinite(valores))
+    if len(posicoes_finitas) == 0:
+        return np.asarray([], dtype=int), forcas
+
+    ordenadas = sorted(
+        posicoes_finitas.tolist(),
+        key=lambda indice: (-float(valores[indice]), int(indice)),
+    )
+    selecionadas = np.asarray(
+        ordenadas[: max(1, int(limite_candidatos))],
+        dtype=int,
+    )
+    valor_topo = float(valores[selecionadas[0]])
+    valores_finitos = valores[posicoes_finitas]
+    centro = float(np.median(valores_finitos))
+    escala = float(np.median(np.abs(valores_finitos - centro))) * 1.4826
+    if not np.isfinite(escala) or escala <= 1e-12:
+        escala = float(np.std(valores_finitos, ddof=0))
+    if not np.isfinite(escala) or escala <= 1e-12:
+        escala = 1.0
+
+    for posicao in selecionadas:
+        diferenca = max(0.0, (valor_topo - float(valores[posicao])) / escala)
+        forcas[posicao] = float(np.exp(-0.5 * diferenca * diferenca))
+    forcas[selecionadas[0]] = 1.0
+    return selecionadas, forcas
+
+
+def otimizar_alocacao_concentrada(
+    utilidades: np.ndarray,
+    quadros: dict[str, pd.DataFrame],
+    simbolos: list[str],
+    instante: pd.Timestamp,
+    pesos_atuais: dict[str, float] | None,
+    configuracao: Any,
+    *,
+    calibrador_retorno_esperado: CalibradorRetornoEsperado | None = None,
+    oportunidade: Any | None = None,
+    limite_oportunidade: float | None = None,
+) -> DecisaoAlocacao:
+    atual = _pesos_atuais_seguros(simbolos, pesos_atuais)
+    utilidade = np.asarray(utilidades[1 : len(simbolos) + 1], dtype=float)
+    finitos = np.isfinite(utilidade)
+    if not finitos.any():
+        return _tudo_caixa(
+            simbolos,
+            atual,
+            status="no_finite_ranking_signal",
+            oportunidade=oportunidade,
+            limite_oportunidade=limite_oportunidade,
+        )
+
+    sinal_relativo = sinal_relativo_transversal(utilidade)
+    selecionadas, proximidade = forca_candidatos_concentrados(
+        utilidade,
+        limite_candidatos=3,
+    )
+    if len(selecionadas) == 0:
+        return _tudo_caixa(
+            simbolos,
+            atual,
+            status="no_ranked_candidate",
+            oportunidade=oportunidade,
+            limite_oportunidade=limite_oportunidade,
+        )
+
+    sinal_relativo_minimo = float(
+        getattr(configuracao, "allocation_minimum_utility", 0.0)
+    )
+    indice_primario = int(selecionadas[0])
+    elegiveis = np.zeros(len(simbolos), dtype=bool)
+    elegiveis[indice_primario] = True
+    for indice in selecionadas[1:]:
+        if (
+            np.isfinite(sinal_relativo[indice])
+            and float(sinal_relativo[indice]) > sinal_relativo_minimo
+            and float(proximidade[indice]) > 1e-6
+        ):
+            elegiveis[indice] = True
+
+    calibrado = (
+        calibrador_retorno_esperado.prever(utilidade)
+        if calibrador_retorno_esperado is not None
+        else np.full(utilidade.shape, np.nan, dtype=float)
+    )
+    confianca = (
+        min(1.0, max(0.0, float(oportunidade.confidence)))
+        if oportunidade is not None
+        and getattr(oportunidade, "confidence", None) is not None
         else 1.0
     )
-    confidence_adjusted = calibrated * confidence
-    allocation_reward_vector = np.where(eligible, closeness, 0.0)
-    allocation_reward_vector[primary_index] = 1.0
-    confidence_adjusted_reward = allocation_reward_vector * confidence
+    ajustado_confianca = calibrado * confianca
+    vetor_recompensa = np.where(elegiveis, proximidade, 0.0)
+    vetor_recompensa[indice_primario] = 1.0
+    recompensa_ajustada = vetor_recompensa * confianca
 
-    lookback = int(getattr(config, "allocation_lookback_days", 126))
-    scenarios = _historical_return_scenarios(frames, symbols, timestamp, lookback, config)
-    minimum_scenarios = max(20, min(60, lookback // 2))
-    if scenarios.shape[0] < minimum_scenarios:
-        raise AllocationTechnicalError(
-            f"Concentrated Allocation has insufficient synchronized risk history at {pd.Timestamp(timestamp)}: {scenarios.shape[0]} scenarios."
+    janela = int(getattr(configuracao, "allocation_lookback_days", 126))
+    cenarios = _cenarios_retorno_historico(
+        quadros,
+        simbolos,
+        instante,
+        janela,
+        configuracao,
+    )
+    minimo_cenarios = max(20, min(60, janela // 2))
+    if cenarios.shape[0] < minimo_cenarios:
+        raise ErroTecnicoAlocacao(
+            "A alocação concentrada possui histórico de risco sincronizado "
+            f"insuficiente em {pd.Timestamp(instante)}: "
+            f"{cenarios.shape[0]} cenários."
         )
 
-    asset_count = len(symbols)
-    scenario_count = int(scenarios.shape[0])
-    cash_index = asset_count
-    alpha_index = asset_count + 1
-    slack_start = alpha_index + 1
-    turnover_start = slack_start + scenario_count
-    turnover_end = turnover_start + asset_count + 1
-    cvar_index = turnover_end
-    risk_penalty_index = cvar_index + 1
-    variable_count = risk_penalty_index + 1
+    quantidade_ativos = len(simbolos)
+    quantidade_cenarios = int(cenarios.shape[0])
+    indice_caixa = quantidade_ativos
+    indice_alpha = quantidade_ativos + 1
+    inicio_folga = indice_alpha + 1
+    inicio_giro = inicio_folga + quantidade_cenarios
+    fim_giro = inicio_giro + quantidade_ativos + 1
+    indice_cvar = fim_giro
+    indice_penalidade_risco = indice_cvar + 1
+    quantidade_variaveis = indice_penalidade_risco + 1
 
-    confidence_level = float(getattr(config, "allocation_cvar_confidence", 0.95))
-    risk_aversion = float(getattr(config, "allocation_cvar_penalty", 1.0))
-    turnover_penalty = float(getattr(config, "allocation_turnover_penalty", 0.0025))
-    max_asset_weight = float(getattr(config, "allocation_max_asset_weight", 1.0))
-    signal_scale = float(getattr(config, "allocation_signal_scale", 1.0))
-    estimated_cost = max(0.0, float(getattr(config, "slippage_bps", 0.0))) / 10000.0
-    estimated_cost += max(0.0, float(getattr(config, "commission_rate", 0.0)))
+    nivel_confianca = float(
+        getattr(configuracao, "allocation_cvar_confidence", 0.95)
+    )
+    aversao_risco = float(
+        getattr(configuracao, "allocation_cvar_penalty", 1.0)
+    )
+    penalidade_giro = float(
+        getattr(configuracao, "allocation_turnover_penalty", 0.0025)
+    )
+    peso_maximo_ativo = float(
+        getattr(configuracao, "allocation_max_asset_weight", 1.0)
+    )
+    escala_sinal = float(
+        getattr(configuracao, "allocation_signal_scale", 1.0)
+    )
+    custo_estimado = (
+        max(0.0, float(getattr(configuracao, "slippage_bps", 0.0))) / 10000.0
+    )
+    custo_estimado += max(
+        0.0,
+        float(getattr(configuracao, "commission_rate", 0.0)),
+    )
 
-    def scenario_cvar(values: np.ndarray) -> float:
-        losses = -np.asarray(values, dtype=float)
-        level = float(np.quantile(losses, confidence_level, method="higher"))
-        tail = losses[losses >= level - 1e-15]
-        return max(0.0, float(np.mean(tail)) if len(tail) else level)
+    def cvar_cenario(valores: np.ndarray) -> float:
+        perdas = -np.asarray(valores, dtype=float)
+        nivel = float(np.quantile(perdas, nivel_confianca, method="higher"))
+        cauda = perdas[perdas >= nivel - 1e-15]
+        return max(0.0, float(np.mean(cauda)) if len(cauda) else nivel)
 
-    individual_cvars = np.asarray(
-        [scenario_cvar(scenarios[:, index]) for index in range(asset_count)],
+    cvars_individuais = np.asarray(
+        [
+            cvar_cenario(cenarios[:, indice])
+            for indice in range(quantidade_ativos)
+        ],
         dtype=float,
     )
-    positive_cvars = individual_cvars[np.isfinite(individual_cvars) & (individual_cvars > 1e-8)]
-    risk_reference = float(np.median(positive_cvars)) if len(positive_cvars) else 0.01
-    risk_reference = max(risk_reference, 1e-6)
-    risk_ceiling = max(
-        risk_reference * 3.0,
-        float(np.max(positive_cvars)) * 1.5 if len(positive_cvars) else 0.03,
+    cvars_positivos = cvars_individuais[
+        np.isfinite(cvars_individuais) & (cvars_individuais > 1e-8)
+    ]
+    referencia_risco = (
+        float(np.median(cvars_positivos)) if len(cvars_positivos) else 0.01
+    )
+    referencia_risco = max(referencia_risco, 1e-6)
+    teto_risco = max(
+        referencia_risco * 3.0,
+        (
+            float(np.max(cvars_positivos)) * 1.5
+            if len(cvars_positivos)
+            else 0.03
+        ),
     )
 
-    c = np.zeros(variable_count, dtype=float)
-    c[:asset_count] = -signal_scale * confidence_adjusted_reward
-    c[turnover_start : turnover_start + asset_count] = turnover_penalty
-    normalized_estimated_cost = estimated_cost / risk_reference
-    c[turnover_start : turnover_start + asset_count] += normalized_estimated_cost
-    c[risk_penalty_index] = risk_aversion
+    c = np.zeros(quantidade_variaveis, dtype=float)
+    c[:quantidade_ativos] = -escala_sinal * recompensa_ajustada
+    c[inicio_giro : inicio_giro + quantidade_ativos] = penalidade_giro
+    custo_estimado_normalizado = custo_estimado / referencia_risco
+    c[inicio_giro : inicio_giro + quantidade_ativos] += custo_estimado_normalizado
+    c[indice_penalidade_risco] = aversao_risco
 
-    a_eq = np.zeros((1, variable_count), dtype=float)
-    a_eq[0, : asset_count + 1] = 1.0
+    a_eq = np.zeros((1, quantidade_variaveis), dtype=float)
+    a_eq[0, : quantidade_ativos + 1] = 1.0
     b_eq = np.asarray([1.0], dtype=float)
 
-    rows: list[np.ndarray] = []
-    rhs: list[float] = []
-    for scenario_index, returns in enumerate(scenarios):
-        row = np.zeros(variable_count, dtype=float)
-        row[:asset_count] = -returns
-        row[alpha_index] = -1.0
-        row[slack_start + scenario_index] = -1.0
-        rows.append(row)
-        rhs.append(0.0)
+    linhas: list[np.ndarray] = []
+    lados_direitos: list[float] = []
+    for indice_cenario, retornos in enumerate(cenarios):
+        linha = np.zeros(quantidade_variaveis, dtype=float)
+        linha[:quantidade_ativos] = -retornos
+        linha[indice_alpha] = -1.0
+        linha[inicio_folga + indice_cenario] = -1.0
+        linhas.append(linha)
+        lados_direitos.append(0.0)
 
-    cvar_row = np.zeros(variable_count, dtype=float)
-    cvar_row[alpha_index] = 1.0
-    cvar_row[slack_start:turnover_start] = 1.0 / max(
+    linha_cvar = np.zeros(quantidade_variaveis, dtype=float)
+    linha_cvar[indice_alpha] = 1.0
+    linha_cvar[inicio_folga:inicio_giro] = 1.0 / max(
         1e-12,
-        (1.0 - confidence_level) * scenario_count,
+        (1.0 - nivel_confianca) * quantidade_cenarios,
     )
-    cvar_row[cvar_index] = -1.0
-    rows.append(cvar_row)
-    rhs.append(0.0)
+    linha_cvar[indice_cvar] = -1.0
+    linhas.append(linha_cvar)
+    lados_direitos.append(0.0)
 
-    for risk_point in np.linspace(0.0, risk_ceiling, 13):
-        slope = float(risk_point) / (risk_reference ** 2)
-        intercept = -0.5 * ((float(risk_point) / risk_reference) ** 2)
-        row = np.zeros(variable_count, dtype=float)
-        row[cvar_index] = slope
-        row[risk_penalty_index] = -1.0
-        rows.append(row)
-        rhs.append(float(-intercept))
+    for ponto_risco in np.linspace(0.0, teto_risco, 13):
+        inclinacao = float(ponto_risco) / (referencia_risco**2)
+        intercepto = -0.5 * (
+            (float(ponto_risco) / referencia_risco) ** 2
+        )
+        linha = np.zeros(quantidade_variaveis, dtype=float)
+        linha[indice_cvar] = inclinacao
+        linha[indice_penalidade_risco] = -1.0
+        linhas.append(linha)
+        lados_direitos.append(float(-intercepto))
 
-    for index in selected[1:]:
-        if not bool(eligible[index]):
+    for indice in selecionadas[1:]:
+        if not bool(elegiveis[indice]):
             continue
-        row = np.zeros(variable_count, dtype=float)
-        row[int(index)] = 1.0
-        row[primary_index] = -float(closeness[index])
-        rows.append(row)
-        rhs.append(0.0)
+        linha = np.zeros(quantidade_variaveis, dtype=float)
+        linha[int(indice)] = 1.0
+        linha[indice_primario] = -float(proximidade[indice])
+        linhas.append(linha)
+        lados_direitos.append(0.0)
 
-    for index in range(asset_count + 1):
-        z_index = turnover_start + index
-        row_positive = np.zeros(variable_count, dtype=float)
-        row_positive[index] = 1.0
-        row_positive[z_index] = -1.0
-        rows.append(row_positive)
-        rhs.append(float(current[index]))
+    for indice in range(quantidade_ativos + 1):
+        indice_z = inicio_giro + indice
+        linha_positiva = np.zeros(quantidade_variaveis, dtype=float)
+        linha_positiva[indice] = 1.0
+        linha_positiva[indice_z] = -1.0
+        linhas.append(linha_positiva)
+        lados_direitos.append(float(atual[indice]))
 
-        row_negative = np.zeros(variable_count, dtype=float)
-        row_negative[index] = -1.0
-        row_negative[z_index] = -1.0
-        rows.append(row_negative)
-        rhs.append(float(-current[index]))
+        linha_negativa = np.zeros(quantidade_variaveis, dtype=float)
+        linha_negativa[indice] = -1.0
+        linha_negativa[indice_z] = -1.0
+        linhas.append(linha_negativa)
+        lados_direitos.append(float(-atual[indice]))
 
-    bounds: list[tuple[float | None, float | None]] = []
-    for index in range(asset_count):
-        bounds.append((0.0, max_asset_weight if bool(eligible[index]) else 0.0))
-    bounds.append((0.0, 1.0))
-    bounds.append((None, None))
-    bounds.extend([(0.0, None)] * scenario_count)
-    bounds.extend([(0.0, None)] * (asset_count + 1))
-    bounds.append((0.0, None))
-    bounds.append((0.0, None))
+    limites: list[tuple[float | None, float | None]] = []
+    for indice in range(quantidade_ativos):
+        limites.append(
+            (
+                0.0,
+                peso_maximo_ativo if bool(elegiveis[indice]) else 0.0,
+            )
+        )
+    limites.append((0.0, 1.0))
+    limites.append((None, None))
+    limites.extend([(0.0, None)] * quantidade_cenarios)
+    limites.extend([(0.0, None)] * (quantidade_ativos + 1))
+    limites.append((0.0, None))
+    limites.append((0.0, None))
 
-    result = linprog(
+    resultado = linprog(
         c,
-        A_ub=np.asarray(rows, dtype=float),
-        b_ub=np.asarray(rhs, dtype=float),
+        A_ub=np.asarray(linhas, dtype=float),
+        b_ub=np.asarray(lados_direitos, dtype=float),
         A_eq=a_eq,
         b_eq=b_eq,
-        bounds=bounds,
+        bounds=limites,
         method="highs",
     )
-    if not bool(result.success):
-        raise AllocationTechnicalError(
-            f"Concentrated Allocation solver failed at {pd.Timestamp(timestamp)}: {str(result.message or 'unknown')[:160]}"
+    if not bool(resultado.success):
+        raise ErroTecnicoAlocacao(
+            "O solucionador da alocação concentrada falhou em "
+            f"{pd.Timestamp(instante)}: "
+            f"{str(resultado.message or 'desconhecido')[:160]}"
         )
 
-    solution = np.asarray(result.x, dtype=float)
-    risky = np.clip(solution[:asset_count], 0.0, 1.0)
-    cash_weight = float(np.clip(solution[cash_index], 0.0, 1.0))
-    total = float(risky.sum() + cash_weight)
+    solucao = np.asarray(resultado.x, dtype=float)
+    risco = np.clip(solucao[:quantidade_ativos], 0.0, 1.0)
+    peso_caixa = float(np.clip(solucao[indice_caixa], 0.0, 1.0))
+    total = float(risco.sum() + peso_caixa)
     if total <= 0 or not np.isfinite(total):
-        raise AllocationTechnicalError(f"Concentrated Allocation returned an invalid solution at {pd.Timestamp(timestamp)}.")
-    risky /= total
-    cash_weight /= total
+        raise ErroTecnicoAlocacao(
+            "A alocação concentrada retornou solução inválida em "
+            f"{pd.Timestamp(instante)}."
+        )
+    risco /= total
+    peso_caixa /= total
 
-    portfolio_returns = scenarios @ risky
-    losses = -portfolio_returns
-    var_level = float(np.quantile(losses, confidence_level, method="higher"))
-    tail = losses[losses >= var_level - 1e-15]
-    estimated_cvar = float(np.mean(tail)) if len(tail) else var_level
-    normalized_cvar = float(max(0.0, estimated_cvar) / risk_reference)
-    target = np.concatenate([risky, np.asarray([cash_weight])])
-    turnover = float(np.abs(target[:-1] - current[:-1]).sum())
-    expected_utility = float(np.dot(np.where(np.isfinite(utility), utility, 0.0), risky))
-    expected_relative_alpha = float(
-        np.dot(np.where(np.isfinite(calibrated), calibrated, 0.0), risky)
+    retornos_carteira = cenarios @ risco
+    perdas = -retornos_carteira
+    nivel_var = float(np.quantile(perdas, nivel_confianca, method="higher"))
+    cauda = perdas[perdas >= nivel_var - 1e-15]
+    cvar_estimado = float(np.mean(cauda)) if len(cauda) else nivel_var
+    cvar_normalizado = float(max(0.0, cvar_estimado) / referencia_risco)
+    alvo = np.concatenate([risco, np.asarray([peso_caixa])])
+    giro = float(np.abs(alvo[:-1] - atual[:-1]).sum())
+    utilidade_esperada = float(
+        np.dot(np.where(np.isfinite(utilidade), utilidade, 0.0), risco)
     )
-    confidence_adjusted_relative_alpha = float(
-        np.dot(np.where(np.isfinite(confidence_adjusted), confidence_adjusted, 0.0), risky)
+    alpha_relativo_esperado = float(
+        np.dot(np.where(np.isfinite(calibrado), calibrado, 0.0), risco)
     )
-    allocation_reward = float(np.dot(allocation_reward_vector, risky))
-    confidence_adjusted_allocation_reward = float(np.dot(confidence_adjusted_reward, risky))
-    eligible_assets = tuple(symbols[index] for index in range(asset_count) if eligible[index])
+    alpha_relativo_ajustado = float(
+        np.dot(
+            np.where(np.isfinite(ajustado_confianca), ajustado_confianca, 0.0),
+            risco,
+        )
+    )
+    recompensa_alocacao = float(np.dot(vetor_recompensa, risco))
+    recompensa_alocacao_ajustada = float(
+        np.dot(recompensa_ajustada, risco)
+    )
+    ativos_elegiveis = tuple(
+        simbolos[indice]
+        for indice in range(quantidade_ativos)
+        if elegiveis[indice]
+    )
 
-    return AllocationDecision(
-        weights={symbol: float(risky[index]) for index, symbol in enumerate(symbols)},
-        cash_weight=float(cash_weight),
-        expected_utility=expected_utility,
-        expected_relative_alpha=expected_relative_alpha,
-        confidence_adjusted_relative_alpha=confidence_adjusted_relative_alpha,
-        allocation_reward=allocation_reward,
-        confidence_adjusted_allocation_reward=confidence_adjusted_allocation_reward,
-        normalized_cvar=normalized_cvar,
-        risk_reference=float(risk_reference),
-        estimated_cvar=estimated_cvar,
-        turnover=turnover,
-        objective_value=float(-result.fun),
-        eligible_assets=eligible_assets,
+    return DecisaoAlocacao(
+        weights={
+            simbolo: float(risco[indice])
+            for indice, simbolo in enumerate(simbolos)
+        },
+        cash_weight=float(peso_caixa),
+        expected_utility=utilidade_esperada,
+        expected_relative_alpha=alpha_relativo_esperado,
+        confidence_adjusted_relative_alpha=alpha_relativo_ajustado,
+        allocation_reward=recompensa_alocacao,
+        confidence_adjusted_allocation_reward=recompensa_alocacao_ajustada,
+        normalized_cvar=cvar_normalizado,
+        risk_reference=float(referencia_risco),
+        estimated_cvar=cvar_estimado,
+        turnover=giro,
+        objective_value=float(-resultado.fun),
+        eligible_assets=ativos_elegiveis,
         optimizer_status="optimal_concentrated",
-        opportunity_probability=float(opportunity.probability) if opportunity is not None else None,
-        opportunity_confidence=float(opportunity.confidence) if opportunity is not None else None,
-        opportunity_threshold=float(opportunity_threshold) if opportunity_threshold is not None else None,
-        opportunity_accepted=bool(opportunity.accepted) if opportunity is not None else None,
+        opportunity_probability=(
+            float(oportunidade.probability)
+            if oportunidade is not None
+            else None
+        ),
+        opportunity_confidence=(
+            float(oportunidade.confidence)
+            if oportunidade is not None
+            else None
+        ),
+        opportunity_threshold=(
+            float(limite_oportunidade)
+            if limite_oportunidade is not None
+            else None
+        ),
+        opportunity_accepted=(
+            bool(oportunidade.accepted)
+            if oportunidade is not None
+            else None
+        ),
     )
