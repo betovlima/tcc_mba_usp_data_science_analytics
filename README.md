@@ -11,8 +11,6 @@ python -m pip install -r requirements.txt
 python backtest.py
 ```
 
-No Spyder, abra `backtest.py` e pressione `F5`.
-
 MongoDB local padrão:
 
 ```text
@@ -33,6 +31,54 @@ TCC_MONGO_DATABASE=extrema_backtest
 
 A execução rejeita MongoDB remoto.
 
+## Execução no Spyder
+
+`backtest.py` é organizado em células `# %%`.
+
+- `F5`: executa o arquivo completo.
+- `Ctrl+Enter`: executa somente a célula atual.
+- As variáveis permanecem no namespace e podem ser abertas no Variable Explorer.
+
+Células:
+
+```text
+# %% 0  Imports e configuração
+# %% 1  Início da execução
+# %% 2  Carregamento e validação do OHLCV
+# %% 3  Preparação metodológica
+# %% 4  LightGBM + walk-forward + política de rotação
+# %% 5  Objetos de resultado para inspeção
+# %% 6  Gravação dos artefatos
+# %% 7  Métricas finais
+```
+
+Após a célula 2:
+
+```text
+raw
+frames
+```
+
+Após a célula 4:
+
+```text
+results
+result
+```
+
+Após a célula 5:
+
+```text
+predictions
+trades
+folds
+metrics
+equity
+payload
+```
+
+Isso permite estudar o experimento etapa por etapa sem alterar a execução completa por `F5` ou terminal.
+
 ## Auditoria no Excel
 
 Após o backtest:
@@ -47,7 +93,7 @@ Arquivo gerado:
 analysis/tcc_backtest_output_analysis.xlsx
 ```
 
-A planilha importa o `output/` e reconstrói no Excel as principais métricas, folds, curva de capital, operações, ciclos, análise mensal e reconciliação contábil.
+A planilha importa o `output/` e reconstrói as principais métricas, folds, curva de capital, operações, ciclos, análise mensal e reconciliação contábil.
 
 ## Fluxo do experimento
 
@@ -120,11 +166,9 @@ Histórico bruto:
 2016-01-01 → 2026-09-04
 ```
 
-O período inicial é usado para construção de features, targets e treino. A avaliação econômica é feita somente nas sessões OOS.
+O período inicial é usado para features, targets e treino. A avaliação econômica é feita somente nas sessões OOS.
 
-## Configuração certificada
-
-Principais parâmetros:
+## Configuração principal
 
 ```text
 capital inicial                  10,000
@@ -145,6 +189,8 @@ margens de calibração            0, 0.0025, 0.005, 0.01
 random_state                     42
 ```
 
+Os parâmetros ficam declarados em `tcc_engine/config.py`.
+
 ## Resultado reproduzido
 
 ```text
@@ -161,8 +207,6 @@ Exposição              100%
 Sessões OOS            1,538
 ```
 
-O capital final reproduz exatamente a referência histórica certificada.
-
 ## Walk-forward
 
 ```text
@@ -172,26 +216,6 @@ Fold 3   US$ 2,805,962.94    → US$ 43,759,854.82   +1,459.53%
 ```
 
 O capital final de cada fold é o capital inicial do fold seguinte.
-
-## Fingerprints
-
-A execução valida os principais fingerprints antes do treinamento:
-
-```text
-Strategy configuration
-509b940659a89a7348be3690882213c839ce1a43b7e44057656074f5b2517a6e
-
-Model settings
-b4d112d678f79ca931c24630831e6464ebfe492f46364f54632c2980618803ab
-
-Execution request
-8aa99e2c5a9e4cdf666cbfa406896b1aee82f2fbe9ea65d68ad077e8b8be73a6
-
-Market OHLCV
-2db920471bc6ff8925081735c4d8218adf879a1363fae7fd239da940d6ebe30c
-```
-
-Os hashes são usados somente para validar reprodutibilidade; não participam da decisão de investimento.
 
 ## Output
 
@@ -219,7 +243,7 @@ Janelas de treino, calibração, purge e teste, com capital e desempenho por fol
 
 ### `trades.csv`
 
-Livro-razão completo de BUY/SELL e diagnósticos da decisão. Inclui scores, ranking, margens, MFE, MAE, custos e métricas contrafactuais.
+Livro-razão de BUY/SELL e diagnósticos da decisão. Inclui scores, ranking, margens, MFE, MAE, custos e métricas contrafactuais.
 
 ### `summary.txt`
 
@@ -243,7 +267,7 @@ A planilha gerada por `analysis/build_excel.py` contém:
 10_Reconciliation
 ```
 
-Principais validações reproduzidas por fórmulas do Excel:
+Principais validações por fórmulas do Excel:
 
 ```text
 capital final
@@ -260,7 +284,7 @@ folds
 reconciliação do capital
 ```
 
-A reconciliação principal é:
+Reconciliação principal:
 
 ```text
 capital inicial
@@ -270,8 +294,6 @@ capital inicial
 ```
 
 ## Estatísticas dos ciclos
-
-Na execução certificada:
 
 ```text
 Ciclos encerrados       316
@@ -298,7 +320,7 @@ Profit capture médio    45.97%
 soma do valor bruto negociado / capital inicial
 ```
 
-Não deve ser interpretado como turnover anual tradicional.
+Não é turnover anual tradicional.
 
 ## Estrutura
 
@@ -308,7 +330,8 @@ tcc_mba_usp_data_science_analytics/
 ├── requirements.txt
 ├── README.md
 ├── analysis/
-│   └── build_excel.py
+│   ├── build_excel.py
+│   └── tcc_backtest_output_analysis.xlsx
 └── tcc_engine/
     ├── config.py
     ├── capital_rotation.py
@@ -320,6 +343,6 @@ tcc_mba_usp_data_science_analytics/
 
 ## Limitação metodológica
 
-O universo de 37 ativos foi obtido retrospectivamente e é tratado aqui como universo congelado.
+O universo de 37 ativos foi obtido retrospectivamente e é tratado como universo congelado.
 
-O resultado demonstra reprodutibilidade do motor, do protocolo walk-forward e da política de rotação sobre esse universo. Ele não demonstra generalização fora da amostra do processo histórico de seleção dos 37 ativos.
+O resultado demonstra reprodutibilidade do motor, do protocolo walk-forward e da política de rotação sobre esse universo. Não demonstra generalização fora da amostra do processo histórico de seleção dos 37 ativos.
