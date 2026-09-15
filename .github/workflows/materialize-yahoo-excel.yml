@@ -1,5 +1,6 @@
 name: Validate Yahoo backtest and materialize Excel
 
+# One-time validation after the Excel timezone fix.
 on:
   push:
     branches: [main]
