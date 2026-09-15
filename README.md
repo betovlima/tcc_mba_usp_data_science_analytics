@@ -1,6 +1,6 @@
 # TCC MBA USP — Data Science & Analytics
 
-Backtest reproduzível de rotação de capital entre ativos com LightGBM e validação walk-forward.
+Backtest de rotação de capital com LightGBM e validação walk-forward.
 
 ## Execução
 
@@ -11,102 +11,53 @@ python -m pip install -r requirements.txt
 python backtest.py
 ```
 
-MongoDB local padrão:
+Fonte de mercado: Yahoo Finance via `yfinance`.
+
+Parâmetros fixos do download:
 
 ```text
-URI        mongodb://localhost:27017
-Database   extrema_backtest
-Collection alpaca_market_bars
-Interval   1Day
-Feed       sip
-Adjustment all
+interval       1d
+auto_adjust    True
+actions        False
+repair         False
 ```
 
-Opcionalmente:
+O `end` do `yfinance` é exclusivo; o script soma um dia para incluir `END_DATE`.
 
-```text
-TCC_MONGO_URI=mongodb://localhost:27017
-TCC_MONGO_DATABASE=extrema_backtest
-```
+## Spyder
 
-A execução rejeita MongoDB remoto.
-
-## Execução no Spyder
-
-`backtest.py` é organizado em células `# %%`.
-
-- `F5`: executa o arquivo completo.
-- `Ctrl+Enter`: executa somente a célula atual.
-- As variáveis permanecem no namespace e podem ser abertas no Variable Explorer.
-
-Células:
+`backtest.py` usa células `# %%`.
 
 ```text
 # %% 0  Imports e configuração
 # %% 1  Início da execução
-# %% 2  Carregamento e validação do OHLCV
+# %% 2  Download e validação das séries OHLCV
 # %% 3  Preparação metodológica
-# %% 4  LightGBM + walk-forward + política de rotação
-# %% 5  Objetos de resultado para inspeção
+# %% 4  LightGBM + walk-forward + rotação
+# %% 5  Objetos de resultado
 # %% 6  Gravação dos artefatos
 # %% 7  Métricas finais
 ```
 
-Após a célula 2:
+- `F5`: executa tudo.
+- `Ctrl+Enter`: executa somente a célula atual.
+
+Após a célula 2, `frames` contém uma série temporal por ativo e `market_data` contém o snapshot consolidado usado no backtest.
+
+## Fluxo
 
 ```text
-raw
-frames
-```
-
-Após a célula 4:
-
-```text
-results
-result
-```
-
-Após a célula 5:
-
-```text
-predictions
-trades
-folds
-metrics
-equity
-payload
-```
-
-Isso permite estudar o experimento etapa por etapa sem alterar a execução completa por `F5` ou terminal.
-
-## Auditoria no Excel
-
-Após o backtest:
-
-```bash
-python analysis/build_excel.py
-```
-
-Arquivo gerado:
-
-```text
-analysis/tcc_backtest_output_analysis.xlsx
-```
-
-A planilha importa o `output/` e reconstrói as principais métricas, folds, curva de capital, operações, ciclos, análise mensal e reconciliação contábil.
-
-## Fluxo do experimento
-
-```text
-OHLCV bruto
+Yahoo Finance
+  ↓
+OHLCV diário
   ↓
 features
   ↓
 target multi-horizonte
   ↓
-folds walk-forward
+folds walk-forward + purge
   ↓
-treinamento LightGBM por fold
+LightGBM por fold
   ↓
 predições OOS
   ↓
@@ -116,20 +67,40 @@ execução na sessão seguinte
   ↓
 custos e compound
   ↓
-métricas e artefatos
+métricas
 ```
 
-Todo o processamento é executado pelo código local deste repositório.
-
-## Fonte de dados
-
-Entrada de runtime:
+## Universo
 
 ```text
-extrema_backtest.alpaca_market_bars
+NVDA, MSFT, META, TSLA, AMD, JPM, SPY, AVGO, NFLX,
+ORCL, COST, LLY, XOM, CAT, WMT, V, HD, ADC, ADEA,
+ADI, ADM, GKOS, VNCE, CORT, UNFI, DNN, MKSI, APD,
+DDS, RACE, UNF, TX, CEF, YANG, KKR, BXMT, SCSC
 ```
 
-Campos utilizados:
+Período solicitado:
+
+```text
+2016-01-01 → 2026-09-04
+```
+
+## Output
+
+Cada execução gera:
+
+```text
+output/market_data.csv
+output/backtest_result.json
+output/equity_curve.csv
+output/folds.csv
+output/trades.csv
+output/summary.txt
+```
+
+### `market_data.csv`
+
+Snapshot exato das séries usadas pelo motor:
 
 ```text
 symbol
@@ -141,34 +112,69 @@ close
 volume
 ```
 
-Não são usados como entrada:
+O `backtest_result.json` registra também o SHA-256 desse snapshot.
 
-- Strategy persistida;
-- modelo treinado persistido;
-- previsões persistidas;
-- resultado de backtest anterior;
-- jobs ou serviços externos de processamento.
+## Excel
 
-## Universo congelado
+Após o backtest:
 
-37 ativos:
-
-```text
-NVDA, MSFT, META, TSLA, AMD, JPM, SPY, AVGO, NFLX,
-ORCL, COST, LLY, XOM, CAT, WMT, V, HD, ADC, ADEA,
-ADI, ADM, GKOS, VNCE, CORT, UNFI, DNN, MKSI, APD,
-DDS, RACE, UNF, TX, CEF, YANG, KKR, BXMT, SCSC
+```bash
+python analysis/build_excel.py
 ```
 
-Histórico bruto:
+Arquivo:
 
 ```text
-2016-01-01 → 2026-09-04
+analysis/tcc_backtest_output_analysis.xlsx
 ```
 
-O período inicial é usado para features, targets e treino. A avaliação econômica é feita somente nas sessões OOS.
+Abas gerais:
 
-## Configuração principal
+```text
+00_Guia
+01_KPIs
+02_Equity
+03_Folds
+04_Trades
+05_Cycles
+06_Assets
+07_Monthly
+08_Dictionary
+09_JSON
+10_Reconciliation
+11_Ativos
+```
+
+Além delas, o Excel cria uma aba para cada ativo:
+
+```text
+NVDA
+MSFT
+META
+TSLA
+...
+SCSC
+```
+
+Cada aba de ativo contém a série temporal efetivamente usada pelo backtest:
+
+```text
+Date
+Open
+High
+Low
+Close
+Volume
+Daily Return
+Running Peak
+Drawdown
+```
+
+As abas dos ativos são geradas a partir de `output/market_data.csv`; o Excel não baixa novamente os dados.
+
+## Configuração do modelo
+
+Principais parâmetros em `tcc_engine/config.py`:
 
 ```text
 capital inicial                  10,000
@@ -189,160 +195,16 @@ margens de calibração            0, 0.0025, 0.005, 0.01
 random_state                     42
 ```
 
-Os parâmetros ficam declarados em `tcc_engine/config.py`.
+## Referência histórica
 
-## Resultado reproduzido
-
-```text
-Capital inicial        US$ 10,000.00
-Capital final          US$ 43,759,854.819224246
-CAGR                   293.8231%
-Sharpe                 2.557370
-Max Drawdown           -28.1934%
-Rotações               315
-Compras                316
-Vendas                 316
-CASH days              0
-Exposição              100%
-Sessões OOS            1,538
-```
-
-## Walk-forward
+A reprodução certificada anterior, baseada no snapshot histórico antigo, foi preservada na tag:
 
 ```text
-Fold 1   US$ 10,000.00       → US$ 69,042.61       +590.43%
-Fold 2   US$ 69,042.61       → US$ 2,805,962.94    +3,964.10%
-Fold 3   US$ 2,805,962.94    → US$ 43,759,854.82   +1,459.53%
+certified-43m-standalone
 ```
 
-O capital final de cada fold é o capital inicial do fold seguinte.
-
-## Output
-
-Cada execução gera:
-
-```text
-output/backtest_result.json
-output/equity_curve.csv
-output/folds.csv
-output/trades.csv
-output/summary.txt
-```
-
-### `backtest_result.json`
-
-Resultado canônico: métricas, configuração, folds, metadados e diagnósticos agregados.
-
-### `equity_curve.csv`
-
-Curva OOS por sessão. Permite recalcular retorno, CAGR, Sharpe, drawdown e benchmark.
-
-### `folds.csv`
-
-Janelas de treino, calibração, purge e teste, com capital e desempenho por fold.
-
-### `trades.csv`
-
-Livro-razão de BUY/SELL e diagnósticos da decisão. Inclui scores, ranking, margens, MFE, MAE, custos e métricas contrafactuais.
-
-### `summary.txt`
-
-Resumo textual da execução.
-
-## Auditoria financeira no Excel
-
-A planilha gerada por `analysis/build_excel.py` contém:
-
-```text
-00_Guia
-01_KPIs
-02_Equity
-03_Folds
-04_Trades
-05_Cycles
-06_Assets
-07_Monthly
-08_Dictionary
-09_JSON
-10_Reconciliation
-```
-
-Principais validações por fórmulas do Excel:
-
-```text
-capital final
-retorno total
-CAGR
-Sharpe
-Max Drawdown
-compras e vendas
-rotações
-holding médio
-retorno geométrico por posição
-taxas
-folds
-reconciliação do capital
-```
-
-Reconciliação principal:
-
-```text
-capital inicial
-+ PnL realizado nas posições encerradas
-- taxas das compras
-= capital final
-```
-
-## Estatísticas dos ciclos
-
-```text
-Ciclos encerrados       316
-Vencedores              204
-Perdedores              112
-Win rate                64.56%
-Retorno médio vencedor  +6.58%
-Retorno médio perdedor  -3.46%
-Payoff                  1.90
-Profit Factor           2.79
-Mediana por posição     +1.37%
-Melhor posição          +84.34%
-Pior posição            -14.32%
-MFE médio               +6.63%
-MAE médio               -3.43%
-Profit capture médio    45.97%
-```
-
-## Turnover
-
-`turnover_ratio` nesta implementação é:
-
-```text
-soma do valor bruto negociado / capital inicial
-```
-
-Não é turnover anual tradicional.
-
-## Estrutura
-
-```text
-tcc_mba_usp_data_science_analytics/
-├── backtest.py
-├── requirements.txt
-├── README.md
-├── analysis/
-│   ├── build_excel.py
-│   └── tcc_backtest_output_analysis.xlsx
-└── tcc_engine/
-    ├── config.py
-    ├── capital_rotation.py
-    ├── research_challengers.py
-    └── ...
-```
-
-`output/` é gerado localmente e permanece fora do Git.
+A `main` usa Yahoo Finance e constitui um novo experimento. Portanto, o resultado de US$ 43.759.854,82 não é tratado como resultado esperado da nova fonte de dados.
 
 ## Limitação metodológica
 
-O universo de 37 ativos foi obtido retrospectivamente e é tratado como universo congelado.
-
-O resultado demonstra reprodutibilidade do motor, do protocolo walk-forward e da política de rotação sobre esse universo. Não demonstra generalização fora da amostra do processo histórico de seleção dos 37 ativos.
+O universo de 37 ativos foi obtido retrospectivamente e é tratado como universo congelado. A validação walk-forward é aplicada às decisões do modelo, não ao processo histórico de seleção desse universo.
