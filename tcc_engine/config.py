@@ -20,7 +20,8 @@ ASSETS = (
 )
 
 
-def _lightgbm_settings() -> dict[str, Any]:
+def _configuracoes_lightgbm() -> dict[str, Any]:
+    """Retorna os hiperparâmetros declarados para o LightGBM."""
     return {
         "schema_version": 3,
         "settings_revision": 1,
@@ -63,7 +64,7 @@ class StandaloneBacktestConfig:
     market_data_history_start_tolerance_days: int = 10
     market_data_require_complete_history: bool = True
 
-    # Target e validação temporal.
+    # Alvo e validação temporal.
     rotation_models: tuple[str, ...] = ("xgboost_utility",)
     rotation_horizon_days: int = 40
     rotation_target_horizons: tuple[int, ...] = (5, 10, 20, 40, 60)
@@ -86,7 +87,7 @@ class StandaloneBacktestConfig:
     rotation_switch_margin: float = 0.0005
     rotation_switch_margin_candidates: tuple[float, ...] = (0.0, 0.0025, 0.005, 0.01)
 
-    # Interface completa usada pelo motor.
+    # Nomes mantidos por compatibilidade com a interface interna do motor.
     opportunity_utility_entry_threshold: float = 0.28
     opportunity_utility_exit_threshold: float = 0.27
     allocation_lookback_days: int = 126
@@ -131,7 +132,7 @@ class StandaloneBacktestConfig:
     research_reference_assets: tuple[str, ...] = ASSETS
     research_candidate_assets: tuple[str, ...] = ()
     research_model_family: str = "lightgbm_utility"
-    research_model_settings: dict[str, Any] = field(default_factory=_lightgbm_settings)
+    research_model_settings: dict[str, Any] = field(default_factory=_configuracoes_lightgbm)
     research_market_data_mode: str = "yahoo_snapshot"
     expected_market_data_signature_sha256: str | None = None
     research_market_data_snapshot_id: str | None = None
