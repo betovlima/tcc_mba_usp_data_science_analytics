@@ -1,0 +1,26 @@
+name: Create certified standalone tag
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/create-certified-tag.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create tag on certified pre-cell commit
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a certified-43m-standalone 90a02a4c80194c82909c35edc9ca67c93d824b21 -m 'Certified standalone reproduction before Spyder cell refactor'
+          git push origin certified-43m-standalone
