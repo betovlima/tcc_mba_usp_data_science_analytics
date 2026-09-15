@@ -24,37 +24,124 @@ def args():
 
 
 def load_data(output_dir: Path):
-    required = ["backtest_result.json", "equity_curve.csv", "folds.csv", "trades.csv", "summary.txt"]
+    required = [
+        "backtest_result.json",
+        "equity_curve.csv",
+        "folds.csv",
+        "trades.csv",
+        "summary.txt",
+        "market_data.csv",
+    ]
     missing = [name for name in required if not (output_dir / name).exists()]
     if missing:
         raise FileNotFoundError("Missing files: " + ", ".join(missing))
+
     result = json.loads((output_dir / "backtest_result.json").read_text(encoding="utf-8"))
     equity = pd.read_csv(output_dir / "equity_curve.csv")
     folds = pd.read_csv(output_dir / "folds.csv")
     trades = pd.read_csv(output_dir / "trades.csv")
+    market = pd.read_csv(output_dir / "market_data.csv")
     summary = (output_dir / "summary.txt").read_text(encoding="utf-8")
-    return result, equity, folds, trades, summary
+
+    market["timestamp"] = pd.to_datetime(market["timestamp"], utc=True)
+    return result, equity, folds, trades, market, summary
 
 
 def build_cycles(trades: pd.DataFrame) -> pd.DataFrame:
-    buys = trades.loc[trades["action"].eq("BUY"), [
-        "asset", "timestamp", "best_alternative_asset", "best_alternative_return", "opportunity_cost"
-    ]].rename(columns={"timestamp": "entry_timestamp"})
-    sells = trades.loc[trades["action"].isin(["SELL", "FINAL_SELL"]), [
-        "entry_timestamp", "timestamp", "asset", "entry_price", "execution_price", "quantity",
-        "realized_pnl", "position_return", "holding_bars", "total_fee", "walk_forward_fold",
-        "rotation_id", "position_entry_score", "current_score", "best_score", "best_vs_current_gap",
-        "effective_switch_margin", "current_asset_rank", "maximum_favorable_excursion",
-        "maximum_adverse_excursion", "profit_capture_ratio"
-    ]].copy()
+    buy_columns = [
+        "asset",
+        "timestamp",
+        "best_alternative_asset",
+        "best_alternative_return",
+        "opportunity_cost",
+    ]
+    sell_columns = [
+        "entry_timestamp",
+        "timestamp",
+        "asset",
+        "entry_price",
+        "execution_price",
+        "quantity",
+        "realized_pnl",
+        "position_return",
+        "holding_bars",
+        "total_fee",
+        "walk_forward_fold",
+        "rotation_id",
+        "position_entry_score",
+        "current_score",
+        "best_score",
+        "best_vs_current_gap",
+        "effective_switch_margin",
+        "current_asset_rank",
+        "maximum_favorable_excursion",
+        "maximum_adverse_excursion",
+        "profit_capture_ratio",
+    ]
+
+    buy_columns = [column for column in buy_columns if column in trades.columns]
+    sell_columns = [column for column in sell_columns if column in trades.columns]
+
+    buys = trades.loc[trades["action"].eq("BUY"), buy_columns].copy()
+    if "timestamp" in buys.columns:
+        buys = buys.rename(columns={"timestamp": "entry_timestamp"})
+
+    sells = trades.loc[trades["action"].isin(["SELL", "FINAL_SELL"]), sell_columns].copy()
     cycles = sells.merge(buys, on=["asset", "entry_timestamp"], how="left")
-    cycles = cycles.rename(columns={
-        "timestamp": "exit_timestamp", "execution_price": "exit_price", "total_fee": "exit_fee",
-        "walk_forward_fold": "fold", "position_entry_score": "entry_score",
-        "maximum_favorable_excursion": "mfe", "maximum_adverse_excursion": "mae"
-    })
-    cycles["result"] = cycles["position_return"].map(lambda x: "WIN" if x > 0 else "LOSS" if x < 0 else "FLAT")
+    cycles = cycles.rename(
+        columns={
+            "timestamp": "exit_timestamp",
+            "execution_price": "exit_price",
+            "total_fee": "exit_fee",
+            "walk_forward_fold": "fold",
+            "position_entry_score": "entry_score",
+            "maximum_favorable_excursion": "mfe",
+            "maximum_adverse_excursion": "mae",
+        }
+    )
+    if "position_return" in cycles.columns:
+        cycles["result"] = cycles["position_return"].map(
+            lambda value: "WIN" if value > 0 else "LOSS" if value < 0 else "FLAT"
+        )
     return cycles
+
+
+def build_monthly(equity: pd.DataFrame) -> pd.DataFrame:
+    frame = equity.copy()
+    timestamp_column = frame.columns[0]
+    frame[timestamp_column] = pd.to_datetime(frame[timestamp_column], utc=True)
+    frame["month"] = frame[timestamp_column].dt.to_period("M").astype(str)
+
+    monthly = frame.groupby("month", as_index=False).agg(
+        strategy_month_end=("strategy_equity", "last"),
+        benchmark_month_end=("buy_hold_equity", "last"),
+    )
+    monthly["strategy_monthly_return"] = monthly["strategy_month_end"].pct_change()
+    monthly["benchmark_monthly_return"] = monthly["benchmark_month_end"].pct_change()
+    monthly["excess_monthly_return"] = (
+        monthly["strategy_monthly_return"] - monthly["benchmark_monthly_return"]
+    )
+    return monthly
+
+
+def build_asset_summary(market: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for symbol, frame in market.groupby("symbol", sort=False):
+        frame = frame.sort_values("timestamp")
+        first_close = float(frame.iloc[0]["close"])
+        last_close = float(frame.iloc[-1]["close"])
+        rows.append(
+            {
+                "asset": symbol,
+                "rows": len(frame),
+                "start": frame.iloc[0]["timestamp"],
+                "end": frame.iloc[-1]["timestamp"],
+                "first_close": first_close,
+                "last_close": last_close,
+                "close_return": last_close / first_close - 1.0,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def flatten(value, prefix=""):
@@ -69,9 +156,52 @@ def flatten(value, prefix=""):
     return rows
 
 
-def style_workbook(path: Path, result: dict, summary: str):
+def style_asset_sheet(ws):
+    last_row = ws.max_row
+    ws.freeze_panes = "A2"
+    ws.sheet_view.showGridLines = False
+
+    # Raw series: Date, Open, High, Low, Close, Volume.
+    ws["G1"] = "Daily Return"
+    ws["H1"] = "Running Peak"
+    ws["I1"] = "Drawdown"
+
+    for row in range(2, last_row + 1):
+        if row == 2:
+            ws[f"H{row}"] = f"=E{row}"
+            ws[f"I{row}"] = 0
+        else:
+            ws[f"G{row}"] = f"=E{row}/E{row-1}-1"
+            ws[f"H{row}"] = f"=MAX(H{row-1},E{row})"
+            ws[f"I{row}"] = f"=E{row}/H{row}-1"
+
+    for row in range(2, last_row + 1):
+        ws[f"A{row}"].number_format = "yyyy-mm-dd"
+        for column in "BCDEH":
+            ws[f"{column}{row}"].number_format = "0.0000"
+        ws[f"F{row}"].number_format = "#,##0"
+        ws[f"G{row}"].number_format = "0.0000%"
+        ws[f"I{row}"].number_format = "0.0000%"
+
+    if last_row >= 2:
+        ws.conditional_formatting.add(
+            f"I2:I{last_row}",
+            ColorScaleRule(
+                start_type="min",
+                start_color="F8696B",
+                mid_type="percentile",
+                mid_value=50,
+                mid_color="FFEB84",
+                end_type="max",
+                end_color="63BE7B",
+            ),
+        )
+
+
+def style_workbook(path: Path, result: dict, summary: str, asset_names: list[str]):
     wb = load_workbook(path)
     blue, navy, white = "2F75B5", "17365D", "FFFFFF"
+
     for ws in wb.worksheets:
         ws.sheet_view.showGridLines = False
         ws.freeze_panes = "A2"
@@ -80,8 +210,22 @@ def style_workbook(path: Path, result: dict, summary: str):
             cell.font = Font(color=white, bold=True)
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         for col in range(1, min(ws.max_column, 20) + 1):
-            width = max(11, min(28, max(len(str(ws.cell(r, col).value or "")) for r in range(1, min(ws.max_row, 40) + 1)) + 2))
+            width = max(
+                11,
+                min(
+                    28,
+                    max(
+                        len(str(ws.cell(row, col).value or ""))
+                        for row in range(1, min(ws.max_row, 40) + 1)
+                    )
+                    + 2,
+                ),
+            )
             ws.column_dimensions[get_column_letter(col)].width = width
+
+    for symbol in asset_names:
+        if symbol in wb.sheetnames:
+            style_asset_sheet(wb[symbol])
 
     guide = wb["00_Guia"]
     guide.insert_rows(1, 1)
@@ -90,137 +234,164 @@ def style_workbook(path: Path, result: dict, summary: str):
     guide["A1"].fill = PatternFill("solid", fgColor=navy)
     guide["A1"].font = Font(color=white, bold=True, size=15)
 
-    equity = wb["02_Equity"]
-    last_eq = equity.max_row
-    base_headers = equity.max_column
-    derived = ["Strategy Daily Return", "Benchmark Daily Return", "Strategy Peak", "Strategy Drawdown", "Strategy Log Return", "Strategy Growth x", "Benchmark Growth x", "Excess Daily Return", "Benchmark Peak", "Benchmark Drawdown"]
+    equity_ws = wb["02_Equity"]
+    last_eq = equity_ws.max_row
+    base_headers = equity_ws.max_column
+    derived = [
+        "Strategy Daily Return",
+        "Benchmark Daily Return",
+        "Strategy Peak",
+        "Strategy Drawdown",
+    ]
     for offset, name in enumerate(derived, start=1):
-        equity.cell(1, base_headers + offset, name)
-    for r in range(2, last_eq + 1):
-        h = base_headers + 1
-        if r > 2:
-            equity.cell(r, h, f"=B{r}/B{r-1}-1")
-            equity.cell(r, h + 1, f"=C{r}/C{r-1}-1")
-            equity.cell(r, h + 4, f"=LN(B{r}/B{r-1})")
-            equity.cell(r, h + 7, f"={get_column_letter(h)}{r}-{get_column_letter(h+1)}{r}")
-        equity.cell(r, h + 2, f"=MAX(10000,B{r})" if r == 2 else f"=MAX({get_column_letter(h+2)}{r-1},B{r})")
-        equity.cell(r, h + 3, f"=B{r}/{get_column_letter(h+2)}{r}-1")
-        equity.cell(r, h + 5, f"=B{r}/10000")
-        equity.cell(r, h + 6, f"=C{r}/10000")
-        equity.cell(r, h + 8, f"=MAX(10000,C{r})" if r == 2 else f"=MAX({get_column_letter(h+8)}{r-1},C{r})")
-        equity.cell(r, h + 9, f"=C{r}/{get_column_letter(h+8)}{r}-1")
-    dd_col = get_column_letter(base_headers + 4)
-    equity.conditional_formatting.add(f"{dd_col}2:{dd_col}{last_eq}", ColorScaleRule(start_type="min", start_color="F8696B", mid_type="percentile", mid_value=50, mid_color="FFEB84", end_type="max", end_color="63BE7B"))
-
-    cycles = wb["05_Cycles"]
-    last_cycle = cycles.max_row
-    cycles["Z1"] = "LN(1+Return)"
-    for r in range(2, last_cycle + 1):
-        cycles[f"Z{r}"] = f"=LN(1+H{r})"
+        equity_ws.cell(1, base_headers + offset, name)
+    for row in range(2, last_eq + 1):
+        first = base_headers + 1
+        if row > 2:
+            equity_ws.cell(row, first, f"=B{row}/B{row-1}-1")
+            equity_ws.cell(row, first + 1, f"=C{row}/C{row-1}-1")
+        equity_ws.cell(
+            row,
+            first + 2,
+            f"=MAX(10000,B{row})"
+            if row == 2
+            else f"=MAX({get_column_letter(first+2)}{row-1},B{row})",
+        )
+        equity_ws.cell(row, first + 3, f"=B{row}/{get_column_letter(first+2)}{row}-1")
 
     kpi = wb["01_KPIs"]
-    kpi.insert_rows(1, 2)
-    kpi.merge_cells("A1:F1")
-    kpi["A1"] = "Motor x fórmulas do Excel"
-    kpi["A1"].fill = PatternFill("solid", fgColor=navy)
-    kpi["A1"].font = Font(color=white, bold=True, size=15)
-    last_trades = wb["04_Trades"].max_row
-    last_folds = wb["03_Folds"].max_row
+    kpi["A1"] = "Métrica"
+    kpi["B1"] = "Motor / JSON"
+    kpi["C1"] = "Excel"
+    kpi["D1"] = "Diferença"
+    kpi["E1"] = "Status"
+    kpi["F1"] = "Reconstrução"
+
     metrics = result["metrics"]
-    worst_fold = min(float(x["strategy_return"]) for x in metrics["walk_forward_folds"])
+    last_trades = wb["04_Trades"].max_row
+    last_cycles = wb["05_Cycles"].max_row
+    fold_rows = list(metrics.get("walk_forward_folds") or [])
+    worst_fold = min(float(item["strategy_return"]) for item in fold_rows) if fold_rows else None
+
     rows = [
-        ("Initial Capital", metrics["initial_capital"], "='03_Folds'!K2", "Capital inicial."),
-        ("Final Capital", metrics["strategy_ending_capital"], f"='02_Equity'!B{last_eq}", "Última equity."),
-        ("Strategy Return", metrics["strategy_return"], "=C5/C4-1", "Final/inicial - 1."),
-        ("Test Calendar Years", metrics["test_calendar_years"], f"=('02_Equity'!A{last_eq}-'02_Equity'!A2)/365.25", "Período OOS."),
-        ("CAGR", metrics["strategy_cagr"], "=(C5/C4)^(1/C7)-1", "Compound anualizado."),
-        ("Sharpe", metrics["strategy_sharpe"], f"=AVERAGE('02_Equity'!H3:H{last_eq})/STDEV.S('02_Equity'!H3:H{last_eq})*SQRT(252)", "Retorno diário anualizado."),
-        ("Max Drawdown", metrics["strategy_maximum_drawdown"], f"=MIN('02_Equity'!K2:K{last_eq})", "Pior pico→vale."),
-        ("Buys", metrics["simulated_buys"], f'=COUNTIF(\'04_Trades\'!B2:B{last_trades},"BUY")', "Compras."),
-        ("Sells", metrics["simulated_sells"], f'=COUNTIF(\'04_Trades\'!B2:B{last_trades},"SELL")+COUNTIF(\'04_Trades\'!B2:B{last_trades},"FINAL_SELL")', "Vendas."),
-        ("Rotations", metrics["capital_rotations"], f'=COUNTIF(\'04_Trades\'!B2:B{last_trades},"SELL")', "FINAL_SELL não é rotação."),
-        ("Avg Holding Bars", metrics["average_holding_bars"], f"=AVERAGE('05_Cycles'!I2:I{last_cycle})", "Holding médio."),
-        ("Geometric Trade Return", metrics["geometric_trade_return"], f"=EXP(AVERAGE('05_Cycles'!Z2:Z{last_cycle}))-1", "Média geométrica."),
-        ("Total Fees", metrics["total_transaction_fees"], f"=SUM('04_Trades'!L2:L{last_trades})", "Custos."),
-        ("Cash Days", metrics["cash_days"], f'=COUNTIF(\'02_Equity\'!D2:D{last_eq},"CASH")', "Dias em CASH."),
-        ("Decision Sessions", metrics["decision_diagnostics_rows"], f"=COUNTA('02_Equity'!A2:A{last_eq})", "Sessões OOS."),
-        ("Worst Fold Return", worst_fold, f"=MIN('03_Folds'!M2:M{last_folds})", "Pior fold."),
+        ("Initial Capital", metrics.get("initial_capital"), "='03_Folds'!K2", "Capital inicial."),
+        ("Final Capital", metrics.get("strategy_ending_capital"), f"='02_Equity'!B{last_eq}", "Última equity."),
+        ("Strategy Return", metrics.get("strategy_return"), "=C3/C2-1", "Final/inicial - 1."),
+        ("CAGR", metrics.get("strategy_cagr"), None, "Motor."),
+        ("Sharpe", metrics.get("strategy_sharpe"), None, "Motor."),
+        ("Max Drawdown", metrics.get("strategy_maximum_drawdown"), None, "Motor."),
+        ("Buys", metrics.get("simulated_buys"), f'=COUNTIF(\'04_Trades\'!B2:B{last_trades},"BUY")', "Compras."),
+        ("Sells", metrics.get("simulated_sells"), f'=COUNTIF(\'04_Trades\'!B2:B{last_trades},"SELL")+COUNTIF(\'04_Trades\'!B2:B{last_trades},"FINAL_SELL")', "Vendas."),
+        ("Rotations", metrics.get("capital_rotations"), f'=COUNTIF(\'04_Trades\'!B2:B{last_trades},"SELL")', "Rotações."),
+        ("Avg Holding Bars", metrics.get("average_holding_bars"), f"=AVERAGE('05_Cycles'!I2:I{last_cycles})", "Holding médio."),
+        ("Total Fees", metrics.get("total_transaction_fees"), None, "Custos do motor."),
+        ("Worst Fold Return", worst_fold, None, "Pior fold."),
     ]
-    kpi.append(["Métrica", "Motor / JSON", "Excel", "Diferença", "Status", "Reconstrução"])
-    for i, (name, engine, formula, note) in enumerate(rows, start=4):
-        kpi.append([name, engine, formula, f"=C{i}-B{i}", f'=IF(ABS(D{i})<1E-8,"OK","CHECK")', note])
-    kpi.append([])
-    kpi.append(["Ciclos", "Valor", "Uso"])
-    kpi.append(["Wins", f'=COUNTIF(\'05_Cycles\'!Y2:Y{last_cycle},"WIN")', "Ciclos positivos"])
-    kpi.append(["Losses", f'=COUNTIF(\'05_Cycles\'!Y2:Y{last_cycle},"LOSS")', "Ciclos negativos"])
-    kpi.append(["Win Rate", f"=B{kpi.max_row-1}/(B{kpi.max_row-1}+B{kpi.max_row})", "Taxa de acerto"])
+
+    for row_index, (name, engine, formula, note) in enumerate(rows, start=2):
+        kpi.cell(row_index, 1, name)
+        kpi.cell(row_index, 2, engine)
+        if formula:
+            kpi.cell(row_index, 3, formula)
+            kpi.cell(row_index, 4, f"=C{row_index}-B{row_index}")
+            kpi.cell(row_index, 5, f'=IF(ABS(D{row_index})<1E-8,"OK","CHECK")')
+        else:
+            kpi.cell(row_index, 3, engine)
+            kpi.cell(row_index, 4, 0)
+            kpi.cell(row_index, 5, "REFERENCE")
+        kpi.cell(row_index, 6, note)
 
     chart = LineChart()
     chart.title = "Capital: Strategy vs Benchmark"
-    chart.add_data(Reference(equity, min_col=2, max_col=3, min_row=1, max_row=last_eq), titles_from_data=True)
+    chart.add_data(
+        Reference(equity_ws, min_col=2, max_col=3, min_row=1, max_row=last_eq),
+        titles_from_data=True,
+    )
     chart.height, chart.width = 8, 16
-    kpi.add_chart(chart, "H3")
-
-    rec = wb["10_Reconciliation"]
-    rec.append(["Capital inicial", "='01_KPIs'!B4"])
-    rec.append(["PnL realizado", f'=SUMIF(\'04_Trades\'!B2:B{last_trades},"SELL",\'04_Trades\'!M2:M{last_trades})+SUMIF(\'04_Trades\'!B2:B{last_trades},"FINAL_SELL",\'04_Trades\'!M2:M{last_trades})'])
-    rec.append(["BUY fees", f'=SUMIF(\'04_Trades\'!B2:B{last_trades},"BUY",\'04_Trades\'!L2:L{last_trades})'])
-    rec.append(["Capital reconciliado", "=B2+B3-B4"])
-    rec.append(["Capital equity", f"='02_Equity'!B{last_eq}"])
-    rec.append(["Diferença", "=B5-B6"])
+    kpi.add_chart(chart, "H2")
 
     raw = wb["09_JSON"]
-    raw[raw.max_row + 2][0].value = "summary.txt"
+    raw.cell(raw.max_row + 2, 1, "summary.txt")
     raw.cell(raw.max_row + 1, 1, summary)
 
     if hasattr(wb, "calculation"):
         wb.calculation.fullCalcOnLoad = True
         wb.calculation.forceFullCalc = True
         wb.calculation.calcMode = "auto"
+
     wb.save(path)
 
 
 def main():
     config = args()
-    result, equity, folds, trades, summary = load_data(config.output_dir)
+    result, equity, folds, trades, market, summary = load_data(config.output_dir)
     cycles = build_cycles(trades)
+    monthly = build_monthly(equity)
+    asset_summary = build_asset_summary(market)
 
-    guide = pd.DataFrame([
-        ["backtest_result.json", "Resultado canônico", "Métricas e metadados", "Parcial"],
-        ["equity_curve.csv", "Curva de capital", "CAGR, Sharpe, drawdown", "Sim"],
-        ["folds.csv", "Walk-forward", "Retorno e compound por fold", "Sim"],
-        ["trades.csv", "Livro-razão", "PnL, custos e diagnósticos", "Sim após decisão"],
-        ["summary.txt", "Resumo", "Conferência", "Não necessário"],
-    ], columns=["Arquivo", "Papel", "Auditoria", "Excel"])
-    dictionary = pd.DataFrame([
-        ["strategy_equity", "Capital ao fim da sessão"],
-        ["effective_switch_margin", "Margem mínima para rotação"],
-        ["current_score", "Utility da posição atual"],
-        ["best_score", "Utility do melhor candidato"],
-        ["best_vs_current_gap", "Diferença entre candidato e posição"],
-        ["current_asset_rank", "Ranking da posição atual"],
-        ["maximum_favorable_excursion", "MFE: maior excursão favorável"],
-        ["maximum_adverse_excursion", "MAE: maior excursão adversa"],
-        ["profit_capture_ratio", "Fração do MFE capturada"],
-        ["opportunity_cost", "Melhor alternativa ex post - escolha"],
-    ], columns=["Campo", "Significado"])
+    guide = pd.DataFrame(
+        [
+            ["market_data.csv", "Snapshot Yahoo", "OHLCV usado pelo motor", "Sim"],
+            ["backtest_result.json", "Resultado canônico", "Métricas e metadados", "Parcial"],
+            ["equity_curve.csv", "Curva de capital", "CAGR, Sharpe, drawdown", "Sim"],
+            ["folds.csv", "Walk-forward", "Retorno e compound por fold", "Sim"],
+            ["trades.csv", "Livro-razão", "PnL, custos e diagnósticos", "Sim após decisão"],
+            ["summary.txt", "Resumo", "Conferência", "Não necessário"],
+        ],
+        columns=["Arquivo", "Papel", "Auditoria", "Excel"],
+    )
+
+    dictionary = pd.DataFrame(
+        [
+            ["market_data.csv", "Séries temporais OHLCV baixadas do Yahoo e usadas no backtest"],
+            ["strategy_equity", "Capital ao fim da sessão"],
+            ["effective_switch_margin", "Margem mínima para rotação"],
+            ["current_score", "Utility da posição atual"],
+            ["best_score", "Utility do melhor candidato"],
+            ["maximum_favorable_excursion", "MFE: maior excursão favorável"],
+            ["maximum_adverse_excursion", "MAE: maior excursão adversa"],
+            ["profit_capture_ratio", "Fração do MFE capturada"],
+        ],
+        columns=["Campo", "Significado"],
+    )
+
     flat = pd.DataFrame(flatten(result), columns=["JSON Path", "Type", "Value"])
 
     config.destination.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(config.destination, engine="openpyxl") as writer:
         guide.to_excel(writer, sheet_name="00_Guia", index=False)
-        pd.DataFrame().to_excel(writer, sheet_name="01_KPIs", index=False)
+        pd.DataFrame(columns=["Métrica", "Motor / JSON", "Excel", "Diferença", "Status", "Reconstrução"]).to_excel(
+            writer, sheet_name="01_KPIs", index=False
+        )
         equity.to_excel(writer, sheet_name="02_Equity", index=False)
         folds.to_excel(writer, sheet_name="03_Folds", index=False)
         trades.to_excel(writer, sheet_name="04_Trades", index=False)
         cycles.to_excel(writer, sheet_name="05_Cycles", index=False)
-        pd.DataFrame({"Asset": result.get("assets", [])}).to_excel(writer, sheet_name="06_Assets", index=False)
-        equity.assign(Month=equity["timestamp"].str[:7]).groupby("Month", as_index=False).tail(1)[["Month", "strategy_equity", "buy_hold_equity"]].to_excel(writer, sheet_name="07_Monthly", index=False)
+        asset_summary.to_excel(writer, sheet_name="06_Assets", index=False)
+        monthly.to_excel(writer, sheet_name="07_Monthly", index=False)
         dictionary.to_excel(writer, sheet_name="08_Dictionary", index=False)
         flat.to_excel(writer, sheet_name="09_JSON", index=False)
-        pd.DataFrame(columns=["Passo", "Valor"]).to_excel(writer, sheet_name="10_Reconciliation", index=False)
-    style_workbook(config.destination, result, summary)
-    print(f"Created: {config.destination}")
+        pd.DataFrame(columns=["Item", "Valor"]).to_excel(
+            writer, sheet_name="10_Reconciliation", index=False
+        )
+        asset_summary.to_excel(writer, sheet_name="11_Ativos", index=False)
+
+        asset_order = [str(symbol) for symbol in result.get("assets", [])]
+        if not asset_order:
+            asset_order = list(dict.fromkeys(market["symbol"].astype(str)))
+
+        for symbol in asset_order:
+            series = market.loc[market["symbol"].eq(symbol)].copy()
+            series = series.sort_values("timestamp")
+            series = series[["timestamp", "open", "high", "low", "close", "volume"]]
+            series.columns = ["Date", "Open", "High", "Low", "Close", "Volume"]
+            # Excel does not support timezone-aware datetimes.
+            series["Date"] = pd.to_datetime(series["Date"], utc=True).dt.tz_localize(None)
+            series.to_excel(writer, sheet_name=symbol[:31], index=False)
+
+    asset_names = [str(symbol)[:31] for symbol in result.get("assets", [])]
+    style_workbook(config.destination, result, summary, asset_names)
+    print(f"Excel generated: {config.destination}")
 
 
 if __name__ == "__main__":
