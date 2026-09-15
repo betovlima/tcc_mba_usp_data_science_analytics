@@ -31,10 +31,7 @@ from tcc_engine.config import (
     END_DATE as DATA_FIM,
     START_DATE as DATA_INICIO,
 )
-from tcc_engine.execution import (
-    apply_slippage as aplicar_deslizamento,
-    calculate_reference_fees as calcular_taxas_referencia,
-)
+from tcc_engine.execution import aplicar_deslizamento, calcular_taxas_referencia
 
 RAIZ_PROJETO = Path(__file__).resolve().parent
 DIRETORIO_SAIDA = RAIZ_PROJETO / "output"
