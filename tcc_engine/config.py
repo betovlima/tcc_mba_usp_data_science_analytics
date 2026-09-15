@@ -1,0 +1,134 @@
+"""Frozen standalone configuration for the historical TCC replay.
+
+This module contains the experiment parameters required by the vendored
+``tcc_engine``.  They are declared locally on purpose: runtime execution must
+not read Strategy documents or any processed artifact from Market Cycle Trader.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field, replace
+from typing import Any
+
+START_DATE = "2016-01-01"
+END_DATE = "2026-09-04"
+
+ASSETS = (
+    "NVDA", "MSFT", "META", "TSLA", "AMD", "JPM", "SPY", "AVGO", "NFLX",
+    "ORCL", "COST", "LLY", "XOM", "CAT", "WMT", "V", "HD", "ADC", "ADEA",
+    "ADI", "ADM", "GKOS", "VNCE", "CORT", "UNFI", "DNN", "MKSI", "APD",
+    "DDS", "RACE", "UNF", "TX", "CEF", "YANG", "KKR", "BXMT", "SCSC",
+)
+
+
+def _lightgbm_settings() -> dict[str, Any]:
+    return {
+        "settings_revision": "tcc-historical-standalone-v1",
+        "profile_id": "strategy-10-lightgbm-utility",
+        "lightgbm": {
+            "n_estimators": 300,
+            "learning_rate": 0.035,
+            "max_depth": 3,
+            "num_leaves": 8,
+            "min_child_samples": 20,
+            "min_child_weight": 5.0,
+            "subsample": 0.85,
+            "subsample_freq": 0,
+            "colsample_bytree": 0.85,
+            "reg_alpha": 0.10,
+            "reg_lambda": 2.0,
+            "max_bin": 255,
+            "n_jobs": -1,
+        },
+    }
+
+
+@dataclass(frozen=True)
+class StandaloneBacktestConfig:
+    """Local equivalent of the historical execution request used by the engine."""
+
+    assets: tuple[str, ...] = ASSETS
+    strategy_mode: str = "COMPOUND_ROTATION_SWING_XGBOOST"
+    start_date: str = START_DATE
+    end_date: str = END_DATE
+    timeframe: str = "1Day"
+
+    initial_capital: float = 10_000.0
+    whole_shares: bool = False
+    slippage_bps: float = 0.0
+    commission_rate: float = 0.0
+    sec_fee_rate: float = 2.06e-5
+    taf_fee_per_share: float = 0.000195
+    taf_fee_cap: float = 9.79
+    cat_fee_per_share: float = 3e-6
+
+    rotation_horizon_days: int = 40
+    rotation_target_horizons: tuple[int, ...] = (5, 10, 20, 40, 60)
+    rotation_target_horizon_weights: tuple[float, ...] = (0.10, 0.15, 0.20, 0.30, 0.25)
+    rotation_movement_capture_weight: float = 0.35
+    rotation_trend_persistence_weight: float = 0.20
+
+    rotation_minimum_training_rows: int = 700
+    rotation_walk_forward_enabled: bool = True
+    rotation_walk_forward_calibration_days: int = 126
+    rotation_walk_forward_test_days: int = 504
+    rotation_walk_forward_min_test_days: int = 126
+    rotation_purge_days: int = 60
+
+    rotation_downside_penalty: float = 0.20
+    rotation_drawdown_penalty: float = 0.35
+    rotation_min_holding_days: int = 2
+    rotation_min_expected_edge: float = 0.001
+    rotation_cash_threshold: float = 0.0
+    rotation_switch_margin: float = 0.005
+    rotation_switch_margin_candidates: tuple[float, ...] = (0.0, 0.0025, 0.005, 0.01)
+
+    rotation_xgb_n_estimators: int = 300
+    rotation_xgb_learning_rate: float = 0.035
+    rotation_xgb_max_depth: int = 3
+    rotation_xgb_repetitions: int = 1
+    rotation_seed_step: int = 1000
+    rotation_accelerator: str = "cpu"
+    rotation_allow_cpu_fallback: bool = True
+
+    xgb_min_child_weight: float = 5.0
+    xgb_subsample: float = 0.85
+    xgb_colsample_bytree: float = 0.85
+    xgb_reg_alpha: float = 0.10
+    xgb_reg_lambda: float = 2.0
+    xgb_n_jobs: int = -1
+
+    random_state: int = 42
+    deterministic_execution: bool = False
+    numeric_thread_limit: int = 1
+
+    # Research execution metadata that historically accompanied the request.
+    # They are local values, not loaded from MCT or MongoDB.
+    research_model_family: str = "lightgbm_utility"
+    research_model_settings: dict[str, Any] = field(default_factory=_lightgbm_settings)
+    analysis_start_date: str = START_DATE
+    analysis_end_date: str = END_DATE
+    calendar_anchor_assets: tuple[str, ...] = ASSETS
+    research_reference_assets: tuple[str, ...] = ASSETS
+    research_candidate_assets: tuple[str, ...] = ()
+    walk_forward_fold_count_override: int | None = None
+    research_market_data_mode: str = "database_only"
+
+    # Later strategy families use these values.  The historical legacy mode
+    # does not activate those gates, but the local engine exposes the complete
+    # interface and expects the attributes to exist in some diagnostic paths.
+    opportunity_utility_entry_threshold: float = 0.28
+    opportunity_utility_exit_threshold: float = 0.27
+    allocation_lookback_days: int = 126
+    allocation_max_asset_weight: float = 1.0
+    allocation_cvar_confidence: float = 0.95
+    allocation_cvar_penalty: float = 1.0
+    allocation_turnover_penalty: float = 0.0025
+    allocation_minimum_utility: float = 0.0
+    allocation_signal_scale: float = 1.0
+
+    def model_copy(self, *, update: dict[str, Any] | None = None) -> "StandaloneBacktestConfig":
+        """Small Pydantic-compatible adapter required by the historical engine."""
+        return replace(self, **dict(update or {}))
+
+
+CONFIG = StandaloneBacktestConfig()
