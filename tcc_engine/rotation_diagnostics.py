@@ -6,203 +6,207 @@ import numpy as np
 import pandas as pd
 
 
-def _timestamp(value: Any) -> pd.Timestamp | None:
-    if value is None:
+def _instante(valor: Any) -> pd.Timestamp | None:
+    if valor is None:
         return None
     try:
-        parsed = pd.Timestamp(value)
+        convertido = pd.Timestamp(valor)
     except (TypeError, ValueError):
         return None
-    if parsed.tzinfo is None:
-        return parsed.tz_localize("UTC")
-    return parsed.tz_convert("UTC")
+    if convertido.tzinfo is None:
+        return convertido.tz_localize("UTC")
+    return convertido.tz_convert("UTC")
 
 
-def _number(value: Any) -> float | None:
+def _numero(valor: Any) -> float | None:
     try:
-        number = float(value)
+        numero = float(valor)
     except (TypeError, ValueError):
         return None
-    return number if np.isfinite(number) else None
+    return numero if np.isfinite(numero) else None
 
 
-def _frame_at(frames: dict[str, pd.DataFrame], symbol: str) -> pd.DataFrame | None:
-    frame = frames.get(str(symbol or ""))
-    if frame is None or frame.empty:
+def _quadro_do_ativo(
+    quadros: dict[str, pd.DataFrame],
+    simbolo: str,
+) -> pd.DataFrame | None:
+    quadro = quadros.get(str(simbolo or ""))
+    if quadro is None or quadro.empty:
         return None
-    if not isinstance(frame.index, pd.DatetimeIndex):
+    if not isinstance(quadro.index, pd.DatetimeIndex):
         return None
-    if frame.index.tz is None:
-        frame = frame.copy()
-        frame.index = frame.index.tz_localize("UTC")
-    return frame.sort_index()
+    if quadro.index.tz is None:
+        quadro = quadro.copy()
+        quadro.index = quadro.index.tz_localize("UTC")
+    return quadro.sort_index()
 
 
-def _open_to_open_return(
-    frames: dict[str, pd.DataFrame],
-    symbol: str,
-    start_at: Any,
-    end_at: Any,
+def _retorno_abertura_abertura(
+    quadros: dict[str, pd.DataFrame],
+    simbolo: str,
+    inicio_em: Any,
+    fim_em: Any,
 ) -> float | None:
-    frame = _frame_at(frames, symbol)
-    start = _timestamp(start_at)
-    end = _timestamp(end_at)
-    if frame is None or start is None or end is None or end <= start:
+    quadro = _quadro_do_ativo(quadros, simbolo)
+    inicio = _instante(inicio_em)
+    fim = _instante(fim_em)
+    if quadro is None or inicio is None or fim is None or fim <= inicio:
         return None
     try:
-        start_open = _number(frame.loc[start, "open"])
-        end_open = _number(frame.loc[end, "open"])
+        abertura_inicial = _numero(quadro.loc[inicio, "open"])
+        abertura_final = _numero(quadro.loc[fim, "open"])
     except (KeyError, TypeError):
         return None
-    if start_open in {None, 0.0} or end_open is None:
+    if abertura_inicial in {None, 0.0} or abertura_final is None:
         return None
-    return float(end_open / start_open - 1.0)
+    return float(abertura_final / abertura_inicial - 1.0)
 
 
-def _position_excursions(
-    frames: dict[str, pd.DataFrame],
-    symbol: str,
-    entry_at: Any,
-    exit_at: Any,
-    entry_price: Any,
+def _excursoes_posicao(
+    quadros: dict[str, pd.DataFrame],
+    simbolo: str,
+    entrada_em: Any,
+    saida_em: Any,
+    preco_entrada: Any,
 ) -> dict[str, float | None]:
-    frame = _frame_at(frames, symbol)
-    start = _timestamp(entry_at)
-    end = _timestamp(exit_at)
-    base = _number(entry_price)
-    if frame is None or start is None or end is None or base in {None, 0.0} or end < start:
+    quadro = _quadro_do_ativo(quadros, simbolo)
+    inicio = _instante(entrada_em)
+    fim = _instante(saida_em)
+    base = _numero(preco_entrada)
+    if quadro is None or inicio is None or fim is None or base in {None, 0.0} or fim < inicio:
         return {
             "maximum_favorable_excursion": None,
             "maximum_adverse_excursion": None,
         }
 
-    holding = frame.loc[(frame.index >= start) & (frame.index < end)]
-    highs = pd.to_numeric(holding.get("high"), errors="coerce").dropna() if not holding.empty else pd.Series(dtype=float)
-    lows = pd.to_numeric(holding.get("low"), errors="coerce").dropna() if not holding.empty else pd.Series(dtype=float)
+    periodo = quadro.loc[(quadro.index >= inicio) & (quadro.index < fim)]
+    maximas = (
+        pd.to_numeric(periodo.get("high"), errors="coerce").dropna()
+        if not periodo.empty
+        else pd.Series(dtype=float)
+    )
+    minimas = (
+        pd.to_numeric(periodo.get("low"), errors="coerce").dropna()
+        if not periodo.empty
+        else pd.Series(dtype=float)
+    )
 
-    exit_open = None
+    abertura_saida = None
     try:
-        exit_open = _number(frame.loc[end, "open"])
+        abertura_saida = _numero(quadro.loc[fim, "open"])
     except (KeyError, TypeError):
         pass
 
-    high_values = highs.tolist()
-    low_values = lows.tolist()
-    if exit_open is not None:
-        high_values.append(exit_open)
-        low_values.append(exit_open)
-    if not high_values or not low_values:
+    valores_maximos = maximas.tolist()
+    valores_minimos = minimas.tolist()
+    if abertura_saida is not None:
+        valores_maximos.append(abertura_saida)
+        valores_minimos.append(abertura_saida)
+    if not valores_maximos or not valores_minimos:
         return {
             "maximum_favorable_excursion": None,
             "maximum_adverse_excursion": None,
         }
 
     return {
-        "maximum_favorable_excursion": max(0.0, float(max(high_values) / base - 1.0)),
-        "maximum_adverse_excursion": min(0.0, float(min(low_values) / base - 1.0)),
+        "maximum_favorable_excursion": max(0.0, float(max(valores_maximos) / base - 1.0)),
+        "maximum_adverse_excursion": min(0.0, float(min(valores_minimos) / base - 1.0)),
     }
 
 
-def _next_exit(
-    rows: list[dict[str, Any]],
-    buy_index: int,
-    symbol: str,
+def _proxima_saida(
+    linhas: list[dict[str, Any]],
+    indice_compra: int,
+    simbolo: str,
 ) -> dict[str, Any] | None:
-    for row in rows[buy_index + 1 :]:
-        if str(row.get("asset") or "") != symbol:
+    for linha in linhas[indice_compra + 1 :]:
+        if str(linha.get("asset") or "") != simbolo:
             continue
-        if str(row.get("action") or "").upper() in {"SELL", "FINAL_SELL"}:
-            return row
+        if str(linha.get("action") or "").upper() in {"SELL", "FINAL_SELL"}:
+            return linha
     return None
 
 
-def enrich_trade_diagnostics(
-    records: Iterable[dict[str, Any]],
-    frames: dict[str, pd.DataFrame],
-    symbols: Iterable[str],
+def enriquecer_diagnosticos_operacoes(
+    registros: Iterable[dict[str, Any]],
+    quadros: dict[str, pd.DataFrame],
+    simbolos: Iterable[str],
 ) -> list[dict[str, Any]]:
-    
+    linhas = [dict(linha) for linha in registros]
+    universo = [str(simbolo) for simbolo in simbolos]
 
-
-
-
-
-
-    rows = [dict(row) for row in records]
-    universe = [str(symbol) for symbol in symbols]
-
-    for row in rows:
-        if str(row.get("action") or "").upper() not in {"SELL", "FINAL_SELL"}:
+    for linha in linhas:
+        if str(linha.get("action") or "").upper() not in {"SELL", "FINAL_SELL"}:
             continue
-        excursions = _position_excursions(
-            frames,
-            str(row.get("asset") or ""),
-            row.get("entry_timestamp"),
-            row.get("timestamp"),
-            row.get("entry_price"),
+        excursoes = _excursoes_posicao(
+            quadros,
+            str(linha.get("asset") or ""),
+            linha.get("entry_timestamp"),
+            linha.get("timestamp"),
+            linha.get("entry_price"),
         )
-        row.update(excursions)
-        realized_return = _number(row.get("position_return"))
-        mfe = _number(excursions.get("maximum_favorable_excursion"))
-        row["profit_capture_ratio"] = (
-            max(0.0, realized_return) / mfe
-            if realized_return is not None and mfe is not None and mfe > 0
+        linha.update(excursoes)
+        retorno_realizado = _numero(linha.get("position_return"))
+        mfe = _numero(excursoes.get("maximum_favorable_excursion"))
+        linha["profit_capture_ratio"] = (
+            max(0.0, retorno_realizado) / mfe
+            if retorno_realizado is not None and mfe is not None and mfe > 0
             else None
         )
 
-    for index, buy in enumerate(rows):
-        if str(buy.get("action") or "").upper() != "BUY":
+    for indice, compra in enumerate(linhas):
+        if str(compra.get("action") or "").upper() != "BUY":
             continue
-        rotation_id = str(buy.get("rotation_id") or "").strip()
-        from_asset = str(buy.get("rotation_from_asset") or "").strip()
-        to_asset = str(buy.get("rotation_to_asset") or buy.get("asset") or "").strip()
-        if not rotation_id or not from_asset or not to_asset:
+        identificador_rotacao = str(compra.get("rotation_id") or "").strip()
+        ativo_origem = str(compra.get("rotation_from_asset") or "").strip()
+        ativo_destino = str(compra.get("rotation_to_asset") or compra.get("asset") or "").strip()
+        if not identificador_rotacao or not ativo_origem or not ativo_destino:
             continue
 
-        exit_row = _next_exit(rows, index, to_asset)
-        if exit_row is None:
+        linha_saida = _proxima_saida(linhas, indice, ativo_destino)
+        if linha_saida is None:
             continue
-        start_at = buy.get("timestamp")
-        end_at = exit_row.get("timestamp")
-        chosen_return = _open_to_open_return(frames, to_asset, start_at, end_at)
-        previous_return = _open_to_open_return(frames, from_asset, start_at, end_at)
+        inicio_em = compra.get("timestamp")
+        fim_em = linha_saida.get("timestamp")
+        retorno_escolhido = _retorno_abertura_abertura(quadros, ativo_destino, inicio_em, fim_em)
+        retorno_anterior = _retorno_abertura_abertura(quadros, ativo_origem, inicio_em, fim_em)
 
-        alternative_returns: list[tuple[str, float]] = []
-        for symbol in universe:
-            value = _open_to_open_return(frames, symbol, start_at, end_at)
-            if value is not None:
-                alternative_returns.append((symbol, value))
-        best_asset = None
-        best_return = None
-        if alternative_returns:
-            best_asset, best_return = max(alternative_returns, key=lambda item: item[1])
+        retornos_alternativos: list[tuple[str, float]] = []
+        for simbolo in universo:
+            valor = _retorno_abertura_abertura(quadros, simbolo, inicio_em, fim_em)
+            if valor is not None:
+                retornos_alternativos.append((simbolo, valor))
+        melhor_ativo = None
+        melhor_retorno = None
+        if retornos_alternativos:
+            melhor_ativo, melhor_retorno = max(retornos_alternativos, key=lambda item: item[1])
 
-        value_added = (
-            chosen_return - previous_return
-            if chosen_return is not None and previous_return is not None
+        valor_adicionado = (
+            retorno_escolhido - retorno_anterior
+            if retorno_escolhido is not None and retorno_anterior is not None
             else None
         )
-        opportunity_cost = (
-            max(0.0, best_return - chosen_return)
-            if best_return is not None and chosen_return is not None
+        custo_oportunidade = (
+            max(0.0, melhor_retorno - retorno_escolhido)
+            if melhor_retorno is not None and retorno_escolhido is not None
             else None
         )
 
-        buy.update(
+        compra.update(
             {
-                "subsequent_position_return": _number(exit_row.get("position_return")),
-                "chosen_market_return": chosen_return,
-                "counterfactual_previous_asset_return": previous_return,
-                "rotation_value_added": value_added,
-                "rotation_regret": max(0.0, -value_added) if value_added is not None else None,
-                "best_alternative_asset": best_asset,
-                "best_alternative_return": best_return,
-                "opportunity_cost": opportunity_cost,
-                "maximum_favorable_excursion": _number(exit_row.get("maximum_favorable_excursion")),
-                "maximum_adverse_excursion": _number(exit_row.get("maximum_adverse_excursion")),
-                "profit_capture_ratio": _number(exit_row.get("profit_capture_ratio")),
-                "subsequent_holding_days": _number(exit_row.get("holding_bars")),
+                "subsequent_position_return": _numero(linha_saida.get("position_return")),
+                "chosen_market_return": retorno_escolhido,
+                "counterfactual_previous_asset_return": retorno_anterior,
+                "rotation_value_added": valor_adicionado,
+                "rotation_regret": max(0.0, -valor_adicionado) if valor_adicionado is not None else None,
+                "best_alternative_asset": melhor_ativo,
+                "best_alternative_return": melhor_retorno,
+                "opportunity_cost": custo_oportunidade,
+                "maximum_favorable_excursion": _numero(linha_saida.get("maximum_favorable_excursion")),
+                "maximum_adverse_excursion": _numero(linha_saida.get("maximum_adverse_excursion")),
+                "profit_capture_ratio": _numero(linha_saida.get("profit_capture_ratio")),
+                "subsequent_holding_days": _numero(linha_saida.get("holding_bars")),
             }
         )
 
-    return rows
+    return linhas
