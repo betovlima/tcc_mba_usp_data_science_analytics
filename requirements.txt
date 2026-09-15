@@ -8,8 +8,8 @@ threadpoolctl>=3.5,<4
 # Modelo usado pelo experimento
 lightgbm>=4.6,<5
 
-# Séries históricas OHLCV do Yahoo Finance
-yfinance>=1.7,<2
+# Exportação única do histórico Alpaca certificado a partir do Mongo local
+pymongo>=4.11,<5
 
 # Geração da planilha de auditoria
 openpyxl>=3.1,<4
