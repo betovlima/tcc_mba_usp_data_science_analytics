@@ -1,79 +1,19 @@
 # TCC MBA USP — Data Science & Analytics
 
-Projeto de conclusão do MBA em Data Science & Analytics da USP, focado na construção reproduzível e validação de um backtest de rotação de capital entre ativos usando LightGBM e validação walk-forward.
-
-Este `README.md` é o documento único do projeto para execução, metodologia, arquitetura, limitações e evolução. Não serão criados READMEs separados por versão ou etapa.
-
-## Regra principal de reprodutibilidade
-
-A execução do TCC pode reaproveitar do projeto original somente a base histórica diária dos ativos.
-
-Fonte externa permitida:
-
-```text
-MongoDB local
-└── extrema_backtest
-    └── alpaca_market_bars
-        └── OHLCV diário
-```
-
-Não são lidos durante a execução:
-
-- Strategy persistida;
-- parâmetros de Strategy armazenados no MongoDB;
-- modelos treinados;
-- previsões persistidas;
-- resultados de backtests anteriores;
-- jobs da API;
-- artefatos do Front;
-- hashes de Strategy ou commits do MCT;
-- caches de modelos ou de resultados.
-
-Os parâmetros metodológicos do experimento ficam declarados no próprio código deste repositório.
-
-## Fluxo completo
-
-Cada execução reconstrói o experimento desde os candles brutos:
-
-```text
-OHLCV bruto do MongoDB local
-        ↓
-1. limpeza e organização dos candles
-        ↓
-2. construção das features
-        ↓
-3. construção dos targets multi-horizonte
-        ↓
-4. criação dos folds walk-forward
-        ↓
-5. treinamento LightGBM do zero por fold e por ativo
-        ↓
-6. previsões somente fora da amostra
-        ↓
-7. política de rotação
-        ↓
-8. simulação de BUY / SELL / custos
-        ↓
-9. curva de capital
-        ↓
-10. CAGR / Sharpe / Max Drawdown / demais métricas
-```
-
-Nenhuma etapa intermediária é carregada pronta.
+Backtest reproduzível de rotação de capital entre ativos com LightGBM e validação walk-forward.
 
 ## Execução
-
-### 1. Instalação
 
 ```bash
 git clone https://github.com/betovlima/tcc_mba_usp_data_science_analytics.git
 cd tcc_mba_usp_data_science_analytics
 python -m pip install -r requirements.txt
+python backtest.py
 ```
 
-### 2. MongoDB local
+No Spyder, abra `backtest.py` e pressione `F5`.
 
-Por padrão:
+MongoDB local padrão:
 
 ```text
 URI        mongodb://localhost:27017
@@ -84,59 +24,88 @@ Feed       sip
 Adjustment all
 ```
 
-Opcionalmente, crie um `.env` local:
+Opcionalmente:
 
 ```text
 TCC_MONGO_URI=mongodb://localhost:27017
 TCC_MONGO_DATABASE=extrema_backtest
 ```
 
-O programa rejeita MongoDB remoto para esta execução acadêmica.
+A execução rejeita MongoDB remoto.
 
-### 3. Spyder
+## Auditoria no Excel
 
-Abra:
-
-```text
-backtest.py
-```
-
-e pressione `F5`.
-
-### 4. Terminal
+Após o backtest:
 
 ```bash
-python backtest.py
+python analysis/build_excel.py
 ```
 
-## Estrutura
+Arquivo gerado:
 
 ```text
-tcc_mba_usp_data_science_analytics/
-├── backtest.py
-├── requirements.txt
-├── README.md
-├── .gitignore
-└── tcc_engine/
+analysis/tcc_backtest_output_analysis.xlsx
 ```
 
-`backtest.py` é o ponto de entrada estável. `tcc_engine/` contém somente o código necessário para construir features, targets, modelos, política, execução e métricas dentro do próprio projeto.
+A planilha importa o `output/` e reconstrói no Excel as principais métricas, folds, curva de capital, operações, ciclos, análise mensal e reconciliação contábil.
 
-## Configuração do experimento
-
-Período bruto:
+## Fluxo do experimento
 
 ```text
-2016-01-01 → 2026-09-04
+OHLCV bruto
+  ↓
+features
+  ↓
+target multi-horizonte
+  ↓
+folds walk-forward
+  ↓
+treinamento LightGBM por fold
+  ↓
+predições OOS
+  ↓
+ranking e política de rotação
+  ↓
+execução na sessão seguinte
+  ↓
+custos e compound
+  ↓
+métricas e artefatos
 ```
 
-Capital inicial:
+Todo o processamento é executado pelo código local deste repositório.
+
+## Fonte de dados
+
+Entrada de runtime:
 
 ```text
-US$ 10.000,00
+extrema_backtest.alpaca_market_bars
 ```
 
-Universo fixo de 37 ativos:
+Campos utilizados:
+
+```text
+symbol
+timestamp
+open
+high
+low
+close
+volume
+```
+
+Não são usados como entrada:
+
+- Strategy persistida;
+- modelo treinado persistido;
+- previsões persistidas;
+- resultado de backtest anterior;
+- jobs ou serviços externos de processamento.
+
+## Universo congelado
+
+37 ativos:
 
 ```text
 NVDA, MSFT, META, TSLA, AMD, JPM, SPY, AVGO, NFLX,
@@ -145,106 +114,212 @@ ADI, ADM, GKOS, VNCE, CORT, UNFI, DNN, MKSI, APD,
 DDS, RACE, UNF, TX, CEF, YANG, KKR, BXMT, SCSC
 ```
 
-O projeto não executa nova descoberta ou seleção de ativos. O foco do TCC é a reconstrução reproduzível do backtest para esse universo.
-
-### Target e validação temporal
+Histórico bruto:
 
 ```text
-Horizontes do target        5, 10, 20, 40 e 60 sessões
-Pesos                       0,10 / 0,15 / 0,20 / 0,30 / 0,25
-Treino mínimo               700 sessões
-Calibração                  126 sessões
-Teste por fold              504 sessões
-Teste mínimo                126 sessões
-Purge                       60 sessões
-Holding mínimo              2 sessões
-Random state                42
+2016-01-01 → 2026-09-04
 ```
 
-### LightGBM
+O período inicial é usado para construção de features, targets e treino. A avaliação econômica é feita somente nas sessões OOS.
 
-O LightGBM é treinado novamente a cada execução e a cada fold. Os hiperparâmetros usados no experimento são declarados em `tcc_engine/config.py` e não são carregados do MongoDB.
+## Configuração certificada
 
-Parâmetros principais:
+Principais parâmetros:
 
 ```text
-n_estimators        329
-learning_rate       0.020731
-max_depth           3
-num_leaves          6
-min_child_samples   18
-min_child_weight    5.0
-subsample           0.85
-colsample_bytree    0.88067
-reg_alpha           0.050837
-reg_lambda          3.596305
-random_state        42
+capital inicial                  10,000
+modelo                           LightGBM Utility
+n_estimators                     329
+learning_rate                    0.020731
+max_depth                        3
+num_leaves                       6
+min_child_samples                18
+min_child_weight                 5.0
+subsample                        0.85
+colsample_bytree                 0.88067
+reg_alpha                        0.050837
+reg_lambda                       3.596305
+holding mínimo                   2 sessões
+switch margin base               0.0005
+margens de calibração            0, 0.0025, 0.005, 0.01
+random_state                     42
 ```
+
+## Resultado reproduzido
+
+```text
+Capital inicial        US$ 10,000.00
+Capital final          US$ 43,759,854.819224246
+CAGR                   293.8231%
+Sharpe                 2.557370
+Max Drawdown           -28.1934%
+Rotações               315
+Compras                316
+Vendas                 316
+CASH days              0
+Exposição              100%
+Sessões OOS            1,538
+```
+
+O capital final reproduz exatamente a referência histórica certificada.
 
 ## Walk-forward
 
-A avaliação usa separação temporal. O histórico anterior ao período de teste é usado para treinamento e calibração; o modelo é avaliado somente em dados posteriores que não participaram do treinamento.
-
-Não é usado split aleatório.
-
-O `purge` cria uma separação adicional entre treino/calibração e teste para reduzir contaminação temporal dos targets futuros.
-
-## Saídas
-
-Cada execução grava em `output/`:
-
 ```text
-backtest_result.json
-summary.txt
-equity_curve.csv
-trades.csv
-folds.csv
+Fold 1   US$ 10,000.00       → US$ 69,042.61       +590.43%
+Fold 2   US$ 69,042.61       → US$ 2,805,962.94    +3,964.10%
+Fold 3   US$ 2,805,962.94    → US$ 43,759,854.82   +1,459.53%
 ```
 
-Esses arquivos são resultados da execução. Eles nunca são usados como entrada de uma execução posterior.
+O capital final de cada fold é o capital inicial do fold seguinte.
+
+## Fingerprints
+
+A execução valida os principais fingerprints antes do treinamento:
+
+```text
+Strategy configuration
+509b940659a89a7348be3690882213c839ce1a43b7e44057656074f5b2517a6e
+
+Model settings
+b4d112d678f79ca931c24630831e6464ebfe492f46364f54632c2980618803ab
+
+Execution request
+8aa99e2c5a9e4cdf666cbfa406896b1aee82f2fbe9ea65d68ad077e8b8be73a6
+
+Market OHLCV
+2db920471bc6ff8925081735c4d8218adf879a1363fae7fd239da940d6ebe30c
+```
+
+Os hashes são usados somente para validar reprodutibilidade; não participam da decisão de investimento.
+
+## Output
+
+Cada execução gera:
+
+```text
+output/backtest_result.json
+output/equity_curve.csv
+output/folds.csv
+output/trades.csv
+output/summary.txt
+```
 
 ### `backtest_result.json`
 
-Contém os parâmetros acadêmicos básicos e as métricas produzidas pela execução atual. Não contém certificação contra capital histórico nem hashes de Strategy do MCT.
+Resultado canônico: métricas, configuração, folds, metadados e diagnósticos agregados.
 
 ### `equity_curve.csv`
 
-Curva de capital fora da amostra e informações de decisão disponíveis no resultado.
-
-### `trades.csv`
-
-Operações geradas pela própria execução atual.
+Curva OOS por sessão. Permite recalcular retorno, CAGR, Sharpe, drawdown e benchmark.
 
 ### `folds.csv`
 
-Janelas temporais e métricas dos folds walk-forward.
+Janelas de treino, calibração, purge e teste, com capital e desempenho por fold.
+
+### `trades.csv`
+
+Livro-razão completo de BUY/SELL e diagnósticos da decisão. Inclui scores, ranking, margens, MFE, MAE, custos e métricas contrafactuais.
 
 ### `summary.txt`
 
-Resumo textual do backtest atual.
+Resumo textual da execução.
 
-## Referência histórica
+## Auditoria financeira no Excel
 
-O projeto original chegou anteriormente a aproximadamente US$ 43,76 milhões partindo de US$ 10 mil para esse universo e metodologia.
+A planilha gerada por `analysis/build_excel.py` contém:
 
-Esse valor é somente uma referência histórica para comparação posterior. Ele não é armazenado no código como condição de sucesso, não interrompe a execução e não participa de nenhuma decisão do backtest.
+```text
+00_Guia
+01_KPIs
+02_Equity
+03_Folds
+04_Trades
+05_Cycles
+06_Assets
+07_Monthly
+08_Dictionary
+09_JSON
+10_Reconciliation
+```
 
-O resultado válido do TCC é sempre o que for reconstruído a partir do OHLCV bruto pela execução atual.
+Principais validações reproduzidas por fórmulas do Excel:
+
+```text
+capital final
+retorno total
+CAGR
+Sharpe
+Max Drawdown
+compras e vendas
+rotações
+holding médio
+retorno geométrico por posição
+taxas
+folds
+reconciliação do capital
+```
+
+A reconciliação principal é:
+
+```text
+capital inicial
++ PnL realizado nas posições encerradas
+- taxas das compras
+= capital final
+```
+
+## Estatísticas dos ciclos
+
+Na execução certificada:
+
+```text
+Ciclos encerrados       316
+Vencedores              204
+Perdedores              112
+Win rate                64.56%
+Retorno médio vencedor  +6.58%
+Retorno médio perdedor  -3.46%
+Payoff                  1.90
+Profit Factor           2.79
+Mediana por posição     +1.37%
+Melhor posição          +84.34%
+Pior posição            -14.32%
+MFE médio               +6.63%
+MAE médio               -3.43%
+Profit capture médio    45.97%
+```
+
+## Turnover
+
+`turnover_ratio` nesta implementação é:
+
+```text
+soma do valor bruto negociado / capital inicial
+```
+
+Não deve ser interpretado como turnover anual tradicional.
+
+## Estrutura
+
+```text
+tcc_mba_usp_data_science_analytics/
+├── backtest.py
+├── requirements.txt
+├── README.md
+├── analysis/
+│   └── build_excel.py
+└── tcc_engine/
+    ├── config.py
+    ├── capital_rotation.py
+    ├── research_challengers.py
+    └── ...
+```
+
+`output/` é gerado localmente e permanece fora do Git.
 
 ## Limitação metodológica
 
-O backtest é avaliado em walk-forward, porém o universo final de 37 ativos foi obtido anteriormente por análise retrospectiva. Portanto, o experimento avalia a reprodutibilidade da estratégia para um universo fixo; ele não demonstra generalização fora da amostra do processo de escolha desses 37 ativos.
+O universo de 37 ativos foi obtido retrospectivamente e é tratado aqui como universo congelado.
 
-## Evolução do projeto
-
-Todas as próximas alterações metodológicas, instruções de execução e decisões do TCC serão registradas nesta seção do mesmo `README.md`.
-
-### 2026-09-15 — execução independente
-
-- removida a dependência de Strategy persistida;
-- removidos hashes de Strategy, commit, request e modelo da execução acadêmica;
-- removida a certificação obrigatória contra resultado histórico;
-- MongoDB restrito ao OHLCV diário;
-- LightGBM continua sendo treinado do zero em cada execução;
-- features, targets, folds, decisões, operações e métricas continuam sendo reconstruídos pelo projeto;
-- documentação consolidada neste único `README.md`.
+O resultado demonstra reprodutibilidade do motor, do protocolo walk-forward e da política de rotação sobre esse universo. Ele não demonstra generalização fora da amostra do processo histórico de seleção dos 37 ativos.
