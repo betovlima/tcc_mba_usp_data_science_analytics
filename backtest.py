@@ -1,27 +1,19 @@
 """Backtest academico reproduzivel para o TCC MBA USP.
 
-As series historicas OHLCV sao obtidas diretamente da Tiingo no inicio da
-execucao e permanecem em memoria ate o fim do processamento. Para este teste,
-o modelo usa somente os campos brutos open, high, low, close e volume. Os
-campos ajustados disponibilizados pela Tiingo nao entram no treinamento.
+A entrada do experimento e uma fotografia local e congelada das series EOD
+brutas da Tiingo. O backtest nao consulta a internet e nao depende de token.
+Cada execucao reconstrói features, targets, folds walk-forward, treinamento
+LightGBM, politica de rotacao, operacoes, curva de capital e metricas.
 
-Features, targets, folds walk-forward, treinamento LightGBM, politica de
-rotacao, operacoes, curva de capital e metricas sao reconstruidos a cada
-execucao.
-
-O arquivo e organizado em celulas Spyder ``# %%``. F5 executa o script completo;
-Ctrl+Enter executa somente a celula atual, mantendo as variaveis no namespace
-para inspecao no Variable Explorer.
-
-Nao sao lidos Strategy documents, modelos treinados, previsoes persistidas,
-resultados anteriores ou configuracoes de runtime do Market Cycle Trader.
+Os eventos corporativos ficam preservados nos CSVs, mas ainda nao sao aplicados
+ao OHLCV. Isso permite estudar depois um tratamento causal sem reescrever o
+passado com eventos futuros.
 """
 
 # %% 0 - Imports e configuracao
 from __future__ import annotations
 
 import json
-import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -29,8 +21,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import requests
-from dotenv import dotenv_values, load_dotenv
 
 from tcc_engine.capital_rotation import run_rotation_models as executar_modelos_rotacao
 from tcc_engine.config import ASSETS as ATIVOS
@@ -41,8 +31,11 @@ from tcc_engine.execution import apply_slippage as aplicar_deslizamento
 from tcc_engine.execution import calculate_reference_fees as calcular_taxas_referencia
 
 RAIZ_PROJETO = Path(__file__).resolve().parent
+DIRETORIO_SERIES = RAIZ_PROJETO / "dados" / "series_historicas"
+ARQUIVO_MANIFESTO = DIRETORIO_SERIES / "manifesto_tiingo.json"
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output"
-URL_BASE_TIINGO = "https://api.tiingo.com/tiingo/daily"
+
+COLUNAS_OHLCV = ["open", "high", "low", "close", "volume"]
 
 
 def registrar(mensagem: str) -> None:
@@ -74,209 +67,105 @@ def registrar_detalhe_tecnico(mensagem: str) -> None:
     registrar(f"[motor] {mensagem}")
 
 
-# %% 1 - Inicio da execucao e credencial da Tiingo
+# %% 1 - Inicio da execucao e identificacao do snapshot
 inicio_execucao = time.perf_counter()
 
 registrar("TCC MBA USP - backtest reconstruido passo a passo")
-registrar("Entrada: Tiingo EOD RAW -> memoria -> motor")
+registrar("Entrada: snapshot local Tiingo EOD RAW -> memoria -> motor")
 registrar(f"Periodo: {DATA_INICIO} -> {DATA_FIM} | ativos={len(ATIVOS)}")
 
-candidatos_env = [
-    RAIZ_PROJETO / ".env",
-    Path.cwd() / ".env",
-    RAIZ_PROJETO.parent / ".env",
-]
-
-arquivos_env_unicos: list[Path] = []
-for candidato in candidatos_env:
-    candidato = candidato.resolve()
-    if candidato not in arquivos_env_unicos:
-        arquivos_env_unicos.append(candidato)
-
-arquivo_env = next(
-    (candidato for candidato in arquivos_env_unicos if candidato.exists()),
-    None,
-)
-
-if arquivo_env is None:
-    caminhos = "\n".join(f"- {caminho}" for caminho in arquivos_env_unicos)
+if not DIRETORIO_SERIES.exists():
     raise RuntimeError(
-        "Arquivo .env nao encontrado. Foram verificados:\n" + caminhos
+        "Diretorio de series historicas nao encontrado. "
+        "Execute primeiro: python congelar_series_tiingo.py"
     )
 
-load_dotenv(arquivo_env, override=True)
-valores_env = {
-    str(nome): str(valor or "").strip()
-    for nome, valor in dotenv_values(arquivo_env).items()
-}
-
-token_tiingo = str(
-    valores_env.get("TIINGO_API_KEY")
-    or valores_env.get("TIINGO_TOKEN")
-    or os.getenv("TIINGO_API_KEY")
-    or os.getenv("TIINGO_TOKEN")
-    or ""
-).strip()
-
-registrar(f"Arquivo .env: {arquivo_env}")
-registrar(
-    "Variavel do token Tiingo: "
-    + (
-        "TIINGO_API_KEY"
-        if str(valores_env.get("TIINGO_API_KEY") or os.getenv("TIINGO_API_KEY") or "").strip()
-        else "TIINGO_TOKEN"
-        if str(valores_env.get("TIINGO_TOKEN") or os.getenv("TIINGO_TOKEN") or "").strip()
-        else "nao encontrada"
+manifesto: dict[str, Any] = {}
+if ARQUIVO_MANIFESTO.exists():
+    manifesto = json.loads(ARQUIVO_MANIFESTO.read_text(encoding="utf-8"))
+    registrar(
+        "Snapshot: "
+        + str(manifesto.get("data_congelamento_utc") or "data nao informada")
     )
-)
-
-if not token_tiingo:
-    raise RuntimeError(
-        "Token da Tiingo nao encontrado. "
-        "Defina TIINGO_API_KEY no arquivo .env."
-    )
-
-sessao_tiingo = requests.Session()
-sessao_tiingo.headers.update(
-    {
-        "Content-Type": "application/json",
-        "Authorization": f"Token {token_tiingo}",
-    }
-)
+else:
+    registrar("Aviso: manifesto_tiingo.json nao encontrado; usando somente os CSVs.")
 
 
-# %% 2 - Download das series historicas brutas diretamente para a memoria
-registrar(f"[1/8] Baixando {len(ATIVOS)} series historicas da Tiingo")
+# %% 2 - Carregamento das series congeladas para memoria
+registrar(f"[1/8] Carregando {len(ATIVOS)} series congeladas")
 registrar("[1/8] Fonte: Tiingo EOD | frequencia=diaria | precos=RAW")
-registrar("[1/8] Campos ajustados nao serao usados pelo modelo")
+registrar("[1/8] Nenhuma consulta externa sera realizada")
 
 series_historicas: dict[str, pd.DataFrame] = {}
 eventos_corporativos: dict[str, pd.DataFrame] = {}
-colunas_ohlcv = ["open", "high", "low", "close", "volume"]
 
 for posicao, ativo in enumerate(ATIVOS, start=1):
-    url = f"{URL_BASE_TIINGO}/{ativo}/prices"
-    parametros = {
-        "startDate": DATA_INICIO,
-        "endDate": DATA_FIM,
-        "resampleFreq": "daily",
-    }
-
-    try:
-        resposta = sessao_tiingo.get(
-            url,
-            params=parametros,
-            timeout=60,
-        )
-        resposta.raise_for_status()
-    except requests.RequestException as erro:
-        detalhe = ""
-        if getattr(erro, "response", None) is not None:
-            detalhe = str(erro.response.text or "").strip()
+    arquivo = DIRETORIO_SERIES / f"{ativo}.csv"
+    if not arquivo.exists():
         raise RuntimeError(
-            f"Falha ao consultar {ativo} na Tiingo: {erro}"
-            + (f" | resposta={detalhe[:300]}" if detalhe else "")
-        ) from erro
+            f"Snapshot incompleto: arquivo ausente para {ativo}: {arquivo}"
+        )
 
-    dados = resposta.json()
-    if not isinstance(dados, list) or not dados:
-        raise RuntimeError(f"A Tiingo nao retornou dados para {ativo}.")
+    tabela = pd.read_csv(arquivo)
 
-    serie_completa = pd.DataFrame(dados)
-    serie_completa.columns = [str(coluna) for coluna in serie_completa.columns]
-
-    colunas_obrigatorias = ["date", *colunas_ohlcv]
-    ausentes = [
-        coluna
-        for coluna in colunas_obrigatorias
-        if coluna not in serie_completa.columns
-    ]
+    colunas_obrigatorias = ["timestamp", *COLUNAS_OHLCV]
+    ausentes = [coluna for coluna in colunas_obrigatorias if coluna not in tabela.columns]
     if ausentes:
         raise RuntimeError(
-            f"{ativo}: colunas ausentes na resposta da Tiingo: "
-            + ", ".join(ausentes)
+            f"{ativo}: colunas ausentes no snapshot: " + ", ".join(ausentes)
         )
 
-    # Guardamos os eventos informados pela fonte somente para auditoria.
-    # Eles nao alteram a serie usada no treinamento deste teste.
-    dividendos = (
-        pd.to_numeric(serie_completa["divCash"], errors="coerce").fillna(0.0)
-        if "divCash" in serie_completa.columns
-        else pd.Series(0.0, index=serie_completa.index)
+    tabela["timestamp"] = pd.to_datetime(tabela["timestamp"], utc=True, errors="coerce")
+    for coluna in COLUNAS_OHLCV:
+        tabela[coluna] = pd.to_numeric(tabela[coluna], errors="coerce")
+
+    tabela["dividendo"] = (
+        pd.to_numeric(tabela["dividendo"], errors="coerce").fillna(0.0)
+        if "dividendo" in tabela.columns
+        else 0.0
     )
-    fatores_split = (
-        pd.to_numeric(serie_completa["splitFactor"], errors="coerce").fillna(1.0)
-        if "splitFactor" in serie_completa.columns
-        else pd.Series(1.0, index=serie_completa.index)
+    tabela["fator_split"] = (
+        pd.to_numeric(tabela["fator_split"], errors="coerce").fillna(1.0)
+        if "fator_split" in tabela.columns
+        else 1.0
     )
 
-    eventos = pd.DataFrame(
-        {
-            "timestamp": pd.to_datetime(
-                serie_completa["date"],
-                utc=True,
-                errors="coerce",
-            ),
-            "dividendo": dividendos,
-            "fator_split": fatores_split,
-        }
+    tabela = tabela.dropna(subset=["timestamp", *COLUNAS_OHLCV])
+    tabela = tabela.sort_values("timestamp")
+    tabela = tabela.drop_duplicates(subset=["timestamp"], keep="last")
+
+    valores_validos = (
+        (tabela["open"] > 0)
+        & (tabela["high"] > 0)
+        & (tabela["low"] > 0)
+        & (tabela["close"] > 0)
+        & (tabela["volume"] >= 0)
     )
-    eventos = eventos.dropna(subset=["timestamp"])
-    eventos = eventos.loc[
-        (eventos["dividendo"] != 0.0)
-        | (eventos["fator_split"] != 1.0)
+    tabela = tabela.loc[valores_validos].copy()
+
+    if tabela.empty:
+        raise RuntimeError(f"{ativo}: serie congelada vazia depois da validacao.")
+
+    eventos = tabela.loc[
+        (tabela["dividendo"] != 0.0) | (tabela["fator_split"] != 1.0),
+        ["timestamp", "dividendo", "fator_split"],
     ].copy()
     eventos_corporativos[ativo] = eventos.reset_index(drop=True)
 
-    serie = serie_completa[colunas_obrigatorias].copy()
-    serie = serie.rename(columns={"date": "timestamp"})
-    serie["timestamp"] = pd.to_datetime(
-        serie["timestamp"],
-        utc=True,
-        errors="coerce",
-    )
-    serie = serie.dropna(subset=["timestamp"])
-    serie = serie.set_index("timestamp").sort_index()
-    serie = serie[~serie.index.duplicated(keep="last")]
-
-    for coluna in colunas_ohlcv:
-        serie[coluna] = pd.to_numeric(serie[coluna], errors="coerce")
-
-    serie = serie.dropna(subset=colunas_ohlcv)
-    valores_validos = (
-        (serie["open"] > 0)
-        & (serie["high"] > 0)
-        & (serie["low"] > 0)
-        & (serie["close"] > 0)
-        & (serie["volume"] >= 0)
-    )
-    serie = serie.loc[valores_validos].copy()
-
-    if serie.empty:
-        raise RuntimeError(
-            f"{ativo}: serie historica vazia depois da validacao."
-        )
-
+    serie = tabela.set_index("timestamp")[COLUNAS_OHLCV].copy()
     series_historicas[ativo] = serie
-
-    quantidade_splits = int(
-        (eventos_corporativos[ativo]["fator_split"] != 1.0).sum()
-    )
-    quantidade_dividendos = int(
-        (eventos_corporativos[ativo]["dividendo"] != 0.0).sum()
-    )
 
     registrar(
         f"[1/8] {posicao:02d}/{len(ATIVOS)} {ativo} | "
         f"{len(serie)} candles | "
         f"{serie.index.min().date()} -> {serie.index.max().date()} | "
-        f"splits={quantidade_splits} | dividendos={quantidade_dividendos}"
+        f"splits={int((eventos['fator_split'] != 1.0).sum())} | "
+        f"dividendos={int((eventos['dividendo'] != 0.0).sum())}"
     )
 
 if len(series_historicas) != len(ATIVOS):
     raise RuntimeError(
-        f"Esperava {len(ATIVOS)} series em memoria; "
-        f"foram carregadas {len(series_historicas)}."
+        f"Esperava {len(ATIVOS)} series; foram carregadas {len(series_historicas)}."
     )
 
 total_splits = sum(
@@ -289,19 +178,15 @@ total_dividendos = sum(
 )
 
 registrar(
-    f"[1/8] {len(series_historicas)} series RAW mantidas em memoria; "
-    "nenhum CSV intermediario foi usado"
+    f"[1/8] {len(series_historicas)} series RAW carregadas do snapshot local"
 )
 registrar(
-    f"[1/8] Eventos apenas para auditoria: "
+    f"[1/8] Eventos preservados, ainda nao aplicados: "
     f"splits={total_splits} | dividendos={total_dividendos}"
 )
 
 
 # %% 3 - Preparacao metodologica
-# As features, targets e folds sao construidos pelo tcc_engine diretamente a
-# partir das series_historicas mantidas em memoria. Os eventos corporativos
-# coletados acima nao sao aplicados ao OHLCV neste teste.
 registrar("[2/8] Construindo features tecnicas a partir do OHLCV RAW")
 registrar(
     "[3/8] Construindo targets multi-horizonte: "
@@ -314,9 +199,11 @@ contexto_experimento = {
     "asset_count": len(ATIVOS),
     "history_start": DATA_INICIO,
     "history_end": DATA_FIM,
-    "market_data_source": "tiingo_eod_memoria",
+    "market_data_source": "tiingo_eod_snapshot_local",
     "market_data_feed": "eod",
     "market_data_adjustment": "raw",
+    "market_data_snapshot_frozen": True,
+    "market_data_snapshot_created_at": manifesto.get("data_congelamento_utc"),
     "corporate_actions_available": True,
     "corporate_actions_applied": False,
     "split_event_count": total_splits,
@@ -389,7 +276,7 @@ tempo_total = time.perf_counter() - inicio_execucao
 
 resultado_serializado = {
     "experiment": "mba_usp_reproducible_backtest",
-    "input_source": "tiingo_eod_raw_memoria",
+    "input_source": "tiingo_eod_raw_snapshot_local",
     **contexto_experimento,
     "walk_forward": {
         "minimum_training_rows": CONFIGURACAO.rotation_minimum_training_rows,
@@ -405,6 +292,11 @@ resultado_serializado = {
 
 # %% 6 - Gravacao somente dos artefatos finais
 DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
+
+# Remove artefato antigo que nao e produzido por esta versao.
+arquivo_residual = DIRETORIO_RESULTADOS / "market_data.csv"
+if arquivo_residual.exists():
+    arquivo_residual.unlink()
 
 curva_csv = curva_capital.copy()
 if curva_csv.index.name is not None or not isinstance(curva_csv.index, pd.RangeIndex):
