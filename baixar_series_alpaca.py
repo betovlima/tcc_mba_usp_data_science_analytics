@@ -15,7 +15,7 @@ from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 from tcc_engine.config import ASSETS as ATIVOS
 from tcc_engine.config import END_DATE as DATA_FIM
@@ -26,23 +26,76 @@ DIRETORIO_SERIES = RAIZ_PROJETO / "dados" / "series_historicas"
 
 
 # %% 1 - Credenciais da Alpaca
-load_dotenv(RAIZ_PROJETO / ".env", override=False)
+candidatos_env = [
+    RAIZ_PROJETO / ".env",
+    Path.cwd() / ".env",
+    RAIZ_PROJETO.parent / ".env",
+]
 
-chave_api = (
-    os.getenv("ALPACA_API_KEY")
-    or os.getenv("APCA_API_KEY_ID")
-    or ""
-).strip()
-segredo_api = (
-    os.getenv("ALPACA_SECRET_KEY")
-    or os.getenv("APCA_API_SECRET_KEY")
-    or ""
-).strip()
+arquivos_env_unicos = []
+for candidato in candidatos_env:
+    candidato = candidato.resolve()
+    if candidato not in arquivos_env_unicos:
+        arquivos_env_unicos.append(candidato)
+
+arquivo_env = next(
+    (candidato for candidato in arquivos_env_unicos if candidato.exists()),
+    None,
+)
+
+if arquivo_env is None:
+    caminhos = "\n".join(f"- {caminho}" for caminho in arquivos_env_unicos)
+    raise RuntimeError(
+        "Arquivo .env nao encontrado. Foram verificados:\n" + caminhos
+    )
+
+# No Spyder podem existir variaveis de ambiente antigas ou vazias no processo.
+# O override=True garante que o arquivo .env encontrado seja a fonte usada nesta execucao.
+load_dotenv(arquivo_env, override=True)
+valores_env = {
+    str(nome): str(valor or "").strip()
+    for nome, valor in dotenv_values(arquivo_env).items()
+}
+
+
+def ler_credencial(*nomes: str) -> tuple[str, str | None]:
+    for nome in nomes:
+        valor = valores_env.get(nome) or os.getenv(nome) or ""
+        valor = str(valor).strip()
+        if valor:
+            return valor, nome
+    return "", None
+
+
+chave_api, nome_chave_api = ler_credencial(
+    "ALPACA_API_KEY",
+    "ALPACA_API_KEY_ID",
+    "APCA_API_KEY_ID",
+)
+segredo_api, nome_segredo_api = ler_credencial(
+    "ALPACA_SECRET_KEY",
+    "ALPACA_API_SECRET_KEY",
+    "APCA_API_SECRET_KEY",
+)
+
+print(f"Arquivo .env: {arquivo_env}")
+print(f"Variavel da chave: {nome_chave_api or 'nao encontrada'}")
+print(f"Variavel do segredo: {nome_segredo_api or 'nao encontrada'}")
 
 if not chave_api or not segredo_api:
+    nomes_encontrados = sorted(
+        nome
+        for nome, valor in valores_env.items()
+        if valor and ("ALPACA" in nome.upper() or "APCA" in nome.upper())
+    )
+    encontrados = ", ".join(nomes_encontrados) if nomes_encontrados else "nenhuma"
     raise RuntimeError(
-        "Credenciais da Alpaca ausentes. Preencha ALPACA_API_KEY e "
-        "ALPACA_SECRET_KEY no arquivo .env."
+        "Credenciais da Alpaca nao foram reconhecidas no .env. "
+        "Use um dos pares: "
+        "ALPACA_API_KEY + ALPACA_SECRET_KEY, "
+        "ALPACA_API_KEY_ID + ALPACA_API_SECRET_KEY, ou "
+        "APCA_API_KEY_ID + APCA_API_SECRET_KEY. "
+        f"Variaveis relacionadas encontradas: {encontrados}."
     )
 
 cliente = StockHistoricalDataClient(
