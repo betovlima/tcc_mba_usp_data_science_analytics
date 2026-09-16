@@ -5,8 +5,8 @@ o backtest dentro deste repositorio. Nenhuma Strategy, modelo treinado,
 parametrizacao persistida, previsao ou resultado do Market Cycle Trader e lido
 em tempo de execucao.
 
-A unica fonte externa permitida e o historico diario OHLCV dos ativos no
-MongoDB local.
+A unica entrada externa do backtest e o historico diario OHLCV dos ativos
+armazenado em arquivos CSV locais.
 """
 from __future__ import annotations
 
@@ -132,7 +132,8 @@ class StandaloneBacktestConfig:
     deterministic_execution: bool = False
     numeric_thread_limit: int = 1
 
-    # Compatibilidade interna do motor; nao habilita leitura de caches Mongo.
+    # Campos legados exigidos pela interface interna do motor. Mantidos
+    # desabilitados; nao iniciam leitura ou escrita em banco de dados.
     mongo_cache_enabled: bool = False
     mongo_refresh_overlap_days: int = 0
     mongo_write_batch_size: int = 1000
