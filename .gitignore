@@ -35,11 +35,17 @@ data/
 *.gz
 *.zip
 
-# CSVs gerados fora da base historica versionada
+# CSVs gerados fora dos dados congelados do experimento
 *.csv
 !dados/
 !dados/series_historicas/
 !dados/series_historicas/*.csv
+!dados/eventos_corporativos/
+!dados/eventos_corporativos/*.csv
+
+# Progresso temporario de download
+.dados_temporarios/
+dados/.tiingo_congelamento_parcial.json
 
 # Resultados gerados
 output/
