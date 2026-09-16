@@ -1,13 +1,14 @@
 """Backtest academico reproduzivel para o TCC MBA USP.
 
-A entrada do experimento e uma fotografia local e congelada das series EOD
-brutas da Tiingo. O backtest nao consulta a internet e nao depende de token.
-Cada execucao reconstrói features, targets, folds walk-forward, treinamento
-LightGBM, politica de rotacao, operacoes, curva de capital e metricas.
+A entrada do experimento e uma fotografia local e congelada da Tiingo.
+As series de mercado contem somente OHLCV bruto, exatamente como negociado.
+Dividendos e splits ficam em arquivos separados e nunca alteram silenciosamente
+as observacoes historicas.
 
-Os eventos corporativos ficam preservados nos CSVs, mas ainda nao sao aplicados
-ao OHLCV. Isso permite estudar depois um tratamento causal sem reescrever o
-passado com eventos futuros.
+Este arquivo ainda executa o motor sobre OHLCV RAW puro. Portanto, seu resultado
+e apenas diagnostico: rupturas mecanicas de split ainda podem contaminar
+features e targets. O tratamento causal dos eventos sera uma etapa explicita e
+separada, construída sobre o snapshot bruto congelado.
 """
 
 # %% 0 - Imports e configuracao
@@ -32,10 +33,12 @@ from tcc_engine.execution import calculate_reference_fees as calcular_taxas_refe
 
 RAIZ_PROJETO = Path(__file__).resolve().parent
 DIRETORIO_SERIES = RAIZ_PROJETO / "dados" / "series_historicas"
-ARQUIVO_MANIFESTO = DIRETORIO_SERIES / "manifesto_tiingo.json"
+DIRETORIO_EVENTOS = RAIZ_PROJETO / "dados" / "eventos_corporativos"
+ARQUIVO_MANIFESTO = RAIZ_PROJETO / "dados" / "manifesto_tiingo.json"
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output"
 
 COLUNAS_OHLCV = ["open", "high", "low", "close", "volume"]
+COLUNAS_EVENTOS = ["timestamp", "dividendo", "fator_split"]
 
 
 def registrar(mensagem: str) -> None:
@@ -73,11 +76,17 @@ inicio_execucao = time.perf_counter()
 registrar("TCC MBA USP - backtest reconstruido passo a passo")
 registrar("Entrada: snapshot local Tiingo EOD RAW -> memoria -> motor")
 registrar(f"Periodo: {DATA_INICIO} -> {DATA_FIM} | ativos={len(ATIVOS)}")
+registrar("ATENCAO: OHLCV RAW puro e usado apenas como diagnostico nesta etapa")
 
 if not DIRETORIO_SERIES.exists():
     raise RuntimeError(
         "Diretorio de series historicas nao encontrado. "
         "Execute primeiro: python congelar_series_tiingo.py"
+    )
+if not DIRETORIO_EVENTOS.exists():
+    raise RuntimeError(
+        "Diretorio de eventos corporativos nao encontrado. "
+        "Execute novamente: python congelar_series_tiingo.py"
     )
 
 manifesto: dict[str, Any] = {}
@@ -88,49 +97,69 @@ if ARQUIVO_MANIFESTO.exists():
         + str(manifesto.get("data_congelamento_utc") or "data nao informada")
     )
 else:
-    registrar("Aviso: manifesto_tiingo.json nao encontrado; usando somente os CSVs.")
+    registrar("Aviso: manifesto_tiingo.json nao encontrado; usando os CSVs locais.")
 
 
-# %% 2 - Carregamento das series congeladas para memoria
+# %% 2 - Carregamento das series brutas e eventos separados
 registrar(f"[1/8] Carregando {len(ATIVOS)} series congeladas")
 registrar("[1/8] Fonte: Tiingo EOD | frequencia=diaria | precos=RAW")
+registrar("[1/8] Series contem somente timestamp, open, high, low, close e volume")
+registrar("[1/8] Dividendos e splits sao lidos separadamente e nao sao aplicados")
 registrar("[1/8] Nenhuma consulta externa sera realizada")
 
 series_historicas: dict[str, pd.DataFrame] = {}
 eventos_corporativos: dict[str, pd.DataFrame] = {}
 
+colunas_proibidas_serie = {
+    "adjopen",
+    "adjhigh",
+    "adjlow",
+    "adjclose",
+    "adjvolume",
+    "dividendo",
+    "fator_split",
+    "divcash",
+    "splitfactor",
+}
+
 for posicao, ativo in enumerate(ATIVOS, start=1):
-    arquivo = DIRETORIO_SERIES / f"{ativo}.csv"
-    if not arquivo.exists():
+    arquivo_serie = DIRETORIO_SERIES / f"{ativo}.csv"
+    arquivo_eventos = DIRETORIO_EVENTOS / f"{ativo}.csv"
+
+    if not arquivo_serie.exists():
         raise RuntimeError(
-            f"Snapshot incompleto: arquivo ausente para {ativo}: {arquivo}"
+            f"Snapshot incompleto: serie bruta ausente para {ativo}: {arquivo_serie}"
+        )
+    if not arquivo_eventos.exists():
+        raise RuntimeError(
+            f"Snapshot incompleto: eventos ausentes para {ativo}: {arquivo_eventos}"
         )
 
-    tabela = pd.read_csv(arquivo)
-
+    tabela = pd.read_csv(arquivo_serie)
     colunas_obrigatorias = ["timestamp", *COLUNAS_OHLCV]
     ausentes = [coluna for coluna in colunas_obrigatorias if coluna not in tabela.columns]
     if ausentes:
         raise RuntimeError(
-            f"{ativo}: colunas ausentes no snapshot: " + ", ".join(ausentes)
+            f"{ativo}: colunas ausentes na serie bruta: " + ", ".join(ausentes)
         )
 
+    proibidas_encontradas = [
+        coluna
+        for coluna in tabela.columns
+        if str(coluna).lower() in colunas_proibidas_serie
+    ]
+    if proibidas_encontradas:
+        raise RuntimeError(
+            f"{ativo}: serie bruta contaminada por colunas de ajuste/evento: "
+            + ", ".join(proibidas_encontradas)
+        )
+
+    tabela = tabela[colunas_obrigatorias].copy()
     tabela["timestamp"] = pd.to_datetime(tabela["timestamp"], utc=True, errors="coerce")
     for coluna in COLUNAS_OHLCV:
         tabela[coluna] = pd.to_numeric(tabela[coluna], errors="coerce")
 
-    tabela["dividendo"] = (
-        pd.to_numeric(tabela["dividendo"], errors="coerce").fillna(0.0)
-        if "dividendo" in tabela.columns
-        else 0.0
-    )
-    tabela["fator_split"] = (
-        pd.to_numeric(tabela["fator_split"], errors="coerce").fillna(1.0)
-        if "fator_split" in tabela.columns
-        else 1.0
-    )
-
-    tabela = tabela.dropna(subset=["timestamp", *COLUNAS_OHLCV])
+    tabela = tabela.dropna(subset=colunas_obrigatorias)
     tabela = tabela.sort_values("timestamp")
     tabela = tabela.drop_duplicates(subset=["timestamp"], keep="last")
 
@@ -142,25 +171,53 @@ for posicao, ativo in enumerate(ATIVOS, start=1):
         & (tabela["volume"] >= 0)
     )
     tabela = tabela.loc[valores_validos].copy()
-
     if tabela.empty:
-        raise RuntimeError(f"{ativo}: serie congelada vazia depois da validacao.")
-
-    eventos = tabela.loc[
-        (tabela["dividendo"] != 0.0) | (tabela["fator_split"] != 1.0),
-        ["timestamp", "dividendo", "fator_split"],
-    ].copy()
-    eventos_corporativos[ativo] = eventos.reset_index(drop=True)
+        raise RuntimeError(f"{ativo}: serie bruta vazia depois da validacao.")
 
     serie = tabela.set_index("timestamp")[COLUNAS_OHLCV].copy()
     series_historicas[ativo] = serie
+
+    eventos = pd.read_csv(arquivo_eventos)
+    ausentes_eventos = [
+        coluna for coluna in COLUNAS_EVENTOS if coluna not in eventos.columns
+    ]
+    if ausentes_eventos:
+        raise RuntimeError(
+            f"{ativo}: colunas ausentes no arquivo de eventos: "
+            + ", ".join(ausentes_eventos)
+        )
+
+    if not eventos.empty:
+        eventos = eventos[COLUNAS_EVENTOS].copy()
+        eventos["timestamp"] = pd.to_datetime(
+            eventos["timestamp"], utc=True, errors="coerce"
+        )
+        eventos["dividendo"] = pd.to_numeric(
+            eventos["dividendo"], errors="coerce"
+        ).fillna(0.0)
+        eventos["fator_split"] = pd.to_numeric(
+            eventos["fator_split"], errors="coerce"
+        ).fillna(1.0)
+        eventos = eventos.dropna(subset=["timestamp"])
+        eventos = eventos.sort_values("timestamp")
+        eventos = eventos.drop_duplicates(subset=["timestamp"], keep="last")
+    else:
+        eventos = pd.DataFrame(columns=COLUNAS_EVENTOS)
+
+    eventos_corporativos[ativo] = eventos.reset_index(drop=True)
+
+    quantidade_splits = (
+        int((eventos["fator_split"] != 1.0).sum()) if not eventos.empty else 0
+    )
+    quantidade_dividendos = (
+        int((eventos["dividendo"] != 0.0).sum()) if not eventos.empty else 0
+    )
 
     registrar(
         f"[1/8] {posicao:02d}/{len(ATIVOS)} {ativo} | "
         f"{len(serie)} candles | "
         f"{serie.index.min().date()} -> {serie.index.max().date()} | "
-        f"splits={int((eventos['fator_split'] != 1.0).sum())} | "
-        f"dividendos={int((eventos['dividendo'] != 0.0).sum())}"
+        f"splits={quantidade_splits} | dividendos={quantidade_dividendos}"
     )
 
 if len(series_historicas) != len(ATIVOS):
@@ -171,17 +228,17 @@ if len(series_historicas) != len(ATIVOS):
 total_splits = sum(
     int((eventos["fator_split"] != 1.0).sum())
     for eventos in eventos_corporativos.values()
+    if not eventos.empty
 )
 total_dividendos = sum(
     int((eventos["dividendo"] != 0.0).sum())
     for eventos in eventos_corporativos.values()
+    if not eventos.empty
 )
 
+registrar(f"[1/8] {len(series_historicas)} series RAW puras carregadas")
 registrar(
-    f"[1/8] {len(series_historicas)} series RAW carregadas do snapshot local"
-)
-registrar(
-    f"[1/8] Eventos preservados, ainda nao aplicados: "
+    f"[1/8] Eventos preservados fora das series: "
     f"splits={total_splits} | dividendos={total_dividendos}"
 )
 
@@ -202,12 +259,15 @@ contexto_experimento = {
     "market_data_source": "tiingo_eod_snapshot_local",
     "market_data_feed": "eod",
     "market_data_adjustment": "raw",
+    "market_data_input_pure_raw": True,
     "market_data_snapshot_frozen": True,
     "market_data_snapshot_created_at": manifesto.get("data_congelamento_utc"),
+    "corporate_actions_stored_separately": True,
     "corporate_actions_available": True,
     "corporate_actions_applied": False,
     "split_event_count": total_splits,
     "dividend_event_count": total_dividendos,
+    "result_is_raw_diagnostic": True,
     "model_family": CONFIGURACAO.research_model_family,
     "target_horizons": list(CONFIGURACAO.rotation_target_horizons),
     "minimum_training_rows": CONFIGURACAO.rotation_minimum_training_rows,
@@ -293,7 +353,6 @@ resultado_serializado = {
 # %% 6 - Gravacao somente dos artefatos finais
 DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
 
-# Remove artefato antigo que nao e produzido por esta versao.
 arquivo_residual = DIRETORIO_RESULTADOS / "market_data.csv"
 if arquivo_residual.exists():
     arquivo_residual.unlink()
@@ -353,5 +412,6 @@ registrar(f"Max Drawdown    : {float(metricas['strategy_maximum_drawdown']):.2%}
 registrar(f"Rotacoes        : {int(metricas.get('capital_rotations') or 0)}")
 registrar(f"CASH days       : {int(metricas.get('cash_days') or 0)}")
 registrar(f"Series em memoria: {len(series_historicas)}")
+registrar("Resultado RAW: diagnostico; nao usar como baseline economico final")
 registrar(f"Tempo total     : {tempo_total:.2f}s")
 registrar(f"Resultados      : {DIRETORIO_RESULTADOS}")
