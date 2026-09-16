@@ -6,6 +6,8 @@ O script nao treina modelos e nao altera dados. Ele compara, por ativo e data:
 2. serie RAW congelada da Tiingo;
 3. serie Tiingo com normalizacao causal apenas de desdobramentos.
 
+As duas fontes podem representar o mesmo pregao com horarios UTC diferentes.
+Por isso, a comparacao e feita pela data da sessao, e nao pelo timestamp exato.
 A finalidade e localizar exatamente onde e como as fontes divergem antes de
 qualquer nova calibracao de hiperparametros ou politica de rotacao.
 """
@@ -28,7 +30,7 @@ DIRETORIO_DESDOBRAMENTOS = RAIZ_PROJETO / "dados" / "desdobramentos"
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output"
 
 COLUNAS_OHLCV = ["open", "high", "low", "close", "volume"]
-LIMIAR_DIVERGENCIA = 0.001  # 0,10%
+LIMIAR_DIVERGENCIA_RETORNO = 0.001  # 0,10 ponto percentual
 
 
 def registrar(mensagem: str) -> None:
@@ -49,13 +51,22 @@ def ler_serie(caminho: Path, ativo: str) -> pd.DataFrame:
         )
 
     tabela = tabela[obrigatorias].copy()
-    tabela["timestamp"] = pd.to_datetime(tabela["timestamp"], utc=True, errors="coerce")
+    tabela["timestamp"] = pd.to_datetime(
+        tabela["timestamp"], utc=True, errors="coerce"
+    )
     for coluna in COLUNAS_OHLCV:
         tabela[coluna] = pd.to_numeric(tabela[coluna], errors="coerce")
+
     tabela = tabela.dropna(subset=obrigatorias)
     tabela = tabela.sort_values("timestamp")
-    tabela = tabela.drop_duplicates(subset=["timestamp"], keep="last")
-    return tabela.set_index("timestamp")
+
+    # Mongo/Alpaca e Tiingo podem usar horarios UTC diferentes para o mesmo
+    # candle diario. A unidade economica de comparacao aqui e o pregao.
+    tabela["data_sessao"] = tabela["timestamp"].dt.normalize()
+    tabela = tabela.drop_duplicates(subset=["data_sessao"], keep="last")
+    tabela = tabela.set_index("data_sessao")[COLUNAS_OHLCV]
+    tabela.index.name = "timestamp"
+    return tabela.sort_index()
 
 
 def normalizar_desdobramentos_causalmente(
@@ -84,12 +95,11 @@ def normalizar_desdobramentos_causalmente(
 
         for evento in eventos.itertuples(index=False):
             data_evento = pd.Timestamp(evento.timestamp).normalize()
-            sessoes = serie.index[serie.index.normalize() == data_evento]
-            if len(sessoes) != 1:
+            if data_evento not in serie.index:
                 raise RuntimeError(
-                    f"{ativo}: evento de {data_evento.date()} sem sessao unica correspondente."
+                    f"{ativo}: evento de {data_evento.date()} sem sessao correspondente."
                 )
-            fator_na_sessao.loc[sessoes[0]] *= float(evento.fator_split)
+            fator_na_sessao.loc[data_evento] *= float(evento.fator_split)
 
     fator_acumulado = fator_na_sessao.cumprod()
     for coluna in ("open", "high", "low", "close"):
@@ -109,7 +119,11 @@ for diretorio, descricao in (
 
 registrar("Comparando referencia Mongo 43M com Tiingo RAW e Tiingo causal")
 registrar(f"Ativos: {len(ATIVOS)}")
-registrar(f"Primeira divergencia relevante: abs(diferenca) > {LIMIAR_DIVERGENCIA:.2%}")
+registrar("Alinhamento: data da sessao diaria, ignorando diferencas de horario UTC")
+registrar(
+    "Primeira divergencia relevante de retorno: "
+    f"abs(diferenca) > {LIMIAR_DIVERGENCIA_RETORNO:.2%}"
+)
 
 DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
 resumos: list[dict[str, object]] = []
@@ -124,7 +138,16 @@ for posicao, ativo in enumerate(ATIVOS, start=1):
 
     datas = mongo.index.intersection(tiingo_raw.index).intersection(tiingo_causal.index)
     if len(datas) < 2:
-        raise RuntimeError(f"{ativo}: poucas datas comuns para comparacao.")
+        registrar(
+            f"{ativo}: Mongo={len(mongo)} sessoes "
+            f"({mongo.index.min().date()} -> {mongo.index.max().date()}) | "
+            f"Tiingo={len(tiingo_raw)} sessoes "
+            f"({tiingo_raw.index.min().date()} -> {tiingo_raw.index.max().date()}) | "
+            f"comuns={len(datas)}"
+        )
+        raise RuntimeError(
+            f"{ativo}: poucas datas comuns para comparacao mesmo apos alinhar pela data da sessao."
+        )
 
     comparacao = pd.DataFrame(index=datas)
     comparacao["mongo_close"] = mongo.loc[datas, "close"].astype(float)
@@ -141,58 +164,75 @@ for posicao, ativo in enumerate(ATIVOS, start=1):
     comparacao["retorno_mongo"] = comparacao["mongo_close"].pct_change()
     comparacao["retorno_tiingo_raw"] = comparacao["tiingo_raw_close"].pct_change()
     comparacao["retorno_tiingo_causal"] = comparacao["tiingo_causal_close"].pct_change()
+    comparacao["dif_retorno_raw"] = (
+        comparacao["retorno_tiingo_raw"] - comparacao["retorno_mongo"]
+    )
     comparacao["dif_retorno_causal"] = (
         comparacao["retorno_tiingo_causal"] - comparacao["retorno_mongo"]
     )
 
     validos_retorno = comparacao[["retorno_mongo", "retorno_tiingo_causal"]].dropna()
     correlacao = (
-        float(validos_retorno["retorno_mongo"].corr(validos_retorno["retorno_tiingo_causal"]))
+        float(
+            validos_retorno["retorno_mongo"].corr(
+                validos_retorno["retorno_tiingo_causal"]
+            )
+        )
         if len(validos_retorno) >= 2
         else float("nan")
     )
 
-    divergencias = comparacao.loc[
-        comparacao["dif_preco_causal"].abs() > LIMIAR_DIVERGENCIA
+    divergencias_retorno = comparacao.loc[
+        comparacao["dif_retorno_causal"].abs() > LIMIAR_DIVERGENCIA_RETORNO
     ]
     primeira_divergencia = (
-        divergencias.index.min().date().isoformat() if not divergencias.empty else None
+        divergencias_retorno.index.min().date().isoformat()
+        if not divergencias_retorno.empty
+        else None
     )
 
     resumo = {
         "ativo": ativo,
+        "datas_mongo": len(mongo),
+        "datas_tiingo": len(tiingo_raw),
         "datas_comuns": len(comparacao),
         "inicio_comum": comparacao.index.min().date().isoformat(),
         "fim_comum": comparacao.index.max().date().isoformat(),
-        "primeira_divergencia_causal_maior_0_1pct": primeira_divergencia,
+        "primeira_divergencia_retorno_causal_maior_0_1pct": primeira_divergencia,
         "mediana_abs_dif_preco_raw": float(comparacao["dif_preco_raw"].abs().median()),
-        "mediana_abs_dif_preco_causal": float(comparacao["dif_preco_causal"].abs().median()),
+        "mediana_abs_dif_preco_causal": float(
+            comparacao["dif_preco_causal"].abs().median()
+        ),
         "max_abs_dif_preco_causal": float(comparacao["dif_preco_causal"].abs().max()),
         "correlacao_retornos_mongo_tiingo_causal": correlacao,
+        "erro_medio_abs_retorno_raw_bps": float(
+            comparacao["dif_retorno_raw"].abs().dropna().mean() * 10_000
+        ),
         "erro_medio_abs_retorno_causal_bps": float(
             comparacao["dif_retorno_causal"].abs().dropna().mean() * 10_000
         ),
-        "dias_dif_preco_causal_maior_0_1pct": int(
-            (comparacao["dif_preco_causal"].abs() > 0.001).sum()
+        "dias_dif_retorno_causal_maior_0_1pct": int(
+            (comparacao["dif_retorno_causal"].abs() > 0.001).sum()
         ),
-        "dias_dif_preco_causal_maior_0_5pct": int(
-            (comparacao["dif_preco_causal"].abs() > 0.005).sum()
+        "dias_dif_retorno_causal_maior_0_5pct": int(
+            (comparacao["dif_retorno_causal"].abs() > 0.005).sum()
         ),
-        "dias_dif_preco_causal_maior_1pct": int(
-            (comparacao["dif_preco_causal"].abs() > 0.01).sum()
+        "dias_dif_retorno_causal_maior_1pct": int(
+            (comparacao["dif_retorno_causal"].abs() > 0.01).sum()
         ),
     }
     resumos.append(resumo)
 
-    detalhe = comparacao.reset_index().rename(columns={"index": "timestamp"})
+    detalhe = comparacao.reset_index()
     detalhe.insert(0, "ativo", ativo)
     detalhes.append(detalhe)
 
     registrar(
         f"{posicao:02d}/{len(ATIVOS)} {ativo} | "
-        f"correlacao retornos={correlacao:.6f} | "
-        f"erro retorno={resumo['erro_medio_abs_retorno_causal_bps']:.2f} bps | "
-        f"1a divergencia={primeira_divergencia or 'nenhuma'}"
+        f"Mongo={len(mongo)} | Tiingo={len(tiingo_raw)} | comuns={len(datas)} | "
+        f"correlacao={correlacao:.6f} | "
+        f"erro={resumo['erro_medio_abs_retorno_causal_bps']:.2f} bps | "
+        f"1a divergencia retorno={primeira_divergencia or 'nenhuma'}"
     )
 
 
