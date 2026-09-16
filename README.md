@@ -2,11 +2,21 @@
 
 Backtest reproduzível de rotação de capital entre ativos com LightGBM e validação walk-forward.
 
-## Fonte de dados do teste atual
+## Entrada congelada do experimento
 
-O `backtest.py` consulta diretamente a API End-of-Day da Tiingo no início da execução e mantém as séries em memória até o fim do processamento.
+A fonte atual é a API End-of-Day da Tiingo. A aquisição dos dados fica separada do backtest:
 
-Para este teste são usados somente os campos brutos:
+```text
+Tiingo EOD
+  ↓
+congelar_series_tiingo.py
+  ↓
+snapshot local versionável
+  ↓
+backtest.py
+```
+
+O snapshot usa somente os preços brutos:
 
 ```text
 open
@@ -16,18 +26,74 @@ close
 volume
 ```
 
-Os campos ajustados (`adjOpen`, `adjHigh`, `adjLow`, `adjClose`, `adjVolume`) não entram no treinamento.
+Os campos ajustados da Tiingo (`adjOpen`, `adjHigh`, `adjLow`, `adjClose`, `adjVolume`) não são gravados nem usados pelo modelo.
 
-A Tiingo também informa `divCash` e `splitFactor`. Esses eventos são mantidos separadamente em memória apenas para auditoria e não são aplicados ao OHLCV neste teste.
-
-Fluxo atual:
+Também são preservados, separadamente:
 
 ```text
-Tiingo EOD RAW
-  ↓
-37 séries mantidas em memória
-  ↓
-OHLCV bruto
+dividendo
+fator_split
+```
+
+Esses eventos ainda não alteram o OHLCV nem a carteira. Eles serão usados posteriormente para estudar um tratamento causal de eventos corporativos.
+
+## 1. Congelar a fotografia da Tiingo
+
+Instale as dependências:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Crie `.env` a partir do exemplo e informe:
+
+```text
+TIINGO_API_KEY=SEU_TOKEN
+```
+
+Depois execute uma única vez:
+
+```bash
+python congelar_series_tiingo.py
+```
+
+O script faz uma consulta por ativo e grava:
+
+```text
+dados/series_historicas/NVDA.csv
+dados/series_historicas/MSFT.csv
+...
+dados/series_historicas/SCSC.csv
+dados/series_historicas/manifesto_tiingo.json
+```
+
+Cada CSV possui:
+
+```text
+timestamp
+open
+high
+low
+close
+volume
+dividendo
+fator_split
+```
+
+O `manifesto_tiingo.json` registra a data do congelamento, período, universo e contagem de eventos. Não são usados hashes.
+
+Depois de congelada, essa fotografia deve ser mantida sem substituição silenciosa. Uma nova coleta representa um novo snapshot de dados e deve ser validada separadamente.
+
+## 2. Executar o backtest
+
+```bash
+python backtest.py
+```
+
+O backtest não consulta internet, não usa token e não baixa dados. Ele lê somente a fotografia local congelada e executa:
+
+```text
+OHLCV bruto congelado
   ↓
 features
   ↓
@@ -48,85 +114,9 @@ custos e capital composto
 métricas e artefatos
 ```
 
-Nenhum CSV intermediário é usado pelo `backtest.py` neste teste.
+No Spyder, `backtest.py` continua organizado em células `# %%`.
 
-## Preparação
-
-Instale as dependências:
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-Copie o arquivo de exemplo:
-
-Windows:
-
-```bash
-copy .env.example .env
-```
-
-Linux/macOS:
-
-```bash
-cp .env.example .env
-```
-
-Preencha o token da Tiingo:
-
-```text
-TIINGO_API_KEY=
-```
-
-As variáveis da Alpaca permanecem no exemplo porque `baixar_series_alpaca.py` continua disponível como utilitário de comparação:
-
-```text
-ALPACA_API_KEY=
-ALPACA_SECRET_KEY=
-```
-
-## Execução do backtest
-
-```bash
-python backtest.py
-```
-
-No Spyder, `backtest.py` está organizado em células `# %%`:
-
-```text
-# %% 0  Imports e configuração
-# %% 1  Início da execução e credencial da Tiingo
-# %% 2  Download das séries RAW diretamente para memória
-# %% 3  Preparação metodológica
-# %% 4  LightGBM + walk-forward + política de rotação
-# %% 5  Objetos de resultado para inspeção
-# %% 6  Gravação dos artefatos
-# %% 7  Métricas finais
-```
-
-- `F5`: executa todo o arquivo.
-- `Ctrl+Enter`: executa somente a célula atual.
-- As variáveis ficam disponíveis no Variable Explorer.
-
-## Eventos corporativos no teste atual
-
-A série utilizada pelo modelo não é retroativamente ajustada. Os eventos recebidos da Tiingo ficam disponíveis na variável:
-
-```text
-eventos_corporativos
-```
-
-Por ativo, são preservados:
-
-```text
-timestamp
-dividendo
-fator_split
-```
-
-Eles ainda não alteram preço, volume, quantidade de ações ou retorno. Essa separação permite investigar posteriormente um tratamento causal de splits e dividendos sem utilizar eventos futuros para modificar observações passadas.
-
-## Universo congelado
+## Universo
 
 37 ativos:
 
@@ -143,49 +133,40 @@ Período:
 2016-01-01 → 2026-09-04
 ```
 
-O período inicial é usado para criação das variáveis, alvos e treinamento. A avaliação econômica ocorre somente nas sessões fora da amostra.
+## Resultado de referência — Tiingo RAW direto
 
-## Configuração principal
-
-```text
-capital inicial                  10,000
-modelo                           LightGBM Utility
-n_estimators                     329
-learning_rate                    0.020731
-max_depth                        3
-num_leaves                       6
-min_child_samples                18
-min_child_weight                 5.0
-subsample                        0.85
-colsample_bytree                 0.88067
-reg_alpha                        0.050837
-reg_lambda                       3.596305
-holding mínimo                   2 sessões
-switch margin base               0.0005
-margens de calibração            0, 0.0025, 0.005, 0.01
-random_state                     42
-```
-
-Os parâmetros ficam declarados em `tcc_engine/config.py`.
-
-## Referências de comparação
-
-A pesquisa já produziu resultados diferentes conforme a fonte e a política de ajuste dos dados. O resultado histórico certificado permanece apenas como referência experimental:
+Antes de congelar a fotografia, a execução direta Tiingo → memória de 16/09/2026 produziu:
 
 ```text
 Capital inicial        US$ 10,000.00
-Capital final          US$ 43,759,854.82
-CAGR                   293.82%
-Sharpe                 2.557
-Max Drawdown           -28.19%
-Rotações               315
+Capital final          US$ 45,766.77
+Retorno total          357.67%
+CAGR                   28.22%
+Sharpe                  0.711
+Max Drawdown           -56.09%
+Rotações                238
 ```
 
-Esse valor não é tratado como objetivo a ser reproduzido pela Tiingo. O teste atual busca medir o comportamento da mesma estratégia quando alimentada por OHLCV bruto de uma fonte independente.
+Esse resultado é uma referência para validar o snapshot congelado. Se a Tiingo devolver os mesmos registros no momento do congelamento, o backtest local deverá reproduzir numericamente essa execução.
 
-## Resultados
+O resultado também mostra que OHLCV bruto sem tratamento de splits não é a metodologia final: splits permanecem como descontinuidades econômicas artificiais na série. A fotografia RAW é preservada justamente para permitir que o tratamento causal seja desenvolvido de forma reproduzível.
 
-Cada execução gera:
+## Comparações já observadas
+
+```text
+Tiingo RAW atual        ≈ US$ 45.8 mil
+Alpaca RAW              ≈ US$ 76.2 mil
+Yahoo Finance           ≈ US$ 1.25 milhão
+Alpaca SPLIT            ≈ US$ 3.34 milhões
+Alpaca ALL atual        ≈ US$ 22.02 milhões
+Snapshot histórico      ≈ US$ 43.76 milhões
+```
+
+Esses valores não são usados para escolher a fonte pelo maior capital. Eles demonstram o impacto da origem e da política de ajuste dos dados sobre o experimento.
+
+## Resultados gerados
+
+Cada execução cria somente:
 
 ```text
 output/backtest_result.json
@@ -195,45 +176,22 @@ output/trades.csv
 output/summary.txt
 ```
 
-`output/` permanece fora do Git.
+O arquivo residual `output/market_data.csv` de versões antigas é removido automaticamente, evitando misturar dados de execuções anteriores.
 
-O `backtest_result.json` registra explicitamente:
-
-```text
-market_data_source       tiingo_eod_memoria
-market_data_adjustment   raw
-corporate_actions_applied false
-```
-
-## Utilitários históricos
-
-`baixar_series_alpaca.py` continua disponível para baixar séries da Alpaca e comparar fontes.
-
-`exportar_series_certificadas_mongo.py` existe somente para recuperar o snapshot histórico usado na reprodução certificada. Ele não participa do teste Tiingo.
-
-## Auditoria no Excel
-
-Após o backtest:
-
-```bash
-python analysis/build_excel.py
-```
-
-Arquivo gerado:
-
-```text
-analysis/tcc_backtest_output_analysis.xlsx
-```
-
-## Estrutura
+## Estrutura principal
 
 ```text
 tcc_mba_usp_data_science_analytics/
 ├── backtest.py
+├── congelar_series_tiingo.py
 ├── baixar_series_alpaca.py
 ├── exportar_series_certificadas_mongo.py
-├── .env.example
-├── requirements.txt
+├── dados/
+│   └── series_historicas/
+│       ├── manifesto_tiingo.json
+│       ├── NVDA.csv
+│       ├── ...
+│       └── SCSC.csv
 ├── analysis/
 │   └── build_excel.py
 └── tcc_engine/
@@ -241,6 +199,4 @@ tcc_mba_usp_data_science_analytics/
 
 ## Limitação metodológica
 
-O universo de 37 ativos foi obtido retrospectivamente e é tratado como universo congelado.
-
-O resultado demonstra o comportamento do motor, da validação walk-forward e da política de rotação sobre esse universo. Ele não demonstra generalização fora da amostra do processo histórico de seleção dos 37 ativos.
+O universo de 37 ativos foi obtido retrospectivamente e é tratado como universo congelado. O resultado demonstra o comportamento do motor e da validação walk-forward nesse universo, não a generalização fora da amostra do processo histórico de seleção dos ativos.
