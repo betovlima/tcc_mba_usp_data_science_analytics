@@ -1,7 +1,9 @@
 """Backtest academico reproduzivel para o TCC MBA USP.
 
-A unica entrada externa do experimento e o conjunto de series historicas OHLCV
-armazenadas em ``dados/series_historicas``, com um arquivo CSV por ativo.
+As series historicas OHLCV sao obtidas diretamente da Alpaca no inicio da
+execucao e permanecem em memoria ate o fim do processamento. Nenhum arquivo de
+serie historica e gravado ou relido pelo backtest.
+
 Features, targets, folds walk-forward, treinamento LightGBM, politica de
 rotacao, operacoes, curva de capital e metricas sao reconstruidos a cada
 execucao.
@@ -10,15 +12,15 @@ O arquivo e organizado em celulas Spyder ``# %%``. F5 executa o script completo;
 Ctrl+Enter executa somente a celula atual, mantendo as variaveis no namespace
 para inspecao no Variable Explorer.
 
-O backtest nao acessa MongoDB, nao baixa dados de mercado e nao le Strategy,
-modelo treinado, previsao persistida ou resultado anterior do Market Cycle
-Trader.
+Nao sao lidos Strategy documents, modelos treinados, previsoes persistidas,
+resultados anteriores ou configuracoes de runtime do Market Cycle Trader.
 """
 
 # %% 0 - Imports e configuracao
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +28,11 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from alpaca.data.enums import Adjustment, DataFeed
+from alpaca.data.historical.stock import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
+from dotenv import dotenv_values, load_dotenv
 
 from tcc_engine.capital_rotation import run_rotation_models as executar_modelos_rotacao
 from tcc_engine.config import ASSETS as ATIVOS
@@ -36,7 +43,6 @@ from tcc_engine.execution import apply_slippage as aplicar_deslizamento
 from tcc_engine.execution import calculate_reference_fees as calcular_taxas_referencia
 
 RAIZ_PROJETO = Path(__file__).resolve().parent
-DIRETORIO_SERIES = RAIZ_PROJETO / "dados" / "series_historicas"
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output"
 
 
@@ -69,53 +75,155 @@ def registrar_detalhe_tecnico(mensagem: str) -> None:
     registrar(f"[motor] {mensagem}")
 
 
-# %% 1 - Inicio da execucao
+# %% 1 - Inicio da execucao e credenciais da Alpaca
 inicio_execucao = time.perf_counter()
 
 registrar("TCC MBA USP - backtest reconstruido passo a passo")
-registrar("Entrada: um arquivo CSV historico por ativo")
+registrar("Entrada: Alpaca SIP -> memoria -> motor")
 registrar(f"Periodo: {DATA_INICIO} -> {DATA_FIM} | ativos={len(ATIVOS)}")
-registrar(f"Diretorio das series: {DIRETORIO_SERIES}")
 
-if not DIRETORIO_SERIES.exists():
+candidatos_env = [
+    RAIZ_PROJETO / ".env",
+    Path.cwd() / ".env",
+    RAIZ_PROJETO.parent / ".env",
+]
+
+arquivos_env_unicos: list[Path] = []
+for candidato in candidatos_env:
+    candidato = candidato.resolve()
+    if candidato not in arquivos_env_unicos:
+        arquivos_env_unicos.append(candidato)
+
+arquivo_env = next(
+    (candidato for candidato in arquivos_env_unicos if candidato.exists()),
+    None,
+)
+
+if arquivo_env is None:
+    caminhos = "\n".join(f"- {caminho}" for caminho in arquivos_env_unicos)
     raise RuntimeError(
-        "Diretorio de series historicas inexistente. Execute "
-        "'python baixar_series_alpaca.py' antes do backtest."
+        "Arquivo .env nao encontrado. Foram verificados:\n" + caminhos
     )
 
-inicio_periodo = pd.Timestamp(DATA_INICIO, tz="UTC")
-fim_periodo_exclusivo = pd.Timestamp(DATA_FIM, tz="UTC") + pd.Timedelta(days=1)
+load_dotenv(arquivo_env, override=True)
+valores_env = {
+    str(nome): str(valor or "").strip()
+    for nome, valor in dotenv_values(arquivo_env).items()
+}
+
+nomes_chave = (
+    "ALPACA_API_KEY",
+    "ALPACA_API_KEY_ID",
+    "APCA_API_KEY_ID",
+)
+nomes_segredo = (
+    "ALPACA_SECRET_KEY",
+    "ALPACA_API_SECRET_KEY",
+    "APCA_API_SECRET_KEY",
+)
+
+nome_chave_api = next(
+    (
+        nome
+        for nome in nomes_chave
+        if str(valores_env.get(nome) or os.getenv(nome) or "").strip()
+    ),
+    None,
+)
+nome_segredo_api = next(
+    (
+        nome
+        for nome in nomes_segredo
+        if str(valores_env.get(nome) or os.getenv(nome) or "").strip()
+    ),
+    None,
+)
+
+chave_api = (
+    str(valores_env.get(nome_chave_api) or os.getenv(nome_chave_api) or "").strip()
+    if nome_chave_api
+    else ""
+)
+segredo_api = (
+    str(valores_env.get(nome_segredo_api) or os.getenv(nome_segredo_api) or "").strip()
+    if nome_segredo_api
+    else ""
+)
+
+registrar(f"Arquivo .env: {arquivo_env}")
+registrar(f"Variavel da chave: {nome_chave_api or 'nao encontrada'}")
+registrar(f"Variavel do segredo: {nome_segredo_api or 'nao encontrada'}")
+
+if not chave_api or not segredo_api:
+    raise RuntimeError(
+        "Credenciais da Alpaca nao foram reconhecidas no .env."
+    )
+
+cliente_alpaca = StockHistoricalDataClient(
+    api_key=chave_api,
+    secret_key=segredo_api,
+)
+
+inicio_periodo = pd.Timestamp(DATA_INICIO, tz="UTC").to_pydatetime()
+fim_periodo = (
+    pd.Timestamp(DATA_FIM, tz="UTC")
+    + pd.Timedelta(days=1)
+    - pd.Timedelta(microseconds=1)
+).to_pydatetime()
 
 
-# %% 2 - Carregamento e validacao das series historicas
-registrar(f"[1/8] Carregando {len(ATIVOS)} arquivos de series historicas")
+# %% 2 - Download das series historicas diretamente para a memoria
+registrar(f"[1/8] Baixando {len(ATIVOS)} series historicas da Alpaca")
+registrar("[1/8] Fonte: Alpaca | timeframe=1Day | feed=SIP | adjustment=all")
 
 series_historicas: dict[str, pd.DataFrame] = {}
-arquivos_series: dict[str, Path] = {}
 colunas_ohlcv = ["open", "high", "low", "close", "volume"]
 
 for posicao, ativo in enumerate(ATIVOS, start=1):
-    arquivo = DIRETORIO_SERIES / f"{ativo}.csv"
-    arquivos_series[ativo] = arquivo
+    solicitacao = StockBarsRequest(
+        symbol_or_symbols=ativo,
+        timeframe=TimeFrame.Day,
+        start=inicio_periodo,
+        end=fim_periodo,
+        adjustment=Adjustment.ALL,
+        feed=DataFeed.SIP,
+        limit=10_000,
+    )
 
-    if not arquivo.exists():
-        raise RuntimeError(
-            f"Serie historica ausente para {ativo}: {arquivo}. "
-            "Execute 'python baixar_series_alpaca.py'."
-        )
+    resposta = cliente_alpaca.get_stock_bars(solicitacao)
+    serie = resposta.df.copy()
 
-    serie = pd.read_csv(arquivo)
+    if serie.empty:
+        raise RuntimeError(f"A Alpaca nao retornou dados para {ativo}.")
+
+    if isinstance(serie.index, pd.MultiIndex):
+        nomes_indice = list(serie.index.names)
+        if "symbol" in nomes_indice:
+            serie = serie.xs(ativo, level="symbol")
+
+    serie = serie.reset_index()
     serie.columns = [str(coluna).lower() for coluna in serie.columns]
 
+    if "symbol" in serie.columns:
+        serie = serie.drop(columns=["symbol"])
+
     colunas_obrigatorias = ["timestamp", *colunas_ohlcv]
-    ausentes = [coluna for coluna in colunas_obrigatorias if coluna not in serie.columns]
+    ausentes = [
+        coluna for coluna in colunas_obrigatorias
+        if coluna not in serie.columns
+    ]
     if ausentes:
         raise RuntimeError(
-            f"{ativo}: colunas ausentes em {arquivo.name}: {', '.join(ausentes)}"
+            f"{ativo}: colunas ausentes na resposta da Alpaca: "
+            + ", ".join(ausentes)
         )
 
     serie = serie[colunas_obrigatorias].copy()
-    serie["timestamp"] = pd.to_datetime(serie["timestamp"], utc=True, errors="coerce")
+    serie["timestamp"] = pd.to_datetime(
+        serie["timestamp"],
+        utc=True,
+        errors="coerce",
+    )
     serie = serie.dropna(subset=["timestamp"])
     serie = serie.set_index("timestamp").sort_index()
     serie = serie[~serie.index.duplicated(keep="last")]
@@ -124,11 +232,6 @@ for posicao, ativo in enumerate(ATIVOS, start=1):
         serie[coluna] = pd.to_numeric(serie[coluna], errors="coerce")
 
     serie = serie.dropna(subset=colunas_ohlcv)
-    serie = serie.loc[
-        (serie.index >= inicio_periodo)
-        & (serie.index < fim_periodo_exclusivo)
-    ].copy()
-
     valores_validos = (
         (serie["open"] > 0)
         & (serie["high"] > 0)
@@ -149,10 +252,21 @@ for posicao, ativo in enumerate(ATIVOS, start=1):
         f"{serie.index.min().date()} -> {serie.index.max().date()}"
     )
 
+if len(series_historicas) != len(ATIVOS):
+    raise RuntimeError(
+        f"Esperava {len(ATIVOS)} series em memoria; "
+        f"foram carregadas {len(series_historicas)}."
+    )
+
+registrar(
+    f"[1/8] {len(series_historicas)} series mantidas em memoria; "
+    "nenhum CSV intermediario foi usado"
+)
+
 
 # %% 3 - Preparacao metodologica
-# As features, targets e folds sao construidos pelo tcc_engine a partir das
-# series_historicas. Esta celula deixa explicito o protocolo antes do processamento.
+# As features, targets e folds sao construidos pelo tcc_engine diretamente a
+# partir das series_historicas mantidas em memoria.
 registrar("[2/8] Construindo features tecnicas a partir do OHLCV")
 registrar(
     "[3/8] Construindo targets multi-horizonte: "
@@ -165,8 +279,9 @@ contexto_experimento = {
     "asset_count": len(ATIVOS),
     "history_start": DATA_INICIO,
     "history_end": DATA_FIM,
-    "market_data_source": "alpaca_sip_csv_por_ativo",
-    "market_data_directory": "dados/series_historicas",
+    "market_data_source": "alpaca_sip_memoria",
+    "market_data_feed": "sip",
+    "market_data_adjustment": "all",
     "model_family": CONFIGURACAO.research_model_family,
     "target_horizons": list(CONFIGURACAO.rotation_target_horizons),
     "minimum_training_rows": CONFIGURACAO.rotation_minimum_training_rows,
@@ -235,7 +350,7 @@ tempo_total = time.perf_counter() - inicio_execucao
 
 resultado_serializado = {
     "experiment": "mba_usp_reproducible_backtest",
-    "input_source": "alpaca_sip_csv_por_ativo",
+    "input_source": "alpaca_sip_memoria",
     **contexto_experimento,
     "walk_forward": {
         "minimum_training_rows": CONFIGURACAO.rotation_minimum_training_rows,
@@ -249,7 +364,7 @@ resultado_serializado = {
 }
 
 
-# %% 6 - Gravacao dos artefatos
+# %% 6 - Gravacao somente dos artefatos finais
 DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
 
 curva_csv = curva_capital.copy()
@@ -306,5 +421,6 @@ registrar(f"Sharpe          : {float(metricas['strategy_sharpe']):.3f}")
 registrar(f"Max Drawdown    : {float(metricas['strategy_maximum_drawdown']):.2%}")
 registrar(f"Rotacoes        : {int(metricas.get('capital_rotations') or 0)}")
 registrar(f"CASH days       : {int(metricas.get('cash_days') or 0)}")
+registrar(f"Series em memoria: {len(series_historicas)}")
 registrar(f"Tempo total     : {tempo_total:.2f}s")
 registrar(f"Resultados      : {DIRETORIO_RESULTADOS}")
