@@ -1,23 +1,24 @@
 """Backtest academico reproduzivel para o TCC MBA USP.
 
-A unica entrada externa do experimento e o historico diario OHLCV armazenado
-na collection local ``alpaca_market_bars``. Features, targets, folds
-walk-forward, treinamento LightGBM, politica de rotacao, operacoes, curva de
-capital e metricas sao reconstruidos a cada execucao.
+A unica entrada externa do experimento e o conjunto de series historicas OHLCV
+armazenadas em ``dados/series_historicas``, com um arquivo CSV por ativo.
+Features, targets, folds walk-forward, treinamento LightGBM, politica de
+rotacao, operacoes, curva de capital e metricas sao reconstruidos a cada
+execucao.
 
 O arquivo e organizado em celulas Spyder ``# %%``. F5 executa o script completo;
 Ctrl+Enter executa somente a celula atual, mantendo as variaveis no namespace
 para inspecao no Variable Explorer.
 
-Nao sao lidos Strategy documents, modelos treinados, previsoes persistidas,
-resultados anteriores ou configuracoes de runtime do Market Cycle Trader.
+O backtest nao acessa MongoDB, nao baixa dados de mercado e nao le Strategy,
+modelo treinado, previsao persistida ou resultado anterior do Market Cycle
+Trader.
 """
 
 # %% 0 - Imports e configuracao
 from __future__ import annotations
 
 import json
-import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -25,214 +26,191 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from dotenv import load_dotenv
-from pymongo import MongoClient
 
-from tcc_engine.capital_rotation import run_rotation_models
-from tcc_engine.config import ASSETS, CONFIG, END_DATE, START_DATE
-from tcc_engine.execution import apply_slippage, calculate_reference_fees
+from tcc_engine.capital_rotation import run_rotation_models as executar_modelos_rotacao
+from tcc_engine.config import ASSETS as ATIVOS
+from tcc_engine.config import CONFIG as CONFIGURACAO
+from tcc_engine.config import END_DATE as DATA_FIM
+from tcc_engine.config import START_DATE as DATA_INICIO
+from tcc_engine.execution import apply_slippage as aplicar_deslizamento
+from tcc_engine.execution import calculate_reference_fees as calcular_taxas_referencia
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-OUTPUT_DIR = PROJECT_ROOT / "output"
-
-DEFAULT_MONGO_URI = "mongodb://localhost:27017"
-DEFAULT_MONGO_DATABASE = "extrema_backtest"
-MARKET_COLLECTION = "alpaca_market_bars"
-
-
-# Funcoes auxiliares pequenas permanecem aqui porque sao callbacks/serializadores
-# exigidos pelas APIs usadas pelo script. As etapas do experimento sao celulas.
-def log(message: str) -> None:
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}", flush=True)
+RAIZ_PROJETO = Path(__file__).resolve().parent
+DIRETORIO_SERIES = RAIZ_PROJETO / "dados" / "series_historicas"
+DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output"
 
 
-def json_default(value: Any) -> Any:
-    if isinstance(value, (pd.Timestamp, datetime)):
-        return pd.Timestamp(value).isoformat()
-    if isinstance(value, np.integer):
-        return int(value)
-    if isinstance(value, np.floating):
-        number = float(value)
-        return number if np.isfinite(number) else None
-    if isinstance(value, np.bool_):
-        return bool(value)
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, Path):
-        return str(value)
-    return str(value)
+def registrar(mensagem: str) -> None:
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {mensagem}", flush=True)
 
 
-def progress_callback(percent: float, stage: str, completed_runs: int) -> None:
-    log(f"[5/8] {percent:5.1f}% | {stage}")
+def converter_json(valor: Any) -> Any:
+    if isinstance(valor, (pd.Timestamp, datetime)):
+        return pd.Timestamp(valor).isoformat()
+    if isinstance(valor, np.integer):
+        return int(valor)
+    if isinstance(valor, np.floating):
+        numero = float(valor)
+        return numero if np.isfinite(numero) else None
+    if isinstance(valor, np.bool_):
+        return bool(valor)
+    if isinstance(valor, np.ndarray):
+        return valor.tolist()
+    if isinstance(valor, Path):
+        return str(valor)
+    return str(valor)
 
 
-def technical_log_callback(message: str) -> None:
-    log(f"[motor] {message}")
+def registrar_progresso(percentual: float, etapa: str, execucoes_concluidas: int) -> None:
+    registrar(f"[5/8] {percentual:5.1f}% | {etapa}")
+
+
+def registrar_detalhe_tecnico(mensagem: str) -> None:
+    registrar(f"[motor] {mensagem}")
 
 
 # %% 1 - Inicio da execucao
-started = time.perf_counter()
+inicio_execucao = time.perf_counter()
 
-log("TCC MBA USP — backtest reconstruido passo a passo")
-log("Entrada externa permitida: somente candles OHLCV do MongoDB local")
-log(f"Periodo: {START_DATE} -> {END_DATE} | ativos={len(ASSETS)}")
+registrar("TCC MBA USP - backtest reconstruido passo a passo")
+registrar("Entrada: um arquivo CSV historico por ativo")
+registrar(f"Periodo: {DATA_INICIO} -> {DATA_FIM} | ativos={len(ATIVOS)}")
+registrar(f"Diretorio das series: {DIRETORIO_SERIES}")
 
-load_dotenv(PROJECT_ROOT / ".env", override=False)
-
-mongo_uri = str(os.getenv("TCC_MONGO_URI") or DEFAULT_MONGO_URI).strip()
-database_name = str(os.getenv("TCC_MONGO_DATABASE") or DEFAULT_MONGO_DATABASE).strip()
-
-lowered_mongo_uri = mongo_uri.lower()
-if not any(host in lowered_mongo_uri for host in ("localhost", "127.0.0.1", "::1")):
+if not DIRETORIO_SERIES.exists():
     raise RuntimeError(
-        "O TCC aceita somente MongoDB local. Defina TCC_MONGO_URI para localhost."
+        "Diretorio de series historicas inexistente. Execute "
+        "'python baixar_series_alpaca.py' antes do backtest."
     )
 
-start_timestamp = pd.Timestamp(START_DATE, tz="UTC").to_pydatetime()
-end_timestamp = (
-    pd.Timestamp(END_DATE, tz="UTC") + pd.Timedelta(days=1)
-).to_pydatetime()
+inicio_periodo = pd.Timestamp(DATA_INICIO, tz="UTC")
+fim_periodo_exclusivo = pd.Timestamp(DATA_FIM, tz="UTC") + pd.Timedelta(days=1)
 
 
-# %% 2 - Carregamento e validacao do OHLCV bruto
-log(f"[1/8] Carregando OHLCV bruto de {len(ASSETS)} ativos")
-log(f"[1/8] Fonte: {database_name}.{MARKET_COLLECTION}")
+# %% 2 - Carregamento e validacao das series historicas
+registrar(f"[1/8] Carregando {len(ATIVOS)} arquivos de series historicas")
 
-client = MongoClient(
-    mongo_uri,
-    serverSelectionTimeoutMS=3_000,
-    connectTimeoutMS=3_000,
-    retryWrites=False,
-)
-try:
-    client.admin.command("ping")
-    collection = client[database_name][MARKET_COLLECTION]
-    rows = list(
-        collection.find(
-            {
-                "symbol": {"$in": list(ASSETS)},
-                "interval": CONFIG.timeframe,
-                "feed": CONFIG.alpaca_historical_feed,
-                "adjustment": CONFIG.alpaca_adjustment,
-                "timestamp": {"$gte": start_timestamp, "$lt": end_timestamp},
-            },
-            {
-                "_id": 0,
-                "symbol": 1,
-                "timestamp": 1,
-                "open": 1,
-                "high": 1,
-                "low": 1,
-                "close": 1,
-                "volume": 1,
-            },
-        ).sort([("symbol", 1), ("timestamp", 1)])
-    )
-finally:
-    client.close()
+series_historicas: dict[str, pd.DataFrame] = {}
+arquivos_series: dict[str, Path] = {}
+colunas_ohlcv = ["open", "high", "low", "close", "volume"]
 
-if not rows:
-    raise RuntimeError("Nenhum candle OHLCV foi encontrado no MongoDB local.")
+for posicao, ativo in enumerate(ATIVOS, start=1):
+    arquivo = DIRETORIO_SERIES / f"{ativo}.csv"
+    arquivos_series[ativo] = arquivo
 
-raw = pd.DataFrame(rows)
-raw["symbol"] = raw["symbol"].astype(str).str.upper()
-raw["timestamp"] = pd.to_datetime(raw["timestamp"], utc=True)
-
-frames: dict[str, pd.DataFrame] = {}
-for symbol, group in raw.groupby("symbol", sort=False):
-    frame = group.drop(columns=["symbol"]).set_index("timestamp").sort_index()
-    frame = frame[~frame.index.duplicated(keep="last")]
-
-    for column in ("open", "high", "low", "close", "volume"):
-        frame[column] = pd.to_numeric(frame[column], errors="coerce")
-
-    frame = frame.dropna(subset=["open", "high", "low", "close", "volume"])
-    valid = (
-        (frame["open"] > 0)
-        & (frame["high"] > 0)
-        & (frame["low"] > 0)
-        & (frame["close"] > 0)
-        & (frame["volume"] >= 0)
-    )
-    frames[str(symbol)] = frame.loc[valid].copy()
-
-missing_assets = [
-    symbol for symbol in ASSETS
-    if symbol not in frames or frames[symbol].empty
-]
-if missing_assets:
-    raise RuntimeError("Historico ausente para: " + ", ".join(missing_assets))
-
-for position, symbol in enumerate(ASSETS, start=1):
-    if position == 1 or position % 5 == 0 or position == len(ASSETS):
-        frame = frames[symbol]
-        log(
-            f"[1/8] {position:02d}/{len(ASSETS)} {symbol} | "
-            f"{len(frame)} candles | "
-            f"{frame.index.min().date()} -> {frame.index.max().date()}"
+    if not arquivo.exists():
+        raise RuntimeError(
+            f"Serie historica ausente para {ativo}: {arquivo}. "
+            "Execute 'python baixar_series_alpaca.py'."
         )
+
+    serie = pd.read_csv(arquivo)
+    serie.columns = [str(coluna).lower() for coluna in serie.columns]
+
+    colunas_obrigatorias = ["timestamp", *colunas_ohlcv]
+    ausentes = [coluna for coluna in colunas_obrigatorias if coluna not in serie.columns]
+    if ausentes:
+        raise RuntimeError(
+            f"{ativo}: colunas ausentes em {arquivo.name}: {', '.join(ausentes)}"
+        )
+
+    serie = serie[colunas_obrigatorias].copy()
+    serie["timestamp"] = pd.to_datetime(serie["timestamp"], utc=True, errors="coerce")
+    serie = serie.dropna(subset=["timestamp"])
+    serie = serie.set_index("timestamp").sort_index()
+    serie = serie[~serie.index.duplicated(keep="last")]
+
+    for coluna in colunas_ohlcv:
+        serie[coluna] = pd.to_numeric(serie[coluna], errors="coerce")
+
+    serie = serie.dropna(subset=colunas_ohlcv)
+    serie = serie.loc[
+        (serie.index >= inicio_periodo)
+        & (serie.index < fim_periodo_exclusivo)
+    ].copy()
+
+    valores_validos = (
+        (serie["open"] > 0)
+        & (serie["high"] > 0)
+        & (serie["low"] > 0)
+        & (serie["close"] > 0)
+        & (serie["volume"] >= 0)
+    )
+    serie = serie.loc[valores_validos].copy()
+
+    if serie.empty:
+        raise RuntimeError(f"{ativo}: serie historica vazia depois da validacao.")
+
+    series_historicas[ativo] = serie
+
+    registrar(
+        f"[1/8] {posicao:02d}/{len(ATIVOS)} {ativo} | "
+        f"{len(serie)} candles | "
+        f"{serie.index.min().date()} -> {serie.index.max().date()}"
+    )
 
 
 # %% 3 - Preparacao metodologica
-# As features, targets e folds sao construidos pelo tcc_engine a partir de
-# ``frames``. Esta celula deixa explicito o protocolo antes do processamento.
-log("[2/8] Construindo features tecnicas a partir do OHLCV")
-log(
+# As features, targets e folds sao construidos pelo tcc_engine a partir das
+# series_historicas. Esta celula deixa explicito o protocolo antes do processamento.
+registrar("[2/8] Construindo features tecnicas a partir do OHLCV")
+registrar(
     "[3/8] Construindo targets multi-horizonte: "
-    + ", ".join(str(value) for value in CONFIG.rotation_target_horizons)
+    + ", ".join(str(valor) for valor in CONFIGURACAO.rotation_target_horizons)
 )
-log("[4/8] Criando folds temporais walk-forward com purge")
+registrar("[4/8] Criando folds temporais walk-forward com purge")
 
-experiment_context = {
-    "assets": list(ASSETS),
-    "asset_count": len(ASSETS),
-    "history_start": START_DATE,
-    "history_end": END_DATE,
-    "model_family": CONFIG.research_model_family,
-    "target_horizons": list(CONFIG.rotation_target_horizons),
-    "minimum_training_rows": CONFIG.rotation_minimum_training_rows,
-    "calibration_days": CONFIG.rotation_walk_forward_calibration_days,
-    "test_days": CONFIG.rotation_walk_forward_test_days,
-    "minimum_test_days": CONFIG.rotation_walk_forward_min_test_days,
-    "purge_days": CONFIG.rotation_purge_days,
+contexto_experimento = {
+    "assets": list(ATIVOS),
+    "asset_count": len(ATIVOS),
+    "history_start": DATA_INICIO,
+    "history_end": DATA_FIM,
+    "market_data_source": "alpaca_sip_csv_por_ativo",
+    "market_data_directory": "dados/series_historicas",
+    "model_family": CONFIGURACAO.research_model_family,
+    "target_horizons": list(CONFIGURACAO.rotation_target_horizons),
+    "minimum_training_rows": CONFIGURACAO.rotation_minimum_training_rows,
+    "calibration_days": CONFIGURACAO.rotation_walk_forward_calibration_days,
+    "test_days": CONFIGURACAO.rotation_walk_forward_test_days,
+    "minimum_test_days": CONFIGURACAO.rotation_walk_forward_min_test_days,
+    "purge_days": CONFIGURACAO.rotation_purge_days,
 }
 
 
 # %% 4 - Treinamento LightGBM, previsoes OOS e politica de rotacao
-log("[5/8] Treinando LightGBM do zero em cada fold e ativo")
+registrar("[5/8] Treinando LightGBM do zero em cada fold e ativo")
 
-results = run_rotation_models(
-    frames,
-    CONFIG,
-    calculate_reference_fees,
-    apply_slippage,
-    progress_callback=progress_callback,
-    technical_log_callback=technical_log_callback,
+resultados = executar_modelos_rotacao(
+    series_historicas,
+    CONFIGURACAO,
+    calcular_taxas_referencia,
+    aplicar_deslizamento,
+    progress_callback=registrar_progresso,
+    technical_log_callback=registrar_detalhe_tecnico,
 )
 
-if not results:
+if not resultados:
     raise RuntimeError("O motor nao retornou resultado.")
-if len(results) != 1:
+if len(resultados) != 1:
     raise RuntimeError(
-        f"Esperava uma execucao; foram retornadas {len(results)}."
+        f"Esperava uma execucao; foram retornadas {len(resultados)}."
     )
 
-result = results[0]
+resultado = resultados[0]
 
-log("[6/8] Aplicando a politica de rotacao somente nas sessoes fora da amostra")
-log("[7/8] Reconstruindo trades, custos e curva de capital")
+registrar("[6/8] Aplicando a politica de rotacao somente nas sessoes fora da amostra")
+registrar("[7/8] Reconstruindo trades, custos e curva de capital")
 
 
 # %% 5 - Objetos de resultado para inspecao no Spyder
-predictions = result.predictions.copy()
-trades = result.trades.copy()
-folds = list(result.metrics.get("walk_forward_folds") or [])
-metrics = dict(result.metrics)
+previsoes = resultado.predictions.copy()
+operacoes = resultado.trades.copy()
+folds = list(resultado.metrics.get("walk_forward_folds") or [])
+metricas = dict(resultado.metrics)
 
-equity_columns = [
-    column
-    for column in (
+colunas_curva = [
+    coluna
+    for coluna in (
         "strategy_equity",
         "buy_hold_equity",
         "selected_asset",
@@ -245,92 +223,88 @@ equity_columns = [
         "market_exposure_weight",
         "assets_held",
     )
-    if column in predictions.columns
+    if coluna in previsoes.columns
 ]
-equity = (
-    predictions[equity_columns].copy()
-    if equity_columns
-    else predictions.copy()
+curva_capital = (
+    previsoes[colunas_curva].copy()
+    if colunas_curva
+    else previsoes.copy()
 )
 
-elapsed = time.perf_counter() - started
+tempo_total = time.perf_counter() - inicio_execucao
 
-payload = {
+resultado_serializado = {
     "experiment": "mba_usp_reproducible_backtest",
-    "input_source": "local_mongodb_alpaca_market_bars_ohlcv_only",
-    **experiment_context,
+    "input_source": "alpaca_sip_csv_por_ativo",
+    **contexto_experimento,
     "walk_forward": {
-        "minimum_training_rows": CONFIG.rotation_minimum_training_rows,
-        "calibration_days": CONFIG.rotation_walk_forward_calibration_days,
-        "test_days": CONFIG.rotation_walk_forward_test_days,
-        "minimum_test_days": CONFIG.rotation_walk_forward_min_test_days,
-        "purge_days": CONFIG.rotation_purge_days,
+        "minimum_training_rows": CONFIGURACAO.rotation_minimum_training_rows,
+        "calibration_days": CONFIGURACAO.rotation_walk_forward_calibration_days,
+        "test_days": CONFIGURACAO.rotation_walk_forward_test_days,
+        "minimum_test_days": CONFIGURACAO.rotation_walk_forward_min_test_days,
+        "purge_days": CONFIGURACAO.rotation_purge_days,
     },
-    "elapsed_seconds": float(elapsed),
-    "metrics": metrics,
+    "elapsed_seconds": float(tempo_total),
+    "metrics": metricas,
 }
 
 
 # %% 6 - Gravacao dos artefatos
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
 
-equity_csv = equity.copy()
-if equity_csv.index.name is not None or not isinstance(
-    equity_csv.index, pd.RangeIndex
-):
-    equity_csv = equity_csv.reset_index()
+curva_csv = curva_capital.copy()
+if curva_csv.index.name is not None or not isinstance(curva_csv.index, pd.RangeIndex):
+    curva_csv = curva_csv.reset_index()
 
-trades_csv = trades.copy()
-if trades_csv.index.name is not None or not isinstance(
-    trades_csv.index, pd.RangeIndex
-):
-    trades_csv = trades_csv.reset_index()
+operacoes_csv = operacoes.copy()
+if operacoes_csv.index.name is not None or not isinstance(operacoes_csv.index, pd.RangeIndex):
+    operacoes_csv = operacoes_csv.reset_index()
 
-for dataframe in (equity_csv, trades_csv):
-    for column in dataframe.columns:
-        has_nested_values = dataframe[column].map(
-            lambda value: isinstance(value, (dict, list, tuple))
+for tabela in (curva_csv, operacoes_csv):
+    for coluna in tabela.columns:
+        possui_valores_aninhados = tabela[coluna].map(
+            lambda valor: isinstance(valor, (dict, list, tuple))
         ).any()
-        if has_nested_values:
-            dataframe[column] = dataframe[column].map(
-                lambda value: json.dumps(
-                    value,
+        if possui_valores_aninhados:
+            tabela[coluna] = tabela[coluna].map(
+                lambda valor: json.dumps(
+                    valor,
                     ensure_ascii=False,
-                    default=json_default,
+                    default=converter_json,
                 )
-                if isinstance(value, (dict, list, tuple))
-                else value
+                if isinstance(valor, (dict, list, tuple))
+                else valor
             )
 
-equity_csv.to_csv(OUTPUT_DIR / "equity_curve.csv", index=False)
-trades_csv.to_csv(OUTPUT_DIR / "trades.csv", index=False)
-pd.DataFrame(folds).to_csv(OUTPUT_DIR / "folds.csv", index=False)
+curva_csv.to_csv(DIRETORIO_RESULTADOS / "equity_curve.csv", index=False)
+operacoes_csv.to_csv(DIRETORIO_RESULTADOS / "trades.csv", index=False)
+pd.DataFrame(folds).to_csv(DIRETORIO_RESULTADOS / "folds.csv", index=False)
 
-(OUTPUT_DIR / "backtest_result.json").write_text(
+(DIRETORIO_RESULTADOS / "backtest_result.json").write_text(
     json.dumps(
-        payload,
+        resultado_serializado,
         indent=2,
         ensure_ascii=False,
-        default=json_default,
+        default=converter_json,
     )
     + "\n",
     encoding="utf-8",
 )
-(OUTPUT_DIR / "summary.txt").write_text(
-    str(result.summary).rstrip() + "\n",
+(DIRETORIO_RESULTADOS / "summary.txt").write_text(
+    str(resultado.summary).rstrip() + "\n",
     encoding="utf-8",
 )
 
 
 # %% 7 - Metricas finais
-log("[8/8] Calculando e salvando metricas finais")
-log(f"Capital inicial : US$ {CONFIG.initial_capital:,.2f}")
-log(f"Capital final   : US$ {float(metrics['strategy_ending_capital']):,.2f}")
-log(f"Retorno         : {float(metrics['strategy_return']):.2%}")
-log(f"CAGR            : {float(metrics['strategy_cagr']):.2%}")
-log(f"Sharpe          : {float(metrics['strategy_sharpe']):.3f}")
-log(f"Max Drawdown    : {float(metrics['strategy_maximum_drawdown']):.2%}")
-log(f"Rotacoes        : {int(metrics.get('capital_rotations') or 0)}")
-log(f"CASH days       : {int(metrics.get('cash_days') or 0)}")
-log(f"Tempo total     : {elapsed:.2f}s")
-log(f"Resultados      : {OUTPUT_DIR}")
+registrar("[8/8] Calculando e salvando metricas finais")
+registrar(f"Capital inicial : US$ {CONFIGURACAO.initial_capital:,.2f}")
+registrar(f"Capital final   : US$ {float(metricas['strategy_ending_capital']):,.2f}")
+registrar(f"Retorno         : {float(metricas['strategy_return']):.2%}")
+registrar(f"CAGR            : {float(metricas['strategy_cagr']):.2%}")
+registrar(f"Sharpe          : {float(metricas['strategy_sharpe']):.3f}")
+registrar(f"Max Drawdown    : {float(metricas['strategy_maximum_drawdown']):.2%}")
+registrar(f"Rotacoes        : {int(metricas.get('capital_rotations') or 0)}")
+registrar(f"CASH days       : {int(metricas.get('cash_days') or 0)}")
+registrar(f"Tempo total     : {tempo_total:.2f}s")
+registrar(f"Resultados      : {DIRETORIO_RESULTADOS}")
