@@ -1,16 +1,16 @@
-# Numerical and data stack
+# Bibliotecas numericas e de dados
 numpy>=2.2,<3
 pandas>=2.2,<4
 scipy>=1.15,<2
 scikit-learn>=1.6,<2
 threadpoolctl>=3.5,<4
 
-# Model used by the experiment
+# Modelo usado pelo experimento
 lightgbm>=4.6,<5
 
-# Local OHLCV data source and local configuration
-pymongo>=4.10,<5
+# Download das series historicas da Alpaca
+alpaca-py>=0.43,<1
 python-dotenv>=1.0,<2
 
-# Excel audit workbook
+# Auditoria em Excel
 openpyxl>=3.1,<4
