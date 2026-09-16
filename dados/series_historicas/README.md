@@ -1,52 +1,43 @@
-# Séries históricas
+# Séries históricas congeladas
 
-Este diretório contém a entrada estática e congelada do backtest: um CSV por ativo.
+Este diretório contém a entrada estática do backtest.
 
-Formato esperado de cada arquivo:
+A fotografia atual deve ser criada com:
 
-```text
-timestamp,open,high,low,close,volume
+```bash
+python congelar_series_tiingo.py
 ```
 
-Exemplos:
+A fonte é Tiingo End-of-Day e somente os campos brutos de mercado são usados:
+
+```text
+timestamp
+open
+high
+low
+close
+volume
+```
+
+Cada CSV também preserva:
+
+```text
+dividendo
+fator_split
+```
+
+Os eventos corporativos ainda não são aplicados ao OHLCV. Eles ficam armazenados para permitir tratamento causal posterior.
+
+Arquivos esperados:
 
 ```text
 NVDA.csv
 MSFT.csv
-META.csv
-TSLA.csv
 ...
 SCSC.csv
+manifesto_tiingo.json
 ```
 
-## Base certificada do experimento
+Depois de gerado e validado, o snapshot deve permanecer congelado. O `backtest.py` não consulta Tiingo, Alpaca, Yahoo, MongoDB ou qualquer outra fonte externa.
 
-Para reproduzir o resultado histórico certificado, os CSVs devem representar exatamente o mesmo snapshot OHLCV usado pelo backtest certificado.
-
-A Alpaca permite baixar dados com:
-
-```text
-timeframe   1Day
-feed        SIP
-adjustment  all
-```
-
-Porém, `adjustment=all` incorpora eventos corporativos. Dividendos e outros eventos processados posteriormente podem reajustar retroativamente preços históricos. Portanto, um novo download feito em outra data pode ser correto e ainda assim não ser numericamente idêntico ao snapshot usado anteriormente.
-
-Para migrar uma única vez o snapshot certificado armazenado no MongoDB local para os CSVs deste diretório:
-
-```bash
-python exportar_series_certificadas_mongo.py
-```
-
-Depois dessa migração, o `backtest.py` lê somente os arquivos CSV. O MongoDB não participa da execução do experimento.
-
-## Download atual da Alpaca
-
-O script abaixo continua disponível para obter uma fotografia atual dos dados da Alpaca:
-
-```bash
-python baixar_series_alpaca.py
-```
-
-Um novo download não deve ser usado para substituir silenciosamente a base certificada sem uma nova validação do backtest.
+Uma nova coleta da Tiingo deve ser tratada como um novo snapshot e validada antes de substituir a fotografia usada no experimento.
