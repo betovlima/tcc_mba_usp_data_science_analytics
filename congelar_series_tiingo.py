@@ -1,10 +1,11 @@
 """Congela uma fotografia reproduzivel das series EOD brutas da Tiingo.
 
-O script consulta a Tiingo uma unica vez por ativo e grava um CSV local com
-OHLCV bruto, dividendo em dinheiro e fator de split. O backtest passa a usar
-somente esses arquivos, sem depender da API durante o experimento.
+O script consulta a Tiingo uma unica vez por ativo e grava imediatamente cada
+serie concluida em CSV. Se o limite horario da API for atingido, a execucao pode
+ser retomada depois sem repetir os ativos ja baixados.
 
-Campos ajustados da Tiingo nao sao gravados nem usados.
+O snapshot contem OHLCV bruto, dividendo em dinheiro e fator de split. Campos
+ajustados da Tiingo nao sao gravados nem usados.
 """
 
 # %% 0 - Imports e configuracao
@@ -26,6 +27,7 @@ from tcc_engine.config import START_DATE as DATA_INICIO
 RAIZ_PROJETO = Path(__file__).resolve().parent
 DIRETORIO_SERIES = RAIZ_PROJETO / "dados" / "series_historicas"
 ARQUIVO_MANIFESTO = DIRETORIO_SERIES / "manifesto_tiingo.json"
+ARQUIVO_PROGRESSO = DIRETORIO_SERIES / ".tiingo_congelamento_parcial.json"
 URL_BASE_TIINGO = "https://api.tiingo.com/tiingo/daily"
 
 COLUNAS_SNAPSHOT = [
@@ -42,6 +44,80 @@ COLUNAS_SNAPSHOT = [
 
 def registrar(mensagem: str) -> None:
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {mensagem}", flush=True)
+
+
+def carregar_progresso() -> set[str]:
+    if not ARQUIVO_PROGRESSO.exists():
+        return set()
+
+    try:
+        progresso = json.loads(ARQUIVO_PROGRESSO.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+
+    if (
+        progresso.get("fonte") != "Tiingo EOD"
+        or progresso.get("periodo_inicio") != DATA_INICIO
+        or progresso.get("periodo_fim") != DATA_FIM
+    ):
+        return set()
+
+    concluidos = progresso.get("ativos_concluidos") or []
+    return {str(ativo).upper() for ativo in concluidos}
+
+
+def salvar_progresso(ativos_concluidos: set[str]) -> None:
+    DIRETORIO_SERIES.mkdir(parents=True, exist_ok=True)
+    progresso = {
+        "fonte": "Tiingo EOD",
+        "tipo_preco": "raw",
+        "periodo_inicio": DATA_INICIO,
+        "periodo_fim": DATA_FIM,
+        "atualizado_em_utc": datetime.now(timezone.utc).isoformat(),
+        "ativos_concluidos": [ativo for ativo in ATIVOS if ativo in ativos_concluidos],
+    }
+    ARQUIVO_PROGRESSO.write_text(
+        json.dumps(progresso, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def ler_serie_congelada(ativo: str) -> pd.DataFrame:
+    arquivo = DIRETORIO_SERIES / f"{ativo}.csv"
+    if not arquivo.exists():
+        raise RuntimeError(
+            f"{ativo}: marcado como concluido, mas o arquivo nao existe: {arquivo}"
+        )
+
+    serie = pd.read_csv(arquivo)
+    ausentes = [coluna for coluna in COLUNAS_SNAPSHOT if coluna not in serie.columns]
+    if ausentes:
+        raise RuntimeError(
+            f"{ativo}: snapshot parcial invalido; colunas ausentes: "
+            + ", ".join(ausentes)
+        )
+
+    serie["timestamp"] = pd.to_datetime(serie["timestamp"], utc=True, errors="coerce")
+    for coluna in ("open", "high", "low", "close", "volume", "dividendo", "fator_split"):
+        serie[coluna] = pd.to_numeric(serie[coluna], errors="coerce")
+
+    serie = serie.dropna(subset=COLUNAS_SNAPSHOT)
+    serie = serie.sort_values("timestamp")
+    serie = serie.drop_duplicates(subset=["timestamp"], keep="last")
+    return serie[COLUNAS_SNAPSHOT].copy()
+
+
+def resumir_serie(ativo: str, serie: pd.DataFrame) -> dict[str, object]:
+    quantidade_splits = int((serie["fator_split"] != 1.0).sum())
+    quantidade_dividendos = int((serie["dividendo"] != 0.0).sum())
+    return {
+        "ativo": ativo,
+        "candles": len(serie),
+        "inicio": serie["timestamp"].min().date().isoformat(),
+        "fim": serie["timestamp"].max().date().isoformat(),
+        "splits": quantidade_splits,
+        "dividendos": quantidade_dividendos,
+    }
 
 
 # %% 1 - Credencial da Tiingo
@@ -86,17 +162,27 @@ sessao_tiingo.headers.update(
 )
 
 
-# %% 2 - Download completo para memoria
+# %% 2 - Download e gravacao progressiva do snapshot
+DIRETORIO_SERIES.mkdir(parents=True, exist_ok=True)
+ativos_concluidos = carregar_progresso()
+
 registrar("Congelando fotografia Tiingo EOD RAW")
 registrar(f"Periodo: {DATA_INICIO} -> {DATA_FIM} | ativos={len(ATIVOS)}")
 registrar("Os campos ajustados da Tiingo nao serao armazenados")
-
-snapshot_por_ativo: dict[str, pd.DataFrame] = {}
-resumo_ativos: list[dict[str, object]] = []
-total_splits = 0
-total_dividendos = 0
+if ativos_concluidos:
+    registrar(
+        f"Retomando execucao: {len(ativos_concluidos)} ativo(s) ja congelado(s)"
+    )
 
 for posicao, ativo in enumerate(ATIVOS, start=1):
+    if ativo in ativos_concluidos:
+        serie_existente = ler_serie_congelada(ativo)
+        registrar(
+            f"{posicao:02d}/{len(ATIVOS)} {ativo} | ja congelado | "
+            f"{len(serie_existente)} candles"
+        )
+        continue
+
     resposta = sessao_tiingo.get(
         f"{URL_BASE_TIINGO}/{ativo}/prices",
         params={
@@ -107,9 +193,22 @@ for posicao, ativo in enumerate(ATIVOS, start=1):
         timeout=60,
     )
 
+    if resposta.status_code == 429:
+        salvar_progresso(ativos_concluidos)
+        detalhe = str(resposta.text or "").strip()
+        registrar("Limite horario da Tiingo atingido (HTTP 429).")
+        registrar(
+            "Os ativos ja baixados foram preservados. "
+            "Execute este mesmo script novamente quando a janela da API liberar."
+        )
+        if detalhe:
+            registrar(f"Tiingo: {detalhe[:300]}")
+        raise SystemExit(2)
+
     try:
         resposta.raise_for_status()
     except requests.RequestException as erro:
+        salvar_progresso(ativos_concluidos)
         detalhe = str(resposta.text or "").strip()
         raise RuntimeError(
             f"Falha ao consultar {ativo} na Tiingo: {erro}"
@@ -118,12 +217,14 @@ for posicao, ativo in enumerate(ATIVOS, start=1):
 
     dados = resposta.json()
     if not isinstance(dados, list) or not dados:
+        salvar_progresso(ativos_concluidos)
         raise RuntimeError(f"A Tiingo nao retornou dados para {ativo}.")
 
     tabela = pd.DataFrame(dados)
     colunas_obrigatorias = ["date", "open", "high", "low", "close", "volume"]
     ausentes = [coluna for coluna in colunas_obrigatorias if coluna not in tabela.columns]
     if ausentes:
+        salvar_progresso(ativos_concluidos)
         raise RuntimeError(
             f"{ativo}: colunas ausentes na resposta da Tiingo: "
             + ", ".join(ausentes)
@@ -162,43 +263,37 @@ for posicao, ativo in enumerate(ATIVOS, start=1):
     serie = serie.loc[valores_validos, COLUNAS_SNAPSHOT].copy()
 
     if serie.empty:
+        salvar_progresso(ativos_concluidos)
         raise RuntimeError(f"{ativo}: serie historica vazia depois da validacao.")
 
-    quantidade_splits = int((serie["fator_split"] != 1.0).sum())
-    quantidade_dividendos = int((serie["dividendo"] != 0.0).sum())
-    total_splits += quantidade_splits
-    total_dividendos += quantidade_dividendos
+    arquivo_destino = DIRETORIO_SERIES / f"{ativo}.csv"
+    arquivo_temporario = DIRETORIO_SERIES / f".{ativo}.csv.tmp"
+    serie.to_csv(arquivo_temporario, index=False)
+    arquivo_temporario.replace(arquivo_destino)
 
-    snapshot_por_ativo[ativo] = serie
-    resumo_ativos.append(
-        {
-            "ativo": ativo,
-            "candles": len(serie),
-            "inicio": serie["timestamp"].min().date().isoformat(),
-            "fim": serie["timestamp"].max().date().isoformat(),
-            "splits": quantidade_splits,
-            "dividendos": quantidade_dividendos,
-        }
-    )
+    ativos_concluidos.add(ativo)
+    salvar_progresso(ativos_concluidos)
 
+    resumo = resumir_serie(ativo, serie)
     registrar(
         f"{posicao:02d}/{len(ATIVOS)} {ativo} | "
-        f"{len(serie)} candles | "
-        f"{serie['timestamp'].min().date()} -> {serie['timestamp'].max().date()} | "
-        f"splits={quantidade_splits} | dividendos={quantidade_dividendos}"
-    )
-
-if len(snapshot_por_ativo) != len(ATIVOS):
-    raise RuntimeError(
-        f"Esperava {len(ATIVOS)} series; foram carregadas {len(snapshot_por_ativo)}."
+        f"{resumo['candles']} candles | "
+        f"{resumo['inicio']} -> {resumo['fim']} | "
+        f"splits={resumo['splits']} | dividendos={resumo['dividendos']}"
     )
 
 
-# %% 3 - Gravacao atomica da fotografia local
-DIRETORIO_SERIES.mkdir(parents=True, exist_ok=True)
+# %% 3 - Validacao final e manifesto
+resumo_ativos: list[dict[str, object]] = []
+total_splits = 0
+total_dividendos = 0
 
-for ativo, serie in snapshot_por_ativo.items():
-    serie.to_csv(DIRETORIO_SERIES / f"{ativo}.csv", index=False)
+for ativo in ATIVOS:
+    serie = ler_serie_congelada(ativo)
+    resumo = resumir_serie(ativo, serie)
+    resumo_ativos.append(resumo)
+    total_splits += int(resumo["splits"])
+    total_dividendos += int(resumo["dividendos"])
 
 manifesto = {
     "fonte": "Tiingo EOD",
@@ -221,6 +316,9 @@ ARQUIVO_MANIFESTO.write_text(
     json.dumps(manifesto, indent=2, ensure_ascii=False) + "\n",
     encoding="utf-8",
 )
+
+if ARQUIVO_PROGRESSO.exists():
+    ARQUIVO_PROGRESSO.unlink()
 
 registrar(
     f"Snapshot congelado: {len(ATIVOS)} ativos | "
