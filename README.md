@@ -2,57 +2,114 @@
 
 Backtest reproduzível de rotação de capital entre ativos com LightGBM e validação walk-forward.
 
-## Execução
+## Fonte de dados
+
+O experimento usa séries históricas diárias da Alpaca, com um arquivo CSV por ativo em:
+
+```text
+dados/series_historicas/
+```
+
+Exemplo:
+
+```text
+NVDA.csv
+MSFT.csv
+META.csv
+TSLA.csv
+...
+SCSC.csv
+```
+
+Cada arquivo contém:
+
+```text
+timestamp
+open
+high
+low
+close
+volume
+```
+
+Parâmetros usados na Alpaca:
+
+```text
+timeframe   1Day
+feed        SIP
+adjustment  all
+```
+
+O `backtest.py` não consulta MongoDB e não baixa dados. Ele executa somente sobre os arquivos históricos locais.
+
+## Preparação das séries históricas
+
+Instale as dependências:
 
 ```bash
-git clone https://github.com/betovlima/tcc_mba_usp_data_science_analytics.git
-cd tcc_mba_usp_data_science_analytics
 python -m pip install -r requirements.txt
+```
+
+Copie o arquivo de exemplo:
+
+```bash
+copy .env.example .env
+```
+
+No Linux/macOS:
+
+```bash
+cp .env.example .env
+```
+
+Preencha:
+
+```text
+ALPACA_API_KEY=
+ALPACA_SECRET_KEY=
+```
+
+Depois execute:
+
+```bash
+python baixar_series_alpaca.py
+```
+
+O script baixa os 37 ativos diretamente da Alpaca e grava cada série em seu próprio arquivo dentro de `dados/series_historicas/`.
+
+A aquisição dos dados fica separada do experimento. Depois que os CSVs existem, o backtest não precisa de conexão com a Alpaca.
+
+## Execução do backtest
+
+```bash
 python backtest.py
 ```
 
-No Spyder, abra `backtest.py` e pressione `F5`.
-
-MongoDB local padrão:
+No Spyder, `backtest.py` está organizado em células `# %%`:
 
 ```text
-URI        mongodb://localhost:27017
-Database   extrema_backtest
-Collection alpaca_market_bars
-Interval   1Day
-Feed       sip
-Adjustment all
+# %% 0  Imports e configuração
+# %% 1  Início da execução
+# %% 2  Carregamento e validação das séries históricas
+# %% 3  Preparação metodológica
+# %% 4  LightGBM + walk-forward + política de rotação
+# %% 5  Objetos de resultado para inspeção
+# %% 6  Gravação dos artefatos
+# %% 7  Métricas finais
 ```
 
-Opcionalmente:
-
-```text
-TCC_MONGO_URI=mongodb://localhost:27017
-TCC_MONGO_DATABASE=extrema_backtest
-```
-
-A execução rejeita MongoDB remoto.
-
-## Auditoria no Excel
-
-Após o backtest:
-
-```bash
-python analysis/build_excel.py
-```
-
-Arquivo gerado:
-
-```text
-analysis/tcc_backtest_output_analysis.xlsx
-```
-
-A planilha importa o `output/` e reconstrói no Excel as principais métricas, folds, curva de capital, operações, ciclos, análise mensal e reconciliação contábil.
+- `F5`: executa todo o arquivo.
+- `Ctrl+Enter`: executa somente a célula atual.
+- As variáveis ficam disponíveis no Variable Explorer.
 
 ## Fluxo do experimento
 
 ```text
-OHLCV bruto
+Alpaca SIP
+  ↓
+CSV estático por ativo
+  ↓
+OHLCV
   ↓
 features
   ↓
@@ -62,46 +119,18 @@ folds walk-forward
   ↓
 treinamento LightGBM por fold
   ↓
-predições OOS
+predições fora da amostra
   ↓
 ranking e política de rotação
   ↓
 execução na sessão seguinte
   ↓
-custos e compound
+custos e capital composto
   ↓
 métricas e artefatos
 ```
 
-Todo o processamento é executado pelo código local deste repositório.
-
-## Fonte de dados
-
-Entrada de runtime:
-
-```text
-extrema_backtest.alpaca_market_bars
-```
-
-Campos utilizados:
-
-```text
-symbol
-timestamp
-open
-high
-low
-close
-volume
-```
-
-Não são usados como entrada:
-
-- Strategy persistida;
-- modelo treinado persistido;
-- previsões persistidas;
-- resultado de backtest anterior;
-- jobs ou serviços externos de processamento.
+Todo o processamento da estratégia é executado pelo código local deste repositório. Não são usadas APIs de processamento, Strategy persistida, modelos treinados, previsões ou resultados anteriores do Market Cycle Trader.
 
 ## Universo congelado
 
@@ -114,17 +143,15 @@ ADI, ADM, GKOS, VNCE, CORT, UNFI, DNN, MKSI, APD,
 DDS, RACE, UNF, TX, CEF, YANG, KKR, BXMT, SCSC
 ```
 
-Histórico bruto:
+Período:
 
 ```text
 2016-01-01 → 2026-09-04
 ```
 
-O período inicial é usado para construção de features, targets e treino. A avaliação econômica é feita somente nas sessões OOS.
+O período inicial é usado para criação das variáveis, alvos e treinamento. A avaliação econômica ocorre somente nas sessões fora da amostra.
 
-## Configuração certificada
-
-Principais parâmetros:
+## Configuração principal
 
 ```text
 capital inicial                  10,000
@@ -145,55 +172,24 @@ margens de calibração            0, 0.0025, 0.005, 0.01
 random_state                     42
 ```
 
-## Resultado reproduzido
+Os parâmetros ficam declarados em `tcc_engine/config.py`.
+
+## Referência histórica certificada
+
+O estado anterior do experimento, ainda lendo o mesmo histórico Alpaca a partir do MongoDB local, reproduziu:
 
 ```text
 Capital inicial        US$ 10,000.00
-Capital final          US$ 43,759,854.819224246
-CAGR                   293.8231%
-Sharpe                 2.557370
-Max Drawdown           -28.1934%
+Capital final          US$ 43,759,854.82
+CAGR                   293.82%
+Sharpe                 2.557
+Max Drawdown           -28.19%
 Rotações               315
-Compras                316
-Vendas                 316
-CASH days              0
-Exposição              100%
-Sessões OOS            1,538
 ```
 
-O capital final reproduz exatamente a referência histórica certificada.
+A alteração atual muda somente a forma de armazenamento e leitura do OHLCV: em vez de MongoDB, um CSV por ativo. O motor da estratégia permanece local no projeto.
 
-## Walk-forward
-
-```text
-Fold 1   US$ 10,000.00       → US$ 69,042.61       +590.43%
-Fold 2   US$ 69,042.61       → US$ 2,805,962.94    +3,964.10%
-Fold 3   US$ 2,805,962.94    → US$ 43,759,854.82   +1,459.53%
-```
-
-O capital final de cada fold é o capital inicial do fold seguinte.
-
-## Fingerprints
-
-A execução valida os principais fingerprints antes do treinamento:
-
-```text
-Strategy configuration
-509b940659a89a7348be3690882213c839ce1a43b7e44057656074f5b2517a6e
-
-Model settings
-b4d112d678f79ca931c24630831e6464ebfe492f46364f54632c2980618803ab
-
-Execution request
-8aa99e2c5a9e4cdf666cbfa406896b1aee82f2fbe9ea65d68ad077e8b8be73a6
-
-Market OHLCV
-2db920471bc6ff8925081735c4d8218adf879a1363fae7fd239da940d6ebe30c
-```
-
-Os hashes são usados somente para validar reprodutibilidade; não participam da decisão de investimento.
-
-## Output
+## Resultados
 
 Cada execução gera:
 
@@ -205,121 +201,45 @@ output/trades.csv
 output/summary.txt
 ```
 
-### `backtest_result.json`
+`output/` permanece fora do Git.
 
-Resultado canônico: métricas, configuração, folds, metadados e diagnósticos agregados.
+## Auditoria no Excel
 
-### `equity_curve.csv`
+Após o backtest:
 
-Curva OOS por sessão. Permite recalcular retorno, CAGR, Sharpe, drawdown e benchmark.
-
-### `folds.csv`
-
-Janelas de treino, calibração, purge e teste, com capital e desempenho por fold.
-
-### `trades.csv`
-
-Livro-razão completo de BUY/SELL e diagnósticos da decisão. Inclui scores, ranking, margens, MFE, MAE, custos e métricas contrafactuais.
-
-### `summary.txt`
-
-Resumo textual da execução.
-
-## Auditoria financeira no Excel
-
-A planilha gerada por `analysis/build_excel.py` contém:
-
-```text
-00_Guia
-01_KPIs
-02_Equity
-03_Folds
-04_Trades
-05_Cycles
-06_Assets
-07_Monthly
-08_Dictionary
-09_JSON
-10_Reconciliation
+```bash
+python analysis/build_excel.py
 ```
 
-Principais validações reproduzidas por fórmulas do Excel:
+Arquivo gerado:
 
 ```text
-capital final
-retorno total
-CAGR
-Sharpe
-Max Drawdown
-compras e vendas
-rotações
-holding médio
-retorno geométrico por posição
-taxas
-folds
-reconciliação do capital
+analysis/tcc_backtest_output_analysis.xlsx
 ```
 
-A reconciliação principal é:
-
-```text
-capital inicial
-+ PnL realizado nas posições encerradas
-- taxas das compras
-= capital final
-```
-
-## Estatísticas dos ciclos
-
-Na execução certificada:
-
-```text
-Ciclos encerrados       316
-Vencedores              204
-Perdedores              112
-Win rate                64.56%
-Retorno médio vencedor  +6.58%
-Retorno médio perdedor  -3.46%
-Payoff                  1.90
-Profit Factor           2.79
-Mediana por posição     +1.37%
-Melhor posição          +84.34%
-Pior posição            -14.32%
-MFE médio               +6.63%
-MAE médio               -3.43%
-Profit capture médio    45.97%
-```
-
-## Turnover
-
-`turnover_ratio` nesta implementação é:
-
-```text
-soma do valor bruto negociado / capital inicial
-```
-
-Não deve ser interpretado como turnover anual tradicional.
+A planilha reconstrói as principais métricas, folds, curva de capital, operações, ciclos, análise mensal e reconciliação financeira.
 
 ## Estrutura
 
 ```text
 tcc_mba_usp_data_science_analytics/
 ├── backtest.py
+├── baixar_series_alpaca.py
+├── .env.example
 ├── requirements.txt
-├── README.md
+├── dados/
+│   └── series_historicas/
+│       ├── NVDA.csv
+│       ├── MSFT.csv
+│       ├── ...
+│       └── SCSC.csv
 ├── analysis/
 │   └── build_excel.py
 └── tcc_engine/
-    ├── config.py
-    ├── capital_rotation.py
-    ├── research_challengers.py
-    └── ...
 ```
-
-`output/` é gerado localmente e permanece fora do Git.
 
 ## Limitação metodológica
 
-O universo de 37 ativos foi obtido retrospectivamente e é tratado aqui como universo congelado.
+O universo de 37 ativos foi obtido retrospectivamente e é tratado como universo congelado.
 
-O resultado demonstra reprodutibilidade do motor, do protocolo walk-forward e da política de rotação sobre esse universo. Ele não demonstra generalização fora da amostra do processo histórico de seleção dos 37 ativos.
+O resultado demonstra o comportamento do motor, da validação walk-forward e da política de rotação sobre esse universo. Ele não demonstra generalização fora da amostra do processo histórico de seleção dos 37 ativos.
