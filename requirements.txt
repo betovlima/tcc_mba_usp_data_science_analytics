@@ -8,8 +8,9 @@ threadpoolctl>=3.5,<4
 # Modelo usado pelo experimento
 lightgbm>=4.6,<5
 
-# Download das series historicas da Alpaca
+# Fontes de dados historicos
 alpaca-py>=0.43,<1
+requests>=2.32,<3
 python-dotenv>=1.0,<2
 
 # Auditoria em Excel
