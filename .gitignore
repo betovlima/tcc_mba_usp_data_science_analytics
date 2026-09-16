@@ -42,10 +42,13 @@ data/
 !dados/series_historicas/*.csv
 !dados/eventos_corporativos/
 !dados/eventos_corporativos/*.csv
+!dados/desdobramentos/
+!dados/desdobramentos/*.csv
 
 # Progresso temporario de download
 .dados_temporarios/
 dados/.tiingo_congelamento_parcial.json
+dados/desdobramentos/.tiingo_desdobramentos_parcial.json
 
 # Resultados gerados
 output/
