@@ -1,8 +1,9 @@
 """Backtest academico reproduzivel para o TCC MBA USP.
 
-As series historicas OHLCV sao obtidas diretamente da Alpaca no inicio da
-execucao e permanecem em memoria ate o fim do processamento. Nenhum arquivo de
-serie historica e gravado ou relido pelo backtest.
+As series historicas OHLCV sao obtidas diretamente da Tiingo no inicio da
+execucao e permanecem em memoria ate o fim do processamento. Para este teste,
+o modelo usa somente os campos brutos open, high, low, close e volume. Os
+campos ajustados disponibilizados pela Tiingo nao entram no treinamento.
 
 Features, targets, folds walk-forward, treinamento LightGBM, politica de
 rotacao, operacoes, curva de capital e metricas sao reconstruidos a cada
@@ -28,10 +29,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from alpaca.data.enums import Adjustment, DataFeed
-from alpaca.data.historical.stock import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
-from alpaca.data.timeframe import TimeFrame
+import requests
 from dotenv import dotenv_values, load_dotenv
 
 from tcc_engine.capital_rotation import run_rotation_models as executar_modelos_rotacao
@@ -44,6 +42,7 @@ from tcc_engine.execution import calculate_reference_fees as calcular_taxas_refe
 
 RAIZ_PROJETO = Path(__file__).resolve().parent
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output"
+URL_BASE_TIINGO = "https://api.tiingo.com/tiingo/daily"
 
 
 def registrar(mensagem: str) -> None:
@@ -75,11 +74,11 @@ def registrar_detalhe_tecnico(mensagem: str) -> None:
     registrar(f"[motor] {mensagem}")
 
 
-# %% 1 - Inicio da execucao e credenciais da Alpaca
+# %% 1 - Inicio da execucao e credencial da Tiingo
 inicio_execucao = time.perf_counter()
 
 registrar("TCC MBA USP - backtest reconstruido passo a passo")
-registrar("Entrada: Alpaca SIP -> memoria -> motor")
+registrar("Entrada: Tiingo EOD RAW -> memoria -> motor")
 registrar(f"Periodo: {DATA_INICIO} -> {DATA_FIM} | ativos={len(ATIVOS)}")
 
 candidatos_env = [
@@ -111,114 +110,126 @@ valores_env = {
     for nome, valor in dotenv_values(arquivo_env).items()
 }
 
-nomes_chave = (
-    "ALPACA_API_KEY",
-    "ALPACA_API_KEY_ID",
-    "APCA_API_KEY_ID",
-)
-nomes_segredo = (
-    "ALPACA_SECRET_KEY",
-    "ALPACA_API_SECRET_KEY",
-    "APCA_API_SECRET_KEY",
-)
-
-nome_chave_api = next(
-    (
-        nome
-        for nome in nomes_chave
-        if str(valores_env.get(nome) or os.getenv(nome) or "").strip()
-    ),
-    None,
-)
-nome_segredo_api = next(
-    (
-        nome
-        for nome in nomes_segredo
-        if str(valores_env.get(nome) or os.getenv(nome) or "").strip()
-    ),
-    None,
-)
-
-chave_api = (
-    str(valores_env.get(nome_chave_api) or os.getenv(nome_chave_api) or "").strip()
-    if nome_chave_api
-    else ""
-)
-segredo_api = (
-    str(valores_env.get(nome_segredo_api) or os.getenv(nome_segredo_api) or "").strip()
-    if nome_segredo_api
-    else ""
-)
+token_tiingo = str(
+    valores_env.get("TIINGO_API_KEY")
+    or valores_env.get("TIINGO_TOKEN")
+    or os.getenv("TIINGO_API_KEY")
+    or os.getenv("TIINGO_TOKEN")
+    or ""
+).strip()
 
 registrar(f"Arquivo .env: {arquivo_env}")
-registrar(f"Variavel da chave: {nome_chave_api or 'nao encontrada'}")
-registrar(f"Variavel do segredo: {nome_segredo_api or 'nao encontrada'}")
-
-if not chave_api or not segredo_api:
-    raise RuntimeError(
-        "Credenciais da Alpaca nao foram reconhecidas no .env."
+registrar(
+    "Variavel do token Tiingo: "
+    + (
+        "TIINGO_API_KEY"
+        if str(valores_env.get("TIINGO_API_KEY") or os.getenv("TIINGO_API_KEY") or "").strip()
+        else "TIINGO_TOKEN"
+        if str(valores_env.get("TIINGO_TOKEN") or os.getenv("TIINGO_TOKEN") or "").strip()
+        else "nao encontrada"
     )
-
-cliente_alpaca = StockHistoricalDataClient(
-    api_key=chave_api,
-    secret_key=segredo_api,
 )
 
-inicio_periodo = pd.Timestamp(DATA_INICIO, tz="UTC").to_pydatetime()
-fim_periodo = (
-    pd.Timestamp(DATA_FIM, tz="UTC")
-    + pd.Timedelta(days=1)
-    - pd.Timedelta(microseconds=1)
-).to_pydatetime()
+if not token_tiingo:
+    raise RuntimeError(
+        "Token da Tiingo nao encontrado. "
+        "Defina TIINGO_API_KEY no arquivo .env."
+    )
+
+sessao_tiingo = requests.Session()
+sessao_tiingo.headers.update(
+    {
+        "Content-Type": "application/json",
+        "Authorization": f"Token {token_tiingo}",
+    }
+)
 
 
-# %% 2 - Download das series historicas diretamente para a memoria
-registrar(f"[1/8] Baixando {len(ATIVOS)} series historicas da Alpaca")
-registrar("[1/8] Fonte: Alpaca | timeframe=1Day | feed=SIP | adjustment=all")
+# %% 2 - Download das series historicas brutas diretamente para a memoria
+registrar(f"[1/8] Baixando {len(ATIVOS)} series historicas da Tiingo")
+registrar("[1/8] Fonte: Tiingo EOD | frequencia=diaria | precos=RAW")
+registrar("[1/8] Campos ajustados nao serao usados pelo modelo")
 
 series_historicas: dict[str, pd.DataFrame] = {}
+eventos_corporativos: dict[str, pd.DataFrame] = {}
 colunas_ohlcv = ["open", "high", "low", "close", "volume"]
 
 for posicao, ativo in enumerate(ATIVOS, start=1):
-    solicitacao = StockBarsRequest(
-        symbol_or_symbols=ativo,
-        timeframe=TimeFrame.Day,
-        start=inicio_periodo,
-        end=fim_periodo,
-        adjustment=Adjustment.ALL,
-        feed=DataFeed.SIP,
-        limit=10_000,
-    )
+    url = f"{URL_BASE_TIINGO}/{ativo}/prices"
+    parametros = {
+        "startDate": DATA_INICIO,
+        "endDate": DATA_FIM,
+        "resampleFreq": "daily",
+    }
 
-    resposta = cliente_alpaca.get_stock_bars(solicitacao)
-    serie = resposta.df.copy()
+    try:
+        resposta = sessao_tiingo.get(
+            url,
+            params=parametros,
+            timeout=60,
+        )
+        resposta.raise_for_status()
+    except requests.RequestException as erro:
+        detalhe = ""
+        if getattr(erro, "response", None) is not None:
+            detalhe = str(erro.response.text or "").strip()
+        raise RuntimeError(
+            f"Falha ao consultar {ativo} na Tiingo: {erro}"
+            + (f" | resposta={detalhe[:300]}" if detalhe else "")
+        ) from erro
 
-    if serie.empty:
-        raise RuntimeError(f"A Alpaca nao retornou dados para {ativo}.")
+    dados = resposta.json()
+    if not isinstance(dados, list) or not dados:
+        raise RuntimeError(f"A Tiingo nao retornou dados para {ativo}.")
 
-    if isinstance(serie.index, pd.MultiIndex):
-        nomes_indice = list(serie.index.names)
-        if "symbol" in nomes_indice:
-            serie = serie.xs(ativo, level="symbol")
+    serie_completa = pd.DataFrame(dados)
+    serie_completa.columns = [str(coluna) for coluna in serie_completa.columns]
 
-    serie = serie.reset_index()
-    serie.columns = [str(coluna).lower() for coluna in serie.columns]
-
-    if "symbol" in serie.columns:
-        serie = serie.drop(columns=["symbol"])
-
-    colunas_obrigatorias = ["timestamp", *colunas_ohlcv]
+    colunas_obrigatorias = ["date", *colunas_ohlcv]
     ausentes = [
-        coluna for coluna in colunas_obrigatorias
-        if coluna not in serie.columns
+        coluna
+        for coluna in colunas_obrigatorias
+        if coluna not in serie_completa.columns
     ]
     if ausentes:
         raise RuntimeError(
-            f"{ativo}: colunas ausentes na resposta da Alpaca: "
+            f"{ativo}: colunas ausentes na resposta da Tiingo: "
             + ", ".join(ausentes)
         )
 
-    serie = serie[colunas_obrigatorias].copy()
+    # Guardamos os eventos informados pela fonte somente para auditoria.
+    # Eles nao alteram a serie usada no treinamento deste teste.
+    dividendos = (
+        pd.to_numeric(serie_completa["divCash"], errors="coerce").fillna(0.0)
+        if "divCash" in serie_completa.columns
+        else pd.Series(0.0, index=serie_completa.index)
+    )
+    fatores_split = (
+        pd.to_numeric(serie_completa["splitFactor"], errors="coerce").fillna(1.0)
+        if "splitFactor" in serie_completa.columns
+        else pd.Series(1.0, index=serie_completa.index)
+    )
+
+    eventos = pd.DataFrame(
+        {
+            "timestamp": pd.to_datetime(
+                serie_completa["date"],
+                utc=True,
+                errors="coerce",
+            ),
+            "dividendo": dividendos,
+            "fator_split": fatores_split,
+        }
+    )
+    eventos = eventos.dropna(subset=["timestamp"])
+    eventos = eventos.loc[
+        (eventos["dividendo"] != 0.0)
+        | (eventos["fator_split"] != 1.0)
+    ].copy()
+    eventos_corporativos[ativo] = eventos.reset_index(drop=True)
+
+    serie = serie_completa[colunas_obrigatorias].copy()
+    serie = serie.rename(columns={"date": "timestamp"})
     serie["timestamp"] = pd.to_datetime(
         serie["timestamp"],
         utc=True,
@@ -242,14 +253,24 @@ for posicao, ativo in enumerate(ATIVOS, start=1):
     serie = serie.loc[valores_validos].copy()
 
     if serie.empty:
-        raise RuntimeError(f"{ativo}: serie historica vazia depois da validacao.")
+        raise RuntimeError(
+            f"{ativo}: serie historica vazia depois da validacao."
+        )
 
     series_historicas[ativo] = serie
+
+    quantidade_splits = int(
+        (eventos_corporativos[ativo]["fator_split"] != 1.0).sum()
+    )
+    quantidade_dividendos = int(
+        (eventos_corporativos[ativo]["dividendo"] != 0.0).sum()
+    )
 
     registrar(
         f"[1/8] {posicao:02d}/{len(ATIVOS)} {ativo} | "
         f"{len(serie)} candles | "
-        f"{serie.index.min().date()} -> {serie.index.max().date()}"
+        f"{serie.index.min().date()} -> {serie.index.max().date()} | "
+        f"splits={quantidade_splits} | dividendos={quantidade_dividendos}"
     )
 
 if len(series_historicas) != len(ATIVOS):
@@ -258,16 +279,30 @@ if len(series_historicas) != len(ATIVOS):
         f"foram carregadas {len(series_historicas)}."
     )
 
+total_splits = sum(
+    int((eventos["fator_split"] != 1.0).sum())
+    for eventos in eventos_corporativos.values()
+)
+total_dividendos = sum(
+    int((eventos["dividendo"] != 0.0).sum())
+    for eventos in eventos_corporativos.values()
+)
+
 registrar(
-    f"[1/8] {len(series_historicas)} series mantidas em memoria; "
+    f"[1/8] {len(series_historicas)} series RAW mantidas em memoria; "
     "nenhum CSV intermediario foi usado"
+)
+registrar(
+    f"[1/8] Eventos apenas para auditoria: "
+    f"splits={total_splits} | dividendos={total_dividendos}"
 )
 
 
 # %% 3 - Preparacao metodologica
 # As features, targets e folds sao construidos pelo tcc_engine diretamente a
-# partir das series_historicas mantidas em memoria.
-registrar("[2/8] Construindo features tecnicas a partir do OHLCV")
+# partir das series_historicas mantidas em memoria. Os eventos corporativos
+# coletados acima nao sao aplicados ao OHLCV neste teste.
+registrar("[2/8] Construindo features tecnicas a partir do OHLCV RAW")
 registrar(
     "[3/8] Construindo targets multi-horizonte: "
     + ", ".join(str(valor) for valor in CONFIGURACAO.rotation_target_horizons)
@@ -279,9 +314,13 @@ contexto_experimento = {
     "asset_count": len(ATIVOS),
     "history_start": DATA_INICIO,
     "history_end": DATA_FIM,
-    "market_data_source": "alpaca_sip_memoria",
-    "market_data_feed": "sip",
-    "market_data_adjustment": "all",
+    "market_data_source": "tiingo_eod_memoria",
+    "market_data_feed": "eod",
+    "market_data_adjustment": "raw",
+    "corporate_actions_available": True,
+    "corporate_actions_applied": False,
+    "split_event_count": total_splits,
+    "dividend_event_count": total_dividendos,
     "model_family": CONFIGURACAO.research_model_family,
     "target_horizons": list(CONFIGURACAO.rotation_target_horizons),
     "minimum_training_rows": CONFIGURACAO.rotation_minimum_training_rows,
@@ -350,7 +389,7 @@ tempo_total = time.perf_counter() - inicio_execucao
 
 resultado_serializado = {
     "experiment": "mba_usp_reproducible_backtest",
-    "input_source": "alpaca_sip_memoria",
+    "input_source": "tiingo_eod_raw_memoria",
     **contexto_experimento,
     "walk_forward": {
         "minimum_training_rows": CONFIGURACAO.rotation_minimum_training_rows,
