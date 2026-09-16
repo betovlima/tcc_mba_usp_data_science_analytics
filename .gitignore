@@ -7,12 +7,12 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
-# Virtual environments
+# Ambientes virtuais
 .venv/
 venv/
 env/
 
-# Environment and secrets
+# Ambiente e segredos
 .env
 .env.*
 !.env.example
@@ -25,12 +25,8 @@ env/
 # Jupyter
 .ipynb_checkpoints/
 
-# Frozen historical MCT runtime checkout bootstrapped by backtest.py
-.mct_reference/
-
-# Local data and database artifacts
+# Dados locais auxiliares
 data/
-*.csv
 *.parquet
 *.feather
 *.sqlite
@@ -39,13 +35,19 @@ data/
 *.gz
 *.zip
 
-# Generated outputs
+# CSVs gerados fora da base historica versionada
+*.csv
+!dados/
+!dados/series_historicas/
+!dados/series_historicas/*.csv
+
+# Resultados gerados
 output/
 outputs/
 results/
 artifacts/
 
-# OS / IDE
+# Sistema operacional / IDE
 .DS_Store
 Thumbs.db
 .vscode/
