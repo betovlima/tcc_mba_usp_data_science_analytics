@@ -1,35 +1,37 @@
-"""Congela os desdobramentos reais informados pela API de Corporate Actions da Tiingo.
+"""Extrai desdobramentos a partir do snapshot Tiingo EOD ja congelado.
 
-O endpoint EOD da Tiingo possui ``splitFactor``, mas a propria documentacao
-informa que esse campo tambem pode representar distribuicoes. Por isso ele nao
-e usado para normalizar a serie do modelo.
+O endpoint especifico de Corporate Actions da Tiingo pode exigir acesso beta e
+retornar HTTP 403. Para nao depender desse endpoint, este script trabalha
+somente com os arquivos locais ja congelados.
 
-Este script consulta o endpoint especifico de splits/desdobramentos e grava uma
-fotografia local separada. O backtest usa somente eventos ativos, na data em que
-ocorrem, para remover a ruptura mecanica do split sem reescrever o passado.
+O campo ``splitFactor`` do EOD nao e aplicado cegamente, porque a documentacao
+da Tiingo informa que ele tambem pode aparecer em distribuicoes. Cada evento
+candidato e validado contra a ruptura mecanica observada entre o fechamento da
+sessao anterior e a abertura da data do evento.
+
+Nenhum preco bruto e alterado neste script. O resultado e uma lista separada de
+desdobramentos aceita pelo backtest para normalizacao causal em memoria.
 """
 
 # %% 0 - Imports e configuracao
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
-import requests
-from dotenv import dotenv_values, load_dotenv
 
 from tcc_engine.config import ASSETS as ATIVOS
 from tcc_engine.config import END_DATE as DATA_FIM
 from tcc_engine.config import START_DATE as DATA_INICIO
 
 RAIZ_PROJETO = Path(__file__).resolve().parent
+DIRETORIO_SERIES = RAIZ_PROJETO / "dados" / "series_historicas"
+DIRETORIO_EVENTOS = RAIZ_PROJETO / "dados" / "eventos_corporativos"
 DIRETORIO_DESDOBRAMENTOS = RAIZ_PROJETO / "dados" / "desdobramentos"
 ARQUIVO_MANIFESTO = RAIZ_PROJETO / "dados" / "manifesto_desdobramentos_tiingo.json"
-ARQUIVO_PROGRESSO = DIRETORIO_DESDOBRAMENTOS / ".tiingo_desdobramentos_parcial.json"
-URL_BASE_DESDOBRAMENTOS = "https://api.tiingo.com/tiingo/corporate-actions"
 
 COLUNAS_DESDOBRAMENTOS = [
     "timestamp",
@@ -39,264 +41,295 @@ COLUNAS_DESDOBRAMENTOS = [
     "status",
 ]
 
+# Um desdobramento real deve produzir uma mudanca mecanica de escala muito
+# proxima do fator informado. A tolerancia existe apenas para permitir o gap
+# normal de mercado entre o fechamento anterior e a abertura da sessao.
+TOLERANCIA_RELATIVA_ABERTURA = 0.10
+
 
 def registrar(mensagem: str) -> None:
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {mensagem}", flush=True)
 
 
-def carregar_progresso() -> set[str]:
-    if not ARQUIVO_PROGRESSO.exists():
-        return set()
-    try:
-        progresso = json.loads(ARQUIVO_PROGRESSO.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return set()
-    if (
-        progresso.get("fonte") != "Tiingo Corporate Actions Splits"
-        or progresso.get("periodo_inicio") != DATA_INICIO
-        or progresso.get("periodo_fim") != DATA_FIM
-    ):
-        return set()
-    return {str(ativo).upper() for ativo in progresso.get("ativos_concluidos") or []}
-
-
-def salvar_progresso(ativos_concluidos: set[str]) -> None:
-    DIRETORIO_DESDOBRAMENTOS.mkdir(parents=True, exist_ok=True)
-    progresso = {
-        "fonte": "Tiingo Corporate Actions Splits",
-        "periodo_inicio": DATA_INICIO,
-        "periodo_fim": DATA_FIM,
-        "atualizado_em_utc": datetime.now(timezone.utc).isoformat(),
-        "ativos_concluidos": [ativo for ativo in ATIVOS if ativo in ativos_concluidos],
-    }
-    ARQUIVO_PROGRESSO.write_text(
-        json.dumps(progresso, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-
-
-def ler_desdobramentos(ativo: str) -> pd.DataFrame:
-    arquivo = DIRETORIO_DESDOBRAMENTOS / f"{ativo}.csv"
+def ler_serie_bruta(ativo: str) -> pd.DataFrame:
+    arquivo = DIRETORIO_SERIES / f"{ativo}.csv"
     if not arquivo.exists():
-        raise RuntimeError(f"{ativo}: arquivo de desdobramentos nao encontrado: {arquivo}")
+        raise RuntimeError(
+            f"{ativo}: serie RAW nao encontrada. "
+            "Nao baixe novamente; restaure o snapshot congelado em dados/series_historicas."
+        )
+
     tabela = pd.read_csv(arquivo)
-    ausentes = [coluna for coluna in COLUNAS_DESDOBRAMENTOS if coluna not in tabela.columns]
+    obrigatorias = ["timestamp", "open", "high", "low", "close", "volume"]
+    ausentes = [coluna for coluna in obrigatorias if coluna not in tabela.columns]
     if ausentes:
         raise RuntimeError(
-            f"{ativo}: colunas ausentes no arquivo de desdobramentos: "
-            + ", ".join(ausentes)
+            f"{ativo}: serie RAW invalida; colunas ausentes: " + ", ".join(ausentes)
         )
-    if tabela.empty:
-        return pd.DataFrame(columns=COLUNAS_DESDOBRAMENTOS)
-    tabela = tabela[COLUNAS_DESDOBRAMENTOS].copy()
-    tabela["timestamp"] = pd.to_datetime(tabela["timestamp"], utc=True, errors="coerce")
-    for coluna in ("split_de", "split_para", "fator_split"):
-        tabela[coluna] = pd.to_numeric(tabela[coluna], errors="coerce")
-    tabela["status"] = tabela["status"].astype(str).str.lower().str.strip()
-    tabela = tabela.dropna(subset=["timestamp", "split_de", "split_para", "fator_split"])
-    tabela = tabela.loc[
-        (tabela["split_de"] > 0)
-        & (tabela["split_para"] > 0)
-        & (tabela["fator_split"] > 0)
-        & (tabela["status"] == "a")
-    ].copy()
-    tabela = tabela.sort_values("timestamp").drop_duplicates(
-        subset=["timestamp", "split_de", "split_para"], keep="last"
+
+    tabela = tabela[obrigatorias].copy()
+    tabela["timestamp"] = pd.to_datetime(
+        tabela["timestamp"], utc=True, errors="coerce"
     )
+    for coluna in ("open", "high", "low", "close", "volume"):
+        tabela[coluna] = pd.to_numeric(tabela[coluna], errors="coerce")
+
+    tabela = tabela.dropna(subset=obrigatorias)
+    tabela = tabela.sort_values("timestamp")
+    tabela = tabela.drop_duplicates(subset=["timestamp"], keep="last")
     return tabela.reset_index(drop=True)
 
 
-# %% 1 - Credencial da Tiingo
-candidatos_env = [
-    RAIZ_PROJETO / ".env",
-    Path.cwd() / ".env",
-    RAIZ_PROJETO.parent / ".env",
-]
+def ler_eventos_eod(ativo: str) -> pd.DataFrame:
+    arquivo = DIRETORIO_EVENTOS / f"{ativo}.csv"
+    if not arquivo.exists():
+        raise RuntimeError(
+            f"{ativo}: eventos EOD nao encontrados. "
+            "O snapshot congelado precisa conter dados/eventos_corporativos."
+        )
 
-arquivo_env = next(
-    (caminho.resolve() for caminho in candidatos_env if caminho.resolve().exists()),
-    None,
-)
-if arquivo_env is None:
-    raise RuntimeError("Arquivo .env nao encontrado.")
+    tabela = pd.read_csv(arquivo)
+    obrigatorias = ["timestamp", "dividendo", "fator_split"]
+    ausentes = [coluna for coluna in obrigatorias if coluna not in tabela.columns]
+    if ausentes:
+        raise RuntimeError(
+            f"{ativo}: eventos EOD invalidos; colunas ausentes: "
+            + ", ".join(ausentes)
+        )
 
-load_dotenv(arquivo_env, override=True)
-valores_env = {
-    str(nome): str(valor or "").strip()
-    for nome, valor in dotenv_values(arquivo_env).items()
-}
+    if tabela.empty:
+        return pd.DataFrame(columns=obrigatorias)
 
-token_tiingo = str(
-    valores_env.get("TIINGO_API_KEY")
-    or valores_env.get("TIINGO_TOKEN")
-    or os.getenv("TIINGO_API_KEY")
-    or os.getenv("TIINGO_TOKEN")
-    or ""
-).strip()
+    tabela = tabela[obrigatorias].copy()
+    tabela["timestamp"] = pd.to_datetime(
+        tabela["timestamp"], utc=True, errors="coerce"
+    )
+    tabela["dividendo"] = pd.to_numeric(
+        tabela["dividendo"], errors="coerce"
+    ).fillna(0.0)
+    tabela["fator_split"] = pd.to_numeric(
+        tabela["fator_split"], errors="coerce"
+    ).fillna(1.0)
+    tabela = tabela.dropna(subset=["timestamp"])
+    tabela = tabela.sort_values("timestamp")
+    tabela = tabela.drop_duplicates(subset=["timestamp"], keep="last")
+    return tabela.reset_index(drop=True)
 
-if not token_tiingo:
+
+def decompor_fator(fator: float) -> tuple[float, float]:
+    if fator >= 1.0:
+        return 1.0, fator
+    return 1.0 / fator, 1.0
+
+
+# %% 1 - Validacao da materia-prima local
+if not DIRETORIO_SERIES.exists():
     raise RuntimeError(
-        "Token da Tiingo nao encontrado. Defina TIINGO_API_KEY no arquivo .env."
+        "Diretorio dados/series_historicas nao encontrado. "
+        "Use o snapshot Tiingo RAW que ja foi congelado."
+    )
+if not DIRETORIO_EVENTOS.exists():
+    raise RuntimeError(
+        "Diretorio dados/eventos_corporativos nao encontrado. "
+        "Use o snapshot Tiingo que ja foi congelado."
     )
 
-sessao_tiingo = requests.Session()
-sessao_tiingo.headers.update(
-    {
-        "Content-Type": "application/json",
-        "Authorization": f"Token {token_tiingo}",
-    }
-)
-
-
-# %% 2 - Download dos desdobramentos reais
 DIRETORIO_DESDOBRAMENTOS.mkdir(parents=True, exist_ok=True)
-ativos_concluidos = carregar_progresso()
 
-registrar("Congelando desdobramentos da Tiingo Corporate Actions")
-registrar(f"Periodo do experimento: {DATA_INICIO} -> {DATA_FIM} | ativos={len(ATIVOS)}")
-registrar("O splitFactor do endpoint EOD nao sera usado para normalizar o modelo")
-
-if ativos_concluidos:
-    registrar(f"Retomando execucao: {len(ativos_concluidos)} ativo(s) ja concluidos")
+registrar("Extraindo desdobramentos do snapshot Tiingo EOD congelado")
+registrar("Nenhuma chamada a API sera realizada")
+registrar(f"Periodo: {DATA_INICIO} -> {DATA_FIM} | ativos={len(ATIVOS)}")
+registrar(
+    "Criterio: splitFactor candidato precisa explicar a mudanca de escala "
+    f"no open com desvio relativo <= {TOLERANCIA_RELATIVA_ABERTURA:.0%}"
+)
 
 inicio = pd.Timestamp(DATA_INICIO, tz="UTC")
 fim = pd.Timestamp(DATA_FIM, tz="UTC")
+resumo_ativos: list[dict[str, object]] = []
+candidatos_rejeitados: list[dict[str, object]] = []
+total_desdobramentos = 0
+total_candidatos = 0
 
+
+# %% 2 - Classificacao dos eventos splitFactor do EOD
 for posicao, ativo in enumerate(ATIVOS, start=1):
-    if ativo in ativos_concluidos:
-        existentes = ler_desdobramentos(ativo)
-        registrar(
-            f"{posicao:02d}/{len(ATIVOS)} {ativo} | ja congelado | "
-            f"desdobramentos={len(existentes)}"
-        )
-        continue
+    serie = ler_serie_bruta(ativo)
+    eventos = ler_eventos_eod(ativo)
 
-    resposta = sessao_tiingo.get(
-        f"{URL_BASE_DESDOBRAMENTOS}/{ativo}/splits",
-        timeout=60,
-    )
+    candidatos = eventos.loc[
+        (eventos["timestamp"] >= inicio)
+        & (eventos["timestamp"] <= fim)
+        & (~np.isclose(eventos["fator_split"].astype(float), 1.0)),
+        ["timestamp", "dividendo", "fator_split"],
+    ].copy()
 
-    if resposta.status_code == 429:
-        salvar_progresso(ativos_concluidos)
-        registrar("Limite horario da Tiingo atingido (HTTP 429).")
-        registrar("Os ativos ja concluidos foram preservados; execute novamente mais tarde.")
-        detalhe = str(resposta.text or "").strip()
-        if detalhe:
-            registrar(f"Tiingo: {detalhe[:300]}")
-        raise SystemExit(2)
+    linhas_aceitas: list[dict[str, object]] = []
+    diagnosticos_ativo: list[dict[str, object]] = []
 
-    try:
-        resposta.raise_for_status()
-    except requests.RequestException as erro:
-        salvar_progresso(ativos_concluidos)
-        detalhe = str(resposta.text or "").strip()
-        raise RuntimeError(
-            f"Falha ao consultar desdobramentos de {ativo}: {erro}"
-            + (f" | resposta={detalhe[:300]}" if detalhe else "")
-        ) from erro
+    for candidato in candidatos.itertuples(index=False):
+        total_candidatos += 1
+        data_evento = pd.Timestamp(candidato.timestamp).normalize()
+        fator = float(candidato.fator_split)
 
-    dados = resposta.json()
-    if not isinstance(dados, list):
-        salvar_progresso(ativos_concluidos)
-        raise RuntimeError(f"Resposta inesperada da Tiingo para {ativo}: esperado uma lista.")
+        indices = serie.index[
+            serie["timestamp"].dt.normalize() == data_evento
+        ].tolist()
 
-    linhas: list[dict[str, object]] = []
-    for item in dados:
-        if not isinstance(item, dict):
-            continue
-        timestamp = pd.to_datetime(item.get("exDate"), utc=True, errors="coerce")
-        if pd.isna(timestamp) or timestamp < inicio or timestamp > fim:
-            continue
+        diagnostico: dict[str, object] = {
+            "ativo": ativo,
+            "data": data_evento.date().isoformat(),
+            "fator_split_eod": fator,
+            "dividendo_eod": float(candidato.dividendo),
+        }
 
-        status = str(item.get("splitStatus") or "").lower().strip()
-        if status != "a":
-            continue
-
-        split_de = pd.to_numeric(item.get("splitFrom"), errors="coerce")
-        split_para = pd.to_numeric(item.get("splitTo"), errors="coerce")
-        fator_split = pd.to_numeric(item.get("splitFactor"), errors="coerce")
-        if not all(pd.notna(valor) and float(valor) > 0 for valor in (split_de, split_para, fator_split)):
-            continue
-
-        fator_calculado = float(split_para) / float(split_de)
-        if not abs(float(fator_split) - fator_calculado) <= max(1e-10, abs(fator_calculado) * 1e-8):
-            raise RuntimeError(
-                f"{ativo}: fator de split inconsistente em {timestamp.date()}: "
-                f"API={float(fator_split)} calculado={fator_calculado}"
+        if len(indices) != 1:
+            diagnostico.update(
+                {
+                    "aceito": False,
+                    "motivo": "data_sem_sessao_unica",
+                }
             )
+            candidatos_rejeitados.append(diagnostico)
+            diagnosticos_ativo.append(diagnostico)
+            continue
 
-        linhas.append(
+        indice = int(indices[0])
+        if indice == 0:
+            diagnostico.update(
+                {
+                    "aceito": False,
+                    "motivo": "sem_sessao_anterior",
+                }
+            )
+            candidatos_rejeitados.append(diagnostico)
+            diagnosticos_ativo.append(diagnostico)
+            continue
+
+        fechamento_anterior = float(serie.loc[indice - 1, "close"])
+        abertura_evento = float(serie.loc[indice, "open"])
+        fechamento_evento = float(serie.loc[indice, "close"])
+
+        if not all(
+            np.isfinite(valor) and valor > 0
+            for valor in (fechamento_anterior, abertura_evento, fechamento_evento, fator)
+        ):
+            diagnostico.update(
+                {
+                    "aceito": False,
+                    "motivo": "preco_ou_fator_invalido",
+                }
+            )
+            candidatos_rejeitados.append(diagnostico)
+            diagnosticos_ativo.append(diagnostico)
+            continue
+
+        razao_observada_abertura = fechamento_anterior / abertura_evento
+        razao_observada_fechamento = fechamento_anterior / fechamento_evento
+        desvio_relativo_abertura = abs(razao_observada_abertura / fator - 1.0)
+
+        aceito = desvio_relativo_abertura <= TOLERANCIA_RELATIVA_ABERTURA
+        diagnostico.update(
             {
-                "timestamp": timestamp,
+                "fechamento_anterior": fechamento_anterior,
+                "abertura_evento": abertura_evento,
+                "fechamento_evento": fechamento_evento,
+                "razao_observada_abertura": razao_observada_abertura,
+                "razao_observada_fechamento": razao_observada_fechamento,
+                "desvio_relativo_abertura": desvio_relativo_abertura,
+                "aceito": bool(aceito),
+                "motivo": (
+                    "ruptura_compativel_com_desdobramento"
+                    if aceito
+                    else "fator_nao_explica_ruptura_de_preco"
+                ),
+            }
+        )
+        diagnosticos_ativo.append(diagnostico)
+
+        if not aceito:
+            candidatos_rejeitados.append(diagnostico)
+            continue
+
+        split_de, split_para = decompor_fator(fator)
+        linhas_aceitas.append(
+            {
+                "timestamp": pd.Timestamp(candidato.timestamp),
                 "split_de": float(split_de),
                 "split_para": float(split_para),
-                "fator_split": float(fator_split),
-                "status": status,
+                "fator_split": fator,
+                "status": "a",
             }
         )
 
-    tabela = pd.DataFrame(linhas, columns=COLUNAS_DESDOBRAMENTOS)
-    if not tabela.empty:
-        tabela = tabela.sort_values("timestamp").drop_duplicates(
-            subset=["timestamp", "split_de", "split_para"], keep="last"
+    tabela_saida = pd.DataFrame(
+        linhas_aceitas,
+        columns=COLUNAS_DESDOBRAMENTOS,
+    )
+    if not tabela_saida.empty:
+        tabela_saida = tabela_saida.sort_values("timestamp")
+        tabela_saida = tabela_saida.drop_duplicates(
+            subset=["timestamp", "fator_split"], keep="last"
         )
 
-    arquivo_destino = DIRETORIO_DESDOBRAMENTOS / f"{ativo}.csv"
-    arquivo_temporario = DIRETORIO_DESDOBRAMENTOS / f".{ativo}.csv.tmp"
-    tabela.to_csv(arquivo_temporario, index=False)
-    arquivo_temporario.replace(arquivo_destino)
-
-    ativos_concluidos.add(ativo)
-    salvar_progresso(ativos_concluidos)
-    registrar(
-        f"{posicao:02d}/{len(ATIVOS)} {ativo} | "
-        f"desdobramentos={len(tabela)}"
+    tabela_saida.to_csv(
+        DIRETORIO_DESDOBRAMENTOS / f"{ativo}.csv",
+        index=False,
     )
 
-
-# %% 3 - Validacao final e manifesto
-resumo_ativos: list[dict[str, object]] = []
-total_desdobramentos = 0
-
-for ativo in ATIVOS:
-    tabela = ler_desdobramentos(ativo)
-    total_desdobramentos += len(tabela)
+    total_desdobramentos += len(tabela_saida)
     resumo_ativos.append(
         {
             "ativo": ativo,
-            "desdobramentos": len(tabela),
-            "eventos": [
-                {
-                    "data": pd.Timestamp(linha.timestamp).date().isoformat(),
-                    "split_de": float(linha.split_de),
-                    "split_para": float(linha.split_para),
-                    "fator_split": float(linha.fator_split),
-                }
-                for linha in tabela.itertuples(index=False)
-            ],
+            "candidatos_eod": len(candidatos),
+            "desdobramentos_aceitos": len(tabela_saida),
+            "diagnosticos": diagnosticos_ativo,
         }
     )
 
+    registrar(
+        f"{posicao:02d}/{len(ATIVOS)} {ativo} | "
+        f"candidatos={len(candidatos)} | aceitos={len(tabela_saida)}"
+    )
+
+
+# %% 3 - Manifesto auditavel
 manifesto = {
-    "fonte": "Tiingo Corporate Actions Splits",
-    "endpoint": "/tiingo/corporate-actions/<ticker>/splits",
-    "data_congelamento_utc": datetime.now(timezone.utc).isoformat(),
+    "fonte_precos": "Tiingo EOD snapshot local",
+    "fonte_candidatos": "splitFactor do Tiingo EOD snapshot local",
+    "endpoint_corporate_actions_usado": False,
+    "motivo_sem_endpoint_corporate_actions": (
+        "O endpoint especifico pode exigir habilitacao beta e retornar HTTP 403."
+    ),
+    "metodo": "validacao_de_ruptura_mecanica_no_open",
+    "tolerancia_relativa_abertura": TOLERANCIA_RELATIVA_ABERTURA,
+    "data_geracao_utc": datetime.now(timezone.utc).isoformat(),
     "periodo_inicio": DATA_INICIO,
     "periodo_fim": DATA_FIM,
     "quantidade_ativos": len(ATIVOS),
-    "ativos": list(ATIVOS),
-    "somente_status_ativo": True,
-    "total_desdobramentos": total_desdobramentos,
+    "total_candidatos_eod": total_candidatos,
+    "total_desdobramentos_aceitos": total_desdobramentos,
+    "total_candidatos_rejeitados": len(candidatos_rejeitados),
+    "candidatos_rejeitados": candidatos_rejeitados,
     "resumo_ativos": resumo_ativos,
 }
+
 ARQUIVO_MANIFESTO.write_text(
-    json.dumps(manifesto, indent=2, ensure_ascii=False) + "\n",
+    json.dumps(manifesto, indent=2, ensure_ascii=False, default=str) + "\n",
     encoding="utf-8",
 )
 
-if ARQUIVO_PROGRESSO.exists():
-    ARQUIVO_PROGRESSO.unlink()
-
-registrar(f"Snapshot concluido: {total_desdobramentos} desdobramento(s) ativo(s)")
+registrar(
+    f"Concluido: candidatos={total_candidatos} | "
+    f"desdobramentos aceitos={total_desdobramentos} | "
+    f"rejeitados={len(candidatos_rejeitados)}"
+)
+for rejeitado in candidatos_rejeitados:
+    registrar(
+        "Rejeitado: "
+        f"{rejeitado['ativo']} {rejeitado['data']} "
+        f"fator={rejeitado['fator_split_eod']} "
+        f"motivo={rejeitado['motivo']}"
+    )
 registrar(f"Diretorio: {DIRETORIO_DESDOBRAMENTOS}")
 registrar("Agora execute: python backtest.py")
