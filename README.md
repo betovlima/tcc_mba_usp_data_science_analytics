@@ -2,29 +2,13 @@
 
 Backtest reproduzível de rotação de capital entre ativos com LightGBM e validação walk-forward.
 
-## Fonte de dados
+## Fonte de dados do teste atual
 
-O experimento usa séries históricas diárias da Alpaca, com um arquivo CSV por ativo em:
+O `backtest.py` consulta diretamente a API End-of-Day da Tiingo no início da execução e mantém as séries em memória até o fim do processamento.
 
-```text
-dados/series_historicas/
-```
-
-Exemplo:
+Para este teste são usados somente os campos brutos:
 
 ```text
-NVDA.csv
-MSFT.csv
-META.csv
-TSLA.csv
-...
-SCSC.csv
-```
-
-Cada arquivo contém:
-
-```text
-timestamp
 open
 high
 low
@@ -32,84 +16,18 @@ close
 volume
 ```
 
-Parâmetros usados na Alpaca:
+Os campos ajustados (`adjOpen`, `adjHigh`, `adjLow`, `adjClose`, `adjVolume`) não entram no treinamento.
+
+A Tiingo também informa `divCash` e `splitFactor`. Esses eventos são mantidos separadamente em memória apenas para auditoria e não são aplicados ao OHLCV neste teste.
+
+Fluxo atual:
 
 ```text
-timeframe   1Day
-feed        SIP
-adjustment  all
-```
-
-O `backtest.py` não consulta MongoDB e não baixa dados. Ele executa somente sobre os arquivos históricos locais.
-
-## Preparação das séries históricas
-
-Instale as dependências:
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-Copie o arquivo de exemplo:
-
-```bash
-copy .env.example .env
-```
-
-No Linux/macOS:
-
-```bash
-cp .env.example .env
-```
-
-Preencha:
-
-```text
-ALPACA_API_KEY=
-ALPACA_SECRET_KEY=
-```
-
-Depois execute:
-
-```bash
-python baixar_series_alpaca.py
-```
-
-O script baixa os 37 ativos diretamente da Alpaca e grava cada série em seu próprio arquivo dentro de `dados/series_historicas/`.
-
-A aquisição dos dados fica separada do experimento. Depois que os CSVs existem, o backtest não precisa de conexão com a Alpaca.
-
-## Execução do backtest
-
-```bash
-python backtest.py
-```
-
-No Spyder, `backtest.py` está organizado em células `# %%`:
-
-```text
-# %% 0  Imports e configuração
-# %% 1  Início da execução
-# %% 2  Carregamento e validação das séries históricas
-# %% 3  Preparação metodológica
-# %% 4  LightGBM + walk-forward + política de rotação
-# %% 5  Objetos de resultado para inspeção
-# %% 6  Gravação dos artefatos
-# %% 7  Métricas finais
-```
-
-- `F5`: executa todo o arquivo.
-- `Ctrl+Enter`: executa somente a célula atual.
-- As variáveis ficam disponíveis no Variable Explorer.
-
-## Fluxo do experimento
-
-```text
-Alpaca SIP
+Tiingo EOD RAW
   ↓
-CSV estático por ativo
+37 séries mantidas em memória
   ↓
-OHLCV
+OHLCV bruto
   ↓
 features
   ↓
@@ -130,7 +48,83 @@ custos e capital composto
 métricas e artefatos
 ```
 
-Todo o processamento da estratégia é executado pelo código local deste repositório. Não são usadas APIs de processamento, Strategy persistida, modelos treinados, previsões ou resultados anteriores do Market Cycle Trader.
+Nenhum CSV intermediário é usado pelo `backtest.py` neste teste.
+
+## Preparação
+
+Instale as dependências:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Copie o arquivo de exemplo:
+
+Windows:
+
+```bash
+copy .env.example .env
+```
+
+Linux/macOS:
+
+```bash
+cp .env.example .env
+```
+
+Preencha o token da Tiingo:
+
+```text
+TIINGO_API_KEY=
+```
+
+As variáveis da Alpaca permanecem no exemplo porque `baixar_series_alpaca.py` continua disponível como utilitário de comparação:
+
+```text
+ALPACA_API_KEY=
+ALPACA_SECRET_KEY=
+```
+
+## Execução do backtest
+
+```bash
+python backtest.py
+```
+
+No Spyder, `backtest.py` está organizado em células `# %%`:
+
+```text
+# %% 0  Imports e configuração
+# %% 1  Início da execução e credencial da Tiingo
+# %% 2  Download das séries RAW diretamente para memória
+# %% 3  Preparação metodológica
+# %% 4  LightGBM + walk-forward + política de rotação
+# %% 5  Objetos de resultado para inspeção
+# %% 6  Gravação dos artefatos
+# %% 7  Métricas finais
+```
+
+- `F5`: executa todo o arquivo.
+- `Ctrl+Enter`: executa somente a célula atual.
+- As variáveis ficam disponíveis no Variable Explorer.
+
+## Eventos corporativos no teste atual
+
+A série utilizada pelo modelo não é retroativamente ajustada. Os eventos recebidos da Tiingo ficam disponíveis na variável:
+
+```text
+eventos_corporativos
+```
+
+Por ativo, são preservados:
+
+```text
+timestamp
+dividendo
+fator_split
+```
+
+Eles ainda não alteram preço, volume, quantidade de ações ou retorno. Essa separação permite investigar posteriormente um tratamento causal de splits e dividendos sem utilizar eventos futuros para modificar observações passadas.
 
 ## Universo congelado
 
@@ -174,9 +168,9 @@ random_state                     42
 
 Os parâmetros ficam declarados em `tcc_engine/config.py`.
 
-## Referência histórica certificada
+## Referências de comparação
 
-O estado anterior do experimento, ainda lendo o mesmo histórico Alpaca a partir do MongoDB local, reproduziu:
+A pesquisa já produziu resultados diferentes conforme a fonte e a política de ajuste dos dados. O resultado histórico certificado permanece apenas como referência experimental:
 
 ```text
 Capital inicial        US$ 10,000.00
@@ -187,7 +181,7 @@ Max Drawdown           -28.19%
 Rotações               315
 ```
 
-A alteração atual muda somente a forma de armazenamento e leitura do OHLCV: em vez de MongoDB, um CSV por ativo. O motor da estratégia permanece local no projeto.
+Esse valor não é tratado como objetivo a ser reproduzido pela Tiingo. O teste atual busca medir o comportamento da mesma estratégia quando alimentada por OHLCV bruto de uma fonte independente.
 
 ## Resultados
 
@@ -203,6 +197,20 @@ output/summary.txt
 
 `output/` permanece fora do Git.
 
+O `backtest_result.json` registra explicitamente:
+
+```text
+market_data_source       tiingo_eod_memoria
+market_data_adjustment   raw
+corporate_actions_applied false
+```
+
+## Utilitários históricos
+
+`baixar_series_alpaca.py` continua disponível para baixar séries da Alpaca e comparar fontes.
+
+`exportar_series_certificadas_mongo.py` existe somente para recuperar o snapshot histórico usado na reprodução certificada. Ele não participa do teste Tiingo.
+
 ## Auditoria no Excel
 
 Após o backtest:
@@ -217,22 +225,15 @@ Arquivo gerado:
 analysis/tcc_backtest_output_analysis.xlsx
 ```
 
-A planilha reconstrói as principais métricas, folds, curva de capital, operações, ciclos, análise mensal e reconciliação financeira.
-
 ## Estrutura
 
 ```text
 tcc_mba_usp_data_science_analytics/
 ├── backtest.py
 ├── baixar_series_alpaca.py
+├── exportar_series_certificadas_mongo.py
 ├── .env.example
 ├── requirements.txt
-├── dados/
-│   └── series_historicas/
-│       ├── NVDA.csv
-│       ├── MSFT.csv
-│       ├── ...
-│       └── SCSC.csv
 ├── analysis/
 │   └── build_excel.py
 └── tcc_engine/
