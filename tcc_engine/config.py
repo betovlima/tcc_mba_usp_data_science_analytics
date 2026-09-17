@@ -17,10 +17,12 @@ START_DATE = "2016-01-01"
 END_DATE = "2026-09-04"
 
 ASSETS = (
-    "NVDA", "MSFT", "META", "TSLA", "AMD", "JPM", "SPY", "AVGO", "NFLX",
-    "ORCL", "COST", "LLY", "XOM", "CAT", "WMT", "V", "HD", "ADC", "ADEA",
-    "ADI", "ADM", "GKOS", "VNCE", "CORT", "UNFI", "DNN", "MKSI", "APD",
-    "DDS", "RACE", "UNF", "TX", "CEF", "YANG", "KKR", "BXMT", "SCSC",
+    "NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "AMD", "JPM", "SPY",
+    "AVGO", "NFLX", "CRM", "ORCL", "COST", "LLY", "XOM", "CAT", "WMT", "V",
+    "HD", "ADC", "ADEA", "ADI", "ADM", "DDS", "CNQ", "VRTS", "XSD", "CXW",
+    "ENS", "CORT", "CCK", "CEF", "GKOS", "RACE", "TX", "UNF", "BXMT", "PXLW",
+    "KKR", "SCSC", "LKFT", "DNN", "VNCE", "UNFI", "DOC", "CLMT", "APD", "MGM",
+    "MAN", "MYE", "YANG", "MKSI", "MCS", "ECC",
 )
 
 
@@ -61,12 +63,12 @@ class StandaloneBacktestConfig:
     end_date: str | None = END_DATE
     timeframe: str = "1Day"
 
-    market_data_provider: str = "alpaca"
+    market_data_provider: str = "tiingo"
     alpaca_historical_feed: str = "sip"
     alpaca_live_feed: str = "iex"
     alpaca_adjustment: str = "all"
     market_data_history_backfill_enabled: bool = False
-    market_data_history_backfill_provider: str = "alpaca"
+    market_data_history_backfill_provider: str = "tiingo"
     market_data_history_start_tolerance_days: int = 10
     market_data_require_complete_history: bool = True
 
@@ -146,7 +148,7 @@ class StandaloneBacktestConfig:
     research_candidate_assets: tuple[str, ...] = ()
     research_model_family: str = "lightgbm_utility"
     research_model_settings: dict[str, Any] = field(default_factory=_lightgbm_settings)
-    research_market_data_mode: str = "database_only"
+    research_market_data_mode: str = "local_snapshot"
     expected_market_data_signature_sha256: str | None = None
     research_market_data_snapshot_id: str | None = None
     walk_forward_fold_count_override: int | None = None
