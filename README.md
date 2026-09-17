@@ -53,6 +53,23 @@ splitStatus
 
 Somente eventos com `splitStatus = a` são congelados e usados.
 
+## Execucao oficial desta branch no Spyder
+
+A branch `research/tiingo-starter-frozen-dataset-v1` usa exclusivamente Tiingo
+como fonte do snapshot experimental e o universo completo de 56 ativos.
+
+No Spyder, execute os scripts abaixo nesta ordem, sempre com o diretorio de
+trabalho apontando para a raiz do repositorio:
+
+```text
+congelar_series_tiingo.py
+congelar_desdobramentos_tiingo.py
+backtest.py
+```
+
+O primeiro script exige somente `TIINGO_API_KEY` no arquivo `.env`.
+Os dois passos seguintes trabalham sobre os arquivos locais congelados.
+
 ## 1. Congelar o OHLCV bruto
 
 Com `TIINGO_API_KEY` configurada no `.env`:
@@ -179,13 +196,15 @@ O arquivo mostra, para cada split, o retorno observado no RAW e o retorno depois
 
 ## Universo congelado
 
-37 ativos:
+56 ativos:
 
 ```text
-NVDA, MSFT, META, TSLA, AMD, JPM, SPY, AVGO, NFLX,
-ORCL, COST, LLY, XOM, CAT, WMT, V, HD, ADC, ADEA,
-ADI, ADM, GKOS, VNCE, CORT, UNFI, DNN, MKSI, APD,
-DDS, RACE, UNF, TX, CEF, YANG, KKR, BXMT, SCSC
+NVDA, AAPL, MSFT, AMZN, GOOGL, META, TSLA, AMD, JPM, SPY,
+AVGO, NFLX, CRM, ORCL, COST, LLY, XOM, CAT, WMT, V, HD,
+ADC, ADEA, ADI, ADM, DDS, CNQ, VRTS, XSD, CXW, ENS, CORT,
+CCK, CEF, GKOS, RACE, TX, UNF, BXMT, PXLW, KKR, SCSC, LKFT,
+DNN, VNCE, UNFI, DOC, CLMT, APD, MGM, MAN, MYE, YANG, MKSI,
+MCS, ECC
 ```
 
 Período:
