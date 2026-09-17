@@ -8,6 +8,12 @@ threadpoolctl>=3.5,<4
 # Modelo usado pelo experimento
 lightgbm>=4.6,<5
 
+# Otimizacao Bayesiana CARO v2
+# BoTorch 0.18.x requer Python >=3.11, PyTorch >=2.0.1 e GPyTorch >=1.14.
+torch>=2.14,<3
+botorch>=0.18,<0.19
+gpytorch>=1.14,<2
+
 # Fontes de dados historicos
 alpaca-py>=0.43,<1
 requests>=2.32,<3
