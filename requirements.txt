@@ -11,6 +11,7 @@ lightgbm>=4.6,<5
 # Local OHLCV data source and local configuration
 pymongo>=4.10,<5
 python-dotenv>=1.0,<2
+requests>=2.32,<3
 
 # Excel audit workbook
 openpyxl>=3.1,<4
