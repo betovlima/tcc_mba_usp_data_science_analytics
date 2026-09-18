@@ -302,3 +302,59 @@ Durante campanhas LHS/CARO, o painel de features, os folds e as matrizes
 X/y de cada fase sao mantidos em RAM e reutilizados entre candidatos. Isso
 evita recalcular features e reler/slicar os mesmos dados dezenas de vezes.
 
+
+
+## Pesquisa de contribuicao marginal periodica — Tiingo
+
+Branch:
+
+```text
+research/tiingo-periodic-marginal-asset-search-v1
+```
+
+Esta pesquisa procura os meses OOS mais fracos do baseline Tiingo 56 e mede,
+por replay contrafactual sobre a mesma matriz de scores LightGBM, a contribuicao
+marginal da elegibilidade dos ativos.
+
+No Spyder, execute:
+
+```text
+pesquisar_contribuicao_marginal_periodica_tiingo.py
+```
+
+O fluxo padrao e:
+
+```text
+Tiingo 56 split-causal
+  -> baseline LightGBM + matriz completa de scores OOS
+  -> ranking dos meses mais fracos
+  -> ranking dos ativos em cada mes
+  -> leave-one-out dos 56 ativos
+  -> core 37 + cada um dos 19 ativos adicionais
+  -> matrizes de contribuicao marginal por periodo
+```
+
+O baseline e treinado apenas uma vez. A matriz OOS e salva e reutilizada nas
+retomadas. Os contrafactuais nao retreinam o LightGBM; eles alteram somente
+quem pode competir no ranking durante o mes investigado.
+
+Artefatos principais:
+
+```text
+output/tiingo_periodic_marginal_asset_search_v1/
+  baseline_score_matrix.csv
+  period_stats.csv
+  weak_periods.csv
+  asset_period_rank.csv
+  leave_one_out.csv
+  core_plus_one.csv
+  leave_one_out_matrix.csv
+  core_plus_one_matrix.csv
+  summary.json
+```
+
+Importante: esta fase usa o resultado futuro somente para localizar os periodos
+de falha e medir contribuicoes. Portanto e diagnostica/ex-post. Qualquer regra
+derivada desses resultados precisa ser aprendida em janelas anteriores e
+validada depois em walk-forward fora da amostra antes de ser aceita.
+
