@@ -486,3 +486,70 @@ output/tiingo_forced_candidate_episode_advantage_v2/
   summary.json
 ```
 
+
+
+## Contextual meta-ranker v1 — validacao cronologica
+
+Branch:
+
+```text
+research/tiingo-contextual-meta-ranker-v1
+```
+
+Entrada:
+
+```text
+output/tiingo_forced_candidate_episode_advantage_v2/
+```
+
+Execute:
+
+```text
+%run pesquisar_meta_ranker_contextual_tiingo.py
+```
+
+O experimento testa se a vantagem contrafactual produzida pela v2 pode ser
+prevista antes da decisao. Ele nao altera a estrategia e nao usa o proprio ano
+de teste para treinar.
+
+A validacao e expanding-window anual. Uma linha historica so pode entrar no
+treino quando o seu `reconvergence_date` ocorreu antes do inicio do ano de
+teste. Isso impede que um target ainda nao maturado atravesse a fronteira entre
+treino e teste.
+
+Sao comparados dois objetivos fixos, sem tuning no OOS:
+
+```text
+LightGBM regressao L1 -> episode_delta_log_capital
+LightGBM LambdaRank   -> ordenacao dos candidatos dentro da data
+```
+
+O contexto inclui:
+
+```text
+features do candidato
+features relativas ao baseline
+score/rank do LightGBM original
+estado do incumbent
+dispersao cross-sectional dos scores
+SPY e breadth do universo
+retorno/drawdown da estrategia conhecidos ate t
+mes do ano
+```
+
+Artefatos:
+
+```text
+output/tiingo_contextual_meta_ranker_v1/
+  fold_metrics.csv
+  oos_meta_predictions.csv
+  feature_importance.csv
+  feature_contract.json
+  summary.json
+```
+
+A referencia de decisao continua sendo nao intervir, cujo delta contrafactual e
+zero. Um meta-modelo so deve ser integrado ao backtest se demonstrar vantagem
+cronologica fora da amostra, e depois precisa ser validado em simulacao
+sequencial completa.
+
