@@ -1,6 +1,6 @@
-"""Campanha unica de retuning do LightGBM sobre a base Tiingo total-causal congelada.
+"""Campanha LHS do LightGBM sobre o baseline oficial Tiingo 56 split-causal.
 
-Versao: tiingo-lightgbm-tuning-v1.0.0
+Versao: tiingo-56-lightgbm-lhs-v1.0.0
 
 Somente hiperparametros do LightGBM variam. Dataset, features, targets, folds,
 politica de rotacao e custos permanecem fixos. A referencia historica de 43M
@@ -30,12 +30,12 @@ from tcc_engine.capital_rotation import run_rotation_models
 from tcc_engine.config import ASSETS, CONFIG
 from tcc_engine.execution import apply_slippage, calculate_reference_fees
 
-VERSION = "tiingo-lightgbm-tuning-v1.0.0"
+VERSION = "tiingo-56-lightgbm-lhs-v1.0.0"
 ROOT = Path(__file__).resolve().parent
 DIR_TIINGO = ROOT / "dados" / "series_historicas"
 DIR_EVENTS = ROOT / "dados" / "eventos_corporativos"
 DIR_SPLITS = ROOT / "dados" / "desdobramentos"
-DIR_OUT = ROOT / "output" / "tiingo_lightgbm_tuning"
+DIR_OUT = ROOT / "output" / "tiingo_56_lightgbm_lhs_v1"
 MANIFEST_TIINGO = ROOT / "dados" / "manifesto_tiingo.json"
 MANIFEST_SPLITS = ROOT / "dados" / "manifesto_desdobramentos_tiingo.json"
 OHLCV = ["open", "high", "low", "close", "volume"]
@@ -126,47 +126,20 @@ def apply_splits(asset: str, raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series
     return out, cumulative
 
 
-def apply_dividends(asset: str, split_series: pd.DataFrame, split_factor: pd.Series) -> pd.DataFrame:
-    path = DIR_EVENTS / f"{asset}.csv"
-    if not path.exists():
-        raise RuntimeError(f"{asset}: eventos corporativos ausentes: {path}")
-    events = pd.read_csv(path)
-    session_factor = pd.Series(1.0, index=split_series.index, dtype=float)
-    if not events.empty:
-        events["timestamp"] = pd.to_datetime(events["timestamp"], utc=True, errors="coerce")
-        events["dividendo"] = pd.to_numeric(events["dividendo"], errors="coerce").fillna(0.0)
-        events = events.dropna(subset=["timestamp"])
-        events = events.loc[events["dividendo"] != 0.0].sort_values("timestamp")
-        for event in events.itertuples(index=False):
-            session = pd.Timestamp(event.timestamp).normalize()
-            if session not in split_series.index:
-                continue
-            pos = int(split_series.index.get_loc(session))
-            if pos == 0:
-                continue
-            previous_close = float(split_series.iloc[pos - 1]["close"])
-            dividend = float(event.dividendo) * float(split_factor.loc[session])
-            denominator = previous_close - dividend
-            if not np.isfinite(denominator) or denominator <= 0:
-                raise RuntimeError(f"{asset}: dividendo invalido em {session.date()}")
-            session_factor.loc[session] *= previous_close / denominator
-    cumulative = session_factor.cumprod()
-    out = split_series.copy()
-    for c in ("open", "high", "low", "close"):
-        out[c] = out[c] * cumulative
-    return out
+def load_tiingo_split_causal() -> dict[str, pd.DataFrame]:
+    """Carrega exatamente o mesmo OHLCV usado pelo baseline oficial.
 
-
-def load_tiingo_total_causal() -> dict[str, pd.DataFrame]:
+    Apenas splits confirmados sao normalizados causalmente da data do evento
+    para frente. Dividendos permanecem armazenados apenas para auditoria e nao
+    alteram preco, features ou targets.
+    """
     series: dict[str, pd.DataFrame] = {}
     for pos, asset in enumerate(ASSETS, start=1):
         raw = read_ohlcv(DIR_TIINGO, asset)
-        split, factor = apply_splits(asset, raw)
-        series[asset] = apply_dividends(asset, split, factor)
+        split, _ = apply_splits(asset, raw)
+        series[asset] = split
         log(f"[dados] {pos:02d}/{len(ASSETS)} {asset} | sessoes={len(series[asset])}")
     return series
-
-
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -197,6 +170,46 @@ def dataset_signature() -> dict[str, Any]:
         "tiingo_manifest": read_json_optional(MANIFEST_TIINGO),
         "split_manifest": read_json_optional(MANIFEST_SPLITS),
     }
+
+
+def validate_snapshot_contract() -> None:
+    """Garante que a campanha usa o snapshot oficial Tiingo dos mesmos 56 ativos."""
+    expected_assets = list(ASSETS)
+    if len(expected_assets) != 56:
+        raise RuntimeError(
+            f"Contrato invalido: esperado universo de 56 ativos; CONFIG possui {len(expected_assets)}."
+        )
+
+    tiingo = read_json_optional(MANIFEST_TIINGO)
+    splits = read_json_optional(MANIFEST_SPLITS)
+    if not tiingo:
+        raise RuntimeError("manifesto_tiingo.json ausente.")
+    if not splits:
+        raise RuntimeError("manifesto_desdobramentos_tiingo.json ausente.")
+
+    manifest_assets = [str(x).upper() for x in (tiingo.get("ativos") or [])]
+    if int(tiingo.get("quantidade_ativos", -1)) != 56 or manifest_assets != expected_assets:
+        raise RuntimeError(
+            "Snapshot Tiingo nao corresponde ao universo oficial de 56 ativos. "
+            "Execute novamente congelar_series_tiingo.py nesta branch."
+        )
+    if int(splits.get("quantidade_ativos", -1)) != 56:
+        raise RuntimeError(
+            "Snapshot de desdobramentos nao corresponde aos 56 ativos. "
+            "Execute novamente congelar_desdobramentos_tiingo.py."
+        )
+
+    for label, directory in (
+        ("OHLCV", DIR_TIINGO),
+        ("eventos", DIR_EVENTS),
+        ("splits", DIR_SPLITS),
+    ):
+        missing = [asset for asset in expected_assets if not (directory / f"{asset}.csv").exists()]
+        if missing:
+            raise RuntimeError(
+                f"Snapshot {label} incompleto; faltam {len(missing)} ativo(s): "
+                + ", ".join(missing)
+            )
 
 
 def current_baseline_params() -> dict[str, Any]:
@@ -266,14 +279,14 @@ def campaign_manifest(lhs_count: int, signature: dict[str, Any]) -> dict[str, An
         "schema_version": 1,
         "script_version": VERSION,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "experiment": "tiingo_total_causal_lightgbm_only_retuning",
+        "experiment": "tiingo_56_split_causal_lightgbm_lhs",
         "lhs_candidate_count": lhs_count,
         "candidate_count_including_baseline": lhs_count + 1,
         "search_seed": SEARCH_SEED,
         "historical_reference_capital_context_only": HISTORICAL_REFERENCE_CAPITAL,
         "selection_uses_43m_reference": False,
         "fixed_components": [
-            "Tiingo RAW snapshot", "causal split normalization", "causal dividend normalization",
+            "Tiingo RAW snapshot 56 assets", "causal split normalization", "dividends audit-only (not applied)",
             "features", "targets", "walk-forward folds", "rotation policy", "fees and slippage",
         ],
         "tuned_component": "LightGBM hyperparameters only",
@@ -298,7 +311,7 @@ def ensure_campaign(lhs_count: int, signature: dict[str, Any]) -> list[dict[str,
         if int(existing_manifest.get("lhs_candidate_count", -1)) != lhs_count:
             raise RuntimeError(
                 "A campanha existente foi criada com outro numero de candidatos. "
-                "Use o mesmo --candidates ou remova output/tiingo_lightgbm_tuning para iniciar outra campanha."
+                "Use o mesmo --candidates ou remova output/tiingo_56_lightgbm_lhs_v1 para iniciar outra campanha."
             )
         old_sig = ((existing_manifest.get("dataset_signature") or {}).get("combined_sha256"))
         new_sig = signature.get("combined_sha256")
@@ -547,7 +560,7 @@ def rank_and_write(all_results: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Retuning LightGBM sobre Tiingo total-causal congelado")
+    parser = argparse.ArgumentParser(description="LHS LightGBM sobre Tiingo 56 split-causal congelado")
     parser.add_argument("--candidates", type=int, default=DEFAULT_LHS_CANDIDATES, help="Quantidade de candidatos LHS, alem do baseline")
     parser.add_argument("--start", type=int, default=0, help="Indice inicial na lista completa, baseline=0")
     parser.add_argument("--limit", type=int, default=None, help="Maximo de candidatos a processar nesta execucao")
@@ -566,7 +579,7 @@ def main() -> int:
     log(f"Campanha: {VERSION}")
     log("Somente hiperparametros LightGBM variam; politica/features/targets permanecem fixos")
     log("Referencia de 43M e apenas contexto; nao entra na selecao dos candidatos")
-    log("Calculando assinatura SHA-256 do dataset congelado")
+    validate_snapshot_contract()\n    log("Contrato validado: Tiingo-only, 56 ativos, splits causais, dividendos fora do modelo")\n    log("Calculando assinatura SHA-256 do dataset congelado")
     signature = dataset_signature()
     log(f"Dataset signature: {signature['combined_sha256']}")
     candidates = ensure_campaign(args.candidates, signature)
@@ -579,8 +592,8 @@ def main() -> int:
         log("Nenhum candidato selecionado nesta execucao")
         return 0
 
-    log(f"Carregando base Tiingo total-causal uma unica vez | ativos={len(ASSETS)}")
-    series = load_tiingo_total_causal()
+    log(f"Carregando baseline Tiingo split-causal uma unica vez | ativos={len(ASSETS)}")
+    series = load_tiingo_split_causal()
 
     results_by_id: dict[str, dict[str, Any]] = {}
     for candidate in candidates:
