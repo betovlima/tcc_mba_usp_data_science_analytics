@@ -25,6 +25,16 @@ ASSETS = (
     "MAN", "MYE", "YANG", "MKSI", "MCS", "ECC",
 )
 
+# Calendario temporal congelado do experimento standalone anterior. Estes 37
+# ativos definem apenas as sessoes comuns usadas para construir os folds.
+# Os 56 ativos de ASSETS continuam elegiveis para ranking e rotacao.
+CALENDAR_ANCHOR_ASSETS = (
+    "NVDA", "MSFT", "META", "TSLA", "AMD", "JPM", "SPY", "AVGO", "NFLX",
+    "ORCL", "COST", "LLY", "XOM", "CAT", "WMT", "V", "HD", "ADC", "ADEA",
+    "ADI", "ADM", "GKOS", "VNCE", "CORT", "UNFI", "DNN", "MKSI", "APD",
+    "DDS", "RACE", "UNF", "TX", "CEF", "YANG", "KKR", "BXMT", "SCSC",
+)
+
 
 def _lightgbm_settings() -> dict[str, Any]:
     """Hiperparametros declarados no proprio experimento."""
@@ -143,7 +153,7 @@ class StandaloneBacktestConfig:
 
     analysis_start_date: str = START_DATE
     analysis_end_date: str | None = END_DATE
-    calendar_anchor_assets: tuple[str, ...] = ASSETS
+    calendar_anchor_assets: tuple[str, ...] = CALENDAR_ANCHOR_ASSETS
     research_reference_assets: tuple[str, ...] = ASSETS
     research_candidate_assets: tuple[str, ...] = ()
     research_model_family: str = "lightgbm_utility"
