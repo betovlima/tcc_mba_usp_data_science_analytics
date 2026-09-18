@@ -406,3 +406,83 @@ contextuais conhecidas no instante da decisao e os targets de vantagem marginal
 futura. Ele e a entrada prevista para a proxima etapa: aprender um meta-ranker
 de elegibilidade e valida-lo em walk-forward futuro.
 
+
+
+## Forced candidate episode advantage v2 — todo o OOS
+
+Branch:
+
+```text
+research/tiingo-forced-candidate-episode-advantage-v2
+```
+
+Script:
+
+```text
+pesquisar_vantagem_forcada_candidato_tiingo_v2.py
+```
+
+A v2 substitui a analise limitada aos oito piores meses por uma varredura de
+todo o periodo OOS. Para cada data e cada um dos 56 ativos, ela compara a
+politica normal com uma unica intervencao: forcar o candidato em t e voltar para
+a politica normal em t+1. O rollout termina quando os dois caminhos voltam ao
+mesmo estado de politica (mesma posicao e mesmos dias de holding).
+
+Target principal:
+
+```text
+episode_delta_log_capital
+```
+
+Campos de auditoria:
+
+```text
+episode_delta_capital_pct
+reconverged
+reconvergence_bars
+reconvergence_date
+target_censored
+episode_peak_advantage_pct
+episode_trough_advantage_pct
+candidate_beats_baseline
+```
+
+A v2 testa tambem ativos sem score LightGBM no instante, desde que exista preco
+valido para a intervencao. Isso permite diagnosticar CLMT em vez de simplesmente
+remove-lo da forca bruta. A cobertura de score por ativo e salva em:
+
+```text
+output/tiingo_forced_candidate_episode_advantage_v2/asset_score_coverage.csv
+```
+
+Antes da execucao completa, pode ser feito um smoke test:
+
+```text
+%run pesquisar_vantagem_forcada_candidato_tiingo_v2.py --limit-episodes 5 --limit-assets 10
+```
+
+Para a campanha completa:
+
+```text
+%run pesquisar_vantagem_forcada_candidato_tiingo_v2.py
+```
+
+O baseline da v1 e reutilizado automaticamente quando o SHA-256 do dataset e o
+hash da configuracao sao identicos, evitando novo treinamento LightGBM.
+
+Principais artefatos:
+
+```text
+output/tiingo_forced_candidate_episode_advantage_v2/
+  experiment_manifest.json
+  baseline_score_matrix.csv
+  baseline_metrics.json
+  period_stats.csv
+  asset_score_coverage.csv
+  forced_candidate_episode_advantage_all_oos.csv
+  candidate_month_summary.csv
+  candidate_year_summary.csv
+  candidate_global_summary.csv
+  summary.json
+```
+
