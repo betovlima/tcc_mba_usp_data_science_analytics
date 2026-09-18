@@ -277,3 +277,28 @@ tunar_lightgbm_tiingo_caro.py
 O CARO usa os resultados do LHS como warm-up e mantem o mesmo dataset Tiingo
 de 56 ativos e o mesmo processamento split-causal do baseline.
 
+
+
+## Aceleracao GPU e cache em memoria
+
+O motor tenta automaticamente o melhor backend disponivel para o LightGBM.
+
+No Windows, o LightGBM nao oferece o backend `device_type=cuda`; a aceleracao
+suportada e `device_type=gpu` via OpenCL. Em Linux, o motor tenta CUDA
+primeiro, depois GPU/OpenCL e por fim CPU.
+
+A configuracao pode ser sobrescrita no `.env`:
+
+```text
+TCC_LIGHTGBM_DEVICE=auto
+TCC_LIGHTGBM_GPU_DEVICE_ID=-1
+```
+
+Valores aceitos para `TCC_LIGHTGBM_DEVICE`: `auto`, `cpu`, `gpu`,
+`cuda`. Se a instalacao local do LightGBM nao possuir o backend acelerado,
+o motor detecta isso com um treino minimo e volta automaticamente para CPU.
+
+Durante campanhas LHS/CARO, o painel de features, os folds e as matrizes
+X/y de cada fase sao mantidos em RAM e reutilizados entre candidatos. Isso
+evita recalcular features e reler/slicar os mesmos dados dezenas de vezes.
+
