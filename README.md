@@ -246,3 +246,34 @@ output/diagnostico_desdobramentos.csv
 ## Limitação metodológica
 
 O universo de 37 ativos foi obtido retrospectivamente e é tratado como universo congelado. O experimento avalia o motor e a validação walk-forward dentro desse universo; ele não demonstra generalização fora da amostra do processo histórico de seleção dos ativos.
+
+
+## 5. Otimizacao do LightGBM sem trocar a familia de modelo
+
+Depois de certificar o baseline com `backtest.py`, a primeira fase de busca
+usa somente LHS (Latin Hypercube Sampling) sobre os hiperparametros do
+LightGBM. Nenhum dado, feature, target, fold, politica de rotacao ou custo e
+alterado.
+
+No Spyder, execute:
+
+```text
+tunar_lightgbm_tiingo.py
+```
+
+O padrao e 32 candidatos LHS mais o `candidate_000`, que reproduz o baseline.
+A campanha e retomavel e grava os resultados em:
+
+```text
+output/tiingo_56_lightgbm_lhs_v1/
+```
+
+Somente depois de concluir o LHS, execute o CARO adaptativo:
+
+```text
+tunar_lightgbm_tiingo_caro.py
+```
+
+O CARO usa os resultados do LHS como warm-up e mantem o mesmo dataset Tiingo
+de 56 ativos e o mesmo processamento split-causal do baseline.
+
