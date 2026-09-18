@@ -27,7 +27,7 @@ import pandas as pd
 from scipy.stats import qmc
 
 from tcc_engine.capital_rotation import run_rotation_models
-from tcc_engine.config import ASSETS, CONFIG
+from tcc_engine.config import ASSETS, CALENDAR_ANCHOR_ASSETS, CONFIG
 from tcc_engine.execution import apply_slippage, calculate_reference_fees
 
 VERSION = "tiingo-56-lightgbm-lhs-v1.0.0"
@@ -344,7 +344,7 @@ def build_candidate_config(candidate_id: str, params: dict[str, Any]):
     settings["lightgbm"] = deepcopy(params)
     return CONFIG.model_copy(update={
         "assets": tuple(ASSETS),
-        "calendar_anchor_assets": tuple(ASSETS),
+        "calendar_anchor_assets": tuple(CALENDAR_ANCHOR_ASSETS),
         "research_reference_assets": tuple(ASSETS),
         "research_candidate_assets": (),
         "research_model_settings": settings,
