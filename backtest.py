@@ -138,6 +138,46 @@ else:
 
 # %% 2 - Carregamento da materia-prima e normalizacao causal de desdobramentos
 registrar(f"[1/8] Carregando {len(ATIVOS)} series OHLCV RAW congeladas")
+# %% 1B - Contrato estrito do baseline Tiingo 56
+ativos_esperados = list(ATIVOS)
+if len(ativos_esperados) != 56:
+    raise RuntimeError(
+        f"Baseline invalido: esperado universo de 56 ativos; CONFIG possui {len(ativos_esperados)}."
+    )
+
+if not manifesto:
+    raise RuntimeError(
+        "manifesto_tiingo.json e obrigatorio para o baseline certificado."
+    )
+ativos_manifesto = [str(valor).upper() for valor in (manifesto.get("ativos") or [])]
+if (
+    int(manifesto.get("quantidade_ativos", -1)) != 56
+    or ativos_manifesto != ativos_esperados
+):
+    raise RuntimeError(
+        "Snapshot Tiingo nao corresponde exatamente aos 56 ativos configurados. "
+        "Execute novamente congelar_series_tiingo.py."
+    )
+
+if not manifesto_desdobramentos:
+    raise RuntimeError(
+        "manifesto_desdobramentos_tiingo.json e obrigatorio para o baseline certificado."
+    )
+if int(manifesto_desdobramentos.get("quantidade_ativos", -1)) != 56:
+    raise RuntimeError(
+        "Snapshot de desdobramentos nao corresponde aos 56 ativos. "
+        "Execute novamente congelar_desdobramentos_tiingo.py."
+    )
+
+if tuple(CONFIGURACAO.calendar_anchor_assets) != tuple(ATIVOS):
+    raise RuntimeError("calendar_anchor_assets deve conter exatamente os 56 ativos.")
+if tuple(CONFIGURACAO.research_reference_assets) != tuple(ATIVOS):
+    raise RuntimeError("research_reference_assets deve conter exatamente os 56 ativos.")
+if tuple(CONFIGURACAO.research_candidate_assets):
+    raise RuntimeError("research_candidate_assets deve estar vazio no baseline oficial.")
+
+registrar("[0/8] Contrato validado: Tiingo-only | 56 ativos | anchors=56 | references=56 | candidates=0")
+
 registrar("[1/8] OHLCV bruto permanece imutavel em series_historicas_brutas")
 registrar("[1/8] Dividendos nao serao incorporados aos precos")
 registrar("[1/8] splitFactor do endpoint EOD nao sera usado como split")
