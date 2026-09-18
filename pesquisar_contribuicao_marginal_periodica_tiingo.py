@@ -154,6 +154,9 @@ def write_json(path: Path, payload: Any) -> None:
 
 
 def compact_baseline_matrix(predictions: pd.DataFrame) -> pd.DataFrame:
+    predictions = predictions.copy()
+    if "timestamp" not in predictions.columns:
+        predictions = predictions.reset_index()
     required = {
         "timestamp",
         "decision_date",
@@ -347,8 +350,13 @@ def period_statistics(
 
 
 def choose_weak_periods(stats: pd.DataFrame, count: int) -> pd.DataFrame:
-    count = max(1, min(int(count), len(stats)))
-    ranked = stats.sort_values(
+    # Meses muito parciais (por exemplo o ultimo mes do snapshot) nao sao
+    # usados para definir "buracos", pois a comparacao seria enviesada.
+    eligible = stats.loc[stats["decision_count"] >= 10].copy()
+    if eligible.empty:
+        raise RuntimeError("Nenhum periodo mensal completo o suficiente para diagnostico.")
+    count = max(1, min(int(count), len(eligible)))
+    ranked = eligible.sort_values(
         ["period_return", "period_max_drawdown", "period"],
         ascending=[True, True, True],
     ).head(count).copy()
@@ -601,13 +609,16 @@ def run_replay(
         margin_by_date,
         allowed,
     )
-    dates = decision_dates_through_period(all_decision_dates, period)
+    # O replay percorre o OOS completo. Truncar exatamente no fim do mes faria
+    # _simulate_exact liquidar a posicao final e contaminaria o capital mensal
+    # com uma venda artificial. O delta do periodo e lido antes da liquidacao
+    # final do OOS.
     return _simulate_exact(
         "periodic_marginal_replay",
         policy,
         frames,
         symbols,
-        dates,
+        all_decision_dates,
         config,
         calculate_reference_fees,
         apply_slippage,
