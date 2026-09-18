@@ -1,6 +1,6 @@
-"""CARO adaptativo para retuning do LightGBM sobre Tiingo total-causal congelado.
+"""CARO adaptativo do LightGBM sobre o baseline oficial Tiingo 56 split-causal.
 
-Versao: tiingo-lightgbm-caro-v1.0.0
+Versao: tiingo-56-lightgbm-caro-v1.0.0
 
 Esta etapa deve ser executada APOS a campanha LHS de tunar_lightgbm_tiingo.py.
 Ela reutiliza baseline + observacoes LHS concluidas como warm-up e passa a
@@ -42,13 +42,13 @@ from tunar_lightgbm_tiingo import (
     ROOT,
     dataset_signature,
     json_default,
-    load_tiingo_total_causal,
+    load_tiingo_split_causal,
     read_json_optional,
 )
 
-VERSION = "tiingo-lightgbm-caro-v1.0.0"
-SOURCE_LHS_DIR = ROOT / "output" / "tiingo_lightgbm_tuning"
-DIR_OUT = ROOT / "output" / "tiingo_lightgbm_caro"
+VERSION = "tiingo-56-lightgbm-caro-v1.0.0"
+SOURCE_LHS_DIR = ROOT / "output" / "tiingo_56_lightgbm_lhs_v1"
+DIR_OUT = ROOT / "output" / "tiingo_56_lightgbm_caro_v1"
 
 SEARCH_SEED = 20260917
 DEFAULT_TRIALS = 30
@@ -1055,7 +1055,7 @@ def ensure_campaign(
         "schema_version": 1,
         "script_version": VERSION,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "experiment": "tiingo_total_causal_lightgbm_caro",
+        "experiment": "tiingo_56_split_causal_lightgbm_caro",
         "warmup_source": SOURCE_LHS_DIR.relative_to(ROOT).as_posix(),
         "warmup_observation_count": int(warmup_count),
         "search_seed": SEARCH_SEED,
@@ -1067,7 +1067,7 @@ def ensure_campaign(
         "fixed_components": [
             "Tiingo RAW snapshot",
             "causal split normalization",
-            "causal dividend normalization",
+            "dividends audit-only (not applied)",
             "features",
             "targets",
             "walk-forward folds",
@@ -1098,7 +1098,7 @@ def ensure_campaign(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="CARO/Bayesiano para LightGBM sobre Tiingo total-causal"
+        description="CARO/Bayesiano para LightGBM sobre Tiingo 56 split-causal"
     )
     parser.add_argument(
         "--trials",
@@ -1205,8 +1205,8 @@ def main() -> int:
         f"CARO retomado | concluidos={len(completed_caro)}/{args.trials} "
         f"| novos nesta execucao={to_run}"
     )
-    log("Carregando base Tiingo total-causal uma unica vez")
-    series = load_tiingo_total_causal()
+    log("Carregando baseline Tiingo 56 split-causal uma unica vez")
+    series = load_tiingo_split_causal()
 
     for local_position in range(to_run):
         trial_number = len(completed_caro) + 1
