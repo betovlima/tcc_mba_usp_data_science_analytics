@@ -120,7 +120,7 @@ class StandaloneBacktestConfig:
     rotation_xgb_n_estimators: int = 300
     rotation_xgb_learning_rate: float = 0.035
     rotation_xgb_max_depth: int = 3
-    rotation_accelerator: str = "cpu"
+    rotation_accelerator: str = "auto"
     rotation_allow_cpu_fallback: bool = True
     rotation_xgb_repetitions: int = 1
     rotation_seed_step: int = 1000
