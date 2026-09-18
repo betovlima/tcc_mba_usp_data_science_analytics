@@ -185,6 +185,10 @@ def build_config(candidate_id: str, params: dict[str, Any]):
     settings["lightgbm"] = deepcopy(params)
     return CONFIG.model_copy(
         update={
+            "assets": tuple(CONFIG.assets),
+            "calendar_anchor_assets": tuple(CONFIG.assets),
+            "research_reference_assets": tuple(CONFIG.assets),
+            "research_candidate_assets": (),
             "research_model_settings": settings,
             "research_model_family": "lightgbm_utility",
             "random_state": 42,
