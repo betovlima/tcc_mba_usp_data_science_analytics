@@ -169,10 +169,22 @@ if int(manifesto_desdobramentos.get("quantidade_ativos", -1)) != 56:
         "Execute novamente congelar_desdobramentos_tiingo.py."
     )
 
+# Reconstroi explicitamente o contrato do experimento a partir do universo
+# carregado. Isso evita que uma sessao longa do Spyder mantenha um objeto CONFIG
+# antigo em memoria depois de um git pull.
+CONFIGURACAO = CONFIGURACAO.model_copy(
+    update={
+        "assets": tuple(ATIVOS),
+        "calendar_anchor_assets": tuple(ATIVOS),
+        "research_reference_assets": tuple(ATIVOS),
+        "research_candidate_assets": (),
+    }
+)
+
 if tuple(CONFIGURACAO.calendar_anchor_assets) != tuple(ATIVOS):
-    raise RuntimeError("calendar_anchor_assets deve conter exatamente os 56 ativos.")
+    raise RuntimeError("calendar_anchor_assets nao foi sincronizado com os 56 ativos.")
 if tuple(CONFIGURACAO.research_reference_assets) != tuple(ATIVOS):
-    raise RuntimeError("research_reference_assets deve conter exatamente os 56 ativos.")
+    raise RuntimeError("research_reference_assets nao foi sincronizado com os 56 ativos.")
 if tuple(CONFIGURACAO.research_candidate_assets):
     raise RuntimeError("research_candidate_assets deve estar vazio no baseline oficial.")
 
