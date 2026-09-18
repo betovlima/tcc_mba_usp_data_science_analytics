@@ -162,6 +162,7 @@ class StandaloneBacktestConfig:
     expected_market_data_signature_sha256: str | None = None
     research_market_data_snapshot_id: str | None = None
     walk_forward_fold_count_override: int | None = None
+    research_capture_full_score_matrix: bool = False
 
     @property
     def fractional_shares(self) -> bool:
