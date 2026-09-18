@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 import math
 import os
+import platform
 import time
 from typing import Any, Callable
 
@@ -43,6 +44,163 @@ from .selective_opportunity import (
     opportunity_cash_gate_enabled,
     selective_opportunity_enabled,
 )
+
+
+# Cache em memoria principal para campanhas de tuning. O mesmo dicionario de
+# series e reutilizado por dezenas de candidatos LHS/CARO; features, folds e
+# matrizes de treino nao precisam ser reconstruidos a cada candidato.
+_EXECUTION_CONTEXT_CACHE: dict[str, Any] = {
+    "bars_object": None,
+    "config_signature": None,
+    "context": None,
+}
+_TRAINING_SLICE_CACHE: dict[tuple[Any, ...], tuple[pd.DataFrame, pd.Series]] = {}
+_LIGHTGBM_DEVICE_CACHE: dict[str, Any] = {
+    "requested": None,
+    "resolved": None,
+    "reason": None,
+}
+
+
+def _structural_config_signature(config: Any) -> tuple[tuple[str, str], ...]:
+    ignored = {
+        "research_model_settings",
+        "random_state",
+        "deterministic_execution",
+        "numeric_thread_limit",
+        "rotation_accelerator",
+        "rotation_allow_cpu_fallback",
+    }
+    raw = vars(config) if hasattr(config, "__dict__") else {}
+    return tuple(
+        sorted(
+            (str(key), repr(value))
+            for key, value in raw.items()
+            if key not in ignored
+        )
+    )
+
+
+def _reset_training_slice_cache() -> None:
+    _TRAINING_SLICE_CACHE.clear()
+
+
+def _probe_lightgbm_device(device: str) -> tuple[bool, str | None]:
+    if device == "cpu":
+        return True, None
+    try:
+        from lightgbm import LGBMRegressor
+        x = np.asarray(
+            [
+                [0.0, 1.0],
+                [1.0, 0.0],
+                [0.5, 0.5],
+                [0.25, 0.75],
+                [0.75, 0.25],
+                [0.9, 0.1],
+                [0.1, 0.9],
+                [0.4, 0.6],
+            ],
+            dtype=np.float32,
+        )
+        y = np.asarray([0.0, 1.0, 0.5, 0.25, 0.75, 0.9, 0.1, 0.4], dtype=np.float32)
+        probe = LGBMRegressor(
+            objective="regression",
+            n_estimators=1,
+            max_depth=2,
+            num_leaves=3,
+            max_bin=63,
+            min_child_samples=1,
+            device_type=device,
+            verbosity=-1,
+        )
+        probe.fit(x, y)
+        return True, None
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def _resolve_lightgbm_device(config: Any) -> tuple[str, str | None]:
+    env_requested = str(os.getenv("TCC_LIGHTGBM_DEVICE") or "").strip().lower()
+    configured = str(getattr(config, "rotation_accelerator", "auto") or "auto").strip().lower()
+    requested = env_requested or configured
+    if requested not in {"auto", "cpu", "gpu", "cuda"}:
+        requested = "auto"
+
+    cache_key = f"{platform.system().lower()}|{requested}"
+    if _LIGHTGBM_DEVICE_CACHE.get("requested") == cache_key:
+        return (
+            str(_LIGHTGBM_DEVICE_CACHE.get("resolved") or "cpu"),
+            _LIGHTGBM_DEVICE_CACHE.get("reason"),
+        )
+
+    system = platform.system().lower()
+    candidates: list[str]
+    note: str | None = None
+    if requested == "cpu":
+        candidates = ["cpu"]
+    elif requested == "cuda":
+        if system == "windows":
+            candidates = ["gpu", "cpu"]
+            note = (
+                "LightGBM device_type=cuda nao e suportado no Windows; "
+                "tentando device_type=gpu (OpenCL) na GPU NVIDIA."
+            )
+        else:
+            candidates = ["cuda", "gpu", "cpu"]
+    elif requested == "gpu":
+        candidates = ["gpu", "cpu"]
+    else:
+        # No Windows, o backend acelerado suportado pelo LightGBM e OpenCL
+        # (device_type=gpu). Em Linux, tentamos CUDA primeiro.
+        candidates = ["gpu", "cpu"] if system == "windows" else ["cuda", "gpu", "cpu"]
+
+    failures: list[str] = []
+    resolved = "cpu"
+    for candidate in candidates:
+        ok, reason = _probe_lightgbm_device(candidate)
+        if ok:
+            resolved = candidate
+            break
+        failures.append(f"{candidate}: {reason}")
+
+    if resolved == "cpu" and requested != "cpu":
+        fallback = " | ".join(failures) if failures else "backend acelerado indisponivel"
+        note = (note + " " if note else "") + f"Fallback CPU: {fallback}"
+
+    _LIGHTGBM_DEVICE_CACHE.update(
+        {"requested": cache_key, "resolved": resolved, "reason": note}
+    )
+    return resolved, note
+
+
+def _training_slice(
+    frames: dict[str, pd.DataFrame],
+    symbol: str,
+    train_dates: pd.DatetimeIndex,
+    target_column: str,
+) -> tuple[pd.DataFrame, pd.Series]:
+    first = pd.Timestamp(train_dates[0]) if len(train_dates) else None
+    last = pd.Timestamp(train_dates[-1]) if len(train_dates) else None
+    key = (
+        id(frames),
+        symbol,
+        target_column,
+        first,
+        last,
+        len(train_dates),
+    )
+    cached = _TRAINING_SLICE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    frame = frames[symbol].loc[train_dates].dropna(
+        subset=[target_column, *ROTATION_FEATURES]
+    )
+    x = frame[ROTATION_FEATURES].copy()
+    y = frame[target_column].copy()
+    _TRAINING_SLICE_CACHE[key] = (x, y)
+    return x, y
 
 
 def _effective_n_jobs(configured: int) -> int:
@@ -92,6 +250,16 @@ def _build_execution_context(
 ]:
     if config.strategy_mode not in SUPPORTED_ROTATION_MODES:
         raise ValueError(f"Unsupported research strategy mode: {config.strategy_mode}.")
+
+    signature = _structural_config_signature(config)
+    cached = _EXECUTION_CONTEXT_CACHE
+    if (
+        cached.get("bars_object") is bars_by_symbol
+        and cached.get("config_signature") == signature
+        and cached.get("context") is not None
+    ):
+        return cached["context"]
+
     frames, common_dates = prepare_rotation_panel(bars_by_symbol, config)
     symbols = sorted(frames)
     folds = _build_walk_forward_folds(common_dates, config)
@@ -107,7 +275,7 @@ def _build_execution_context(
                 "test_start": fold["test_start"],
                 "test_end": fold["test_end"],
             }
-    return (
+    context = (
         frames,
         common_dates,
         symbols,
@@ -116,6 +284,15 @@ def _build_execution_context(
         decision_to_fold,
         decision_metadata,
     )
+    _reset_training_slice_cache()
+    _EXECUTION_CONTEXT_CACHE.update(
+        {
+            "bars_object": bars_by_symbol,
+            "config_signature": signature,
+            "context": context,
+        }
+    )
+    return context
 
 
 
@@ -223,6 +400,7 @@ def _lightgbm_fit_models(
     anchor_assets = set(getattr(config, "calendar_anchor_assets", []) or [])
     minimum_rows = int(config.rotation_minimum_training_rows)
     settings = _lightgbm_settings(config)
+    device, device_note = _resolve_lightgbm_device(config)
     fitted: dict[str, Any] = {}
     started = time.perf_counter()
 
@@ -230,23 +408,26 @@ def _lightgbm_fit_models(
         if technical_log_callback is not None:
             technical_log_callback(message)
 
+    if device_note:
+        technical(f"model=lightgbm event=device_resolution requested={getattr(config, 'rotation_accelerator', 'auto')} resolved={device} note={device_note}")
     technical(
-        f"model=lightgbm phase={phase} event=fit_start device=cpu "
+        f"model=lightgbm phase={phase} event=fit_start device={device} "
         f"models={len(symbols)} train_sessions={len(train_dates)} "
-        f"estimators={int(settings['n_estimators'])} seed={int(config.random_state)}"
+        f"estimators={int(settings['n_estimators'])} seed={int(config.random_state)} "
+        f"ram_training_cache_entries={len(_TRAINING_SLICE_CACHE)}"
     )
     for position, symbol in enumerate(symbols, start=1):
-        frame = frames[symbol].loc[train_dates].dropna(
-            subset=[target_column, *ROTATION_FEATURES]
+        x_train, y_train = _training_slice(
+            frames, symbol, train_dates, target_column
         )
-        if len(frame) < minimum_rows:
+        if len(x_train) < minimum_rows:
             if symbol in anchor_assets:
                 raise ValueError(
-                    f"{symbol}: only {len(frame)} utility rows are available; "
+                    f"{symbol}: only {len(x_train)} utility rows are available; "
                     f"{minimum_rows} are required for an anchor asset."
                 )
             if progress_callback is not None:
-                progress_callback(position, len(symbols), "cpu")
+                progress_callback(position, len(symbols), device)
             continue
         model = LGBMRegressor(
             objective="regression",
@@ -265,17 +446,21 @@ def _lightgbm_fit_models(
             max_bin=int(settings["max_bin"]),
             random_state=int(config.random_state),
             n_jobs=_effective_n_jobs(int(settings["n_jobs"])),
-            deterministic=bool(config.deterministic_execution),
-            force_col_wise=bool(config.deterministic_execution),
+            device_type=device,
+            gpu_device_id=int(os.getenv("TCC_LIGHTGBM_GPU_DEVICE_ID", "-1")),
+            gpu_use_dp=False,
+            deterministic=bool(config.deterministic_execution) if device == "cpu" else False,
+            force_col_wise=bool(config.deterministic_execution) if device == "cpu" else False,
             verbosity=-1,
         )
-        model.fit(frame[ROTATION_FEATURES], frame[target_column])
+        model.fit(x_train, y_train)
         fitted[symbol] = model
         if progress_callback is not None:
-            progress_callback(position, len(symbols), "cpu")
+            progress_callback(position, len(symbols), device)
     technical(
-        f"model=lightgbm phase={phase} event=fit_complete device=cpu "
-        f"models={len(fitted)} duration_seconds={time.perf_counter() - started:.3f}"
+        f"model=lightgbm phase={phase} event=fit_complete device={device} "
+        f"models={len(fitted)} duration_seconds={time.perf_counter() - started:.3f} "
+        f"ram_training_cache_entries={len(_TRAINING_SLICE_CACHE)}"
     )
     return fitted
 
@@ -314,10 +499,11 @@ def _run_lightgbm(
         if progress_detail_callback is not None:
             progress_detail_callback(values)
 
+    resolved_device, _ = _resolve_lightgbm_device(config)
     if progress_callback is not None:
         progress_callback(
             18.0,
-            f"Prepared {len(symbols)} assets and {len(folds)} folds — LightGBM=CPU",
+            f"Prepared {len(symbols)} assets and {len(folds)} folds — LightGBM={resolved_device.upper()}",
             0,
         )
 
@@ -377,7 +563,7 @@ def _run_lightgbm(
                 phase="Calibration training",
                 trained_models=0,
                 total_models=total_models,
-                device="CPU",
+                device=resolved_device.upper(),
             )
             calibration_models = _lightgbm_fit_models(
                 frames,
