@@ -31,7 +31,7 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 
 from tcc_engine.capital_rotation import run_rotation_models
-from tcc_engine.config import CONFIG
+from tcc_engine.config import CALENDAR_ANCHOR_ASSETS, CONFIG
 from tcc_engine.execution import apply_slippage, calculate_reference_fees
 from tunar_lightgbm_tiingo import (
     BASELINE_MAXDD_TOLERANCE,
@@ -186,7 +186,7 @@ def build_config(candidate_id: str, params: dict[str, Any]):
     return CONFIG.model_copy(
         update={
             "assets": tuple(CONFIG.assets),
-            "calendar_anchor_assets": tuple(CONFIG.assets),
+            "calendar_anchor_assets": tuple(CALENDAR_ANCHOR_ASSETS),
             "research_reference_assets": tuple(CONFIG.assets),
             "research_candidate_assets": (),
             "research_model_settings": settings,
