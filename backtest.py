@@ -27,6 +27,7 @@ import pandas as pd
 
 from tcc_engine.capital_rotation import run_rotation_models as executar_modelos_rotacao
 from tcc_engine.config import ASSETS as ATIVOS
+from tcc_engine.config import CALENDAR_ANCHOR_ASSETS as ATIVOS_ANCORA
 from tcc_engine.config import CONFIG as CONFIGURACAO
 from tcc_engine.config import END_DATE as DATA_FIM
 from tcc_engine.config import START_DATE as DATA_INICIO
@@ -169,26 +170,35 @@ if int(manifesto_desdobramentos.get("quantidade_ativos", -1)) != 56:
         "Execute novamente congelar_desdobramentos_tiingo.py."
     )
 
-# Reconstroi explicitamente o contrato do experimento a partir do universo
-# carregado. Isso evita que uma sessao longa do Spyder mantenha um objeto CONFIG
-# antigo em memoria depois de um git pull.
+# Reconstroi explicitamente o contrato do experimento. Os 56 ativos participam
+# do ranking/rotacao, mas o calendario walk-forward continua ancorado no mesmo
+# conjunto estavel de 37 ativos usado pelo experimento standalone anterior.
+# Isto evita truncar todo o painel quando um dos 19 ativos adicionais possui
+# historico mais curto.
 CONFIGURACAO = CONFIGURACAO.model_copy(
     update={
         "assets": tuple(ATIVOS),
-        "calendar_anchor_assets": tuple(ATIVOS),
+        "calendar_anchor_assets": tuple(ATIVOS_ANCORA),
         "research_reference_assets": tuple(ATIVOS),
         "research_candidate_assets": (),
     }
 )
 
-if tuple(CONFIGURACAO.calendar_anchor_assets) != tuple(ATIVOS):
-    raise RuntimeError("calendar_anchor_assets nao foi sincronizado com os 56 ativos.")
+if tuple(CONFIGURACAO.calendar_anchor_assets) != tuple(ATIVOS_ANCORA):
+    raise RuntimeError("calendar_anchor_assets nao corresponde ao calendario congelado de 37 ativos.")
+if len(CONFIGURACAO.calendar_anchor_assets) != 37:
+    raise RuntimeError("O calendario congelado deve conter exatamente 37 ativos.")
+if not set(CONFIGURACAO.calendar_anchor_assets).issubset(set(ATIVOS)):
+    raise RuntimeError("O calendario contem ativo que nao pertence ao universo oficial de 56.")
 if tuple(CONFIGURACAO.research_reference_assets) != tuple(ATIVOS):
-    raise RuntimeError("research_reference_assets nao foi sincronizado com os 56 ativos.")
+    raise RuntimeError("research_reference_assets deve representar os 56 ativos.")
 if tuple(CONFIGURACAO.research_candidate_assets):
     raise RuntimeError("research_candidate_assets deve estar vazio no baseline oficial.")
 
-registrar("[0/8] Contrato validado: Tiingo-only | 56 ativos | anchors=56 | references=56 | candidates=0")
+registrar(
+    "[0/8] Contrato validado: Tiingo-only | universo=56 | "
+    "calendar_anchors=37 | references=56 | candidates=0"
+)
 
 registrar("[1/8] OHLCV bruto permanece imutavel em series_historicas_brutas")
 registrar("[1/8] Dividendos nao serao incorporados aos precos")
