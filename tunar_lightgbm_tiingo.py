@@ -343,6 +343,10 @@ def build_candidate_config(candidate_id: str, params: dict[str, Any]):
     settings["profile_id"] = f"tcc-tiingo-tuning-{candidate_id}"
     settings["lightgbm"] = deepcopy(params)
     return CONFIG.model_copy(update={
+        "assets": tuple(ASSETS),
+        "calendar_anchor_assets": tuple(ASSETS),
+        "research_reference_assets": tuple(ASSETS),
+        "research_candidate_assets": (),
         "research_model_settings": settings,
         "research_model_family": "lightgbm_utility",
         "random_state": 42,
