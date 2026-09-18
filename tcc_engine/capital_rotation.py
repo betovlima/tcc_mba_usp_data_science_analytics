@@ -846,6 +846,11 @@ def _utility_policy(
                     diagnostic[f'top_{rank + 1}_asset'] = asset
                     diagnostic[f'top_{rank + 1}_score'] = finite(score) if score is not None else None
                     diagnostic[f'top_{rank + 1}_cash_edge'] = finite(edge) if edge is not None else None
+                if bool(getattr(config, 'research_capture_full_score_matrix', False)):
+                    diagnostic['asset_scores'] = {
+                        symbols[position - 1]: finite(float(utilities[position]))
+                        for position in range(1, len(utilities))
+                    }
                 decision_diagnostics[pd.Timestamp(timestamp)] = diagnostic
             return (target_position, final_score)
 
