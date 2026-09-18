@@ -499,7 +499,7 @@ def _run_lightgbm(
         if progress_detail_callback is not None:
             progress_detail_callback(values)
 
-    resolved_device, _ = _resolve_lightgbm_device(config)
+    resolved_device, device_resolution_note = _resolve_lightgbm_device(config)
     if progress_callback is not None:
         progress_callback(
             18.0,
@@ -873,7 +873,9 @@ def _run_lightgbm(
                 "effective_switch_margin": float(np.mean([item["effective_switch_margin"] for item in margin_details])),
                 "effective_switch_margin_mean": float(np.mean([item["effective_switch_margin"] for item in margin_details])),
                 "calibrated_switch_margin": float(np.mean([item["calibrated_candidate_margin"] for item in margin_details])),
-                "effective_compute_device": "cpu",
+                "effective_compute_device": resolved_device,
+                "effective_compute_device_note": device_resolution_note,
+                "ram_training_cache_entries": len(_TRAINING_SLICE_CACHE),
                 "deterministic_execution": bool(rep_config.deterministic_execution),
                 "numeric_thread_limit": int(rep_config.numeric_thread_limit),
                 "decision_diagnostics_schema_version": (
