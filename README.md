@@ -358,3 +358,51 @@ de falha e medir contribuicoes. Portanto e diagnostica/ex-post. Qualquer regra
 derivada desses resultados precisa ser aprendida em janelas anteriores e
 validada depois em walk-forward fora da amostra antes de ser aceita.
 
+
+
+## Pesquisa de vantagem contrafactual por episodio — Tiingo
+
+Branch:
+
+```text
+research/tiingo-forced-candidate-episode-advantage-v1
+```
+
+Execute no Spyder:
+
+```text
+pesquisar_vantagem_forcada_candidato_tiingo.py
+```
+
+O experimento compara, para cada decisao nos meses OOS mais fracos:
+
+```text
+politica normal
+versus
+forcar candidato A somente agora
+e voltar a politica normal na proxima decisao
+```
+
+Os rollouts sao medidos em 5, 10, 20, 40 e 60 sessoes. O LightGBM e treinado
+uma unica vez por fold; depois os milhares de contrafactuais reutilizam a matriz
+de scores OOS congelada.
+
+Principais artefatos:
+
+```text
+output/tiingo_forced_candidate_episode_advantage_v1/
+  baseline_score_matrix.csv
+  period_stats.csv
+  weak_periods.csv
+  forced_candidate_episode_advantage.csv
+  candidate_period_summary.csv
+  candidate_global_summary.csv
+  candidate_period_weighted_delta_matrix.csv
+  summary.json
+```
+
+O arquivo `forced_candidate_episode_advantage.csv` ja inclui features
+contextuais conhecidas no instante da decisao e os targets de vantagem marginal
+futura. Ele e a entrada prevista para a proxima etapa: aprender um meta-ranker
+de elegibilidade e valida-lo em walk-forward futuro.
+
