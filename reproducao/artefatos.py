@@ -9,6 +9,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from tcc_engine.config import EXPERIMENT_VERSION
+
 
 def _json_default(value: Any) -> Any:
     if isinstance(value, (pd.Timestamp, datetime)):
@@ -81,7 +83,7 @@ def save_results(
 
     summary = {
         "schema_version": 1,
-        "experiment_version": "1.0.0",
+        "experiment_version": EXPERIMENT_VERSION,
         "experiment": "tcc-cpu-control-vs-soft-horizon-consensus",
         "database_access": False,
         "data_transport": "alpaca_raw_sip_to_csv_per_asset",
@@ -101,7 +103,7 @@ def save_results(
     ratio_text = f"{float(ratio):+.2%}" if ratio is not None else "n/a"
     text = "\n".join(
         [
-            "TCC MBA USP - reproducao v1.0.0",
+            f"TCC MBA USP - reproducao v{EXPERIMENT_VERSION}",
             "Backend: CPU",
             f"Snapshot: {manifest.get('snapshot_sha256')}",
             "",

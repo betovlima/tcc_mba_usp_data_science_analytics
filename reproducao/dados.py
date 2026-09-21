@@ -1,7 +1,7 @@
 """Aquisicao e congelamento do snapshot Alpaca em CSV por ativo."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import date, timedelta
 import hashlib
 import json
@@ -21,6 +21,7 @@ from dotenv import dotenv_values, load_dotenv
 from tcc_engine.config import (
     ANALYSIS_END_DATE,
     ASSETS,
+    EXPERIMENT_VERSION,
     BAR_SNAPSHOT_AS_OF_END,
     START_DATE,
 )
@@ -463,7 +464,7 @@ def build_snapshot_manifest(
 
     identity = {
         "schema_version": 1,
-        "experiment_version": "1.0.0",
+        "experiment_version": EXPERIMENT_VERSION,
         "source": "alpaca",
         "bars": {
             "feed": "sip",

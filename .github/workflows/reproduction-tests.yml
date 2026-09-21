@@ -3,10 +3,8 @@ name: reproduction-tests
 on:
   push:
     branches:
-      - "reproduction/**"
-  pull_request:
-    branches:
       - main
+  workflow_dispatch:
 
 jobs:
   tests:

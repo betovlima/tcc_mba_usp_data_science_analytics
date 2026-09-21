@@ -6,6 +6,7 @@ from tcc_engine.config import (
     ASSETS,
     BAR_SNAPSHOT_AS_OF_END,
     CONFIG,
+    EXPERIMENT_VERSION,
     REFERENCE_ASSETS,
     SOFT_HORIZON_CONSENSUS_PENALTY,
     build_control_config,
@@ -105,3 +106,11 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
     assert "def _soft_horizon_consensus_policy(" in source
     assert "weighted_rank_margin_modifier" in source
     assert "SOFT_CONSENSUS_BLOCK_MARGINAL_SWITCH" in source
+
+
+def test_repository_root_has_no_historical_code() -> None:
+    assert EXPERIMENT_VERSION == "1.0.1"
+    assert not (ROOT / "legacy").exists()
+    assert not (ROOT / "analysis").exists()
+    assert not (ROOT / "backtest.py").exists()
+    assert not (ROOT / "dados" / "series_historicas").exists()
