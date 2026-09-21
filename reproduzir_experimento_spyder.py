@@ -61,19 +61,30 @@ print("comparacao=CONTROL vs SOFT_HORIZON_CONSENSUS", flush=True)
 print("=" * 78, flush=True)
 
 
-# %% 1 - Credenciais Alpaca
-# Necessaria apenas para criar/atualizar o snapshot.
-credenciais = load_alpaca_credentials(RAIZ_PROJETO)
+# %% 1 - Credenciais Alpaca OU reutilizacao offline
+# Depois que o snapshot estiver congelado, a reproducao nao precisa de internet.
+if CAMINHOS.manifest.exists() and not FORCAR_DOWNLOAD:
+    credenciais = None
+    print("[snapshot] modo=offline-reuse", flush=True)
+else:
+    credenciais = load_alpaca_credentials(RAIZ_PROJETO)
 
 
 # %% 2 - Download OHLCV RAW/SIP: um CSV por ativo
 inicio_barras = time.perf_counter()
-arquivos_raw = download_raw_bars(
-    credenciais,
-    CAMINHOS,
-    assets=ASSETS,
-    replace=FORCAR_DOWNLOAD,
-)
+if credenciais is None:
+    arquivos_raw = {
+        ativo: CAMINHOS.raw_bars / f"{ativo}.csv"
+        for ativo in ASSETS
+    }
+    manifesto_existente = validate_snapshot(CAMINHOS)
+else:
+    arquivos_raw = download_raw_bars(
+        credenciais,
+        CAMINHOS,
+        assets=ASSETS,
+        replace=FORCAR_DOWNLOAD,
+    )
 print(
     f"[stage] raw-bars completed seconds={time.perf_counter() - inicio_barras:.3f}",
     flush=True,
@@ -82,12 +93,18 @@ print(
 
 # %% 3 - Corporate Actions: um CSV por ativo
 inicio_ca = time.perf_counter()
-arquivos_eventos = download_corporate_actions(
-    credenciais,
-    CAMINHOS,
-    assets=ASSETS,
-    replace=FORCAR_DOWNLOAD,
-)
+if credenciais is None:
+    arquivos_eventos = {
+        ativo: CAMINHOS.corporate_actions / f"{ativo}.csv"
+        for ativo in ASSETS
+    }
+else:
+    arquivos_eventos = download_corporate_actions(
+        credenciais,
+        CAMINHOS,
+        assets=ASSETS,
+        replace=FORCAR_DOWNLOAD,
+    )
 print(
     f"[stage] corporate-actions completed seconds={time.perf_counter() - inicio_ca:.3f}",
     flush=True,
@@ -95,13 +112,16 @@ print(
 
 
 # %% 4 - Congelamento e SHA-256 do snapshot
-manifesto = build_snapshot_manifest(
-    CAMINHOS,
-    arquivos_raw,
-    arquivos_eventos,
-    credentials=credenciais,
-)
-manifesto = validate_snapshot(CAMINHOS)
+if credenciais is None:
+    manifesto = validate_snapshot(CAMINHOS)
+else:
+    manifesto = build_snapshot_manifest(
+        CAMINHOS,
+        arquivos_raw,
+        arquivos_eventos,
+        credentials=credenciais,
+    )
+    manifesto = validate_snapshot(CAMINHOS)
 
 
 # %% 5 - Preparacao dos dados
