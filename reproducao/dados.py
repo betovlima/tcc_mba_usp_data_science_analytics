@@ -497,6 +497,21 @@ def validate_snapshot(paths: SnapshotPaths) -> dict[str, Any]:
     if not paths.manifest.exists():
         raise RuntimeError("manifest.json nao encontrado; crie o snapshot primeiro.")
     manifest = json.loads(paths.manifest.read_text(encoding="utf-8"))
+
+    expected_snapshot_sha = str(manifest.get("snapshot_sha256") or "")
+    identity = {
+        key: value
+        for key, value in manifest.items()
+        if key not in {"snapshot_sha256", "credential_source"}
+    }
+    actual_snapshot_sha = _canonical_sha256(identity)
+    if not expected_snapshot_sha or actual_snapshot_sha != expected_snapshot_sha:
+        raise RuntimeError(
+            "Snapshot manifest identity mismatch: "
+            f"expected={expected_snapshot_sha or 'missing'} "
+            f"actual={actual_snapshot_sha}"
+        )
+
     for relative, expected in (manifest.get("file_hashes") or {}).items():
         path = paths.root / relative
         if not path.exists():
