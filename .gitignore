@@ -27,8 +27,12 @@ env/
 # Jupyter
 .ipynb_checkpoints/
 
-# Snapshot local da reproducao
-dados/
+# Estrutura de dados versionada; conteudo do snapshot permanece local
+dados/*
+!dados/README.md
+!dados/reproducao_v1/
+dados/reproducao_v1/*
+!dados/reproducao_v1/README.md
 
 # Resultados locais
 output/

@@ -7,7 +7,7 @@ Consensus.
 ## Versao
 
 ```text
-TCC reproduction: 1.0.2
+TCC reproduction: 1.0.3
 Branch oficial: main
 Backend: CPU
 Banco de dados: nenhum
@@ -17,10 +17,9 @@ Timeframe: 1Day
 Download: RAW
 ```
 
-A versao 1.0.2 elimina nomes de modelos aposentados que ainda existiam por
-heranca do projeto-fonte. O modo oficial passa a ser
-`COMPOUND_ROTATION_SWING_LIGHTGBM`, e a configuracao de repeticoes usa o nome
-neutro `rotation_model_repetitions`. A logica matematica, os hiperparametros do
+A versao 1.0.3 documenta explicitamente a estrutura local de dados. Nenhum CSV
+de mercado e versionado, mas a pasta `dados/` permanece visivel no repositorio
+com instrucoes para reproducao. A logica matematica, os hiperparametros do
 LightGBM, os folds, Control e Soft permanecem inalterados.
 
 ## Pipeline oficial
