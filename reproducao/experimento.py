@@ -1,0 +1,191 @@
+"""Execucao comparativa Control vs Soft Horizon Consensus."""
+from __future__ import annotations
+
+from copy import deepcopy
+from typing import Any
+
+import pandas as pd
+
+from tcc_engine.capital_rotation import (
+    _build_walk_forward_folds,
+    _fold_performance,
+    prepare_rotation_panel,
+    run_rotation_models,
+)
+from tcc_engine.config import (
+    CONFIG,
+    SOFT_HORIZON_CONSENSUS_PENALTY,
+    StandaloneBacktestConfig,
+    build_control_config,
+    build_soft_config,
+)
+from tcc_engine.execution import apply_slippage, calculate_reference_fees
+
+
+def build_variant_configs(
+    frames: dict[str, pd.DataFrame],
+    base: StandaloneBacktestConfig = CONFIG,
+) -> tuple[StandaloneBacktestConfig, StandaloneBacktestConfig]:
+    eligible = tuple(frames)
+    anchors = tuple(
+        symbol for symbol in base.calendar_anchor_assets if symbol in frames
+    )
+    references = tuple(
+        symbol for symbol in base.research_reference_assets if symbol in frames
+    )
+    reference_set = set(references)
+    candidates = tuple(
+        symbol
+        for symbol in base.research_candidate_assets
+        if symbol in frames and symbol not in reference_set
+    )
+    common_update = {
+        "assets": eligible,
+        "calendar_anchor_assets": anchors,
+        "research_reference_assets": references,
+        "research_candidate_assets": candidates,
+    }
+    prepared = base.model_copy(update=common_update)
+    control = build_control_config(prepared, assets=eligible)
+    soft = build_soft_config(
+        prepared,
+        assets=eligible,
+        penalty_strength=SOFT_HORIZON_CONSENSUS_PENALTY,
+    )
+    return control, soft
+
+
+def build_folds(
+    frames: dict[str, pd.DataFrame],
+    config: StandaloneBacktestConfig,
+) -> tuple[pd.DatetimeIndex, list[dict[str, Any]]]:
+    _, common_dates = prepare_rotation_panel(frames, config)
+    folds = _build_walk_forward_folds(common_dates, config)
+    return common_dates, folds
+
+
+def summarize_metrics(
+    result: Any,
+    folds: list[dict[str, Any]],
+    initial_capital: float,
+) -> dict[str, Any]:
+    fold_rows = _fold_performance(
+        result.predictions,
+        folds,
+        initial_capital,
+    )
+    worst_fold = (
+        min(float(row["strategy_return"]) for row in fold_rows)
+        if fold_rows
+        else None
+    )
+    simulation = deepcopy(result.metrics.get("simulation_profile") or {})
+    output = {
+        "ending_capital": float(result.metrics.get("strategy_ending_capital") or 0.0),
+        "strategy_return": float(result.metrics.get("strategy_return") or 0.0),
+        "cagr": float(result.metrics.get("strategy_cagr") or 0.0),
+        "sharpe": float(result.metrics.get("strategy_sharpe") or 0.0),
+        "maximum_drawdown": float(
+            result.metrics.get("strategy_maximum_drawdown") or 0.0
+        ),
+        "worst_fold_return": worst_fold,
+        "folds": fold_rows,
+        "buy_hold_ending_capital": float(
+            result.metrics.get("buy_hold_ending_capital") or 0.0
+        ),
+        "buy_hold_return": float(result.metrics.get("buy_hold_return") or 0.0),
+        "buy_hold_cagr": float(result.metrics.get("buy_hold_cagr") or 0.0),
+        "buy_hold_sharpe": float(result.metrics.get("buy_hold_sharpe") or 0.0),
+        "buy_hold_maximum_drawdown": float(
+            result.metrics.get("buy_hold_maximum_drawdown") or 0.0
+        ),
+        "benchmark_name": result.metrics.get("benchmark_name"),
+        "requested_compute_device": result.metrics.get("requested_compute_device"),
+        "effective_compute_device": result.metrics.get("effective_compute_device"),
+        "predictive_diagnostics": deepcopy(
+            result.metrics.get("lightgbm_predictive_diagnostics") or {}
+        ),
+        "simulation_profile": simulation,
+        "simulation_session_count": simulation.get("session_count"),
+    }
+    for key, value in result.metrics.items():
+        if (
+            str(key).startswith("soft_horizon_consensus_")
+            or str(key).startswith("oos_inference_cache_")
+        ):
+            output[str(key)] = value
+    return output
+
+
+def run_variant(
+    label: str,
+    frames: dict[str, pd.DataFrame],
+    config: StandaloneBacktestConfig,
+    folds: list[dict[str, Any]],
+) -> tuple[Any, dict[str, Any]]:
+    print(f"[final] starting {label}", flush=True)
+    results = run_rotation_models(
+        frames,
+        config,
+        calculate_reference_fees,
+        apply_slippage,
+        progress_callback=lambda p, stage, completed: print(
+            f"[final] {label} progress={p:.1f}% "
+            f"completed={completed} stage={stage}",
+            flush=True,
+        ),
+        technical_log_callback=lambda message: print(
+            f"[technical] {label} {message}",
+            flush=True,
+        ),
+    )
+    if not results:
+        raise RuntimeError(f"{label} returned no result.")
+    result = results[0]
+    metrics = summarize_metrics(result, folds, float(config.initial_capital))
+    worst_fold = metrics["worst_fold_return"]
+    worst_fold_text = (
+        f"{float(worst_fold):.4%}" if worst_fold is not None else "n/a"
+    )
+    print(
+        f"[final] completed {label} "
+        f"capital={metrics['ending_capital']:,.2f} "
+        f"buy_hold={metrics['buy_hold_ending_capital']:,.2f} "
+        f"sharpe={metrics['sharpe']:.4f} "
+        f"maxdd={metrics['maximum_drawdown']:.4%} "
+        f"worst_fold={worst_fold_text}",
+        flush=True,
+    )
+    return result, metrics
+
+
+def compare_variants(
+    control_metrics: dict[str, Any],
+    soft_metrics: dict[str, Any],
+) -> dict[str, Any]:
+    control_capital = float(control_metrics["ending_capital"])
+    soft_capital = float(soft_metrics["ending_capital"])
+    delta = soft_capital - control_capital
+    return {
+        "control_ending_capital": control_capital,
+        "soft_ending_capital": soft_capital,
+        "soft_minus_control_capital": delta,
+        "soft_vs_control_ratio": (
+            soft_capital / control_capital - 1.0
+            if control_capital > 0
+            else None
+        ),
+        "control_cagr": float(control_metrics["cagr"]),
+        "soft_cagr": float(soft_metrics["cagr"]),
+        "control_sharpe": float(control_metrics["sharpe"]),
+        "soft_sharpe": float(soft_metrics["sharpe"]),
+        "control_maximum_drawdown": float(control_metrics["maximum_drawdown"]),
+        "soft_maximum_drawdown": float(soft_metrics["maximum_drawdown"]),
+        "control_worst_fold_return": control_metrics["worst_fold_return"],
+        "soft_worst_fold_return": soft_metrics["worst_fold_return"],
+        "soft_changed_base_actions": int(
+            soft_metrics.get("soft_horizon_consensus_changed_base_actions") or 0
+        ),
+        "requested_compute_device": soft_metrics.get("requested_compute_device"),
+        "effective_compute_device": soft_metrics.get("effective_compute_device"),
+    }
