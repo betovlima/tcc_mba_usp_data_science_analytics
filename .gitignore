@@ -61,3 +61,4 @@ artifacts/
 Thumbs.db
 .vscode/
 .idea/
+\n# Snapshot local oficial da reproducao (imutavel, nao versionado)\ndados/reproducao_v1/\n
