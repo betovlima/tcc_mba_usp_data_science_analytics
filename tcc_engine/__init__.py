@@ -1,10 +1,11 @@
-"""Standalone quantitative rotation engine for the USP MBA TCC.
+"""Motor quantitativo vendorizado para a reproducao do TCC.
 
-Source lineage: Market Cycle Trader historical commit
-17019d95bfce6f0fbcd153e097b1968d9cfce1ca.
-
-The source is vendored into this repository only as a development-time
-migration. Runtime code must not import or execute Market Cycle Trader.
+Runtime independente do Market Cycle Trader. A linhagem abaixo identifica a
+versao usada apenas como fonte de codigo durante a refatoracao.
 """
 
-SOURCE_COMMIT = "17019d95bfce6f0fbcd153e097b1968d9cfce1ca"
+SOURCE_PROJECT = "betovlima/market_cycle_trader_api"
+SOURCE_API_VERSION = "10.8.84"
+SOURCE_BRANCH = "research/api-v10.8.84-soft-horizon-7m-cpu-isolation"
+SOURCE_COMMIT = "aca9c4dd90573121b8e2ff715ecd82bbbd94dfc1"
+TCC_ENGINE_VERSION = "1.0.0"
