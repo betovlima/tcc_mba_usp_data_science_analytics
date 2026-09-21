@@ -1345,7 +1345,7 @@ def _run_lightgbm(
         decision_metadata,
     ) = _build_execution_context(bars_by_symbol, config)
 
-    repetitions = int(config.rotation_xgb_repetitions)
+    repetitions = int(config.rotation_model_repetitions)
     seed_step = int(config.rotation_seed_step)
     total_folds = len(folds)
     total_models = len(symbols)
@@ -1503,7 +1503,7 @@ def _run_lightgbm(
             best_candidate = candidate_margins[0]
             best_score = float("-inf")
             margin_config = (
-                rep_config.model_copy(update={"strategy_mode": "COMPOUND_ROTATION_SWING_XGBOOST"})
+                rep_config.model_copy(update={"strategy_mode": "COMPOUND_ROTATION_SWING_LIGHTGBM"})
                 if selective_opportunity_enabled(rep_config) or absolute_utility_cash_gate_enabled(rep_config)
                 else rep_config
             )
@@ -1668,7 +1668,7 @@ def _run_lightgbm(
 
             effective_margin = max(float(rep_config.rotation_switch_margin), float(best_candidate))
             if opportunity_cash_gate_enabled(rep_config):
-                gate_base_config = rep_config.model_copy(update={"strategy_mode": "COMPOUND_ROTATION_SWING_XGBOOST"})
+                gate_base_config = rep_config.model_copy(update={"strategy_mode": "COMPOUND_ROTATION_SWING_LIGHTGBM"})
                 calibration_base_policy = _utility_policy(
                     calibration_models,
                     frames,
@@ -2646,7 +2646,7 @@ def _run_iqn(
     ) = _build_execution_context(bars_by_symbol, config)
     settings = _iqn_settings(config)
     device, gpu_name, torch_version = _iqn_compute_device(config)
-    repetitions = int(config.rotation_xgb_repetitions)
+    repetitions = int(config.rotation_model_repetitions)
     seed_step = int(config.rotation_seed_step)
     total_folds = len(folds)
 

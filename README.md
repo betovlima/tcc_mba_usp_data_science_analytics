@@ -7,7 +7,7 @@ Consensus.
 ## Versao
 
 ```text
-TCC reproduction: 1.0.1
+TCC reproduction: 1.0.2
 Branch oficial: main
 Backend: CPU
 Banco de dados: nenhum
@@ -17,8 +17,11 @@ Timeframe: 1Day
 Download: RAW
 ```
 
-A versao 1.0.1 e uma limpeza estrutural. Os parametros cientificos e o motor do
-experimento validado na 1.0.0 permanecem inalterados.
+A versao 1.0.2 elimina nomes de modelos aposentados que ainda existiam por
+heranca do projeto-fonte. O modo oficial passa a ser
+`COMPOUND_ROTATION_SWING_LIGHTGBM`, e a configuracao de repeticoes usa o nome
+neutro `rotation_model_repetitions`. A logica matematica, os hiperparametros do
+LightGBM, os folds, Control e Soft permanecem inalterados.
 
 ## Pipeline oficial
 

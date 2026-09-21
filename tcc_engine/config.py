@@ -4,7 +4,7 @@ Este modulo e independente de banco de dados e do Market Cycle Trader em tempo
 de execucao. Os dados entram somente por CSVs locais gerados pela etapa de
 snapshot da Alpaca.
 
-Versao cientifica: 1.0.1
+Versao cientifica: 1.0.2
 Backend oficial: CPU
 Comparacao experimental: Control vs Soft Horizon Consensus
 """
@@ -14,7 +14,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-EXPERIMENT_VERSION = "1.0.1"
+EXPERIMENT_VERSION = "1.0.2"
 START_DATE = "2016-01-01"
 ANALYSIS_END_DATE = "2026-09-17"
 BAR_SNAPSHOT_AS_OF_END = "2026-09-17"
@@ -68,7 +68,7 @@ def _lightgbm_settings() -> dict[str, Any]:
 @dataclass(frozen=True)
 class StandaloneBacktestConfig:
     assets: tuple[str, ...] = ASSETS
-    strategy_mode: str = "COMPOUND_ROTATION_SWING_XGBOOST"
+    strategy_mode: str = "COMPOUND_ROTATION_SWING_LIGHTGBM"
     start_date: str = START_DATE
     end_date: str | None = None
     timeframe: str = "1Day"
@@ -84,7 +84,6 @@ class StandaloneBacktestConfig:
     market_data_history_start_tolerance_days: int = 10
     market_data_require_complete_history: bool = True
 
-    rotation_models: tuple[str, ...] = ("xgboost_utility",)
     rotation_horizon_days: int = 40
     rotation_target_horizons: tuple[int, ...] = (5, 10, 20, 40, 60)
     rotation_target_horizon_weights: tuple[float, ...] = (
@@ -119,12 +118,9 @@ class StandaloneBacktestConfig:
     allocation_minimum_utility: float = 0.0
     allocation_signal_scale: float = 1.0
 
-    rotation_xgb_n_estimators: int = 300
-    rotation_xgb_learning_rate: float = 0.035
-    rotation_xgb_max_depth: int = 3
     rotation_accelerator: str = "cpu"
     rotation_allow_cpu_fallback: bool = False
-    rotation_xgb_repetitions: int = 1
+    rotation_model_repetitions: int = 1
     rotation_seed_step: int = 1000
 
     initial_capital: float = 10_000.0
@@ -136,12 +132,6 @@ class StandaloneBacktestConfig:
     taf_fee_cap: float = 9.79
     cat_fee_per_share: float = 0.000003
 
-    xgb_min_child_weight: float = 5.0
-    xgb_subsample: float = 0.85
-    xgb_colsample_bytree: float = 0.85
-    xgb_reg_alpha: float = 0.10
-    xgb_reg_lambda: float = 2.0
-    xgb_n_jobs: int = -1
     deterministic_execution: bool = False
     numeric_thread_limit: int = 1
     random_state: int = 42

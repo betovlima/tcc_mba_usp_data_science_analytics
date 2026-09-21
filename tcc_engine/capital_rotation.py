@@ -47,12 +47,12 @@ from .selective_opportunity import (
     selective_opportunity_enabled,
 )
 
-LEGACY_ROTATION_MODE = 'COMPOUND_ROTATION_SWING_XGBOOST'
+BASE_ROTATION_MODE = 'COMPOUND_ROTATION_SWING_LIGHTGBM'
 RISK_OFF_ROTATION_MODE = 'COMPOUND_ROTATION_SWING_RISK_OFF'
-SUPPORTED_ROTATION_MODES = frozenset({LEGACY_ROTATION_MODE, RISK_OFF_ROTATION_MODE, SELECTIVE_ROTATION_MODE, OPPORTUNITY_CASH_GATE_MODE, ABSOLUTE_UTILITY_CASH_GATE_MODE, OPTIMIZED_ALLOCATION_MODE, CONCENTRATED_ALLOCATION_MODE, COMPOUND_RISK_OVERLAY_MODE})
+SUPPORTED_ROTATION_MODES = frozenset({BASE_ROTATION_MODE, RISK_OFF_ROTATION_MODE, SELECTIVE_ROTATION_MODE, OPPORTUNITY_CASH_GATE_MODE, ABSOLUTE_UTILITY_CASH_GATE_MODE, OPTIMIZED_ALLOCATION_MODE, CONCENTRATED_ALLOCATION_MODE, COMPOUND_RISK_OVERLAY_MODE})
 
 def _risk_off_enabled(config: Any) -> bool:
-    return str(getattr(config, 'strategy_mode', LEGACY_ROTATION_MODE)) == RISK_OFF_ROTATION_MODE
+    return str(getattr(config, 'strategy_mode', BASE_ROTATION_MODE)) == RISK_OFF_ROTATION_MODE
 
 ROTATION_FEATURES = [
     'return_1', 'return_2', 'return_3', 'return_5', 'return_10', 'return_20',
@@ -564,10 +564,10 @@ def _utility_policy(
     )
     if cash_gate_mode:
         if hasattr(config, 'model_copy'):
-            base_config = config.model_copy(update={'strategy_mode': LEGACY_ROTATION_MODE})
+            base_config = config.model_copy(update={'strategy_mode': BASE_ROTATION_MODE})
         else:
             base_config = copy(config)
-            setattr(base_config, 'strategy_mode', LEGACY_ROTATION_MODE)
+            setattr(base_config, 'strategy_mode', BASE_ROTATION_MODE)
         cash_gate_base_policy = _utility_policy(
             models,
             frames,
@@ -2607,8 +2607,6 @@ def run_rotation_models(
 
 
     model_family = str(getattr(config, 'research_model_family', 'lightgbm_utility'))
-    if model_family == 'xgboost_utility':
-        raise ValueError('XGBoost Utility was retired in API v8.0.0. Use LightGBM Utility.')
     from .research_challengers import run_research_challenger
     return run_research_challenger(
         model_family,

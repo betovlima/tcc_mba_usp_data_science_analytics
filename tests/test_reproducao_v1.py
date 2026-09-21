@@ -43,6 +43,9 @@ def test_frozen_universe_and_dates_match_cpu_reference() -> None:
     assert BAR_SNAPSHOT_AS_OF_END == "2026-09-17"
     assert CONFIG.rotation_accelerator == "cpu"
     assert CONFIG.rotation_allow_cpu_fallback is False
+    assert CONFIG.strategy_mode == "COMPOUND_ROTATION_SWING_LIGHTGBM"
+    assert CONFIG.research_model_family == "lightgbm_utility"
+    assert CONFIG.rotation_model_repetitions == 1
     assert CONFIG.rotation_target_horizons == (5, 10, 20, 40, 60)
     assert CONFIG.rotation_target_horizon_weights == (
         0.10,
@@ -109,8 +112,21 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
 
 
 def test_repository_root_has_no_historical_code() -> None:
-    assert EXPERIMENT_VERSION == "1.0.1"
+    assert EXPERIMENT_VERSION == "1.0.2"
     assert not (ROOT / "legacy").exists()
     assert not (ROOT / "analysis").exists()
     assert not (ROOT / "backtest.py").exists()
     assert not (ROOT / "dados" / "series_historicas").exists()
+
+
+def test_runtime_has_no_retired_model_tokens() -> None:
+    forbidden = ("x" + "gb", "x" + "gboost")
+    runtime_files = [
+        ROOT / "reproduzir_experimento_spyder.py",
+        *sorted((ROOT / "tcc_engine").glob("*.py")),
+        *sorted((ROOT / "reproducao").glob("*.py")),
+    ]
+    for path in runtime_files:
+        source = path.read_text(encoding="utf-8").lower()
+        for token in forbidden:
+            assert token not in source, f"{token} found in {path.relative_to(ROOT)}"
