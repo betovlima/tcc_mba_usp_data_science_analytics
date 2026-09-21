@@ -1,18 +1,18 @@
-# Bibliotecas numericas e de dados
+# Dados e calculo numerico
 numpy>=2.2,<3
 pandas>=2.2,<4
 scipy>=1.15,<2
 scikit-learn>=1.6,<2
 threadpoolctl>=3.5,<4
 
-# Modelo usado pelo experimento
+# Modelo do experimento
 lightgbm>=4.6,<5
 
-# Fontes de dados historicos
+# Snapshot Alpaca -> CSV
 alpaca-py>=0.43,<1
 requests>=2.32,<3
 python-dotenv>=1.0,<2
-pymongo>=4.10,<5
 
-# Auditoria em Excel
+# Auditoria e testes
 openpyxl>=3.1,<4
+pytest>=8,<9
