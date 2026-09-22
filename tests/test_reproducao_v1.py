@@ -108,7 +108,7 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
 
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.1.0-dev.1"
+    assert EXPERIMENT_VERSION == "1.1.0-dev.2"
     forbidden = (
         "series_historicas",
         "tiingo",
@@ -212,9 +212,12 @@ def test_runtime_config_attribute_contract() -> None:
     ]
 
     referenced: set[str] = set()
-    direct_pattern = re.compile(r"\\bconfig\\.([A-Za-z_][A-Za-z0-9_]*)")
+    direct_pattern = re.compile(
+        r"\\b(?:config|rep_config)\\.([A-Za-z_][A-Za-z0-9_]*)"
+    )
     getattr_pattern = re.compile(
-        r"getattr\\(\\s*config\\s*,\\s*['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]"
+        r"getattr\\(\\s*(?:config|rep_config)\\s*,\\s*"
+        r"['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]"
     )
     for path in runtime_files:
         source = path.read_text(encoding="utf-8")
