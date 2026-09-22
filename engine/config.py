@@ -4,7 +4,7 @@ Este modulo e independente de banco de dados e do Market Cycle Trader em tempo
 de execucao. Os dados entram somente por CSVs locais gerados pela etapa de
 snapshot da Alpaca.
 
-Versao cientifica: 1.1.0
+Versao cientifica: 1.2.0-dev.1
 Backend oficial: CPU
 Comparacao experimental: Control vs Soft Horizon Consensus
 """
@@ -14,7 +14,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-EXPERIMENT_VERSION = "1.1.0"
+EXPERIMENT_VERSION = "1.2.0-dev.1"
 START_DATE = "2016-01-01"
 ANALYSIS_END_DATE = "2026-09-17"
 BAR_SNAPSHOT_AS_OF_END = "2026-09-17"
