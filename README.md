@@ -287,52 +287,59 @@ comparacao
 Os gráficos são gerados como pós-processamento dos artefatos da reprodução.
 Eles não alteram o backtest nem os dados congelados.
 
-O primeiro gráfico implementado é o **heatmap de retorno mensal**, seguindo a
-mesma regra utilizada no MCT: para cada mês é usado o último capital observado,
-e o retorno mensal é calculado como
+A primeira família de gráficos reproduz dois heatmaps usados no MCT:
 
-```text
-capital no fim do mês / capital no fim do mês anterior - 1
-```
+1. **P/L realizado mensal**: soma o P/L realizado das saídas executadas em cada
+   mês e mostra também total anual, total por mês e total geral.
+2. **Retorno mensal**: usa o último capital observado em cada mês e calcula
+   `capital no fim do mês / capital no fim do mês anterior - 1`. O primeiro
+   mês é omitido porque não existe um mês anterior para comparação.
 
-O primeiro mês é omitido porque não existe um mês anterior para comparação.
-
-Para gerar o heatmap do Control:
+Para gerar o heatmap de P/L realizado do Control:
 
 ```bash
-python gerar_graficos.py --variant control --mode simulation
+python gerar_graficos.py --chart realized-pnl --variant control
 ```
 
-Para gerar a visão do benchmark comprar-e-manter:
+Para gerar o heatmap de retorno mensal do Control:
 
 ```bash
-python gerar_graficos.py --variant control --mode reference
+python gerar_graficos.py --chart monthly-return --variant control --mode simulation
 ```
 
-Para gerar o excesso mensal Control menos benchmark:
+A visão do benchmark comprar-e-manter usa:
 
 ```bash
-python gerar_graficos.py --variant control --mode excess
+python gerar_graficos.py --chart monthly-return --variant control --mode reference
 ```
 
-Também é possível gerar todas as visões e variantes:
+E o excesso mensal Control menos benchmark:
 
 ```bash
-python gerar_graficos.py --variant all --mode all
+python gerar_graficos.py --chart monthly-return --variant control --mode excess
+```
+
+Para gerar todos os heatmaps das duas variantes:
+
+```bash
+python gerar_graficos.py --chart all --variant all --mode all
 ```
 
 Os arquivos são gravados em:
 
 ```text
 output/reproducao_v1/graficos/
+├── monthly_realized_pnl_control.csv
+├── monthly_realized_pnl_heatmap_control.png
+├── monthly_realized_pnl_heatmap_control.svg
 ├── monthly_returns_control.csv
 ├── monthly_return_heatmap_control_simulation.png
 ├── monthly_return_heatmap_control_simulation.svg
 └── ...
 ```
 
-O CSV mensal é mantido junto dos gráficos para que os valores mostrados nas
-figuras possam ser auditados sem depender da imagem.
+Os CSVs mensais são mantidos junto das figuras para permitir auditoria dos
+valores sem depender da imagem.
 
 ## Testes e análise estática
 
