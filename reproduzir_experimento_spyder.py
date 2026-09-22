@@ -44,10 +44,16 @@ from engine.config import (
 )
 
 RAIZ_PROJETO = Path(__file__).resolve().parent
-CAMINHOS = SnapshotPaths.under(RAIZ_PROJETO)
+CAMINHOS_PESQUISA = SnapshotPaths.research(RAIZ_PROJETO)
+CAMINHOS_TEMPORARIOS = SnapshotPaths.temporary(RAIZ_PROJETO)
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "reproducao_v1"
 
-# Troque para True somente quando quiser destruir/substituir os CSVs existentes.
+# True = usa exatamente os CSVs versionados em dados/pesquisa_v1.
+USAR_DADOS_PESQUISA_CONGELADOS = False
+
+# Quando USAR_DADOS_PESQUISA_CONGELADOS=False:
+# False = baixa novamente para dados/temporario/ e executa dali.
+# True = substitui deliberadamente o snapshot oficial dados/pesquisa_v1.
 FORCAR_DOWNLOAD = False
 
 print("=" * 78, flush=True)
@@ -61,13 +67,27 @@ print("comparacao=CONTROL vs SOFT_HORIZON_CONSENSUS", flush=True)
 print("=" * 78, flush=True)
 
 
-# %% 1 - Credenciais Alpaca OU reutilizacao offline
-# Depois que o snapshot estiver congelado, a reproducao nao precisa de internet.
-if CAMINHOS.manifest.exists() and not FORCAR_DOWNLOAD:
+# %% 1 - Origem dos dados
+if USAR_DADOS_PESQUISA_CONGELADOS and FORCAR_DOWNLOAD:
+    raise RuntimeError(
+        "Nao use FORCAR_DOWNLOAD=True junto com "
+        "USAR_DADOS_PESQUISA_CONGELADOS=True."
+    )
+
+if USAR_DADOS_PESQUISA_CONGELADOS:
+    CAMINHOS = CAMINHOS_PESQUISA
     credenciais = None
-    print("[snapshot] modo=offline-reuse", flush=True)
+    print("[snapshot] modo=pesquisa-versionada", flush=True)
+    validate_snapshot(CAMINHOS)
 else:
     credenciais = load_alpaca_credentials(RAIZ_PROJETO)
+    if FORCAR_DOWNLOAD:
+        CAMINHOS = CAMINHOS_PESQUISA
+        print("[snapshot] modo=atualizar-pesquisa-versionada", flush=True)
+    else:
+        CAMINHOS = CAMINHOS_TEMPORARIOS
+        print("[snapshot] modo=download-temporario", flush=True)
+    CAMINHOS.clear_generated()
 
 
 # %% 2 - Download OHLCV RAW/SIP: um CSV por ativo
@@ -83,7 +103,7 @@ else:
         credenciais,
         CAMINHOS,
         assets=ASSETS,
-        replace=FORCAR_DOWNLOAD,
+        replace=True,
     )
 print(
     f"[stage] raw-bars completed seconds={time.perf_counter() - inicio_barras:.3f}",
@@ -103,7 +123,7 @@ else:
         credenciais,
         CAMINHOS,
         assets=ASSETS,
-        replace=FORCAR_DOWNLOAD,
+        replace=True,
     )
 print(
     f"[stage] corporate-actions completed seconds={time.perf_counter() - inicio_ca:.3f}",
