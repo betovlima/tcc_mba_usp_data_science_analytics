@@ -6,6 +6,7 @@ from datetime import date, timedelta
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 import time
 from typing import Any
@@ -67,8 +68,7 @@ class SnapshotPaths:
     manifest: Path
 
     @classmethod
-    def under(cls, project_root: Path) -> "SnapshotPaths":
-        root = project_root / "dados" / "reproducao_v1"
+    def from_root(cls, root: Path) -> "SnapshotPaths":
         return cls(
             root=root,
             raw_bars=root / "raw_bars",
@@ -76,9 +76,38 @@ class SnapshotPaths:
             manifest=root / "manifest.json",
         )
 
+    @classmethod
+    def research(cls, project_root: Path) -> "SnapshotPaths":
+        return cls.from_root(project_root / "dados" / "pesquisa_v1")
+
+    @classmethod
+    def temporary(cls, project_root: Path) -> "SnapshotPaths":
+        return cls.from_root(
+            project_root / "dados" / "temporario" / "reproducao_v1"
+        )
+
+    @classmethod
+    def legacy(cls, project_root: Path) -> "SnapshotPaths":
+        return cls.from_root(project_root / "dados" / "reproducao_v1")
+
+    @classmethod
+    def under(cls, project_root: Path) -> "SnapshotPaths":
+        """Compatibilidade: o snapshot padrao agora e o da pesquisa."""
+        return cls.research(project_root)
+
     def ensure(self) -> None:
         self.raw_bars.mkdir(parents=True, exist_ok=True)
         self.corporate_actions.mkdir(parents=True, exist_ok=True)
+
+    def clear_generated(self) -> None:
+        """Remove dados gerados, preservando documentacao da pasta."""
+        if self.raw_bars.exists():
+            shutil.rmtree(self.raw_bars)
+        if self.corporate_actions.exists():
+            shutil.rmtree(self.corporate_actions)
+        if self.manifest.exists():
+            self.manifest.unlink()
+        self.ensure()
 
 
 @dataclass(frozen=True)
@@ -460,8 +489,8 @@ def build_snapshot_manifest(
         action_counts[symbol] = len(pd.read_csv(path))
 
     identity = {
-        "schema_version": 1,
-        "experiment_version": EXPERIMENT_VERSION,
+        "schema_version": 2,
+        "snapshot_name": "tcc-research-v1",
         "source": "alpaca",
         "bars": {
             "feed": "sip",
@@ -482,7 +511,7 @@ def build_snapshot_manifest(
     }
     manifest = dict(identity)
     manifest["snapshot_sha256"] = _canonical_sha256(identity)
-    manifest["credential_source"] = credentials.source_file if credentials else None
+    manifest["created_for_experiment_version"] = EXPERIMENT_VERSION
     paths.manifest.write_text(
         json.dumps(manifest, indent=2, sort_keys=True, default=str),
         encoding="utf-8",
@@ -497,10 +526,16 @@ def validate_snapshot(paths: SnapshotPaths) -> dict[str, Any]:
     manifest = json.loads(paths.manifest.read_text(encoding="utf-8"))
 
     expected_snapshot_sha = str(manifest.get("snapshot_sha256") or "")
+    schema_version = int(manifest.get("schema_version") or 1)
+    metadata_keys = (
+        {"snapshot_sha256", "credential_source"}
+        if schema_version == 1
+        else {"snapshot_sha256", "created_for_experiment_version"}
+    )
     identity = {
         key: value
         for key, value in manifest.items()
-        if key not in {"snapshot_sha256", "credential_source"}
+        if key not in metadata_keys
     }
     actual_snapshot_sha = _canonical_sha256(identity)
     if not expected_snapshot_sha or actual_snapshot_sha != expected_snapshot_sha:
