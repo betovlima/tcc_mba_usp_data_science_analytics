@@ -1203,6 +1203,76 @@ def _simulate_exact(backend: str, policy: Callable[[pd.Timestamp, int, int], tup
     candidate_assets = [symbol for symbol in getattr(config, 'research_candidate_assets', []) if symbol in symbols and symbol not in reference_set]
     if not getattr(config, 'research_candidate_assets', None):
         candidate_assets = [symbol for symbol in symbols if symbol not in reference_set]
+    metrics = {
+        "portfolio_rotation": True,
+        "strategy_mode": config.strategy_mode,
+        "strategy_label": model_label,
+        "symbol": "PORTFOLIO",
+        "backend": backend,
+        "assets": symbols,
+        "calendar_anchor_assets": anchor_assets,
+        "research_reference_assets": reference_assets,
+        "research_candidate_assets": candidate_assets,
+        "timeframe": "1Day",
+        "decision_horizon_days": int(config.rotation_horizon_days),
+        "decision_horizon_bars": None,
+        "decision_horizon_label": (
+            f"{int(config.rotation_horizon_days)} trading sessions"
+        ),
+        "overnight_positions_allowed": True,
+        "benchmark_name": (
+            "Equal-weight buy-and-hold across continuously available assets"
+        ),
+        "walk_forward_enabled": bool(config.rotation_walk_forward_enabled),
+        "walk_forward_purge_days": int(config.rotation_purge_days),
+        "walk_forward_calibration_days": int(
+            config.rotation_walk_forward_calibration_days
+        ),
+        "walk_forward_test_days": int(config.rotation_walk_forward_test_days),
+        "downside_penalty": float(config.rotation_downside_penalty),
+        "drawdown_penalty": float(config.rotation_drawdown_penalty),
+        "initial_capital": initial,
+        "strategy_ending_capital": ending,
+        "strategy_return": ending / initial - 1,
+        "buy_hold_ending_capital": benchmark_ending,
+        "buy_hold_return": benchmark_ending / initial - 1,
+        "excess_return": ending / initial - benchmark_ending / initial,
+        "strategy_maximum_drawdown": _maximum_drawdown(strategy_curve),
+        "buy_hold_maximum_drawdown": _maximum_drawdown(benchmark_curve),
+        "strategy_sharpe": _annualized_sharpe(
+            strategy_curve,
+            periods_per_year,
+        ),
+        "buy_hold_sharpe": _annualized_sharpe(
+            benchmark_curve,
+            periods_per_year,
+        ),
+        "strategy_cagr": _cagr(strategy_curve, initial),
+        "buy_hold_cagr": _cagr(benchmark_curve, initial),
+        "compound_log_growth": float(
+            math.log(max(ending / initial, 1e-12))
+        ),
+        "risk_adjusted_compound_score": _curve_risk_adjusted_score(
+            strategy_curve,
+            config,
+        ),
+        "market_exposure": float(exposure),
+        "cash_days": cash_days,
+        "simulated_buys": buys,
+        "simulated_sells": sells,
+        "capital_rotations": int(rotation_count),
+        "cycles_per_year": float(buys / years),
+        "average_holding_days": avg_holding,
+        "average_holding_bars": avg_holding,
+        "average_holding_minutes": None,
+        "geometric_trade_return": _geometric_trade_return(trades),
+        "total_transaction_fees": float(total_fees),
+        "turnover_ratio": float(turnover / max(initial, 1e-09)),
+        "test_start": execution_dates[0],
+        "test_end": execution_dates[-1],
+        "test_calendar_years": years,
+    }
+
     simulation_timing["portfolio_replay_seconds"] = time.perf_counter() - replay_started
     simulation_timing["policy_seconds"] = float(policy_seconds)
     simulation_timing["accounting_seconds"] = max(
