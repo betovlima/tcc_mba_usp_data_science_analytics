@@ -1214,16 +1214,12 @@ def _simulate_exact(backend: str, policy: Callable[[pd.Timestamp, int, int], tup
         "research_reference_assets": reference_assets,
         "research_candidate_assets": candidate_assets,
         "timeframe": "1Day",
-        "decision_horizon_days": int(config.rotation_horizon_days),
-        "decision_horizon_bars": None,
-        "decision_horizon_label": (
-            f"{int(config.rotation_horizon_days)} trading sessions"
-        ),
+        "decision_horizons": list(config.rotation_target_horizons),
         "overnight_positions_allowed": True,
         "benchmark_name": (
             "Equal-weight buy-and-hold across continuously available assets"
         ),
-        "walk_forward_enabled": bool(config.rotation_walk_forward_enabled),
+        "walk_forward_enabled": True,
         "walk_forward_purge_days": int(config.rotation_purge_days),
         "walk_forward_calibration_days": int(
             config.rotation_walk_forward_calibration_days
@@ -1390,7 +1386,7 @@ def _analysis_decision_dates(
     champion_oos_start = int(folds[0]['test_start_index'])
     champion_oos_end = int(folds[-1]['test_end_index'])
 
-    requested_start = pd.Timestamp(getattr(config, 'analysis_start_date', config.start_date))
+    requested_start = pd.Timestamp(config.analysis_start_date)
     requested_start = (
         requested_start.tz_localize('UTC')
         if requested_start.tzinfo is None
