@@ -97,7 +97,7 @@ def test_snapshot_layout_is_csv_per_asset() -> None:
 
 
 def test_engine_contains_soft_horizon_consensus_policy() -> None:
-    source = (ROOT / "engine" / "research_challengers.py").read_text(
+    source = (ROOT / "engine" / "lightgbm.py").read_text(
         encoding="utf-8"
     )
     assert "def _soft_horizon_consensus_policy(" in source
