@@ -1,27 +1,24 @@
-# Dados da reproducao
+# Dados da pesquisa
 
-Esta pasta existe apenas para documentar a estrutura local usada pelo experimento.
-
-Nenhum dado de mercado e versionado no Git.
-
-Na primeira execucao de `reproduzir_experimento_spyder.py`, o projeto cria:
+O projeto separa o snapshot oficial do TCC dos downloads usados em execucoes
+com dados novamente consultados na Alpaca.
 
 ```text
 dados/
-└── reproducao_v1/
+├── pesquisa_v1/                 # versionado no Git
+│   ├── raw_bars/
+│   ├── corporate_actions/
+│   └── manifest.json
+└── temporario/reproducao_v1/    # ignorado pelo Git
     ├── raw_bars/
-    │   └── <ATIVO>.csv
     ├── corporate_actions/
-    │   └── <ATIVO>.csv
     └── manifest.json
 ```
 
-- `raw_bars/`: barras OHLCV RAW/SIP baixadas da Alpaca, um CSV por ativo.
-- `corporate_actions/`: eventos corporativos, um CSV por ativo.
-- `manifest.json`: identidade do snapshot e hashes SHA-256 dos arquivos.
+`pesquisa_v1/` e a evidencia congelada da pesquisa e deve permanecer
+versionada.
 
-Os arquivos gerados permanecem locais e sao ignorados pelo Git.
+`temporario/` e recriado para novas consultas a Alpaca e nao deve ser enviado
+ao Git.
 
-
-A normalizacao de splits e calculada em memoria durante a reproducao e nao e
-persistida em uma segunda copia dos dados.
+A normalizacao de splits continua sendo calculada em memoria.
