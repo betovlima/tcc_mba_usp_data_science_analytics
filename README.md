@@ -7,7 +7,7 @@ Consensus.
 ## Versao
 
 ```text
-TCC reproduction: 1.1.0-dev.2
+TCC reproduction: 1.1.0-dev.3
 Branch de refatoracao: refactor/v1.1.0-minimal-engine
 Backend: CPU
 Banco de dados: nenhum
@@ -331,3 +331,10 @@ Corrige o teste de contrato introduzido na dev.1 e amplia a verificacao para
 atributos acessados tanto por `config` quanto por `rep_config`. O objetivo e
 detectar antes da execucao completa qualquer campo removido da configuracao que
 continue sendo usado pelo runtime.
+
+
+### v1.1.0-dev.3
+
+Substitui a verificacao por regex do contrato de configuracao por analise da
+AST (arvore sintatica do Python). O teste detecta atributos acessados por
+`config` e `rep_config` que nao existam em `StandaloneBacktestConfig`.

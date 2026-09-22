@@ -1,5 +1,5 @@
+import ast
 from pathlib import Path
-import re
 
 from reproducao.dados import SnapshotPaths
 from engine.rotation import _execute_buy
@@ -108,7 +108,7 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
 
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.1.0-dev.2"
+    assert EXPERIMENT_VERSION == "1.1.0-dev.3"
     forbidden = (
         "series_historicas",
         "tiingo",
@@ -212,17 +212,28 @@ def test_runtime_config_attribute_contract() -> None:
     ]
 
     referenced: set[str] = set()
-    direct_pattern = re.compile(
-        r"\\b(?:config|rep_config)\\.([A-Za-z_][A-Za-z0-9_]*)"
-    )
-    getattr_pattern = re.compile(
-        r"getattr\\(\\s*(?:config|rep_config)\\s*,\\s*"
-        r"['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]"
-    )
+    config_names = {"config", "rep_config"}
+
     for path in runtime_files:
-        source = path.read_text(encoding="utf-8")
-        referenced.update(direct_pattern.findall(source))
-        referenced.update(getattr_pattern.findall(source))
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id in config_names
+            ):
+                referenced.add(node.attr)
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "getattr"
+                and len(node.args) >= 2
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id in config_names
+                and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)
+            ):
+                referenced.add(node.args[1].value)
 
     missing = sorted(referenced - config_attributes)
     assert not missing, (
