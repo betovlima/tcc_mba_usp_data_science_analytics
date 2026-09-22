@@ -2098,7 +2098,6 @@ def _simulate_exact(backend: str, policy: Callable[[pd.Timestamp, int, int], tup
         if target_position != position:
             old_symbol = symbols[position - 1] if position > 0 else None
             new_symbol = symbols[target_position - 1] if target_position > 0 else None
-            is_rotation = previous_position > 0 and target_position > 0
             from_asset = old_symbol or 'CASH'
             to_asset = new_symbol or 'CASH'
             rotation_id = f'{pd.Timestamp(execution_date).isoformat()}::{from_asset}->{to_asset}'

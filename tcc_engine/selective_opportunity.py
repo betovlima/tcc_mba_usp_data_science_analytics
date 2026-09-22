@@ -623,7 +623,6 @@ def _calibrate_cash_gate_v2_thresholds(
     """
     if len(validation) < CASH_GATE_V2_MIN_VALIDATION_ROWS:
         realized = validation.get("realized_net_log_return", pd.Series(dtype=float)).to_numpy(dtype=float)
-        total = float(np.sum(realized)) if len(realized) else float("nan")
         return 0.0, 0.0, 0.0, len(validation), 0, 0.0, 1.0, True
 
     realized = validation["realized_net_log_return"].to_numpy(dtype=float)
@@ -654,7 +653,6 @@ def _calibrate_cash_gate_v2_thresholds(
             exposed_count = int(np.sum(exposed))
             if exposed_count < minimum_exposed:
                 continue
-            cash_count = count - exposed_count
             intervention = np.where(exposed, 0.0, -realized)
             alpha = float(np.sum(intervention))
             uncertainty = (
