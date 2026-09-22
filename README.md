@@ -229,9 +229,11 @@ Por padrão:
 FORCAR_DOWNLOAD = False
 ```
 
-Mantenha esse valor em `False` para preservar e reutilizar o snapshot
-existente. Altere para `True` somente quando a intenção for substituir os CSVs
-locais e construir deliberadamente um novo snapshot.
+Mantenha esse valor em `False` para reutilizar os arquivos temporários já
+baixados, quando existirem. Altere para `True` quando quiser apagar somente
+`dados/temporario/reproducao_v1/` e baixar novamente todas as séries e
+Corporate Actions da Alpaca. O snapshot oficial em `dados/pesquisa_v1/` não é
+alterado por essa chave.
 
 ## Modos de dados
 
@@ -246,14 +248,15 @@ Com `USAR_DADOS_PESQUISA_CONGELADOS=True`, o sistema usa somente
 `dados/pesquisa_v1/`, valida os hashes e não acessa a Alpaca.
 
 Com `USAR_DADOS_PESQUISA_CONGELADOS=False` e `FORCAR_DOWNLOAD=False`, o
-sistema baixa novamente os ativos e Corporate Actions para
-`dados/temporario/reproducao_v1/`, cria um manifesto temporário e executa
-lendo essa pasta. Esses arquivos não entram no Git.
+sistema usa `dados/temporario/reproducao_v1/`, reaproveitando arquivos já
+existentes e baixando apenas o que estiver ausente. Esses arquivos não entram
+no Git.
 
 Com `USAR_DADOS_PESQUISA_CONGELADOS=False` e `FORCAR_DOWNLOAD=True`, o
-sistema substitui deliberadamente o snapshot oficial em
-`dados/pesquisa_v1/`. Esse modo deve ser usado apenas para estabelecer um novo
-conjunto oficial de dados.
+sistema limpa somente `dados/temporario/reproducao_v1/`, baixa novamente
+todos os ativos e Corporate Actions da Alpaca, recria o manifesto temporário e
+executa a partir desse conjunto. O snapshot oficial em `dados/pesquisa_v1/`
+permanece intocado.
 
 Para migrar o snapshot local antigo para a pasta versionada:
 
