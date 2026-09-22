@@ -14,7 +14,6 @@ from .optimized_allocation import (
     OPTIMIZED_ALLOCATION_MODE,
     AllocationDecision,
     ExpectedReturnCalibrator,
-    fit_expected_return_calibrator,
     optimize_allocation,
 )
 from .concentrated_allocation import (
@@ -25,7 +24,6 @@ from .concentrated_allocation import (
 )
 from .compound_risk_overlay import (
     COMPOUND_RISK_OVERLAY_MODE,
-    allocation_execution_enabled,
     compound_risk_overlay_enabled,
     optimize_compound_risk_overlay,
 )
@@ -39,10 +37,7 @@ from .selective_opportunity import (
     SELECTIVE_ROTATION_MODE,
     AdaptiveOpportunityCashGate,
     SelectiveOpportunityGate,
-    build_base_policy_opportunity_samples,
     evaluate_opportunity,
-    fit_adaptive_opportunity_cash_gate,
-    fit_selective_opportunity_gate,
     opportunity_cash_gate_enabled,
     selective_opportunity_enabled,
 )

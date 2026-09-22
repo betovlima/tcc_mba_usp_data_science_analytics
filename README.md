@@ -7,7 +7,7 @@ Consensus.
 ## Versao
 
 ```text
-TCC reproduction: 1.0.3
+TCC reproduction: 1.0.4
 Branch oficial: main
 Backend: CPU
 Banco de dados: nenhum
@@ -17,10 +17,10 @@ Timeframe: 1Day
 Download: RAW
 ```
 
-A versao 1.0.3 documenta explicitamente a estrutura local de dados. Nenhum CSV
-de mercado e versionado, mas a pasta `dados/` permanece visivel no repositorio
-com instrucoes para reproducao. A logica matematica, os hiperparametros do
-LightGBM, os folds, Control e Soft permanecem inalterados.
+A versao 1.0.4 remove codigo comprovadamente nao utilizado pelo analisador
+estatico e adiciona Ruff ao CI para impedir imports, variaveis e referencias
+mortas no runtime. A logica matematica, os hiperparametros do LightGBM, os
+folds, Control e Soft permanecem inalterados.
 
 ## Pipeline oficial
 

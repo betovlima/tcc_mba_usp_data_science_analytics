@@ -112,7 +112,7 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
 
 
 def test_repository_root_has_no_historical_code() -> None:
-    assert EXPERIMENT_VERSION == "1.0.3"
+    assert EXPERIMENT_VERSION == "1.0.4"
     assert not (ROOT / "legacy").exists()
     assert not (ROOT / "analysis").exists()
     assert not (ROOT / "backtest.py").exists()
