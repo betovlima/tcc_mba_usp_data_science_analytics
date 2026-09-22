@@ -229,7 +229,7 @@ def _select_calendar_source_symbol(
 def prepare_rotation_panel(
     bars_by_symbol: dict[str, pd.DataFrame],
     config: Any,
-) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
+) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex, str]:
     frames = {
         symbol: build_rotation_frame(frame, config)
         for symbol, frame in bars_by_symbol.items()
@@ -256,7 +256,7 @@ def prepare_rotation_panel(
         symbol: frame.reindex(calendar).copy()
         for symbol, frame in frames.items()
     }
-    return aligned, calendar
+    return aligned, calendar, calendar_symbol
 
 def _annualized_sharpe(curve: pd.Series, periods_per_year: float=252.0) -> float:
     returns = curve.pct_change().dropna()
