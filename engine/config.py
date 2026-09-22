@@ -4,7 +4,7 @@ Este modulo e independente de banco de dados e do Market Cycle Trader em tempo
 de execucao. Os dados entram somente por CSVs locais gerados pela etapa de
 snapshot da Alpaca.
 
-Versao cientifica: 1.2.0-dev.2
+Versao cientifica: 1.2.0-dev.3
 Backend oficial: CPU
 Comparacao experimental: Control vs Soft Horizon Consensus
 """
@@ -14,7 +14,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-EXPERIMENT_VERSION = "1.2.0-dev.2"
+EXPERIMENT_VERSION = "1.2.0-dev.3"
 START_DATE = "2016-01-01"
 ANALYSIS_END_DATE = "2026-09-17"
 BAR_SNAPSHOT_AS_OF_END = "2026-09-17"
@@ -27,14 +27,6 @@ ASSETS = (
     "BXMT", "PXLW", "KKR", "SCSC", "LKFT", "DNN", "VNCE", "UNFI", "DOC",
     "CLMT", "APD", "MGM", "MAN", "MYE", "YANG", "MKSI", "MCS", "ECC",
 )
-
-REFERENCE_ASSETS = (
-    "NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "AMD", "JPM",
-    "SPY", "AVGO", "NFLX", "CRM", "ORCL", "COST", "LLY", "XOM", "CAT",
-    "WMT", "V", "HD", "ADC", "ADEA", "ADI", "ADM",
-)
-
-CANDIDATE_ASSETS = tuple(asset for asset in ASSETS if asset not in REFERENCE_ASSETS)
 
 SOFT_HORIZON_CONSENSUS_PENALTY = 1.0
 
@@ -109,9 +101,6 @@ class StandaloneBacktestConfig:
 
     analysis_start_date: str = START_DATE
     analysis_end_date: str | None = ANALYSIS_END_DATE
-    calendar_anchor_assets: tuple[str, ...] = REFERENCE_ASSETS
-    research_reference_assets: tuple[str, ...] = REFERENCE_ASSETS
-    research_candidate_assets: tuple[str, ...] = CANDIDATE_ASSETS
     research_model_settings: dict[str, Any] = field(default_factory=_lightgbm_settings)
     walk_forward_fold_count_override: int | None = None
 
