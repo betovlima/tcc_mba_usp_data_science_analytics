@@ -41,7 +41,7 @@ def build_folds(
     frames: dict[str, pd.DataFrame],
     config: StandaloneBacktestConfig,
 ) -> tuple[pd.DatetimeIndex, list[dict[str, Any]]]:
-    _, common_dates = prepare_rotation_panel(frames, config)
+    _, common_dates, _ = prepare_rotation_panel(frames, config)
     folds = _build_walk_forward_folds(common_dates, config)
     return common_dates, folds
 
@@ -82,6 +82,7 @@ def summarize_metrics(
             result.metrics.get("buy_hold_maximum_drawdown") or 0.0
         ),
         "benchmark_name": result.metrics.get("benchmark_name"),
+        "calendar_source_asset": result.metrics.get("calendar_source_asset"),
         "requested_compute_device": result.metrics.get("requested_compute_device"),
         "effective_compute_device": result.metrics.get("effective_compute_device"),
         "predictive_diagnostics": deepcopy(
