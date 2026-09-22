@@ -734,8 +734,6 @@ def _execute_buy(cash: float, price: float, config: Any, fee_calculator: Callabl
     for _ in range(25):
         fees = fee_calculator('BUY', quantity, execution_price, config)
         next_quantity = max(0.0, (cash - float(fees['total_fee'])) / execution_price)
-        if not bool(config.fractional_shares):
-            next_quantity = float(math.floor(next_quantity))
         if abs(next_quantity - quantity) < 1e-10:
             quantity = next_quantity
             break
@@ -773,8 +771,6 @@ def _equal_weight_benchmark(frames: dict[str, pd.DataFrame], symbols: list[str],
         for _ in range(20):
             fees = fee_calculator('BUY', quantity, buy_price, config)
             next_quantity = max(0.0, (capital_per_asset - float(fees['total_fee'])) / buy_price)
-            if not bool(config.fractional_shares):
-                next_quantity = float(math.floor(next_quantity))
             if abs(next_quantity - quantity) < 1e-10:
                 quantity = next_quantity
                 break
