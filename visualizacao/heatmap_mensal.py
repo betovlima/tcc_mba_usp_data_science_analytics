@@ -373,3 +373,338 @@ def generate_monthly_return_artifacts(
         artifacts[f"{mode}_svg"] = svg_path
 
     return artifacts
+
+
+def monthly_realized_pnl(
+    predictions: pd.DataFrame,
+    trades: pd.DataFrame,
+) -> pd.DataFrame:
+    """Agrega o P/L realizado por mes usando os meses existentes no OOS."""
+    if "timestamp" not in predictions.columns:
+        raise ValueError("Predictions sem a coluna obrigatoria timestamp.")
+    required_trades = {"timestamp", "realized_pnl"}
+    missing = sorted(required_trades - set(trades.columns))
+    if missing:
+        raise ValueError(
+            "Trades sem colunas obrigatorias para P/L mensal: "
+            + ", ".join(missing)
+        )
+
+    equity = predictions.loc[:, ["timestamp"]].copy()
+    equity["timestamp"] = pd.to_datetime(
+        equity["timestamp"],
+        utc=True,
+        errors="coerce",
+    )
+    equity = equity.dropna(subset=["timestamp"]).sort_values("timestamp")
+    equity["month"] = (
+        equity["timestamp"]
+        .dt.tz_convert(None)
+        .dt.to_period("M")
+        .astype(str)
+    )
+    months = sorted(equity["month"].unique().tolist())
+
+    trade_rows = trades.loc[:, ["timestamp", "realized_pnl"]].copy()
+    trade_rows["timestamp"] = pd.to_datetime(
+        trade_rows["timestamp"],
+        utc=True,
+        errors="coerce",
+    )
+    trade_rows["realized_pnl"] = pd.to_numeric(
+        trade_rows["realized_pnl"],
+        errors="coerce",
+    )
+    trade_rows = trade_rows.dropna(subset=["timestamp"])
+    trade_rows["month"] = (
+        trade_rows["timestamp"]
+        .dt.tz_convert(None)
+        .dt.to_period("M")
+        .astype(str)
+    )
+    pnl_by_month = (
+        trade_rows.dropna(subset=["realized_pnl"])
+        .groupby("month", sort=True)["realized_pnl"]
+        .sum()
+        .to_dict()
+    )
+
+    return pd.DataFrame(
+        {
+            "month": months,
+            "realized_pnl": [
+                float(pnl_by_month.get(month, 0.0))
+                for month in months
+            ],
+        }
+    )
+
+
+def _compact_money(value: float) -> str:
+    numeric = float(value)
+    sign = "-" if numeric < 0 else ""
+    magnitude = abs(numeric)
+    if magnitude >= 1_000_000:
+        return sign + "$" + f"{magnitude / 1_000_000:.1f}M"
+    if magnitude >= 1_000:
+        return sign + "$" + f"{magnitude / 1_000:.1f}K"
+    if magnitude >= 100:
+        return sign + "$" + f"{magnitude:.1f}"
+    return sign + "$" + f"{magnitude:.2f}"
+
+
+def _pnl_matrix(
+    monthly_pnl: pd.DataFrame,
+) -> tuple[list[int], np.ndarray]:
+    rows = monthly_pnl.copy()
+    month_parts = rows["month"].astype(str).str.extract(
+        r"^(?P<year>\d{4})-(?P<month>\d{2})$"
+    )
+    rows["year"] = pd.to_numeric(month_parts["year"], errors="coerce")
+    rows["month_number"] = pd.to_numeric(
+        month_parts["month"],
+        errors="coerce",
+    )
+    rows["realized_pnl"] = pd.to_numeric(
+        rows["realized_pnl"],
+        errors="coerce",
+    )
+    rows = rows.dropna(
+        subset=["year", "month_number", "realized_pnl"]
+    )
+
+    years = sorted(rows["year"].astype(int).unique().tolist())
+    matrix = np.full((len(years), 12), np.nan, dtype=float)
+    year_index = {year: index for index, year in enumerate(years)}
+
+    for row in rows.itertuples(index=False):
+        year = int(row.year)
+        month_number = int(row.month_number)
+        if 1 <= month_number <= 12:
+            matrix[
+                year_index[year],
+                month_number - 1,
+            ] = float(row.realized_pnl)
+
+    return years, matrix
+
+
+def render_monthly_realized_pnl_heatmap(
+    monthly_pnl: pd.DataFrame,
+    output_path: str | Path,
+    *,
+    variant: str = "control",
+) -> Path:
+    years, matrix = _pnl_matrix(monthly_pnl)
+    if not years:
+        raise ValueError("Nao existem valores mensais de P/L para desenhar.")
+
+    finite_values = matrix[np.isfinite(matrix)]
+    max_abs = (
+        float(np.max(np.abs(finite_values)))
+        if finite_values.size
+        else 0.0
+    )
+    year_totals = np.nansum(matrix, axis=1)
+    month_totals = np.nansum(matrix, axis=0)
+    grand_total = float(np.nansum(matrix))
+
+    figure, axis = plt.subplots(
+        figsize=(17.2, max(5.4, 1.35 + len(years) * 0.78))
+    )
+
+    def draw_cell(
+        x: int,
+        y: int,
+        value: float,
+        *,
+        summary: bool = False,
+    ) -> None:
+        if not np.isfinite(value):
+            face = (0.96, 0.96, 0.96, 1.0)
+            text_color = "#6f6f6f"
+            label = "—"
+        else:
+            ratio = (
+                min(1.0, abs(float(value)) / max_abs)
+                if max_abs > 0
+                else 0.0
+            )
+            intensity = (
+                0.28 + ratio * 0.58
+                if summary
+                else 0.20 + ratio * 0.65
+            )
+            if value > 0:
+                face = plt.get_cmap("Greens")(intensity)
+            elif value < 0:
+                face = plt.get_cmap("Reds")(intensity)
+            else:
+                face = plt.get_cmap("Greys")(0.20)
+            text_color = "white" if ratio > 0.48 else "black"
+            label = _compact_money(value)
+
+        axis.add_patch(
+            Rectangle(
+                (x, y),
+                1,
+                1,
+                facecolor=face,
+                edgecolor="white",
+                linewidth=2.0,
+            )
+        )
+        axis.text(
+            x + 0.5,
+            y + 0.5,
+            label,
+            ha="center",
+            va="center",
+            fontsize=9.3,
+            fontweight="bold",
+            color=text_color,
+        )
+
+    for year_index, _year in enumerate(years):
+        for month_index in range(12):
+            draw_cell(
+                month_index,
+                year_index,
+                matrix[year_index, month_index],
+            )
+        draw_cell(
+            12,
+            year_index,
+            float(year_totals[year_index]),
+            summary=True,
+        )
+
+    total_row = len(years)
+    for month_index in range(12):
+        draw_cell(
+            month_index,
+            total_row,
+            float(month_totals[month_index]),
+            summary=True,
+        )
+    draw_cell(
+        12,
+        total_row,
+        grand_total,
+        summary=True,
+    )
+
+    axis.set_xlim(0, 13)
+    axis.set_ylim(len(years) + 1, 0)
+    axis.set_xticks(
+        np.arange(13) + 0.5,
+        (*MONTH_LABELS, "Total anual"),
+    )
+    axis.set_yticks(
+        np.arange(len(years) + 1) + 0.5,
+        [*(str(year) for year in years), "Total"],
+    )
+    axis.xaxis.tick_top()
+    axis.tick_params(length=0, labelsize=9.5)
+    for spine in axis.spines.values():
+        spine.set_visible(False)
+
+    variant_label = VARIANT_LABELS.get(variant, variant)
+    axis.set_title(
+        f"P/L realizado mensal — {variant_label}",
+        loc="left",
+        pad=28,
+        fontsize=18,
+        fontweight="bold",
+    )
+    axis.text(
+        0,
+        -0.35,
+        "Soma do P/L realizado nas saidas executadas em cada mes.",
+        fontsize=10,
+        transform=axis.transData,
+    )
+
+    legend_handles = [
+        Patch(
+            facecolor=plt.get_cmap("Reds")(0.72),
+            label="Perda maior",
+        ),
+        Patch(
+            facecolor=plt.get_cmap("Greys")(0.20),
+            label="Proximo de zero",
+        ),
+        Patch(
+            facecolor=plt.get_cmap("Greens")(0.72),
+            label="Ganho maior",
+        ),
+    ]
+    axis.legend(
+        handles=legend_handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.07),
+        ncol=3,
+        frameon=False,
+    )
+
+    figure.tight_layout()
+    target = Path(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(
+        target,
+        dpi=220,
+        bbox_inches="tight",
+    )
+    plt.close(figure)
+    return target
+
+
+def generate_monthly_realized_pnl_artifacts(
+    predictions_csv: str | Path,
+    trades_csv: str | Path,
+    output_dir: str | Path,
+    *,
+    variant: str,
+) -> dict[str, Path]:
+    predictions_path = Path(predictions_csv)
+    trades_path = Path(trades_csv)
+    if not predictions_path.exists():
+        raise FileNotFoundError(
+            f"Arquivo de predictions nao encontrado: {predictions_path}"
+        )
+    if not trades_path.exists():
+        raise FileNotFoundError(
+            f"Arquivo de trades nao encontrado: {trades_path}"
+        )
+
+    monthly = monthly_realized_pnl(
+        pd.read_csv(predictions_path),
+        pd.read_csv(trades_path),
+    )
+    destination = Path(output_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+
+    data_path = destination / f"monthly_realized_pnl_{variant}.csv"
+    monthly.to_csv(
+        data_path,
+        index=False,
+        float_format="%.17g",
+    )
+
+    base = destination / f"monthly_realized_pnl_heatmap_{variant}"
+    png_path = render_monthly_realized_pnl_heatmap(
+        monthly,
+        base.with_suffix(".png"),
+        variant=variant,
+    )
+    svg_path = render_monthly_realized_pnl_heatmap(
+        monthly,
+        base.with_suffix(".svg"),
+        variant=variant,
+    )
+
+    return {
+        "data": data_path,
+        "pnl_png": png_path,
+        "pnl_svg": svg_path,
+    }
