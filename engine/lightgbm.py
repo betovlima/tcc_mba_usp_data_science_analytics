@@ -55,6 +55,7 @@ def _build_execution_context(
 ) -> tuple[
     dict[str, pd.DataFrame],
     pd.DatetimeIndex,
+    str,
     list[str],
     list[dict[str, Any]],
     pd.DatetimeIndex,
