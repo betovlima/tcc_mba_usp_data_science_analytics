@@ -92,10 +92,17 @@ def test_spyder_workflow_is_explicitly_sectioned() -> None:
 
 
 def test_snapshot_layout_is_csv_per_asset() -> None:
-    paths = SnapshotPaths.under(ROOT)
-    assert paths.raw_bars.name == "raw_bars"
-    assert paths.corporate_actions.name == "corporate_actions"
-    assert paths.manifest.name == "manifest.json"
+    research = SnapshotPaths.research(ROOT)
+    temporary = SnapshotPaths.temporary(ROOT)
+
+    assert research.root == ROOT / "dados" / "pesquisa_v1"
+    assert research.raw_bars.name == "raw_bars"
+    assert research.corporate_actions.name == "corporate_actions"
+    assert research.manifest.name == "manifest.json"
+
+    assert temporary.root == (
+        ROOT / "dados" / "temporario" / "reproducao_v1"
+    )
 
 
 def test_engine_contains_soft_horizon_consensus_policy() -> None:
@@ -108,7 +115,7 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
 
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.1.0"
+    assert EXPERIMENT_VERSION == "1.2.0-dev.1"
     forbidden = (
         "series_historicas",
         "tiingo",
@@ -240,3 +247,23 @@ def test_runtime_config_attribute_contract() -> None:
         "runtime config attributes missing from StandaloneBacktestConfig: "
         f"{missing}"
     )
+
+
+def test_research_data_is_versioned_and_temporary_data_is_ignored() -> None:
+    rules = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "dados/temporario/" in rules
+    assert "dados/reproducao_v1/" in rules
+    assert "!dados/pesquisa_v1/raw_bars/*.csv" in rules
+    assert "!dados/pesquisa_v1/corporate_actions/*.csv" in rules
+    assert "!dados/pesquisa_v1/manifest.json" in rules
+
+
+def test_spyder_data_modes_protect_frozen_research_snapshot() -> None:
+    source = (ROOT / "reproduzir_experimento_spyder.py").read_text(
+        encoding="utf-8"
+    )
+    assert "USAR_DADOS_PESQUISA_CONGELADOS = False" in source
+    assert "CAMINHOS_TEMPORARIOS" in source
+    assert "modo=download-temporario" in source
+    assert "modo=pesquisa-versionada" in source
+    assert "modo=atualizar-pesquisa-versionada" in source
