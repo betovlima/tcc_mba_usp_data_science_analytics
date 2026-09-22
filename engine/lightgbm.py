@@ -63,7 +63,10 @@ def _build_execution_context(
 ]:
     if config.strategy_mode not in SUPPORTED_ROTATION_MODES:
         raise ValueError(f"Unsupported research strategy mode: {config.strategy_mode}.")
-    frames, common_dates = prepare_rotation_panel(bars_by_symbol, config)
+    frames, common_dates, calendar_source_asset = prepare_rotation_panel(
+        bars_by_symbol,
+        config,
+    )
     symbols = sorted(frames)
     folds = _build_walk_forward_folds(common_dates, config)
     all_decision_dates = _analysis_decision_dates(common_dates, folds, config)
@@ -81,6 +84,7 @@ def _build_execution_context(
     return (
         frames,
         common_dates,
+        calendar_source_asset,
         symbols,
         folds,
         all_decision_dates,
@@ -1001,6 +1005,7 @@ def run_lightgbm(
     (
         frames,
         common_dates,
+        calendar_source_asset,
         symbols,
         folds,
         all_decision_dates,
@@ -1565,6 +1570,7 @@ def run_lightgbm(
                         ]
                     )
                 ),
+                "calendar_source_asset": calendar_source_asset,
                 "requested_compute_device": "cpu",
                 "effective_compute_device": "cpu",
                 "deterministic_execution": bool(
