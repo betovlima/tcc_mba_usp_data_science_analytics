@@ -33,6 +33,13 @@ A avaliação é cronológica. Cada fold possui período de treinamento, calibra
 purge temporal e teste fora da amostra. Assim, uma decisão em uma determinada
 data utiliza apenas informações disponíveis antes dela.
 
+O universo da pesquisa possui uma única fonte de verdade: `ASSETS`. Não há
+mais divisão manual entre ativos de referência e candidatos. O calendário
+temporal é derivado automaticamente do ativo elegível com o maior histórico
+válido; os demais ativos passam a participar quando possuem dados e histórico
+suficientes para o treinamento. Empates na escolha do calendário são resolvidos
+de forma determinística por início mais antigo, fim mais recente e símbolo.
+
 As mudanças de posição são executadas na abertura da sessão seguinte. Todo o
 capital pertence a uma única conta e é reinvestido após cada rotação.
 
