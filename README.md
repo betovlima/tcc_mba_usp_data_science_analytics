@@ -7,7 +7,7 @@ Consensus.
 ## Versao
 
 ```text
-TCC reproduction: 1.1.0-dev
+TCC reproduction: 1.1.0-dev.1
 Branch de refatoracao: refactor/v1.1.0-minimal-engine
 Backend: CPU
 Banco de dados: nenhum
@@ -313,3 +313,13 @@ engine/
 Foram removidos modos historicos de alocacao, cash gates, selective opportunity,
 risk overlay, IQN, hard horizon voting e suporte GPU. O experimento oficial e
 CPU-only e compara somente Control vs Soft Horizon Consensus.
+
+
+### v1.1.0-dev.1
+
+Corrige a refatoracao da semantica de quantidade. O checkpoint v1.0.6 usava
+`whole_shares=False`, portanto a execucao sempre permitiu quantidades
+fracionarias. Essa semantica agora e fixa no motor, sem um campo de configuracao
+redundante. Foi adicionado um teste de contrato entre os atributos acessados
+pelo runtime e `StandaloneBacktestConfig` para impedir novas remocoes
+inconsistentes.
