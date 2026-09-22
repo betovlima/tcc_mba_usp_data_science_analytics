@@ -1,6 +1,8 @@
 from pathlib import Path
+import re
 
 from reproducao.dados import SnapshotPaths
+from engine.rotation import _execute_buy
 from engine.config import (
     ANALYSIS_END_DATE,
     ASSETS,
@@ -106,7 +108,7 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
 
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.1.0-dev"
+    assert EXPERIMENT_VERSION == "1.1.0-dev.1"
     forbidden = (
         "series_historicas",
         "tiingo",
@@ -182,3 +184,45 @@ def test_engine_has_no_retired_strategy_modes() -> None:
     )
     for token in forbidden:
         assert token not in source, token
+
+
+def test_fractional_execution_is_fixed_experiment_semantics() -> None:
+    quantity, execution_price, fees = _execute_buy(
+        100.0,
+        30.0,
+        CONFIG,
+        lambda side, qty, price, config: {"total_fee": 0.0},
+        lambda price, side, config: price,
+    )
+    assert execution_price == 30.0
+    assert fees["total_fee"] == 0.0
+    assert abs(quantity - (100.0 / 30.0)) < 1e-12
+
+
+def test_runtime_config_attribute_contract() -> None:
+    config_attributes = set(CONFIG.__dataclass_fields__)
+    config_attributes.add("model_copy")
+    runtime_files = [
+        *sorted((ROOT / "engine").glob("*.py")),
+        *sorted((ROOT / "reproducao").glob("*.py")),
+    ]
+    runtime_files = [
+        path for path in runtime_files
+        if path.name != "config.py"
+    ]
+
+    referenced: set[str] = set()
+    direct_pattern = re.compile(r"\\bconfig\\.([A-Za-z_][A-Za-z0-9_]*)")
+    getattr_pattern = re.compile(
+        r"getattr\\(\\s*config\\s*,\\s*['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]"
+    )
+    for path in runtime_files:
+        source = path.read_text(encoding="utf-8")
+        referenced.update(direct_pattern.findall(source))
+        referenced.update(getattr_pattern.findall(source))
+
+    missing = sorted(referenced - config_attributes)
+    assert not missing, (
+        "runtime config attributes missing from StandaloneBacktestConfig: "
+        f"{missing}"
+    )
