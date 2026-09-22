@@ -33,7 +33,7 @@ from reproducao.experimento import (
     run_variant,
 )
 from reproducao.preparacao import prepare_model_frames
-from tcc_engine.config import (
+from engine.config import (
     ANALYSIS_END_DATE,
     ASSETS,
     BAR_SNAPSHOT_AS_OF_END,

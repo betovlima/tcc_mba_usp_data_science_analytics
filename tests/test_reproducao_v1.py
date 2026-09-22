@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from reproducao.dados import SnapshotPaths
-from tcc_engine.config import (
+from engine.config import (
     ANALYSIS_END_DATE,
     ASSETS,
     BAR_SNAPSHOT_AS_OF_END,
@@ -27,7 +27,7 @@ def test_official_reproduction_has_no_database_dependency() -> None:
         ROOT / "reproducao" / "dados.py",
         ROOT / "reproducao" / "preparacao.py",
         ROOT / "reproducao" / "experimento.py",
-        ROOT / "tcc_engine" / "config.py",
+        ROOT / "engine" / "config.py",
     ]
     joined = "\n".join(path.read_text(encoding="utf-8").lower() for path in official_files)
     assert "pymongo" not in joined
@@ -102,7 +102,7 @@ def test_snapshot_layout_is_csv_per_asset() -> None:
 
 
 def test_engine_contains_soft_horizon_consensus_policy() -> None:
-    source = (ROOT / "tcc_engine" / "research_challengers.py").read_text(
+    source = (ROOT / "engine" / "research_challengers.py").read_text(
         encoding="utf-8"
     )
     assert "def _soft_horizon_consensus_policy(" in source
@@ -121,7 +121,7 @@ def test_official_runtime_has_no_historical_references() -> None:
     )
     runtime_files = [
         ROOT / "reproduzir_experimento_spyder.py",
-        *sorted((ROOT / "tcc_engine").glob("*.py")),
+        *sorted((ROOT / "engine").glob("*.py")),
         *sorted((ROOT / "reproducao").glob("*.py")),
     ]
     for path in runtime_files:
@@ -134,7 +134,7 @@ def test_runtime_has_no_retired_model_tokens() -> None:
     forbidden = ("x" + "gb", "x" + "gboost")
     runtime_files = [
         ROOT / "reproduzir_experimento_spyder.py",
-        *sorted((ROOT / "tcc_engine").glob("*.py")),
+        *sorted((ROOT / "engine").glob("*.py")),
         *sorted((ROOT / "reproducao").glob("*.py")),
     ]
     for path in runtime_files:

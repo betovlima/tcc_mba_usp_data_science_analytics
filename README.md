@@ -79,7 +79,7 @@ LightGBM CPU
 │   ├── experimento.py
 │   ├── preparacao.py
 │   └── reference_10_8_74_raw_snapshot_diagnostics.json
-├── tcc_engine/
+├── engine/
 ├── tests/
 ├── reproduzir_experimento_spyder.py
 ├── requirements.txt

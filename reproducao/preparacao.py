@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from reproducao.dados import SnapshotPaths
-from tcc_engine.config import ASSETS
+from engine.config import ASSETS
 
 
 REFERENCE_FILE = Path(__file__).with_name(

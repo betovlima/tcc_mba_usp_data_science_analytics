@@ -6,20 +6,20 @@ from typing import Any
 
 import pandas as pd
 
-from tcc_engine.capital_rotation import (
+from engine.capital_rotation import (
     _build_walk_forward_folds,
     _fold_performance,
     prepare_rotation_panel,
     run_rotation_models,
 )
-from tcc_engine.config import (
+from engine.config import (
     CONFIG,
     SOFT_HORIZON_CONSENSUS_PENALTY,
     StandaloneBacktestConfig,
     build_control_config,
     build_soft_config,
 )
-from tcc_engine.execution import apply_slippage, calculate_reference_fees
+from engine.execution import apply_slippage, calculate_reference_fees
 
 
 def build_variant_configs(
