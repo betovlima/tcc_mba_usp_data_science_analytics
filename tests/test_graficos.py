@@ -7,6 +7,7 @@ from visualizacao.heatmap_mensal import (
     generate_monthly_realized_pnl_artifacts,
     generate_monthly_return_artifacts,
     monthly_realized_pnl,
+    monthly_return_sums,
     monthly_returns_from_predictions,
 )
 from visualizacao import VISUALIZATION_VERSION
@@ -69,7 +70,7 @@ def test_monthly_return_heatmap_exports_png_svg_and_csv(tmp_path) -> None:
         modes=("simulation",),
     )
 
-    assert VISUALIZATION_VERSION == "1.2.0-dev.2"
+    assert VISUALIZATION_VERSION == "1.2.0-dev.3"
     assert artifacts["data"].exists()
     assert artifacts["simulation_png"].exists()
     assert artifacts["simulation_svg"].exists()
@@ -150,3 +151,47 @@ def test_realized_pnl_heatmap_exports_png_svg_and_csv(tmp_path) -> None:
     assert artifacts["pnl_svg"].exists()
     assert artifacts["pnl_png"].stat().st_size > 0
     assert artifacts["pnl_svg"].stat().st_size > 0
+
+
+def test_monthly_return_sums_are_arithmetic_not_compounded() -> None:
+    monthly = pd.DataFrame(
+        {
+            "month": [
+                "2024-01",
+                "2024-02",
+                "2025-01",
+                "2025-02",
+            ],
+            "simulation_return": [
+                0.10,
+                0.05,
+                -0.02,
+                0.03,
+            ],
+            "reference_return": [
+                0.01,
+                0.02,
+                0.03,
+                0.04,
+            ],
+            "excess_return": [
+                0.09,
+                0.03,
+                -0.05,
+                -0.01,
+            ],
+        }
+    )
+
+    years, matrix, year_sums, month_sums, grand_sum = (
+        monthly_return_sums(monthly, mode="simulation")
+    )
+
+    assert years == [2024, 2025]
+    assert matrix[0, 0] == pytest.approx(0.10)
+    assert matrix[0, 1] == pytest.approx(0.05)
+    assert year_sums.tolist() == pytest.approx([0.15, 0.01])
+    assert month_sums[0] == pytest.approx(0.08)
+    assert month_sums[1] == pytest.approx(0.08)
+    assert grand_sum == pytest.approx(0.16)
+    assert year_sums[0] != pytest.approx((1.10 * 1.05) - 1.0)

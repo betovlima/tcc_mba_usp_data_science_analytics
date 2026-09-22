@@ -295,6 +295,11 @@ A primeira família de gráficos reproduz dois heatmaps usados no MCT:
    `capital no fim do mês / capital no fim do mês anterior - 1`. O primeiro
    mês é omitido porque não existe um mês anterior para comparação.
 
+O heatmap de retorno mensal inclui uma coluna **Soma anual** e uma linha
+**Soma por mês**. Esses totais são somas aritméticas dos percentuais exibidos,
+assim como solicitado para a leitura visual do heatmap; eles não representam
+retorno composto anual ou acumulado.
+
 Para gerar o heatmap de P/L realizado do Control:
 
 ```bash

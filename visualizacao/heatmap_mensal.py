@@ -214,6 +214,28 @@ def _cell_style(
     return face, text_color
 
 
+def monthly_return_sums(
+    monthly_returns: pd.DataFrame,
+    *,
+    mode: str = "simulation",
+) -> tuple[list[int], np.ndarray, np.ndarray, np.ndarray, float]:
+    """Calcula as somas aritmeticas exibidas nas margens do heatmap."""
+    years, matrix = _heatmap_values(monthly_returns, mode=mode)
+    if not years:
+        return (
+            [],
+            matrix,
+            np.asarray([], dtype=float),
+            np.asarray([], dtype=float),
+            0.0,
+        )
+
+    year_sums = np.nansum(matrix, axis=1)
+    month_sums = np.nansum(matrix, axis=0)
+    grand_sum = float(np.nansum(matrix))
+    return years, matrix, year_sums, month_sums, grand_sum
+
+
 def render_monthly_return_heatmap(
     monthly_returns: pd.DataFrame,
     output_path: str | Path,
@@ -221,7 +243,13 @@ def render_monthly_return_heatmap(
     variant: str = "control",
     mode: str = "simulation",
 ) -> Path:
-    years, matrix = _heatmap_values(monthly_returns, mode=mode)
+    (
+        years,
+        matrix,
+        year_sums,
+        month_sums,
+        grand_sum,
+    ) = monthly_return_sums(monthly_returns, mode=mode)
     if not years:
         raise ValueError("Nao existem retornos mensais para desenhar o heatmap.")
 
@@ -232,51 +260,97 @@ def render_monthly_return_heatmap(
         else 0.0
     )
 
-    width = 16.0
-    height = max(4.8, 1.08 + len(years) * 0.82)
+    width = 17.4
+    height = max(5.3, 1.35 + (len(years) + 1) * 0.82)
     figure, axis = plt.subplots(figsize=(width, height))
+
+    def draw_cell(
+        x: int,
+        y: int,
+        value: float,
+        *,
+        summary: bool = False,
+    ) -> None:
+        face, text_color = _cell_style(
+            value,
+            max_abs=max_abs,
+        )
+        if summary and np.isfinite(value):
+            ratio = (
+                min(1.0, abs(float(value)) / max_abs)
+                if max_abs > 0
+                else 0.0
+            )
+            if value > 0:
+                face = plt.get_cmap("Greens")(0.30 + ratio * 0.55)
+            elif value < 0:
+                face = plt.get_cmap("Reds")(0.30 + ratio * 0.55)
+            else:
+                face = plt.get_cmap("Greys")(0.22)
+
+        axis.add_patch(
+            Rectangle(
+                (x, y),
+                1,
+                1,
+                facecolor=face,
+                edgecolor="white",
+                linewidth=2.0,
+            )
+        )
+        label = "—" if not np.isfinite(value) else f"{value * 100:.2f}%"
+        axis.text(
+            x + 0.5,
+            y + 0.5,
+            label,
+            ha="center",
+            va="center",
+            fontsize=9.5,
+            fontweight="bold",
+            color=text_color,
+        )
 
     for year_index, _year in enumerate(years):
         for month_index in range(12):
-            value = matrix[year_index, month_index]
-            face, text_color = _cell_style(
-                value,
-                max_abs=max_abs,
+            draw_cell(
+                month_index,
+                year_index,
+                matrix[year_index, month_index],
             )
-            axis.add_patch(
-                Rectangle(
-                    (month_index, year_index),
-                    1,
-                    1,
-                    facecolor=face,
-                    edgecolor="white",
-                    linewidth=2.0,
-                )
-            )
-            label = "—" if not np.isfinite(value) else f"{value * 100:.2f}%"
-            axis.text(
-                month_index + 0.5,
-                year_index + 0.5,
-                label,
-                ha="center",
-                va="center",
-                fontsize=10,
-                fontweight="bold",
-                color=text_color,
-            )
+        draw_cell(
+            12,
+            year_index,
+            float(year_sums[year_index]),
+            summary=True,
+        )
 
-    axis.set_xlim(0, 12)
-    axis.set_ylim(len(years), 0)
+    total_row = len(years)
+    for month_index in range(12):
+        draw_cell(
+            month_index,
+            total_row,
+            float(month_sums[month_index]),
+            summary=True,
+        )
+    draw_cell(
+        12,
+        total_row,
+        grand_sum,
+        summary=True,
+    )
+
+    axis.set_xlim(0, 13)
+    axis.set_ylim(len(years) + 1, 0)
     axis.set_xticks(
-        np.arange(12) + 0.5,
-        MONTH_LABELS,
+        np.arange(13) + 0.5,
+        (*MONTH_LABELS, "Soma anual"),
     )
     axis.set_yticks(
-        np.arange(len(years)) + 0.5,
-        [str(year) for year in years],
+        np.arange(len(years) + 1) + 0.5,
+        [*(str(year) for year in years), "Soma por mês"],
     )
     axis.xaxis.tick_top()
-    axis.tick_params(length=0, labelsize=10)
+    axis.tick_params(length=0, labelsize=9.5)
     for spine in axis.spines.values():
         spine.set_visible(False)
 
@@ -291,8 +365,10 @@ def render_monthly_return_heatmap(
     axis.text(
         0,
         -0.35,
-        subtitle,
-        fontsize=10,
+        subtitle
+        + " Totais = soma aritmetica dos percentuais exibidos; "
+        + "nao representam retorno composto.",
+        fontsize=9.5,
         transform=axis.transData,
     )
 
@@ -303,7 +379,7 @@ def render_monthly_return_heatmap(
         ),
         Patch(
             facecolor=plt.get_cmap("Greys")(0.20),
-            label="Próximo de zero",
+            label="Proximo de zero",
         ),
         Patch(
             facecolor=plt.get_cmap("Greens")(0.72),
