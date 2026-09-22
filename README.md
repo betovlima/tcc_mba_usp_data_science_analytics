@@ -98,10 +98,11 @@ amostra. Eles não constituem previsão nem garantia de desempenho futuro.
 ```text
 .
 ├── dados/
-│   └── reproducao_v1/
-│       ├── raw_bars/
-│       ├── corporate_actions/
-│       └── manifest.json
+│   ├── pesquisa_v1/
+│   │   ├── raw_bars/
+│   │   ├── corporate_actions/
+│   │   └── manifest.json
+│   └── temporario/
 ├── engine/
 │   ├── config.py
 │   ├── diagnostics.py
@@ -119,9 +120,10 @@ amostra. Eles não constituem previsão nem garantia de desempenho futuro.
 └── .env.example
 ```
 
-A pasta `dados/reproducao_v1/` e a pasta `output/` são locais e não são
-versionadas. Depois que o snapshot é criado e validado, o experimento pode ser
-reexecutado offline usando os mesmos CSVs.
+A pasta `dados/pesquisa_v1/` contém o snapshot oficial utilizado no TCC e é
+versionada no Git. Já `dados/temporario/` e `output/` são locais e ignoradas.
+Isso separa a evidência congelada da pesquisa dos downloads usados em novas
+execuções.
 
 ## Pré-requisitos
 
@@ -192,9 +194,9 @@ ALPACA_SECRET_KEY=sua_secret_key
 
 O arquivo `.env` é ignorado pelo Git.
 
-Na primeira execução, se ainda não existir
-`dados/reproducao_v1/manifest.json`, o sistema carrega essas credenciais e
-baixa os dados necessários.
+As credenciais são necessárias para execuções que baixam dados novamente da
+Alpaca. A reprodução do snapshot oficial em `dados/pesquisa_v1/` não depende
+de internet nem de credenciais.
 
 ## Executando a pesquisa
 
@@ -231,18 +233,33 @@ Mantenha esse valor em `False` para preservar e reutilizar o snapshot
 existente. Altere para `True` somente quando a intenção for substituir os CSVs
 locais e construir deliberadamente um novo snapshot.
 
-## Reexecução offline
+## Modos de dados
 
-Se estes itens já existirem:
+O script possui duas chaves:
 
-```text
-dados/reproducao_v1/raw_bars/
-dados/reproducao_v1/corporate_actions/
-dados/reproducao_v1/manifest.json
+```python
+USAR_DADOS_PESQUISA_CONGELADOS = False
+FORCAR_DOWNLOAD = False
 ```
 
-e `FORCAR_DOWNLOAD = False`, o programa valida os hashes e reutiliza os dados
-locais. Nesse caso não é necessário baixar novamente os dados da Alpaca.
+Com `USAR_DADOS_PESQUISA_CONGELADOS=True`, o sistema usa somente
+`dados/pesquisa_v1/`, valida os hashes e não acessa a Alpaca.
+
+Com `USAR_DADOS_PESQUISA_CONGELADOS=False` e `FORCAR_DOWNLOAD=False`, o
+sistema baixa novamente os ativos e Corporate Actions para
+`dados/temporario/reproducao_v1/`, cria um manifesto temporário e executa
+lendo essa pasta. Esses arquivos não entram no Git.
+
+Com `USAR_DADOS_PESQUISA_CONGELADOS=False` e `FORCAR_DOWNLOAD=True`, o
+sistema substitui deliberadamente o snapshot oficial em
+`dados/pesquisa_v1/`. Esse modo deve ser usado apenas para estabelecer um novo
+conjunto oficial de dados.
+
+Para migrar o snapshot local antigo para a pasta versionada:
+
+```bash
+python migrar_snapshot_pesquisa.py
+```
 
 ## Execução no Spyder
 
@@ -251,7 +268,7 @@ para baixo:
 
 ```text
 0  configuração
-1  credenciais ou replay offline
+1  origem dos dados: pesquisa congelada ou download
 2  barras OHLCV RAW
 3  Corporate Actions
 4  manifesto e SHA-256
