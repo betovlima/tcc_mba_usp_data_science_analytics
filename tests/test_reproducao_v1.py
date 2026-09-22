@@ -111,12 +111,24 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
     assert "SOFT_CONSENSUS_BLOCK_MARGINAL_SWITCH" in source
 
 
-def test_repository_root_has_no_historical_code() -> None:
-    assert EXPERIMENT_VERSION == "1.0.4"
-    assert not (ROOT / "legacy").exists()
-    assert not (ROOT / "analysis").exists()
-    assert not (ROOT / "backtest.py").exists()
-    assert not (ROOT / "dados" / "series_historicas").exists()
+def test_official_runtime_has_no_historical_references() -> None:
+    assert EXPERIMENT_VERSION == "1.0.5"
+    forbidden = (
+        "series_historicas",
+        "tiingo",
+        "pymongo",
+        "mongodb",
+        "caro",
+    )
+    runtime_files = [
+        ROOT / "reproduzir_experimento_spyder.py",
+        *sorted((ROOT / "tcc_engine").glob("*.py")),
+        *sorted((ROOT / "reproducao").glob("*.py")),
+    ]
+    for path in runtime_files:
+        source = path.read_text(encoding="utf-8").lower()
+        for token in forbidden:
+            assert token not in source, f"{token} found in {path.relative_to(ROOT)}"
 
 
 def test_runtime_has_no_retired_model_tokens() -> None:

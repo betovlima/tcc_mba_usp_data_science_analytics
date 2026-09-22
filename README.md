@@ -7,7 +7,7 @@ Consensus.
 ## Versao
 
 ```text
-TCC reproduction: 1.0.4
+TCC reproduction: 1.0.5
 Branch oficial: main
 Backend: CPU
 Banco de dados: nenhum
@@ -17,10 +17,11 @@ Timeframe: 1Day
 Download: RAW
 ```
 
-A versao 1.0.4 remove codigo comprovadamente nao utilizado pelo analisador
-estatico e adiciona Ruff ao CI para impedir imports, variaveis e referencias
-mortas no runtime. A logica matematica, os hiperparametros do LightGBM, os
-folds, Control e Soft permanecem inalterados.
+A versao 1.0.5 corrige a validacao de limpeza local: a suite verifica o codigo
+oficial e nao falha por diretorios ignorados que possam ter restado em clones
+antigos. O runtime oficial continua sem referencias a dados historicos antigos,
+Tiingo, MongoDB ou CARO. A logica matematica, os hiperparametros do LightGBM,
+os folds, Control e Soft permanecem inalterados.
 
 ## Pipeline oficial
 
