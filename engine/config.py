@@ -69,22 +69,7 @@ def _lightgbm_settings() -> dict[str, Any]:
 class StandaloneBacktestConfig:
     assets: tuple[str, ...] = ASSETS
     strategy_mode: str = "COMPOUND_ROTATION_SWING_LIGHTGBM"
-    start_date: str = START_DATE
-    end_date: str | None = None
-    timeframe: str = "1Day"
 
-    # Estes campos descrevem a semantica do dado entregue ao motor depois da
-    # normalizacao local dos splits. O download fisico e sempre Alpaca RAW/SIP.
-    market_data_provider: str = "alpaca"
-    alpaca_historical_feed: str = "sip"
-    alpaca_live_feed: str = "iex"
-    alpaca_adjustment: str = "split"
-    market_data_history_backfill_enabled: bool = False
-    market_data_history_backfill_provider: str = "alpaca"
-    market_data_history_start_tolerance_days: int = 10
-    market_data_require_complete_history: bool = True
-
-    rotation_horizon_days: int = 40
     rotation_target_horizons: tuple[int, ...] = (5, 10, 20, 40, 60)
     rotation_target_horizon_weights: tuple[float, ...] = (
         0.10, 0.15, 0.20, 0.30, 0.25
@@ -92,7 +77,6 @@ class StandaloneBacktestConfig:
     rotation_movement_capture_weight: float = 0.35
     rotation_trend_persistence_weight: float = 0.20
     rotation_minimum_training_rows: int = 700
-    rotation_walk_forward_enabled: bool = True
     rotation_walk_forward_calibration_days: int = 126
     rotation_walk_forward_test_days: int = 504
     rotation_walk_forward_min_test_days: int = 126
@@ -112,7 +96,6 @@ class StandaloneBacktestConfig:
     rotation_seed_step: int = 1000
 
     initial_capital: float = 10_000.0
-    whole_shares: bool = False
     slippage_bps: float = 0.0
     commission_rate: float = 0.0
     sec_fee_rate: float = 0.0000206
@@ -131,10 +114,6 @@ class StandaloneBacktestConfig:
     research_candidate_assets: tuple[str, ...] = CANDIDATE_ASSETS
     research_model_settings: dict[str, Any] = field(default_factory=_lightgbm_settings)
     walk_forward_fold_count_override: int | None = None
-
-    @property
-    def fractional_shares(self) -> bool:
-        return not self.whole_shares
 
     def model_copy(
         self,
