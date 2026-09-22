@@ -115,7 +115,7 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
 
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.2.0-dev.1"
+    assert EXPERIMENT_VERSION == "1.2.0-dev.2"
     forbidden = (
         "series_historicas",
         "tiingo",
@@ -264,6 +264,10 @@ def test_spyder_data_modes_protect_frozen_research_snapshot() -> None:
     )
     assert "USAR_DADOS_PESQUISA_CONGELADOS = False" in source
     assert "CAMINHOS_TEMPORARIOS" in source
-    assert "modo=download-temporario" in source
+    assert "modo=download-temporario-forcado" in source
+    assert "modo=download-temporario-reutilizavel" in source
     assert "modo=pesquisa-versionada" in source
-    assert "modo=atualizar-pesquisa-versionada" in source
+    assert "CAMINHOS = CAMINHOS_TEMPORARIOS" in source
+    assert "CAMINHOS = CAMINHOS_PESQUISA" in source
+    assert "modo=atualizar-pesquisa-versionada" not in source
+    assert "replace=FORCAR_DOWNLOAD" in source
