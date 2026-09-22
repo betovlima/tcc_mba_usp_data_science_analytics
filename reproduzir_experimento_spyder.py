@@ -52,8 +52,9 @@ DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "reproducao_v1"
 USAR_DADOS_PESQUISA_CONGELADOS = False
 
 # Quando USAR_DADOS_PESQUISA_CONGELADOS=False:
-# False = baixa novamente para dados/temporario/ e executa dali.
-# True = substitui deliberadamente o snapshot oficial dados/pesquisa_v1.
+# False = reutiliza arquivos existentes em dados/temporario/ quando disponiveis.
+# True = apaga somente dados/temporario/ e baixa novamente todos os arquivos.
+# Esta chave nunca altera dados/pesquisa_v1.
 FORCAR_DOWNLOAD = False
 
 print("=" * 78, flush=True)
@@ -80,14 +81,14 @@ if USAR_DADOS_PESQUISA_CONGELADOS:
     print("[snapshot] modo=pesquisa-versionada", flush=True)
     validate_snapshot(CAMINHOS)
 else:
+    CAMINHOS = CAMINHOS_TEMPORARIOS
     credenciais = load_alpaca_credentials(RAIZ_PROJETO)
     if FORCAR_DOWNLOAD:
-        CAMINHOS = CAMINHOS_PESQUISA
-        print("[snapshot] modo=atualizar-pesquisa-versionada", flush=True)
+        print("[snapshot] modo=download-temporario-forcado", flush=True)
+        CAMINHOS.clear_generated()
     else:
-        CAMINHOS = CAMINHOS_TEMPORARIOS
-        print("[snapshot] modo=download-temporario", flush=True)
-    CAMINHOS.clear_generated()
+        print("[snapshot] modo=download-temporario-reutilizavel", flush=True)
+        CAMINHOS.ensure()
 
 
 # %% 2 - Download OHLCV RAW/SIP: um CSV por ativo
@@ -103,7 +104,7 @@ else:
         credenciais,
         CAMINHOS,
         assets=ASSETS,
-        replace=True,
+        replace=FORCAR_DOWNLOAD,
     )
 print(
     f"[stage] raw-bars completed seconds={time.perf_counter() - inicio_barras:.3f}",
@@ -123,7 +124,7 @@ else:
         credenciais,
         CAMINHOS,
         assets=ASSETS,
-        replace=True,
+        replace=FORCAR_DOWNLOAD,
     )
 print(
     f"[stage] corporate-actions completed seconds={time.perf_counter() - inicio_ca:.3f}",
