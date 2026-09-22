@@ -423,7 +423,6 @@ def _lightgbm_fit_models(
             "LightGBM research requires lightgbm. Install requirements.txt."
         ) from exc
 
-    anchor_assets = set(getattr(config, "calendar_anchor_assets", []) or [])
     minimum_rows = int(config.rotation_minimum_training_rows)
     settings = _lightgbm_settings(config)
     active_device = "cpu"
@@ -446,11 +445,6 @@ def _lightgbm_fit_models(
             subset=[target_column, *ROTATION_FEATURES]
         )
         if len(frame) < minimum_rows:
-            if symbol in anchor_assets:
-                raise ValueError(
-                    f"{symbol}: only {len(frame)} utility rows are available; "
-                    f"{minimum_rows} are required for an anchor asset."
-                )
             if progress_callback is not None:
                 progress_callback(position, len(symbols), active_device)
             continue
