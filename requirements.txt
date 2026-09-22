@@ -4,6 +4,9 @@ pandas>=2.2,<4
 scikit-learn>=1.6,<2
 threadpoolctl>=3.5,<4
 
+# Visualizacao
+matplotlib>=3.10,<4
+
 # Modelo do experimento
 lightgbm>=4.6,<5
 

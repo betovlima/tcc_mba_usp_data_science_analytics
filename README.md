@@ -80,6 +80,7 @@ amostra. Eles não constituem previsão nem garantia de desempenho futuro.
 
 - **Python 3.12** como ambiente de referência do projeto e do CI.
 - **Pandas** e **NumPy** para séries temporais, transformação e cálculo numérico.
+- **Matplotlib** para gráficos reproduzíveis destinados à análise e ao TCC.
 - **LightGBM** para os modelos de regressão de utilidade.
 - **scikit-learn** como dependência do ecossistema de modelagem usado pelo
   LightGBM.
@@ -113,8 +114,11 @@ amostra. Eles não constituem previsão nem garantia de desempenho futuro.
 │   ├── dados.py
 │   ├── experimento.py
 │   └── preparacao.py
+├── visualizacao/
+│   └── heatmap_mensal.py
 ├── tests/
 ├── reproduzir_experimento_spyder.py
+├── gerar_graficos.py
 ├── requirements.txt
 └── .env.example
 ```
@@ -278,12 +282,64 @@ soft_metrics
 comparacao
 ```
 
+## Gráficos para análise e TCC
+
+Os gráficos são gerados como pós-processamento dos artefatos da reprodução.
+Eles não alteram o backtest nem os dados congelados.
+
+O primeiro gráfico implementado é o **heatmap de retorno mensal**, seguindo a
+mesma regra utilizada no MCT: para cada mês é usado o último capital observado,
+e o retorno mensal é calculado como
+
+```text
+capital no fim do mês / capital no fim do mês anterior - 1
+```
+
+O primeiro mês é omitido porque não existe um mês anterior para comparação.
+
+Para gerar o heatmap do Control:
+
+```bash
+python gerar_graficos.py --variant control --mode simulation
+```
+
+Para gerar a visão do benchmark comprar-e-manter:
+
+```bash
+python gerar_graficos.py --variant control --mode reference
+```
+
+Para gerar o excesso mensal Control menos benchmark:
+
+```bash
+python gerar_graficos.py --variant control --mode excess
+```
+
+Também é possível gerar todas as visões e variantes:
+
+```bash
+python gerar_graficos.py --variant all --mode all
+```
+
+Os arquivos são gravados em:
+
+```text
+output/reproducao_v1/graficos/
+├── monthly_returns_control.csv
+├── monthly_return_heatmap_control_simulation.png
+├── monthly_return_heatmap_control_simulation.svg
+└── ...
+```
+
+O CSV mensal é mantido junto dos gráficos para que os valores mostrados nas
+figuras possam ser auditados sem depender da imagem.
+
 ## Testes e análise estática
 
 Antes de executar uma pesquisa completa, rode:
 
 ```bash
-python -m ruff check engine reproducao reproduzir_experimento_spyder.py tests --select F401,F811,F821,F841
+python -m ruff check engine reproducao visualizacao reproduzir_experimento_spyder.py gerar_graficos.py tests --select F401,F811,F821,F841
 python -m pytest -q
 ```
 
