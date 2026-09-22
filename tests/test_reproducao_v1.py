@@ -1,15 +1,16 @@
 import ast
 from pathlib import Path
 
+import pandas as pd
+
 from reproducao.dados import SnapshotPaths
-from engine.rotation import _execute_buy
+from engine.rotation import _execute_buy, _select_calendar_source_symbol
 from engine.config import (
     ANALYSIS_END_DATE,
     ASSETS,
     BAR_SNAPSHOT_AS_OF_END,
     CONFIG,
     EXPERIMENT_VERSION,
-    REFERENCE_ASSETS,
     SOFT_HORIZON_CONSENSUS_PENALTY,
     build_control_config,
     build_soft_config,
@@ -38,7 +39,6 @@ def test_official_reproduction_has_no_database_dependency() -> None:
 
 def test_frozen_universe_and_dates_match_cpu_reference() -> None:
     assert len(ASSETS) == 56
-    assert len(REFERENCE_ASSETS) == 25
     assert "DOC" in ASSETS
     assert "CLMT" in ASSETS
     assert ANALYSIS_END_DATE == "2026-09-17"
@@ -54,6 +54,39 @@ def test_frozen_universe_and_dates_match_cpu_reference() -> None:
         0.25,
     )
 
+
+
+def test_asset_universe_has_no_manual_reference_or_candidate_split() -> None:
+    config_source = (ROOT / "engine" / "config.py").read_text(encoding="utf-8")
+    runtime_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in [
+            ROOT / "engine" / "rotation.py",
+            ROOT / "engine" / "lightgbm.py",
+            ROOT / "reproducao" / "experimento.py",
+        ]
+    )
+    forbidden = (
+        "REFERENCE_ASSETS",
+        "CANDIDATE_ASSETS",
+        "calendar_anchor_assets",
+        "research_reference_assets",
+        "research_candidate_assets",
+    )
+    for token in forbidden:
+        assert token not in config_source
+        assert token not in runtime_source
+
+
+def test_calendar_source_is_derived_from_longest_valid_asset_history() -> None:
+    short_index = pd.date_range("2020-01-01", periods=5, freq="D", tz="UTC")
+    long_index = pd.date_range("2020-01-01", periods=10, freq="D", tz="UTC")
+    frames = {
+        "SHORT": pd.DataFrame(index=short_index),
+        "LONG": pd.DataFrame(index=long_index),
+    }
+
+    assert _select_calendar_source_symbol(frames) == "LONG"
 
 def test_control_and_soft_share_same_lightgbm() -> None:
     control = build_control_config(CONFIG)
@@ -115,7 +148,7 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
 
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.2.0-dev.2"
+    assert EXPERIMENT_VERSION == "1.2.0-dev.3"
     forbidden = (
         "series_historicas",
         "tiingo",
