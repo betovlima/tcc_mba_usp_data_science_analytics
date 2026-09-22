@@ -208,39 +208,55 @@ def build_rotation_frame(bars: pd.DataFrame, config: Any) -> pd.DataFrame:
     data = data.dropna(subset=required)
     return data
 
-def prepare_rotation_panel(bars_by_symbol: dict[str, pd.DataFrame], config: Any) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
-    
+def _select_calendar_source_symbol(
+    frames: dict[str, pd.DataFrame],
+) -> str:
+    """Escolhe de forma deterministica o ativo com maior historico valido."""
+    if not frames:
+        raise ValueError("No valid asset frames are available for calendar selection.")
+
+    def rank(symbol: str) -> tuple[int, int, int, str]:
+        index = pd.DatetimeIndex(frames[symbol].index)
+        if index.empty:
+            return (0, 2**63 - 1, 0, symbol)
+        first = pd.Timestamp(index.min()).value
+        last = pd.Timestamp(index.max()).value
+        return (-len(index), first, -last, symbol)
+
+    return sorted(frames, key=rank)[0]
 
 
-
-
-
-
-
-
+def prepare_rotation_panel(
+    bars_by_symbol: dict[str, pd.DataFrame],
+    config: Any,
+) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex]:
     frames = {
         symbol: build_rotation_frame(frame, config)
         for symbol, frame in bars_by_symbol.items()
         if frame is not None and not frame.empty
     }
     if len(frames) < 2:
-        raise ValueError('Compound rotation needs at least two assets with valid aligned data.')
+        raise ValueError(
+            "Compound rotation needs at least two assets with valid data."
+        )
 
-    configured_anchors = list(getattr(config, 'calendar_anchor_assets', []) or [])
-    anchor_symbols = [symbol for symbol in configured_anchors if symbol in frames]
-    if len(anchor_symbols) < 2:
-        anchor_symbols = sorted(frames)
+    calendar_symbol = _select_calendar_source_symbol(frames)
+    calendar = pd.DatetimeIndex(frames[calendar_symbol].index).sort_values()
+    minimum_calendar_rows = max(
+        700,
+        int(getattr(config, "rotation_minimum_training_rows", 700)),
+    )
+    if len(calendar) < minimum_calendar_rows:
+        raise ValueError(
+            "The automatically selected market calendar is too short for "
+            "train/calibration/test."
+        )
 
-    common: pd.DatetimeIndex | None = None
-    for symbol in anchor_symbols:
-        index = pd.DatetimeIndex(frames[symbol].index)
-        common = index if common is None else common.intersection(index)
-    if common is None or len(common) < 700:
-        raise ValueError('The anchored aligned history is too short for train/calibration/test.')
-
-    common = common.sort_values()
-    aligned = {symbol: frame.reindex(common).copy() for symbol, frame in frames.items()}
-    return aligned, common
+    aligned = {
+        symbol: frame.reindex(calendar).copy()
+        for symbol, frame in frames.items()
+    }
+    return aligned, calendar
 
 def _annualized_sharpe(curve: pd.Series, periods_per_year: float=252.0) -> float:
     returns = curve.pct_change().dropna()
@@ -1191,14 +1207,6 @@ def _simulate_exact(backend: str, policy: Callable[[pd.Timestamp, int, int], tup
     days = max(1, (pd.Timestamp(execution_dates[-1]) - pd.Timestamp(execution_dates[0])).days)
     years = max(days / 365.25, 1 / 365.25)
     periods_per_year = 252.0
-    anchor_assets = [symbol for symbol in getattr(config, 'calendar_anchor_assets', []) if symbol in symbols]
-    reference_assets = [symbol for symbol in getattr(config, 'research_reference_assets', []) if symbol in symbols]
-    if len(reference_assets) < 2:
-        reference_assets = list(anchor_assets)
-    reference_set = set(reference_assets)
-    candidate_assets = [symbol for symbol in getattr(config, 'research_candidate_assets', []) if symbol in symbols and symbol not in reference_set]
-    if not getattr(config, 'research_candidate_assets', None):
-        candidate_assets = [symbol for symbol in symbols if symbol not in reference_set]
     metrics = {
         "portfolio_rotation": True,
         "strategy_mode": config.strategy_mode,
@@ -1206,9 +1214,6 @@ def _simulate_exact(backend: str, policy: Callable[[pd.Timestamp, int, int], tup
         "symbol": "PORTFOLIO",
         "backend": backend,
         "assets": symbols,
-        "calendar_anchor_assets": anchor_assets,
-        "research_reference_assets": reference_assets,
-        "research_candidate_assets": candidate_assets,
         "timeframe": "1Day",
         "decision_horizons": list(config.rotation_target_horizons),
         "overnight_positions_allowed": True,
