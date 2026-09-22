@@ -1,220 +1,269 @@
-# TCC MBA USP — Data Science & Analytics
+# TCC MBA USP — Rotação de Capital com Machine Learning
 
-Reproducao independente do experimento de rotacao de capital com LightGBM,
-validacao temporal walk-forward e comparacao entre Control e Soft Horizon
-Consensus.
+Este projeto implementa uma pesquisa reproduzível de rotação de capital entre
+ativos financeiros usando Machine Learning. O objetivo é estudar se uma
+política que escolhe dinamicamente onde manter o capital pode melhorar o
+crescimento composto quando comparada a uma estratégia simples de comprar e
+manter.
 
-## Versao
+O experimento utiliza dados diários de mercado, LightGBM, validação temporal
+walk-forward e uma única conta de capital reinvestida ao longo do tempo. O
+projeto não depende de MongoDB nem de serviços do Market Cycle Trader em tempo
+de execução.
 
-```text
-TCC reproduction: 1.1.0-dev.3
-Branch de refatoracao: refactor/v1.1.0-minimal-engine
-Backend: CPU
-Banco de dados: nenhum
-Fonte: Alpaca
-Feed: SIP
-Timeframe: 1Day
-Download: RAW
-```
+## O que o sistema faz
 
-A versao 1.0.6 reduz o snapshot local ao conjunto minimo necessario para
-reproducao. A pasta derivada `normalized_bars/` foi removida porque nunca era
-lida: a normalizacao de splits e refeita em memoria a partir de `raw_bars/` e
-`corporate_actions/`. A logica matematica, os hiperparametros do LightGBM,
-os folds, Control e Soft permanecem inalterados.
+O pipeline baixa da Alpaca barras OHLCV diárias em formato RAW usando o feed
+SIP e consulta Corporate Actions para tratar eventos como splits. Os arquivos
+são armazenados localmente em CSV, um por ativo, e um `manifest.json` registra
+a identidade do snapshot e hashes SHA-256 para permitir reproduções posteriores.
 
-## Pipeline oficial
+Antes do treinamento, o pipeline valida a continuidade dos dados. Quando um
+ativo apresenta um problema estrutural de identidade, histórico ou origem, ele
+é excluído de forma explícita em vez de ter sua série reconstruída manualmente.
+Na execução validada, DOC foi excluído por uma mudança estrutural associada à
+operação DOC -> PEAK.
 
-```text
-Alpaca RAW/SIP
-      |
-      v
-CSV OHLCV por ativo
-      |
-      +--> CSV Corporate Actions por ativo
-      |
-      v
-manifest.json + SHA-256
-      |
-      v
-validacao estrutural de identidade
-      |
-      +--> identidade quebrada => excluir ativo
-      |
-      v
-normalizacao local de splits
-      |
-      v
-features + targets 5/10/20/40/60 dias
-      |
-      v
-folds walk-forward
-      |
-      v
-LightGBM CPU
-      |
-      +--------------------+
-      |                    |
-      v                    v
-   CONTROL        SOFT HORIZON CONSENSUS
-      |                    |
-      +---------+----------+
-                v
-          comparacao final
-```
+Os splits são normalizados em memória. Depois disso o sistema calcula variáveis
+de retorno, tendência, volatilidade, médias móveis, RSI, ATR, posição em canais
+de preço, eficiência de tendência e volume. O LightGBM aprende uma utilidade
+multi-horizonte usando horizontes de 5, 10, 20, 40 e 60 sessões.
 
-## Estrutura do repositorio
+A avaliação é cronológica. Cada fold possui período de treinamento, calibração,
+purge temporal e teste fora da amostra. Assim, uma decisão em uma determinada
+data utiliza apenas informações disponíveis antes dela.
+
+As mudanças de posição são executadas na abertura da sessão seguinte. Todo o
+capital pertence a uma única conta e é reinvestido após cada rotação.
+
+## Pesquisa sobre rotação de capital
+
+A pesquisa compara três comportamentos sobre o mesmo capital inicial de
+**US$ 10.000**.
+
+**Control** é a política-base. O LightGBM estima a utilidade dos ativos e a
+estratégia decide permanecer no ativo atual, trocar para outro ativo ou ficar em
+caixa. Uma margem mínima evita rotações quando a vantagem prevista é pequena.
+
+**Soft Horizon Consensus** utiliza exatamente o mesmo LightGBM e a mesma
+política-base, mas consulta a concordância entre os horizontes de 5, 10, 20, 40
+e 60 sessões. Quando o suporte entre horizontes é menor, a margem necessária
+para uma troca aumenta. O Soft não escolhe outro ativo por conta própria: ele
+apenas aceita a decisão-base ou bloqueia uma rotação marginal.
+
+**Comprar e manter** é o benchmark. O capital inicial é distribuído em pesos
+iguais entre os ativos com preços completos na janela de execução e as posições
+são mantidas. Esse benchmark usa o mesmo período histórico e o mesmo capital
+inicial da estratégia de rotação.
+
+A reprodução validada utiliza dados de 2016-01-01 até 2026-09-17. Foram
+solicitados 56 ativos e 55 permaneceram elegíveis. A avaliação fora da amostra
+contém 1.546 sessões distribuídas em três folds.
+
+### Resultado da reprodução validada
+
+| Estratégia | Capital inicial | Capital final | Retorno total | CAGR | Sharpe | Máx. Drawdown |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Control | US$ 10.000,00 | US$ 10.094.316,30 | +100.843,16% | 207,83% | 2,102 | -31,22% |
+| Soft Horizon Consensus | US$ 10.000,00 | US$ 9.851.632,93 | +98.416,33% | 206,62% | 2,101 | -31,22% |
+| Comprar e manter | US$ 10.000,00 | US$ 39.001,99 | +290,02% | 24,76% | 1,154 | -28,15% |
+
+No experimento validado, o Control terminou com aproximadamente **258,8 vezes**
+o capital final do benchmark comprar-e-manter, enquanto o Soft terminou com
+aproximadamente **252,6 vezes** esse benchmark. O Soft modificou somente 5 das
+1.546 decisões da política-base e terminou 2,40% abaixo do Control.
+
+Esses números descrevem um backtest histórico com validação temporal fora da
+amostra. Eles não constituem previsão nem garantia de desempenho futuro.
+
+## Tecnologias utilizadas
+
+- **Python 3.12** como ambiente de referência do projeto e do CI.
+- **Pandas** e **NumPy** para séries temporais, transformação e cálculo numérico.
+- **LightGBM** para os modelos de regressão de utilidade.
+- **scikit-learn** como dependência do ecossistema de modelagem usado pelo
+  LightGBM.
+- **threadpoolctl** para controle do paralelismo numérico.
+- **alpaca-py** e **requests** para obtenção dos dados de mercado.
+- **python-dotenv** para carregar as credenciais locais da Alpaca.
+- **CSV + JSON + SHA-256** para congelamento e auditoria do snapshot de dados.
+- **pytest** para testes automatizados.
+- **Ruff** para análise estática do código.
+- **GitHub Actions** para executar Ruff e pytest em cada atualização relevante.
+- **Spyder** é opcional e pode ser usado para executar o experimento célula por
+  célula e inspecionar as variáveis intermediárias.
+
+## Estrutura do projeto
 
 ```text
 .
-├── .github/
-│   └── workflows/
 ├── dados/
-│   ├── README.md
 │   └── reproducao_v1/
-│       └── README.md
+│       ├── raw_bars/
+│       ├── corporate_actions/
+│       └── manifest.json
+├── engine/
+│   ├── config.py
+│   ├── diagnostics.py
+│   ├── execution.py
+│   ├── lightgbm.py
+│   └── rotation.py
 ├── reproducao/
 │   ├── artefatos.py
 │   ├── dados.py
 │   ├── experimento.py
-│   ├── preparacao.py
-│   └── reference_10_8_74_raw_snapshot_diagnostics.json
-├── engine/
+│   └── preparacao.py
 ├── tests/
 ├── reproduzir_experimento_spyder.py
 ├── requirements.txt
-├── .env.example
-└── README.md
+└── .env.example
 ```
 
-Nao existem scripts historicos de Tiingo, MongoDB, CARO, tuning antigo ou
-backtests antigos no estado atual da `main`. O historico permanece acessivel
-pelos commits do Git.
+A pasta `dados/reproducao_v1/` e a pasta `output/` são locais e não são
+versionadas. Depois que o snapshot é criado e validado, o experimento pode ser
+reexecutado offline usando os mesmos CSVs.
 
-## Dados locais
+## Pré-requisitos
 
-Nenhum dado de mercado e versionado no Git. A primeira execucao cria:
+Para criar um snapshot novo são necessários:
+
+1. Python 3.12.
+2. Acesso à internet.
+3. Uma conta Alpaca.
+4. Uma API Key e uma Secret Key da Alpaca com acesso aos dados históricos
+   necessários, incluindo o feed SIP utilizado pelo experimento.
+5. Git para baixar o projeto.
+
+A Alpaca utiliza **duas credenciais**, não um único token: uma API Key e uma
+Secret Key. Elas são usadas somente para criar ou substituir o snapshot local.
+Depois disso, com o manifesto e os CSVs presentes, a reprodução pode funcionar
+sem acessar a Alpaca.
+
+Nunca adicione as credenciais ao Git.
+
+## Instalação
+
+Clone o projeto e entre no diretório:
+
+```bash
+git clone https://github.com/betovlima/tcc_mba_usp_data_science_analytics.git
+cd tcc_mba_usp_data_science_analytics
+```
+
+Crie um ambiente virtual:
+
+```bash
+python -m venv .venv
+```
+
+No Windows usando Git Bash:
+
+```bash
+source .venv/Scripts/activate
+```
+
+No Linux ou macOS:
+
+```bash
+source .venv/bin/activate
+```
+
+Instale as dependências:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+## Configuração das credenciais da Alpaca
+
+Copie o arquivo de exemplo:
+
+```bash
+cp .env.example .env
+```
+
+Preencha o arquivo `.env`:
 
 ```text
-dados/reproducao_v1/
-├── raw_bars/
-│   └── <ATIVO>.csv
-├── corporate_actions/
-│   └── <ATIVO>.csv
-└── manifest.json
+ALPACA_API_KEY=sua_api_key
+ALPACA_SECRET_KEY=sua_secret_key
 ```
 
-Depois do snapshot ser congelado, as execucoes seguintes podem ser feitas
-offline. O manifesto valida SHA-256 de cada arquivo antes do treinamento.
+O arquivo `.env` é ignorado pelo Git.
 
-Os dados normalizados nao sao persistidos. Eles sao derivados em memoria a
-cada execucao a partir dos dados RAW e dos eventos corporativos, evitando
-duplicacao de arquivos no snapshot.
+Na primeira execução, se ainda não existir
+`dados/reproducao_v1/manifest.json`, o sistema carrega essas credenciais e
+baixa os dados necessários.
 
-## Universo e janela
+## Executando a pesquisa
+
+O modo mais simples é executar:
+
+```bash
+python reproduzir_experimento_spyder.py
+```
+
+O fluxo executado é:
 
 ```text
-Ativos solicitados:       56
-Ativos elegiveis esperados: 55
-Inicio:                    2016-01-01
-Analysis end:              2026-09-17
-Bar snapshot as-of end:    2026-09-17
+Alpaca RAW/SIP
+    -> CSV OHLCV por ativo
+    -> Corporate Actions
+    -> manifest.json + SHA-256
+    -> validação estrutural
+    -> normalização de splits
+    -> features e targets
+    -> folds walk-forward
+    -> LightGBM CPU
+    -> Control
+    -> Soft Horizon Consensus
+    -> comparação e exportação
 ```
 
-A regra metodologica para um ativo com problema estrutural de historico,
-identidade, continuidade ou fonte e: excluir o ativo e registrar a exclusao.
-Nao reconstruir, fazer bridge ou ajuste manual.
-
-No snapshot de referencia, DOC e excluido por mudanca estrutural DOC -> PEAK.
-
-## Contrato de dados de referencia
-
-Quando a Alpaca reproduz a fotografia de dados validada:
-
-```text
-eligible assets       = 55
-eligible RAW rows     = 148060
-splits applied        = 17
-simulation sessions   = 1546
-last execution session = 2026-09-16
-```
-
-Esses valores sao usados como auditoria de reproducao, nao como criterio de
-tuning.
-
-## Control e Soft
-
-Os dois usam exatamente o mesmo LightGBM.
-
-Control:
+Por padrão:
 
 ```python
-soft_horizon_consensus = {"enabled": False}
+FORCAR_DOWNLOAD = False
 ```
 
-Soft Horizon Consensus:
+Mantenha esse valor em `False` para preservar e reutilizar o snapshot
+existente. Altere para `True` somente quando a intenção for substituir os CSVs
+locais e construir deliberadamente um novo snapshot.
 
-```python
-soft_horizon_consensus = {
-    "enabled": True,
-    "penalty_strength": 1.0,
-}
-```
+## Reexecução offline
 
-O Soft nao escolhe um ativo fora da decisao-base. Ele pode aceitar a troca
-proposta pelo Control ou bloquear uma troca marginal e manter a posicao atual.
-
-## LightGBM
+Se estes itens já existirem:
 
 ```text
-n_estimators      = 329
-learning_rate     = 0.020731
-max_depth         = 3
-num_leaves        = 6
-min_child_samples = 18
-min_child_weight  = 5
-subsample         = 0.85
-colsample_bytree  = 0.88067
-reg_alpha         = 0.050837
-reg_lambda        = 3.596305
-max_bin           = 255
-n_jobs            = -1
-random_state      = 42
-backend           = CPU
+dados/reproducao_v1/raw_bars/
+dados/reproducao_v1/corporate_actions/
+dados/reproducao_v1/manifest.json
 ```
 
-Horizontes:
+e `FORCAR_DOWNLOAD = False`, o programa valida os hashes e reutiliza os dados
+locais. Nesse caso não é necessário baixar novamente os dados da Alpaca.
 
-```text
-5, 10, 20, 40, 60
-```
+## Execução no Spyder
 
-Pesos:
-
-```text
-0.10, 0.15, 0.20, 0.30, 0.25
-```
-
-## Spyder
-
-Abra `reproduzir_experimento_spyder.py` e execute as celulas `# %%` de cima
+Abra `reproduzir_experimento_spyder.py` e execute as células `# %%` de cima
 para baixo:
 
 ```text
-0  Configuracao
-1  Credenciais ou replay offline
-2  OHLCV RAW
+0  configuração
+1  credenciais ou replay offline
+2  barras OHLCV RAW
 3  Corporate Actions
-4  Manifesto e SHA-256
-5  Preparacao estrutural e splits
-6  Control/Soft e folds
-7  CONTROL
-8  SOFT HORIZON CONSENSUS
-9  Comparacao
-10 Exportacao
+4  manifesto e SHA-256
+5  preparação dos dados
+6  configurações e folds
+7  Control
+8  Soft Horizon Consensus
+9  comparação
+10 exportação
 ```
 
-As principais variaveis permanecem disponiveis no Variable Explorer:
+O Variable Explorer permite inspecionar, entre outras:
 
 ```text
 frames
@@ -229,30 +278,18 @@ soft_metrics
 comparacao
 ```
 
-## Execucao
+## Testes e análise estática
 
-Instalacao:
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-Configure `.env`:
-
-```text
-ALPACA_API_KEY=...
-ALPACA_SECRET_KEY=...
-```
-
-Execute:
+Antes de executar uma pesquisa completa, rode:
 
 ```bash
-python reproduzir_experimento_spyder.py
+python -m ruff check engine reproducao reproduzir_experimento_spyder.py tests --select F401,F811,F821,F841
+python -m pytest -q
 ```
 
-## Resultados
+## Resultados gerados
 
-Os resultados sao gerados somente localmente:
+A execução cria:
 
 ```text
 output/reproducao_v1/
@@ -269,72 +306,8 @@ output/reproducao_v1/
 └── structural_exclusions.csv
 ```
 
-O diretorio `output/` nao e versionado.
-
-## Resultado de reproducao validado
-
-A reproducao CPU validada antes da limpeza estrutural produziu:
-
-```text
-Control = US$ 10.094.316,30
-Soft    = US$  9.851.632,93
-```
-
-Esse resultado e referencia de reproducao, nao alvo de tuning.
-
-## Testes
-
-```bash
-python -m pytest -q
-```
-
-Os testes verificam ausencia de dependencias de banco, configuracao CPU,
-parametros congelados do LightGBM, equivalencia da configuracao Control/Soft,
-estrutura Spyder e presenca da politica Soft Horizon Consensus.
-
-
-## Refatoracao 1.1.0
-
-A branch `refactor/v1.1.0-minimal-engine` reduz o motor ao fluxo efetivamente
-usado pelo TCC. O pacote `tcc_engine/` foi renomeado para `engine/`.
-
-Estrutura alvo:
-
-```text
-engine/
-├── __init__.py
-├── config.py
-├── diagnostics.py
-├── execution.py
-├── lightgbm.py
-└── rotation.py
-```
-
-Foram removidos modos historicos de alocacao, cash gates, selective opportunity,
-risk overlay, IQN, hard horizon voting e suporte GPU. O experimento oficial e
-CPU-only e compara somente Control vs Soft Horizon Consensus.
-
-
-### v1.1.0-dev.1
-
-Corrige a refatoracao da semantica de quantidade. O checkpoint v1.0.6 usava
-`whole_shares=False`, portanto a execucao sempre permitiu quantidades
-fracionarias. Essa semantica agora e fixa no motor, sem um campo de configuracao
-redundante. Foi adicionado um teste de contrato entre os atributos acessados
-pelo runtime e `StandaloneBacktestConfig` para impedir novas remocoes
-inconsistentes.
-
-
-### v1.1.0-dev.2
-
-Corrige o teste de contrato introduzido na dev.1 e amplia a verificacao para
-atributos acessados tanto por `config` quanto por `rep_config`. O objetivo e
-detectar antes da execucao completa qualquer campo removido da configuracao que
-continue sendo usado pelo runtime.
-
-
-### v1.1.0-dev.3
-
-Substitui a verificacao por regex do contrato de configuracao por analise da
-AST (arvore sintatica do Python). O teste detecta atributos acessados por
-`config` e `rep_config` que nao existam em `StandaloneBacktestConfig`.
+`summary.json` concentra as métricas principais. `comparison.csv` resume a
+comparação Control versus Soft. Os arquivos de predictions e trades permitem
+auditar as decisões individuais, enquanto `data_audit.json` e
+`structural_exclusions.csv` documentam a integridade do snapshot e eventuais
+exclusões estruturais.

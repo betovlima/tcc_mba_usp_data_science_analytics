@@ -108,7 +108,7 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
 
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.1.0-dev.3"
+    assert EXPERIMENT_VERSION == "1.1.0"
     forbidden = (
         "series_historicas",
         "tiingo",
