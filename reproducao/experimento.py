@@ -27,25 +27,7 @@ def build_variant_configs(
     base: StandaloneBacktestConfig = CONFIG,
 ) -> tuple[StandaloneBacktestConfig, StandaloneBacktestConfig]:
     eligible = tuple(frames)
-    anchors = tuple(
-        symbol for symbol in base.calendar_anchor_assets if symbol in frames
-    )
-    references = tuple(
-        symbol for symbol in base.research_reference_assets if symbol in frames
-    )
-    reference_set = set(references)
-    candidates = tuple(
-        symbol
-        for symbol in base.research_candidate_assets
-        if symbol in frames and symbol not in reference_set
-    )
-    common_update = {
-        "assets": eligible,
-        "calendar_anchor_assets": anchors,
-        "research_reference_assets": references,
-        "research_candidate_assets": candidates,
-    }
-    prepared = base.model_copy(update=common_update)
+    prepared = base.model_copy(update={"assets": eligible})
     control = build_control_config(prepared, assets=eligible)
     soft = build_soft_config(
         prepared,
