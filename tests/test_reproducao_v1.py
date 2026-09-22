@@ -41,10 +41,7 @@ def test_frozen_universe_and_dates_match_cpu_reference() -> None:
     assert "CLMT" in ASSETS
     assert ANALYSIS_END_DATE == "2026-09-17"
     assert BAR_SNAPSHOT_AS_OF_END == "2026-09-17"
-    assert CONFIG.rotation_accelerator == "cpu"
-    assert CONFIG.rotation_allow_cpu_fallback is False
     assert CONFIG.strategy_mode == "COMPOUND_ROTATION_SWING_LIGHTGBM"
-    assert CONFIG.research_model_family == "lightgbm_utility"
     assert CONFIG.rotation_model_repetitions == 1
     assert CONFIG.rotation_target_horizons == (5, 10, 20, 40, 60)
     assert CONFIG.rotation_target_horizon_weights == (
@@ -61,8 +58,6 @@ def test_control_and_soft_share_same_lightgbm() -> None:
     soft = build_soft_config(CONFIG)
 
     assert control.research_model_settings["lightgbm"] == soft.research_model_settings["lightgbm"]
-    assert control.research_model_settings["horizon_voting"] == {"enabled": False}
-    assert soft.research_model_settings["horizon_voting"] == {"enabled": False}
     assert control.research_model_settings["soft_horizon_consensus"] == {
         "enabled": False
     }
@@ -111,7 +106,7 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
 
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.0.6"
+    assert EXPERIMENT_VERSION == "1.1.0-dev"
     forbidden = (
         "series_historicas",
         "tiingo",
@@ -151,3 +146,39 @@ def test_snapshot_does_not_persist_derived_normalized_bars() -> None:
     assert "normalized_bars" not in data_source
     assert "normalized_bars" not in preparation_source
     assert "write_normalized_csv" not in preparation_source
+
+
+def test_engine_contains_only_current_modules() -> None:
+    expected = {
+        "__init__.py",
+        "config.py",
+        "diagnostics.py",
+        "execution.py",
+        "lightgbm.py",
+        "rotation.py",
+    }
+    actual = {
+        path.name
+        for path in (ROOT / "engine").glob("*.py")
+    }
+    assert actual == expected
+
+
+def test_engine_has_no_retired_strategy_modes() -> None:
+    forbidden = (
+        "risk_off",
+        "selective_opportunity",
+        "opportunity_cash_gate",
+        "absolute_utility",
+        "optimized_allocation",
+        "concentrated_allocation",
+        "compound_risk_overlay",
+        "iqn",
+        "horizon_voting",
+    )
+    source = "\n".join(
+        path.read_text(encoding="utf-8").lower()
+        for path in sorted((ROOT / "engine").glob("*.py"))
+    )
+    for token in forbidden:
+        assert token not in source, token

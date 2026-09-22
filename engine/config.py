@@ -4,7 +4,7 @@ Este modulo e independente de banco de dados e do Market Cycle Trader em tempo
 de execucao. Os dados entram somente por CSVs locais gerados pela etapa de
 snapshot da Alpaca.
 
-Versao cientifica: 1.0.6
+Versao cientifica: 1.1.0-dev
 Backend oficial: CPU
 Comparacao experimental: Control vs Soft Horizon Consensus
 """
@@ -14,7 +14,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-EXPERIMENT_VERSION = "1.0.6"
+EXPERIMENT_VERSION = "1.1.0-dev"
 START_DATE = "2016-01-01"
 ANALYSIS_END_DATE = "2026-09-17"
 BAR_SNAPSHOT_AS_OF_END = "2026-09-17"
@@ -108,18 +108,6 @@ class StandaloneBacktestConfig:
         0.0, 0.0025, 0.005, 0.01
     )
 
-    opportunity_utility_entry_threshold: float = 0.28
-    opportunity_utility_exit_threshold: float = 0.27
-    allocation_lookback_days: int = 126
-    allocation_max_asset_weight: float = 1.0
-    allocation_cvar_confidence: float = 0.95
-    allocation_cvar_penalty: float = 1.0
-    allocation_turnover_penalty: float = 0.0025
-    allocation_minimum_utility: float = 0.0
-    allocation_signal_scale: float = 1.0
-
-    rotation_accelerator: str = "cpu"
-    rotation_allow_cpu_fallback: bool = False
     rotation_model_repetitions: int = 1
     rotation_seed_step: int = 1000
 
@@ -141,7 +129,6 @@ class StandaloneBacktestConfig:
     calendar_anchor_assets: tuple[str, ...] = REFERENCE_ASSETS
     research_reference_assets: tuple[str, ...] = REFERENCE_ASSETS
     research_candidate_assets: tuple[str, ...] = CANDIDATE_ASSETS
-    research_model_family: str = "lightgbm_utility"
     research_model_settings: dict[str, Any] = field(default_factory=_lightgbm_settings)
     walk_forward_fold_count_override: int | None = None
 
@@ -167,7 +154,6 @@ def build_control_config(
     lightgbm = deepcopy(settings.get("lightgbm") or {})
     lightgbm["early_stopping_enabled"] = False
     settings["lightgbm"] = lightgbm
-    settings["horizon_voting"] = {"enabled": False}
     settings["soft_horizon_consensus"] = {"enabled": False}
     update: dict[str, Any] = {"research_model_settings": settings}
     if assets is not None:

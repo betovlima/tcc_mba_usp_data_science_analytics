@@ -6,11 +6,11 @@ from typing import Any
 
 import pandas as pd
 
-from engine.capital_rotation import (
+from engine.lightgbm import run_lightgbm
+from engine.rotation import (
     _build_walk_forward_folds,
     _fold_performance,
     prepare_rotation_panel,
-    run_rotation_models,
 )
 from engine.config import (
     CONFIG,
@@ -124,7 +124,7 @@ def run_variant(
     folds: list[dict[str, Any]],
 ) -> tuple[Any, dict[str, Any]]:
     print(f"[final] starting {label}", flush=True)
-    results = run_rotation_models(
+    results = run_lightgbm(
         frames,
         config,
         calculate_reference_fees,

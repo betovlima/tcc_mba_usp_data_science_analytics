@@ -7,8 +7,8 @@ Consensus.
 ## Versao
 
 ```text
-TCC reproduction: 1.0.6
-Branch oficial: main
+TCC reproduction: 1.1.0-dev
+Branch de refatoracao: refactor/v1.1.0-minimal-engine
 Backend: CPU
 Banco de dados: nenhum
 Fonte: Alpaca
@@ -291,3 +291,25 @@ python -m pytest -q
 Os testes verificam ausencia de dependencias de banco, configuracao CPU,
 parametros congelados do LightGBM, equivalencia da configuracao Control/Soft,
 estrutura Spyder e presenca da politica Soft Horizon Consensus.
+
+
+## Refatoracao 1.1.0
+
+A branch `refactor/v1.1.0-minimal-engine` reduz o motor ao fluxo efetivamente
+usado pelo TCC. O pacote `tcc_engine/` foi renomeado para `engine/`.
+
+Estrutura alvo:
+
+```text
+engine/
+├── __init__.py
+├── config.py
+├── diagnostics.py
+├── execution.py
+├── lightgbm.py
+└── rotation.py
+```
+
+Foram removidos modos historicos de alocacao, cash gates, selective opportunity,
+risk overlay, IQN, hard horizon voting e suporte GPU. O experimento oficial e
+CPU-only e compara somente Control vs Soft Horizon Consensus.
