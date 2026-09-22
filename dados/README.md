@@ -22,3 +22,13 @@ versionada.
 ao Git.
 
 A normalizacao de splits continua sendo calculada em memoria.
+
+## Modos de execucao
+
+`USAR_DADOS_PESQUISA_CONGELADOS=True` usa somente `pesquisa_v1/` e nunca
+baixa ou altera o snapshot.
+
+Com `USAR_DADOS_PESQUISA_CONGELADOS=False`, toda leitura e escrita ocorre em
+`temporario/reproducao_v1/`. Se `FORCAR_DOWNLOAD=True`, essa pasta temporaria
+e limpa antes do download completo. O snapshot `pesquisa_v1/` permanece
+intocado.
