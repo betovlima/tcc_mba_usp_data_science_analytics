@@ -7,7 +7,7 @@ Consensus.
 ## Versao
 
 ```text
-TCC reproduction: 1.1.0-dev.1
+TCC reproduction: 1.1.0-dev.2
 Branch de refatoracao: refactor/v1.1.0-minimal-engine
 Backend: CPU
 Banco de dados: nenhum
@@ -323,3 +323,11 @@ fracionarias. Essa semantica agora e fixa no motor, sem um campo de configuracao
 redundante. Foi adicionado um teste de contrato entre os atributos acessados
 pelo runtime e `StandaloneBacktestConfig` para impedir novas remocoes
 inconsistentes.
+
+
+### v1.1.0-dev.2
+
+Corrige o teste de contrato introduzido na dev.1 e amplia a verificacao para
+atributos acessados tanto por `config` quanto por `rep_config`. O objetivo e
+detectar antes da execucao completa qualquer campo removido da configuracao que
+continue sendo usado pelo runtime.
