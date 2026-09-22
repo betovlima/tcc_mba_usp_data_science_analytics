@@ -64,7 +64,6 @@ class SnapshotPaths:
     root: Path
     raw_bars: Path
     corporate_actions: Path
-    normalized_bars: Path
     manifest: Path
 
     @classmethod
@@ -74,14 +73,12 @@ class SnapshotPaths:
             root=root,
             raw_bars=root / "raw_bars",
             corporate_actions=root / "corporate_actions",
-            normalized_bars=root / "normalized_bars",
             manifest=root / "manifest.json",
         )
 
     def ensure(self) -> None:
         self.raw_bars.mkdir(parents=True, exist_ok=True)
         self.corporate_actions.mkdir(parents=True, exist_ok=True)
-        self.normalized_bars.mkdir(parents=True, exist_ok=True)
 
 
 @dataclass(frozen=True)

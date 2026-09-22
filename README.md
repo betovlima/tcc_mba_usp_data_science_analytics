@@ -7,7 +7,7 @@ Consensus.
 ## Versao
 
 ```text
-TCC reproduction: 1.0.5
+TCC reproduction: 1.0.6
 Branch oficial: main
 Backend: CPU
 Banco de dados: nenhum
@@ -17,10 +17,10 @@ Timeframe: 1Day
 Download: RAW
 ```
 
-A versao 1.0.5 corrige a validacao de limpeza local: a suite verifica o codigo
-oficial e nao falha por diretorios ignorados que possam ter restado em clones
-antigos. O runtime oficial continua sem referencias a dados historicos antigos,
-Tiingo, MongoDB ou CARO. A logica matematica, os hiperparametros do LightGBM,
+A versao 1.0.6 reduz o snapshot local ao conjunto minimo necessario para
+reproducao. A pasta derivada `normalized_bars/` foi removida porque nunca era
+lida: a normalizacao de splits e refeita em memoria a partir de `raw_bars/` e
+`corporate_actions/`. A logica matematica, os hiperparametros do LightGBM,
 os folds, Control e Soft permanecem inalterados.
 
 ## Pipeline oficial
@@ -101,13 +101,15 @@ dados/reproducao_v1/
 │   └── <ATIVO>.csv
 ├── corporate_actions/
 │   └── <ATIVO>.csv
-├── normalized_bars/
-│   └── <ATIVO>.csv
 └── manifest.json
 ```
 
 Depois do snapshot ser congelado, as execucoes seguintes podem ser feitas
 offline. O manifesto valida SHA-256 de cada arquivo antes do treinamento.
+
+Os dados normalizados nao sao persistidos. Eles sao derivados em memoria a
+cada execucao a partir dos dados RAW e dos eventos corporativos, evitando
+duplicacao de arquivos no snapshot.
 
 ## Universo e janela
 

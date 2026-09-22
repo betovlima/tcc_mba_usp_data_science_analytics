@@ -98,7 +98,6 @@ def test_snapshot_layout_is_csv_per_asset() -> None:
     paths = SnapshotPaths.under(ROOT)
     assert paths.raw_bars.name == "raw_bars"
     assert paths.corporate_actions.name == "corporate_actions"
-    assert paths.normalized_bars.name == "normalized_bars"
     assert paths.manifest.name == "manifest.json"
 
 
@@ -112,7 +111,7 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
 
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.0.5"
+    assert EXPERIMENT_VERSION == "1.0.6"
     forbidden = (
         "series_historicas",
         "tiingo",
@@ -142,3 +141,13 @@ def test_runtime_has_no_retired_model_tokens() -> None:
         source = path.read_text(encoding="utf-8").lower()
         for token in forbidden:
             assert token not in source, f"{token} found in {path.relative_to(ROOT)}"
+
+
+def test_snapshot_does_not_persist_derived_normalized_bars() -> None:
+    data_source = (ROOT / "reproducao" / "dados.py").read_text(encoding="utf-8")
+    preparation_source = (ROOT / "reproducao" / "preparacao.py").read_text(
+        encoding="utf-8"
+    )
+    assert "normalized_bars" not in data_source
+    assert "normalized_bars" not in preparation_source
+    assert "write_normalized_csv" not in preparation_source

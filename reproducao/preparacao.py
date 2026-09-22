@@ -143,7 +143,6 @@ def prepare_model_frames(
     paths: SnapshotPaths,
     *,
     assets: tuple[str, ...] = ASSETS,
-    write_normalized_csv: bool = True,
 ) -> tuple[
     dict[str, pd.DataFrame],
     list[dict[str, Any]],
@@ -185,13 +184,6 @@ def prepare_model_frames(
 
         normalized, applied = split_normalize(raw, actions)
         frames[symbol] = normalized
-        if write_normalized_csv:
-            target = paths.normalized_bars / f"{symbol}.csv"
-            normalized.reset_index().to_csv(
-                target,
-                index=False,
-                float_format="%.17g",
-            )
         diagnostics.append(
             {
                 "symbol": symbol,

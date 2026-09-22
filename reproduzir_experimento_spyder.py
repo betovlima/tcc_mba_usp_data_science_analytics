@@ -132,8 +132,7 @@ else:
 inicio_preparacao = time.perf_counter()
 frames, exclusoes, diagnosticos_dados, auditoria_dados = prepare_model_frames(
     CAMINHOS,
-    assets=ASSETS,
-    write_normalized_csv=True,
+    assets=ASSETS
 )
 print(
     f"[stage] preparation completed eligible={len(frames)} "

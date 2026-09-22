@@ -7,9 +7,12 @@ Conteudo esperado:
 ```text
 raw_bars/
 corporate_actions/
-normalized_bars/
 manifest.json
 ```
 
 Nao adicione CSVs ou o manifesto ao Git. Eles representam o snapshot local do
 experimento e sao validados por SHA-256 em tempo de execucao.
+
+
+Dados normalizados nao sao armazenados neste diretorio; eles sao derivados em
+memoria a partir de `raw_bars/` e `corporate_actions/`.

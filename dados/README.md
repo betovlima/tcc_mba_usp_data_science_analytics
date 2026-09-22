@@ -13,14 +13,15 @@ dados/
     │   └── <ATIVO>.csv
     ├── corporate_actions/
     │   └── <ATIVO>.csv
-    ├── normalized_bars/
-    │   └── <ATIVO>.csv
     └── manifest.json
 ```
 
 - `raw_bars/`: barras OHLCV RAW/SIP baixadas da Alpaca, um CSV por ativo.
 - `corporate_actions/`: eventos corporativos, um CSV por ativo.
-- `normalized_bars/`: OHLCV apos normalizacao local de splits.
 - `manifest.json`: identidade do snapshot e hashes SHA-256 dos arquivos.
 
 Os arquivos gerados permanecem locais e sao ignorados pelo Git.
+
+
+A normalizacao de splits e calculada em memoria durante a reproducao e nao e
+persistida em uma segunda copia dos dados.
