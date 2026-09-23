@@ -1,0 +1,12 @@
+acquiree_cusip,acquiree_rate,acquiree_symbol,acquirer_cusip,acquirer_rate,acquirer_symbol,action_type,cash_rate,cusip,effective_date,ex_date,foreign,id,payable_date,process_date,rate,record_date,source_array,special,symbol
+,,,,,,cash_dividend,,79466L302,,2024-03-13,False,5facc007-7453-47cf-b3ae-2a1327a86708,2024-04-11,2024-04-11,0.4,2024-03-14,cash_dividends,False,CRM
+,,,,,,cash_dividend,,79466L302,,2024-07-09,False,22900663-11f7-414b-93ce-eb7c68010fa1,2024-07-25,2024-07-25,0.4,2024-07-09,cash_dividends,False,CRM
+,,,,,,cash_dividend,,79466L302,,2024-09-18,False,8fcc1941-4f4d-473c-8f8b-549d2dd8d61a,2024-10-08,2024-10-08,0.4,2024-09-18,cash_dividends,False,CRM
+,,,,,,cash_dividend,,79466L302,,2024-12-18,False,7192bb2d-1c05-4a80-9108-87846446c8ca,2025-01-09,2025-01-09,0.4,2024-12-18,cash_dividends,False,CRM
+,,,,,,cash_dividend,,79466L302,,2025-04-10,False,6a441d3b-eab5-464e-b3a0-da5e7e9bbf1b,2025-04-24,2025-04-24,0.416,2025-04-10,cash_dividends,False,CRM
+,,,,,,cash_dividend,,79466L302,,2025-06-18,False,8aa21131-af26-43d4-a940-9193765f7a02,2025-07-10,2025-07-10,0.416,2025-06-18,cash_dividends,False,CRM
+,,,,,,cash_dividend,,79466L302,,2025-09-17,False,62a9d5f3-09cf-464a-90e2-9b742e15d72d,2025-10-09,2025-10-09,0.416,2025-09-17,cash_dividends,False,CRM
+,,,,,,cash_dividend,,79466L302,,2025-12-18,False,00070849-1a15-41c6-9ce1-72a031c50758,2026-01-08,2026-01-08,0.416,2025-12-18,cash_dividends,False,CRM
+,,,,,,cash_dividend,,79466L302,,2026-04-09,False,1d64bb33-9a4b-4266-8757-f38adc8d8aae,2026-04-23,2026-04-23,0.44,2026-04-09,cash_dividends,False,CRM
+,,,,,,cash_dividend,,79466L302,,2026-06-11,False,2da14cce-1445-4161-b61f-ede2c4d1ae89,2026-07-02,2026-07-02,0.44,2026-06-11,cash_dividends,False,CRM
+83088V102,1.0,WORK,79466L302,0.0776,CRM,stock_and_cash_merger,26.79,,2021-07-21,,,299d6bfe-da13-4491-bc28-481f1f2aa54c,,2021-07-21,,,stock_and_cash_mergers,,

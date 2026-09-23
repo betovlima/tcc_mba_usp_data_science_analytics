@@ -1,0 +1,13 @@
+action_type,cusip,ex_date,foreign,id,new_cusip,new_symbol,old_cusip,old_symbol,payable_date,process_date,rate,record_date,source_array,special,symbol
+cash_dividend,30303M102,2024-02-21,False,a6270326-afff-41ba-b4d0-521a571beb28,,,,,2024-03-26,2024-03-26,0.5,2024-02-22,cash_dividends,False,META
+cash_dividend,30303M102,2024-06-14,False,0cbe97fe-a542-470b-8727-cbab4f8e9bb9,,,,,2024-06-26,2024-06-26,0.5,2024-06-14,cash_dividends,False,META
+cash_dividend,30303M102,2024-09-16,False,127c8ddd-dd3a-4aeb-9817-ddbcccbe4206,,,,,2024-09-26,2024-09-26,0.5,2024-09-16,cash_dividends,False,META
+cash_dividend,30303M102,2024-12-16,False,576be40a-5a1d-4960-8bec-d0da7f2b36f9,,,,,2024-12-27,2024-12-27,0.5,2024-12-16,cash_dividends,False,META
+cash_dividend,30303M102,2025-03-14,False,bf9d536d-3a19-48ef-841e-f5c5cc336c90,,,,,2025-03-26,2025-03-26,0.525,2025-03-14,cash_dividends,False,META
+cash_dividend,30303M102,2025-06-16,False,338f396d-d4fe-424f-b3fd-0fc4178b210e,,,,,2025-06-26,2025-06-26,0.525,2025-06-16,cash_dividends,False,META
+cash_dividend,30303M102,2025-09-22,False,568747f1-7940-4e9f-950b-a5530669b274,,,,,2025-09-29,2025-09-29,0.525,2025-09-22,cash_dividends,False,META
+cash_dividend,30303M102,2025-12-15,False,51d4a52d-7ecd-487a-9e85-eacac0929a85,,,,,2025-12-23,2025-12-23,0.525,2025-12-15,cash_dividends,False,META
+cash_dividend,30303M102,2026-03-16,False,0d7436f7-e6cf-4c4a-9370-14b2c10a8b33,,,,,2026-03-26,2026-03-26,0.525,2026-03-16,cash_dividends,False,META
+cash_dividend,30303M102,2026-06-15,False,471ea313-f88d-4486-ab55-c0151e903668,,,,,2026-06-25,2026-06-25,0.525,2026-06-15,cash_dividends,False,META
+name_change,,,,19a51822-eda9-40e2-9301-b8958c74a003,53656F417,METV,53656F417,META,,2022-01-31,,,name_changes,,
+name_change,,,,ed6f16b1-fc46-443e-8dba-898ed9007a7a,30303M102,META,30303M102,FB,,2022-06-09,,,name_changes,,

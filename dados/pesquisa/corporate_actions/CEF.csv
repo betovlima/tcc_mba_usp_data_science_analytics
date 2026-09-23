@@ -1,0 +1,3 @@
+action_type,cusip,ex_date,foreign,id,process_date,rate,source_array,special,symbol
+cash_dividend,,2016-10-27,False,1ad1163a-e9fb-4dcd-bcff-19f53e929db8,2016-10-27,0.01,cash_dividends,False,CEF
+cash_dividend,,2017-10-30,False,413e4e64-8d3e-4914-82c9-cc768801589d,2017-10-30,0.01,cash_dividends,False,CEF

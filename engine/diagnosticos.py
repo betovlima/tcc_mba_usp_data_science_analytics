@@ -121,12 +121,6 @@ def enriquecer_diagnosticos_operacoes(
     frames: dict[str, pd.DataFrame],
     symbols: Iterable[str],
 ) -> list[dict[str, Any]]:
-    
-
-
-
-
-
 
     rows = [dict(row) for row in records]
     universe = [str(symbol) for symbol in symbols]

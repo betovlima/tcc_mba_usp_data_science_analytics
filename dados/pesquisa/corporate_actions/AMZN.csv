@@ -1,0 +1,3 @@
+acquiree_cusip,acquiree_symbol,acquirer_cusip,acquirer_symbol,action_type,cusip,due_bill_redemption_date,effective_date,ex_date,id,new_rate,old_rate,payable_date,process_date,rate,record_date,source_array,symbol
+68269G107,ONEM,023135106,AMZN,cash_merger,,,2023-02-23,,b88345f0-00f5-40fd-a6c7-8ef1c9df0046,,,2023-02-23,2023-02-23,18.0,,cash_mergers,
+,,,,forward_split,023135106,2022-06-07,,2022-06-06,0995b688-d461-4d30-9e3e-54549a070c0e,20.0,1.0,2022-06-03,2022-06-06,,2022-05-27,forward_splits,AMZN

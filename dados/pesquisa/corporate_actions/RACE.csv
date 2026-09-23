@@ -1,0 +1,13 @@
+action_type,cusip,ex_date,foreign,id,new_cusip,new_rate,old_cusip,old_rate,payable_date,process_date,rate,record_date,source_array,special,symbol
+cash_dividend,,2016-05-23,False,6b457206-5f3e-4988-aef7-7bc293eea164,,,,,,2016-05-23,0.51506,,cash_dividends,False,RACE
+cash_dividend,,2017-04-24,False,e8db362a-4600-40fc-98d2-89cff94deaf2,,,,,,2017-04-24,0.68231,,cash_dividends,False,RACE
+cash_dividend,,2018-04-23,False,c3af1033-cef2-4d44-b7e5-09c0af7f7e2c,,,,,,2018-04-23,0.87912,,cash_dividends,False,RACE
+cash_dividend,,2019-04-23,False,10ec0de3-a987-4d7e-af1d-57c5f86229fd,,,,,,2019-04-23,1.164,,cash_dividends,False,RACE
+cash_dividend,N3167Y103,2020-04-20,True,ca5f19a6-89b8-422b-9daa-6454668c5061,,,,,2020-05-05,2020-05-05,1.22718,2020-04-21,cash_dividends,False,RACE
+cash_dividend,N3167Y103,2021-04-19,True,cdd6660e-4c47-4492-918a-bdd3093f64b3,,,,,2021-05-05,2021-05-05,1.0378,2021-04-20,cash_dividends,False,RACE
+cash_dividend,N3167Y103,2022-04-19,True,56138d03-edf4-41a2-aac1-770f7270261f,,,,,2022-05-06,2022-05-06,1.48158,2022-04-20,cash_dividends,False,RACE
+cash_dividend,N3167Y103,2023-04-24,True,b22122a5-5ba6-4fab-b422-89b04c7b5170,,,,,2023-05-05,2023-05-05,1.17266,2023-04-25,cash_dividends,False,RACE
+cash_dividend,N3167Y103,2024-04-22,True,65873320-572e-406d-bfac-43787e4a9720,,,,,2024-05-03,2024-05-03,1.53333,2024-04-23,cash_dividends,False,RACE
+cash_dividend,N3167Y103,2025-04-23,True,1749c36b-f43a-46ee-a602-b985de2570b1,,,,,2025-05-06,2025-05-06,2.00134,2025-04-23,cash_dividends,False,RACE
+cash_dividend,N3167Y103,2026-04-21,True,98ddf153-988d-448c-a815-4a8416bf5c22,,,,,2026-05-05,2026-05-05,2.51292,2026-04-21,cash_dividends,False,RACE
+reverse_split,,2016-01-04,,7a7e602b-625b-4931-b637-8e2790e18ee3,,1.0,,10.0,,2016-01-04,,,reverse_splits,,RACE

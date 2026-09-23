@@ -58,7 +58,7 @@ CAMINHOS_TEMPORARIOS = SnapshotPaths.temporary(RAIZ_PROJETO)
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "reproducao"
 
 # True = usa exatamente os CSVs versionados em dados/pesquisa.
-USAR_DADOS_PESQUISA_CONGELADOS = False
+USAR_DADOS_PESQUISA_CONGELADOS = True
 
 # Quando USAR_DADOS_PESQUISA_CONGELADOS=False:
 # False = reutiliza arquivos existentes em dados/temporario/ quando disponiveis.
