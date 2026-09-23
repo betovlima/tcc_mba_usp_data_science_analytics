@@ -11,15 +11,15 @@ from .rotacao import (
     ROTATION_FEATURES,
     SUPPORTED_ROTATION_MODES,
     RotationRunResult,
-    _analysis_decision_dates,
+    _datas_decisao_analise,
     _construir_folds_walk_forward,
     _desempenho_folds,
-    _model_utilities,
-    _precompute_model_utilities,
-    _scheduled_policy,
-    _simple_policy_growth,
-    _simulate_exact,
-    _utility_policy,
+    _utilidades_modelo,
+    _precalcular_utilidades_modelo,
+    _politica_agendada,
+    _crescimento_politica_simples,
+    _simular_exato,
+    _politica_utilidade,
     preparar_painel_rotacao,
 )
 
@@ -70,7 +70,7 @@ def _construir_contexto_execucao(
     )
     symbols = sorted(frames)
     folds = _construir_folds_walk_forward(common_dates, config)
-    all_decision_dates = _analysis_decision_dates(common_dates, folds, config)
+    all_decision_dates = _datas_decisao_analise(common_dates, folds, config)
     decision_to_fold: dict[pd.Timestamp, int] = {}
     decision_metadata: dict[pd.Timestamp, dict[str, Any]] = {}
     for fold in folds:
@@ -604,7 +604,7 @@ def _registro_consenso_ranking_horizontes(
             if horizon_utility_caches is not None
             else None
         )
-        utilities = _model_utilities(
+        utilities = _utilidades_modelo(
             horizon_models.get(int(horizon), {}),
             frames,
             symbols,
@@ -811,7 +811,7 @@ def _politica_consenso_horizontes_soft(
             margin_multiplier = 1.0
             dynamic_margin = float(base_switch_margin)
         else:
-            base_utilities = _model_utilities(
+            base_utilities = _utilidades_modelo(
                 base_models,
                 frames,
                 symbols,
@@ -1153,14 +1153,14 @@ def executar_lightgbm(
             best_candidate = candidate_margins[0]
             best_score = float("-inf")
             for candidate in candidate_margins:
-                calibration_policy = _utility_policy(
+                calibration_policy = _politica_utilidade(
                     calibration_models,
                     frames,
                     symbols,
                     rep_config,
                     candidate,
                 )
-                score = _simple_policy_growth(
+                score = _crescimento_politica_simples(
                     calibration_policy,
                     frames,
                     symbols,
@@ -1241,7 +1241,7 @@ def executar_lightgbm(
 
             fold_decision_dates = pd.DatetimeIndex(fold["decision_dates"])
             base_utility_cache, base_cache_profile = (
-                _precompute_model_utilities(
+                _precalcular_utilidades_modelo(
                     final_models,
                     frames,
                     symbols,
@@ -1262,7 +1262,7 @@ def executar_lightgbm(
                 dict[pd.Timestamp, np.ndarray],
             ] = {}
             for horizon, horizon_models in final_horizon_models.items():
-                cache, cache_profile = _precompute_model_utilities(
+                cache, cache_profile = _precalcular_utilidades_modelo(
                     horizon_models,
                     frames,
                     symbols,
@@ -1298,7 +1298,7 @@ def executar_lightgbm(
                 float(rep_config.rotation_switch_margin),
                 float(best_candidate),
             )
-            base_policy = _utility_policy(
+            base_policy = _politica_utilidade(
                 final_models,
                 frames,
                 symbols,
@@ -1363,7 +1363,7 @@ def executar_lightgbm(
             ),
             repetition,
         )
-        scheduled = _scheduled_policy(policies, decision_to_fold)
+        scheduled = _politica_agendada(policies, decision_to_fold)
 
         wrapped_trade_callback = None
         if trade_callback is not None:
@@ -1417,7 +1417,7 @@ def executar_lightgbm(
                 device="CPU",
             )
 
-        result = _simulate_exact(
+        result = _simular_exato(
             "lightgbm_utility",
             scheduled,
             frames,
