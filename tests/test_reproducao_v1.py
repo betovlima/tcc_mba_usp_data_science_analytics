@@ -6,7 +6,12 @@ from types import SimpleNamespace
 import pandas as pd
 
 from reproducao.dados import SnapshotPaths
-from reproducao.graficos import (\n    calcular_retornos_mensais,\n    construir_rotacoes,\n    gerar_analises_backtest,\n)\nfrom engine.rotacao import _executar_compra, _selecionar_ativo_fonte_calendario
+from reproducao.graficos import (
+    calcular_retornos_mensais,
+    construir_rotacoes,
+    gerar_analises_backtest,
+)
+from engine.rotacao import _executar_compra, _selecionar_ativo_fonte_calendario
 from engine.configuracao import (
     ANALYSIS_END_DATE,
     ASSETS,
