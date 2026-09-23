@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from reproducao.dados import SnapshotPaths
+from reproducao.graficos import calcular_retornos_mensais, construir_rotacoes
 from engine.rotacao import _executar_compra, _selecionar_ativo_fonte_calendario
 from engine.configuracao import (
     ANALYSIS_END_DATE,
@@ -33,6 +34,8 @@ def test_all_runtime_modules_import_successfully() -> None:
         "reproducao.dados",
         "reproducao.preparacao",
         "reproducao.experimento",
+        "reproducao.caminhos",
+        "reproducao.graficos",
     )
     for module_name in modules:
         module = importlib.import_module(module_name)
@@ -161,25 +164,148 @@ def test_lightgbm_parameters_are_frozen() -> None:
 
 def test_spyder_workflow_is_explicitly_sectioned() -> None:
     source = (ROOT / "reproduzir_experimento_spyder.py").read_text(encoding="utf-8")
-    assert source.count("# %%") >= 11
+    assert source.count("# %%") >= 12
     assert "# %% 7 - CONTROL" in source
     assert "# %% 8 - SOFT HORIZON CONSENSUS" in source
+    assert "# %% 11 - BACKTEST ANALYTICS, GRAFICOS E PLANILHA" in source
     assert "run_variant(" in source
+    assert "gerar_analises_backtest(" in source
 
 
 def test_snapshot_layout_is_csv_per_asset() -> None:
     research = SnapshotPaths.research(ROOT)
     temporary = SnapshotPaths.temporary(ROOT)
 
-    assert research.root == ROOT / "dados" / "pesquisa_v1"
+    assert research.root == ROOT / "dados" / "pesquisa"
     assert research.raw_bars.name == "raw_bars"
     assert research.corporate_actions.name == "corporate_actions"
     assert research.manifest.name == "manifest.json"
 
     assert temporary.root == (
-        ROOT / "dados" / "temporario" / "reproducao_v1"
+        ROOT / "dados" / "temporario" / "reproducao"
     )
 
+
+
+def test_capital_rotations_follow_backtest_analytics_semantics() -> None:
+    trades = pd.DataFrame(
+        [
+            {
+                "timestamp": "2020-01-02T00:00:00+00:00",
+                "action": "BUY",
+                "asset": "AAA",
+                "rotation_id": "r1",
+                "rotation_from_asset": "CASH",
+                "rotation_to_asset": "AAA",
+                "total_fee": 1.0,
+                "execution_price": 10.0,
+            },
+            {
+                "timestamp": "2020-01-10T00:00:00+00:00",
+                "action": "SELL",
+                "asset": "AAA",
+                "rotation_id": "r2",
+                "rotation_from_asset": "AAA",
+                "rotation_to_asset": "BBB",
+                "total_fee": 2.0,
+                "execution_price": 12.0,
+                "realized_pnl": 200.0,
+                "position_return": 0.20,
+                "holding_bars": 8,
+            },
+            {
+                "timestamp": "2020-01-10T00:00:00+00:00",
+                "action": "BUY",
+                "asset": "BBB",
+                "rotation_id": "r2",
+                "rotation_from_asset": "AAA",
+                "rotation_to_asset": "BBB",
+                "total_fee": 1.0,
+                "execution_price": 20.0,
+            },
+            {
+                "timestamp": "2020-01-31T00:00:00+00:00",
+                "action": "FINAL_SELL",
+                "asset": "BBB",
+                "total_fee": 1.0,
+                "realized_pnl": 100.0,
+            },
+        ]
+    )
+
+    rotations = construir_rotacoes(trades)
+
+    assert len(rotations) == 2
+    assert rotations.iloc[0]["from_asset"] == "CASH"
+    assert rotations.iloc[0]["to_asset"] == "AAA"
+    assert rotations.iloc[1]["from_asset"] == "AAA"
+    assert rotations.iloc[1]["to_asset"] == "BBB"
+    assert rotations.iloc[1]["transaction_fees"] == 3.0
+
+
+def test_monthly_returns_match_backtest_analytics_reference() -> None:
+    index = pd.to_datetime(
+        [
+            "2020-01-02T00:00:00Z",
+            "2020-01-31T00:00:00Z",
+            "2020-02-28T00:00:00Z",
+            "2020-03-31T00:00:00Z",
+        ],
+        utc=True,
+    )
+    predictions = pd.DataFrame(
+        {
+            "strategy_equity": [100.0, 110.0, 121.0, 108.9],
+            "buy_hold_equity": [100.0, 105.0, 107.1, 117.81],
+        },
+        index=index,
+    )
+
+    monthly = calcular_retornos_mensais(predictions)
+
+    assert list(monthly["month"]) == ["2020-02", "2020-03"]
+    assert abs(monthly.iloc[0]["simulation_return"] - 0.10) < 1e-12
+    assert abs(monthly.iloc[0]["reference_return"] - 0.02) < 1e-12
+    assert abs(monthly.iloc[1]["simulation_return"] + 0.10) < 1e-12
+    assert abs(monthly.iloc[1]["reference_return"] - 0.10) < 1e-12
+
+
+def test_active_paths_no_longer_use_v1_suffix() -> None:
+    active_files = [
+        ROOT / "reproduzir_experimento_spyder.py",
+        ROOT / "reproducao" / "dados.py",
+        ROOT / "migrar_snapshot_pesquisa.py",
+        ROOT / ".gitignore",
+        ROOT / "README.md",
+        ROOT / "dados" / "README.md",
+    ]
+    for path in active_files:
+        source = path.read_text(encoding="utf-8")
+        assert "pesquisa_v1" not in source
+        assert "reproducao_v1" not in source
+
+
+def test_backtest_analytics_output_contract() -> None:
+    source = (ROOT / "reproducao" / "graficos.py").read_text(
+        encoding="utf-8"
+    )
+    expected = (
+        "monthly_realized_pnl_",
+        "monthly_realized_pnl_heatmap_",
+        "monthly_returns_",
+        "monthly_return_heatmap_",
+        "capital_rotations_",
+        "capital_rotations_monthly_",
+        "capital_rotations_transition_matrix_",
+        "capital_rotations_heatmap_",
+        "backtest_analytics.xlsx",
+    )
+    for token in expected:
+        assert token in source
+
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "matplotlib" in requirements
+    assert "openpyxl" in requirements
 
 def test_engine_contains_soft_horizon_consensus_policy() -> None:
     source = (ROOT / "engine" / "modelo_lightgbm.py").read_text(
@@ -191,7 +317,7 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
 
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.2.0-dev.6"
+    assert EXPERIMENT_VERSION == "1.2.0-dev.7"
     forbidden = (
         "series_historicas",
         "tiingo",
@@ -328,10 +454,10 @@ def test_runtime_config_attribute_contract() -> None:
 def test_research_data_is_versioned_and_temporary_data_is_ignored() -> None:
     rules = (ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "dados/temporario/" in rules
-    assert "dados/reproducao_v1/" in rules
-    assert "!dados/pesquisa_v1/raw_bars/*.csv" in rules
-    assert "!dados/pesquisa_v1/corporate_actions/*.csv" in rules
-    assert "!dados/pesquisa_v1/manifest.json" in rules
+    assert "dados/reproducao/" in rules
+    assert "!dados/pesquisa/raw_bars/*.csv" in rules
+    assert "!dados/pesquisa/corporate_actions/*.csv" in rules
+    assert "!dados/pesquisa/manifest.json" in rules
 
 
 def test_spyder_data_modes_protect_frozen_research_snapshot() -> None:
