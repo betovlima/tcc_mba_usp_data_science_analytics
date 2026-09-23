@@ -19,7 +19,7 @@ from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from dotenv import dotenv_values, load_dotenv
 
-from engine.config import (
+from engine.configuracao import (
     ANALYSIS_END_DATE,
     ASSETS,
     EXPERIMENT_VERSION,
