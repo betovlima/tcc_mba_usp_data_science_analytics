@@ -1413,7 +1413,13 @@ def _datas_decisao_analise(
             if requested_end.tzinfo is None
             else requested_end.tz_convert('UTC')
         )
-        requested_execution_end = int(common_dates.searchsorted(requested_end, side='right'))
+        # analysis_end_date representa uma data de mercado inclusiva, nao um
+        # instante UTC. Barras diarias da NYSE podem aparecer como 04:00/05:00
+        # UTC; comparar com 00:00 UTC excluiria a propria sessao final.
+        requested_end_exclusive = requested_end.normalize() + pd.Timedelta(days=1)
+        requested_execution_end = int(
+            common_dates.searchsorted(requested_end_exclusive, side='left')
+        )
         execution_end = min(champion_oos_end, requested_execution_end)
 
     if execution_start >= execution_end:
