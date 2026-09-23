@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from engine.config import EXPERIMENT_VERSION
+from engine.configuracao import EXPERIMENT_VERSION
 
 
 def _json_default(value: Any) -> Any:
