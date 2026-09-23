@@ -143,6 +143,7 @@ def prepare_model_frames(
     paths: SnapshotPaths,
     *,
     assets: tuple[str, ...] = ASSETS,
+    comparar_snapshot_referencia: bool = True,
 ) -> tuple[
     dict[str, pd.DataFrame],
     list[dict[str, Any]],
@@ -209,27 +210,29 @@ def prepare_model_frames(
     action_mismatches: list[str] = []
     split_mismatches: list[str] = []
 
-    for row in diagnostics:
-        symbol = row["symbol"]
-        if row["excluded"]:
-            continue
-        ref = expected.get(symbol)
-        if ref is None:
-            raw_mismatches.append(symbol)
-            action_mismatches.append(symbol)
-            split_mismatches.append(symbol)
-            continue
-        if int(row["raw_rows"]) != int(ref["raw_rows"]):
-            raw_mismatches.append(symbol)
-        if int(row["corporate_actions"]) != int(ref["corporate_actions"]):
-            action_mismatches.append(symbol)
-        if int(row["splits_applied"]) != int(ref["splits_applied"]):
-            split_mismatches.append(symbol)
+    if comparar_snapshot_referencia:
+        for row in diagnostics:
+            symbol = row["symbol"]
+            if row["excluded"]:
+                continue
+            ref = expected.get(symbol)
+            if ref is None:
+                raw_mismatches.append(symbol)
+                action_mismatches.append(symbol)
+                split_mismatches.append(symbol)
+                continue
+            if int(row["raw_rows"]) != int(ref["raw_rows"]):
+                raw_mismatches.append(symbol)
+            if int(row["corporate_actions"]) != int(ref["corporate_actions"]):
+                action_mismatches.append(symbol)
+            if int(row["splits_applied"]) != int(ref["splits_applied"]):
+                split_mismatches.append(symbol)
 
     actual_rows = sum(int(row["raw_rows"]) for row in diagnostics if not row["excluded"])
     reference_rows = int(reference["eligible_total_raw_rows"])
     audit = {
         "reference_api_version": reference.get("source_api_version"),
+        "reference_comparison_enabled": bool(comparar_snapshot_referencia),
         "eligible_assets": len(frames),
         "reference_eligible_assets": int(reference["eligible_assets"]),
         "actual_total_eligible_raw_rows": actual_rows,
@@ -250,6 +253,7 @@ def prepare_model_frames(
     print(
         "[data-audit] "
         f"eligible_rows={actual_rows} reference_rows={reference_rows} "
+        f"reference_comparison={comparar_snapshot_referencia} "
         f"row_mismatches={len(raw_mismatches)} "
         f"ca_mismatches={len(action_mismatches)} "
         f"split_mismatches={len(split_mismatches)}",
