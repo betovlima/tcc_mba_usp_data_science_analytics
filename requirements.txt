@@ -7,6 +7,10 @@ threadpoolctl>=3.5,<4
 # Modelo do experimento
 lightgbm>=4.6,<5
 
+# Graficos e planilhas de Backtest Analytics
+matplotlib>=3.10,<4
+openpyxl>=3.1,<4
+
 # Snapshot Alpaca -> CSV
 alpaca-py>=0.43,<1
 requests>=2.32,<3
