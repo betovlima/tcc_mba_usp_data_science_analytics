@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Copia dados/reproducao_v1 para dados/pesquisa_v1, "
+            "Copia dados/reproducao para dados/pesquisa, "
             "reconstroi o manifesto e valida os hashes."
         )
     )
@@ -39,14 +39,14 @@ def main() -> int:
 
     if not origem.manifest.exists():
         raise RuntimeError(
-            "Snapshot legado nao encontrado em dados/reproducao_v1."
+            "Snapshot legado nao encontrado em dados/reproducao."
         )
 
     validate_snapshot(origem)
 
     if destino.manifest.exists() and not args.overwrite:
         raise RuntimeError(
-            "dados/pesquisa_v1 ja possui snapshot. "
+            "dados/pesquisa ja possui snapshot. "
             "Use --overwrite somente se a substituicao for intencional."
         )
 
@@ -82,7 +82,7 @@ def main() -> int:
         f"[migration] snapshot_sha256={manifest['snapshot_sha256']}",
         flush=True,
     )
-    print("[migration] versione dados/pesquisa_v1 no Git.", flush=True)
+    print("[migration] versione dados/pesquisa no Git.", flush=True)
     return 0
 
 
