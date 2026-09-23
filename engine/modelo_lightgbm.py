@@ -12,15 +12,15 @@ from .rotacao import (
     SUPPORTED_ROTATION_MODES,
     RotationRunResult,
     _analysis_decision_dates,
-    _build_walk_forward_folds,
-    _fold_performance,
+    _construir_folds_walk_forward,
+    _desempenho_folds,
     _model_utilities,
     _precompute_model_utilities,
     _scheduled_policy,
     _simple_policy_growth,
     _simulate_exact,
     _utility_policy,
-    prepare_rotation_panel,
+    preparar_painel_rotacao,
 )
 
 def _configuracoes_pesquisa(config: Any) -> dict[str, Any]:
@@ -64,12 +64,12 @@ def _construir_contexto_execucao(
 ]:
     if config.strategy_mode not in SUPPORTED_ROTATION_MODES:
         raise ValueError(f"Unsupported research strategy mode: {config.strategy_mode}.")
-    frames, common_dates, calendar_source_asset = prepare_rotation_panel(
+    frames, common_dates, calendar_source_asset = preparar_painel_rotacao(
         bars_by_symbol,
         config,
     )
     symbols = sorted(frames)
-    folds = _build_walk_forward_folds(common_dates, config)
+    folds = _construir_folds_walk_forward(common_dates, config)
     all_decision_dates = _analysis_decision_dates(common_dates, folds, config)
     decision_to_fold: dict[pd.Timestamp, int] = {}
     decision_metadata: dict[pd.Timestamp, dict[str, Any]] = {}
@@ -1047,7 +1047,7 @@ def executar_lightgbm(
     for repetition in range(repetitions):
         run_index = repetition + 1
         seed = int(config.random_state) + repetition * seed_step
-        rep_config = config.model_copy(update={"random_state": seed})
+        rep_config = config.copiar_modelo(update={"random_state": seed})
         policies: dict[int, Callable] = {}
         diagnostics: dict[pd.Timestamp, dict[str, Any]] = {}
         margin_details: list[dict[str, Any]] = []
@@ -1542,7 +1542,7 @@ def executar_lightgbm(
                 "repetition_index": run_index,
                 "repetition_count": repetitions,
                 "walk_forward_fold_count": len(folds),
-                "walk_forward_folds": _fold_performance(
+                "walk_forward_folds": _desempenho_folds(
                     result.predictions,
                     folds,
                     float(rep_config.initial_capital),
