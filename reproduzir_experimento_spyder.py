@@ -24,9 +24,11 @@ from reproducao.graficos import gerar_analises_backtest
 from reproducao.dados import (
     SnapshotPaths,
     build_snapshot_manifest,
+    data_final_temporaria_atual,
     download_corporate_actions,
     download_raw_bars,
     load_alpaca_credentials,
+    snapshot_cobre_data_final,
     validate_snapshot,
 )
 from reproducao.experimento import (
@@ -64,11 +66,22 @@ USAR_DADOS_PESQUISA_CONGELADOS = False
 # Esta chave nunca altera dados/pesquisa.
 FORCAR_DOWNLOAD = False
 
+if USAR_DADOS_PESQUISA_CONGELADOS:
+    DATA_FINAL_EFETIVA = ANALYSIS_END_DATE
+    BAR_SNAPSHOT_AS_OF_EFETIVO = BAR_SNAPSHOT_AS_OF_END
+else:
+    DATA_FINAL_EFETIVA = data_final_temporaria_atual()
+    BAR_SNAPSHOT_AS_OF_EFETIVO = DATA_FINAL_EFETIVA
+
+CONFIG_EFETIVA = CONFIG.copiar_modelo(
+    update={"analysis_end_date": DATA_FINAL_EFETIVA}
+)
+
 print("=" * 78, flush=True)
 print("TCC MBA USP - reproducao cientifica independente", flush=True)
 print(f"versao={EXPERIMENT_VERSION} backend=CPU", flush=True)
-print(f"periodo={START_DATE} -> {ANALYSIS_END_DATE}", flush=True)
-print(f"bar_snapshot_as_of={BAR_SNAPSHOT_AS_OF_END}", flush=True)
+print(f"periodo={START_DATE} -> {DATA_FINAL_EFETIVA}", flush=True)
+print(f"bar_snapshot_as_of={BAR_SNAPSHOT_AS_OF_EFETIVO}", flush=True)
 print(f"ativos_solicitados={len(ASSETS)}", flush=True)
 print("banco_de_dados=NAO", flush=True)
 print("comparacao=CONTROL vs SOFT_HORIZON_CONSENSUS", flush=True)
@@ -90,11 +103,29 @@ if USAR_DADOS_PESQUISA_CONGELADOS:
 else:
     CAMINHOS = CAMINHOS_TEMPORARIOS
     credenciais = load_alpaca_credentials(RAIZ_PROJETO)
+    temporario_cobre_data_final = snapshot_cobre_data_final(
+        CAMINHOS,
+        DATA_FINAL_EFETIVA,
+    )
+    RECRIAR_DADOS_TEMPORARIOS = (
+        FORCAR_DOWNLOAD or not temporario_cobre_data_final
+    )
     if FORCAR_DOWNLOAD:
         print("[snapshot] modo=download-temporario-forcado", flush=True)
         CAMINHOS.clear_generated()
+    elif RECRIAR_DADOS_TEMPORARIOS:
+        print(
+            "[snapshot] modo=download-temporario-atualizacao "
+            f"data_final={DATA_FINAL_EFETIVA}",
+            flush=True,
+        )
+        CAMINHOS.clear_generated()
     else:
-        print("[snapshot] modo=download-temporario-reutilizavel", flush=True)
+        print(
+            "[snapshot] modo=download-temporario-reutilizavel "
+            f"data_final={DATA_FINAL_EFETIVA}",
+            flush=True,
+        )
         CAMINHOS.ensure()
 
 
@@ -111,7 +142,9 @@ else:
         credenciais,
         CAMINHOS,
         assets=ASSETS,
-        replace=FORCAR_DOWNLOAD,
+        replace=RECRIAR_DADOS_TEMPORARIOS,
+        bar_snapshot_as_of_end=BAR_SNAPSHOT_AS_OF_EFETIVO,
+        analysis_end_date=DATA_FINAL_EFETIVA,
     )
 print(
     f"[stage] raw-bars completed seconds={time.perf_counter() - inicio_barras:.3f}",
@@ -131,7 +164,8 @@ else:
         credenciais,
         CAMINHOS,
         assets=ASSETS,
-        replace=FORCAR_DOWNLOAD,
+        replace=RECRIAR_DADOS_TEMPORARIOS,
+        query_end=DATA_FINAL_EFETIVA,
     )
 print(
     f"[stage] corporate-actions completed seconds={time.perf_counter() - inicio_ca:.3f}",
@@ -148,6 +182,8 @@ else:
         arquivos_raw,
         arquivos_eventos,
         credentials=credenciais,
+        bar_snapshot_as_of_end=BAR_SNAPSHOT_AS_OF_EFETIVO,
+        analysis_end_date=DATA_FINAL_EFETIVA,
     )
     manifesto = validate_snapshot(CAMINHOS)
 
@@ -173,7 +209,7 @@ ativos_elegiveis = tuple(frames)
 
 
 # %% 6 - Configuracoes experimentais e folds walk-forward
-config_control, config_soft = build_variant_configs(frames, CONFIG)
+config_control, config_soft = build_variant_configs(frames, CONFIG_EFETIVA)
 
 # Inspecione estas duas variaveis no Spyder.
 control_soft_flag = config_control.research_model_settings["soft_horizon_consensus"]
