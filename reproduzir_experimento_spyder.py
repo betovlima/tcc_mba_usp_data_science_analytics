@@ -10,7 +10,8 @@ Executado como script, os mesmos blocos rodam sequencialmente.
 Fluxo oficial:
 Alpaca RAW/SIP -> CSV por ativo -> Corporate Actions CSV por ativo ->
 integridade -> exclusao estrutural -> normalizacao de splits -> folds ->
-LightGBM CPU -> Control -> Soft Horizon Consensus -> comparacao ->\nBacktest Analytics -> graficos e planilha.
+LightGBM CPU -> Control -> Soft Horizon Consensus -> comparacao ->
+Backtest Analytics -> graficos e planilha.
 """
 
 # %% 0 - Imports, caminhos e configuracao congelada
@@ -18,6 +19,8 @@ from pathlib import Path
 import time
 
 from reproducao.artefatos import save_results
+from reproducao.caminhos import migrar_diretorios_legados
+from reproducao.graficos import gerar_analises_backtest
 from reproducao.dados import (
     SnapshotPaths,
     build_snapshot_manifest,
