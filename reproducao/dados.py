@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import hashlib
 import json
 import os
@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 import time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -43,6 +44,40 @@ REQUEST_TYPES = (
     "worthless_removal",
     "rights_distribution",
 )
+def data_final_temporaria_atual(
+    agora: datetime | None = None,
+) -> str:
+    """Retorna a data corrente do mercado dos EUA para snapshots temporarios."""
+    mercado = ZoneInfo("America/New_York")
+    instante = agora or datetime.now(tz=mercado)
+    if instante.tzinfo is None:
+        instante = instante.replace(tzinfo=mercado)
+    else:
+        instante = instante.astimezone(mercado)
+    return instante.date().isoformat()
+
+
+def snapshot_cobre_data_final(
+    paths: "SnapshotPaths",
+    data_final: str,
+) -> bool:
+    """Indica se barras e Corporate Actions foram consultadas ate a data alvo."""
+    if not paths.manifest.exists():
+        return False
+    try:
+        manifest = json.loads(paths.manifest.read_text(encoding="utf-8"))
+        alvo = date.fromisoformat(str(data_final))
+        barras = date.fromisoformat(
+            str((manifest.get("bars") or {}).get("bar_snapshot_as_of_end"))
+        )
+        eventos = date.fromisoformat(
+            str((manifest.get("corporate_actions") or {}).get("query_end"))
+        )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return barras >= alvo and eventos >= alvo
+
+
 ARRAY_TO_TYPE = {
     "forward_splits": "forward_split",
     "reverse_splits": "reverse_split",
@@ -237,6 +272,8 @@ def download_raw_bars(
     *,
     assets: tuple[str, ...] = ASSETS,
     replace: bool = False,
+    bar_snapshot_as_of_end: str = BAR_SNAPSHOT_AS_OF_END,
+    analysis_end_date: str = ANALYSIS_END_DATE,
 ) -> dict[str, Path]:
     """Baixa SIP/1Day/RAW, um ativo por requisicao, e grava um CSV por ativo."""
     paths.ensure()
@@ -245,14 +282,14 @@ def download_raw_bars(
         secret_key=credentials.secret_key,
     )
     start = pd.Timestamp(START_DATE, tz="UTC").to_pydatetime()
-    bar_end = pd.Timestamp(BAR_SNAPSHOT_AS_OF_END, tz="UTC")
+    bar_end = pd.Timestamp(bar_snapshot_as_of_end, tz="UTC")
     api_end = (bar_end + pd.Timedelta(days=1)).to_pydatetime()
 
     print(
         "[alpaca-bars] loader=10.8.74-download_stock_bars "
         f"assets={len(assets)} feed=sip adjustment=raw timeframe=1Day "
-        f"start={START_DATE} bar_asof_end={BAR_SNAPSHOT_AS_OF_END} "
-        f"research_end={ANALYSIS_END_DATE}",
+        f"start={START_DATE} bar_asof_end={bar_snapshot_as_of_end} "
+        f"analysis_end={analysis_end_date}",
         flush=True,
     )
 
@@ -375,6 +412,7 @@ def download_corporate_actions(
     assets: tuple[str, ...] = ASSETS,
     chunk_size: int = 40,
     replace: bool = False,
+    query_end: str = ANALYSIS_END_DATE,
 ) -> dict[str, Path]:
     """Consulta Corporate Actions e persiste um CSV independente por ativo."""
     paths.ensure()
@@ -390,7 +428,6 @@ def download_corporate_actions(
 
     research_start = date.fromisoformat(START_DATE)
     query_start = (research_start - timedelta(days=366)).isoformat()
-    query_end = ANALYSIS_END_DATE
     symbols = sorted(set(assets))
     resolved_chunk = max(1, min(100, int(chunk_size)))
     documents: list[dict[str, Any]] = []
@@ -474,6 +511,8 @@ def build_snapshot_manifest(
     action_files: dict[str, Path],
     *,
     credentials: AlpacaCredentials | None = None,
+    bar_snapshot_as_of_end: str = BAR_SNAPSHOT_AS_OF_END,
+    analysis_end_date: str = ANALYSIS_END_DATE,
 ) -> dict[str, Any]:
     """Calcula hashes do snapshot; credenciais nunca sao persistidas."""
     file_hashes: dict[str, str] = {}
@@ -497,11 +536,11 @@ def build_snapshot_manifest(
             "timeframe": "1Day",
             "adjustment": "raw",
             "start": START_DATE,
-            "bar_snapshot_as_of_end": BAR_SNAPSHOT_AS_OF_END,
+            "bar_snapshot_as_of_end": bar_snapshot_as_of_end,
         },
         "corporate_actions": {
             "query_start": (date.fromisoformat(START_DATE) - timedelta(days=366)).isoformat(),
-            "query_end": ANALYSIS_END_DATE,
+            "query_end": analysis_end_date,
             "types": list(REQUEST_TYPES),
         },
         "assets": list(ASSETS),
