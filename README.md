@@ -105,7 +105,7 @@ amostra. Eles não constituem previsão nem garantia de desempenho futuro.
 ```text
 .
 ├── dados/
-│   ├── pesquisa_v1/
+│   ├── pesquisa/
 │   │   ├── raw_bars/
 │   │   ├── corporate_actions/
 │   │   └── manifest.json
@@ -127,7 +127,7 @@ amostra. Eles não constituem previsão nem garantia de desempenho futuro.
 └── .env.example
 ```
 
-A pasta `dados/pesquisa_v1/` contém o snapshot oficial utilizado no TCC e é
+A pasta `dados/pesquisa/` contém o snapshot oficial utilizado no TCC e é
 versionada no Git. Já `dados/temporario/` e `output/` são locais e ignoradas.
 Isso separa a evidência congelada da pesquisa dos downloads usados em novas
 execuções.
@@ -202,7 +202,7 @@ ALPACA_SECRET_KEY=sua_secret_key
 O arquivo `.env` é ignorado pelo Git.
 
 As credenciais são necessárias para execuções que baixam dados novamente da
-Alpaca. A reprodução do snapshot oficial em `dados/pesquisa_v1/` não depende
+Alpaca. A reprodução do snapshot oficial em `dados/pesquisa/` não depende
 de internet nem de credenciais.
 
 ## Executando a pesquisa
@@ -238,8 +238,8 @@ FORCAR_DOWNLOAD = False
 
 Mantenha esse valor em `False` para reutilizar os arquivos temporários já
 baixados, quando existirem. Altere para `True` quando quiser apagar somente
-`dados/temporario/reproducao_v1/` e baixar novamente todas as séries e
-Corporate Actions da Alpaca. O snapshot oficial em `dados/pesquisa_v1/` não é
+`dados/temporario/reproducao/` e baixar novamente todas as séries e
+Corporate Actions da Alpaca. O snapshot oficial em `dados/pesquisa/` não é
 alterado por essa chave.
 
 ## Modos de dados
@@ -252,17 +252,17 @@ FORCAR_DOWNLOAD = False
 ```
 
 Com `USAR_DADOS_PESQUISA_CONGELADOS=True`, o sistema usa somente
-`dados/pesquisa_v1/`, valida os hashes e não acessa a Alpaca.
+`dados/pesquisa/`, valida os hashes e não acessa a Alpaca.
 
 Com `USAR_DADOS_PESQUISA_CONGELADOS=False` e `FORCAR_DOWNLOAD=False`, o
-sistema usa `dados/temporario/reproducao_v1/`, reaproveitando arquivos já
+sistema usa `dados/temporario/reproducao/`, reaproveitando arquivos já
 existentes e baixando apenas o que estiver ausente. Esses arquivos não entram
 no Git.
 
 Com `USAR_DADOS_PESQUISA_CONGELADOS=False` e `FORCAR_DOWNLOAD=True`, o
-sistema limpa somente `dados/temporario/reproducao_v1/`, baixa novamente
+sistema limpa somente `dados/temporario/reproducao/`, baixa novamente
 todos os ativos e Corporate Actions da Alpaca, recria o manifesto temporário e
-executa a partir desse conjunto. O snapshot oficial em `dados/pesquisa_v1/`
+executa a partir desse conjunto. O snapshot oficial em `dados/pesquisa/`
 permanece intocado.
 
 Para migrar o snapshot local antigo para a pasta versionada:
@@ -319,7 +319,7 @@ python -m pytest -q
 A execução cria:
 
 ```text
-output/reproducao_v1/
+output/reproducao/
 ├── summary.json
 ├── summary.txt
 ├── comparison.csv
@@ -330,7 +330,17 @@ output/reproducao_v1/
 ├── folds.csv
 ├── data_diagnostics.csv
 ├── data_audit.json
-└── structural_exclusions.csv
+├── structural_exclusions.csv
+└── graficos/
+    ├── backtest_analytics.xlsx
+    ├── monthly_realized_pnl_*.csv
+    ├── monthly_realized_pnl_heatmap_*.png/.svg
+    ├── monthly_returns_*.csv
+    ├── monthly_return_heatmap_*.csv/.png/.svg
+    ├── capital_rotations_*.csv
+    ├── capital_rotations_monthly_*.csv
+    ├── capital_rotations_transition_matrix_*.csv
+    └── capital_rotations_heatmap_*.csv/.png/.svg
 ```
 
 `summary.json` concentra as métricas principais. `comparison.csv` resume a
