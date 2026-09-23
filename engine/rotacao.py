@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from threadpoolctl import threadpool_limits
 
-from .diagnosticos import enrich_trade_diagnostics
+from .diagnosticos import enriquecer_diagnosticos_operacoes
 
 BASE_ROTATION_MODE = "COMPOUND_ROTATION_SWING_LIGHTGBM"
 SUPPORTED_ROTATION_MODES = frozenset({BASE_ROTATION_MODE})
@@ -1185,7 +1185,7 @@ def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tupl
         prediction_rows[-1]['strategy_equity'] = cash
         prediction_rows[-1]['trade_action'] = prediction_rows[-1]['trade_action'] or 'FINAL_SELL'
         prediction_rows[-1]['trade_reason'] = prediction_rows[-1]['trade_reason'] or 'FINAL_LIQUIDATION'
-    records = enrich_trade_diagnostics(records, frames, symbols)
+    records = enriquecer_diagnosticos_operacoes(records, frames, symbols)
     predictions = pd.DataFrame(prediction_rows).set_index('timestamp')
     predictions.index = pd.to_datetime(predictions.index, utc=True)
     predictions.index.name = 'timestamp'
