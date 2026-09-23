@@ -88,6 +88,31 @@ def test_calendar_source_is_derived_from_longest_valid_asset_history() -> None:
 
     assert _select_calendar_source_symbol(frames) == "LONG"
 
+
+def test_execution_helpers_use_portuguese_names() -> None:
+    execution_source = (ROOT / "engine" / "execution.py").read_text(
+        encoding="utf-8"
+    )
+    experiment_source = (ROOT / "reproducao" / "experimento.py").read_text(
+        encoding="utf-8"
+    )
+
+    for expected in (
+        "arredondar_taxa_para_centavo",
+        "calcular_taxas_referencia",
+        "aplicar_deslizamento",
+    ):
+        assert expected in execution_source
+        assert expected in experiment_source or expected == "arredondar_taxa_para_centavo"
+
+    for retired in (
+        "round_fee_to_cent",
+        "calculate_reference_fees",
+        "apply_slippage",
+    ):
+        assert retired not in execution_source
+        assert retired not in experiment_source
+
 def test_control_and_soft_share_same_lightgbm() -> None:
     control = build_control_config(CONFIG)
     soft = build_soft_config(CONFIG)
@@ -148,7 +173,7 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
 
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.2.0-dev.3"
+    assert EXPERIMENT_VERSION == "1.2.0-dev.4"
     forbidden = (
         "series_historicas",
         "tiingo",
