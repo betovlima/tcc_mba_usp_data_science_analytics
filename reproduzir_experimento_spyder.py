@@ -10,7 +10,7 @@ Executado como script, os mesmos blocos rodam sequencialmente.
 Fluxo oficial:
 Alpaca RAW/SIP -> CSV por ativo -> Corporate Actions CSV por ativo ->
 integridade -> exclusao estrutural -> normalizacao de splits -> folds ->
-LightGBM CPU -> Control -> Soft Horizon Consensus -> comparacao.
+LightGBM CPU -> Control -> Soft Horizon Consensus -> comparacao ->\nBacktest Analytics -> graficos e planilha.
 """
 
 # %% 0 - Imports, caminhos e configuracao congelada
@@ -44,9 +44,13 @@ from engine.configuracao import (
 )
 
 RAIZ_PROJETO = Path(__file__).resolve().parent
+
+# Migra automaticamente layouts locais antigos sem sobrescrever arquivos.
+diretorios_migrados = migrar_diretorios_legados(RAIZ_PROJETO)
+
 CAMINHOS_PESQUISA = SnapshotPaths.research(RAIZ_PROJETO)
 CAMINHOS_TEMPORARIOS = SnapshotPaths.temporary(RAIZ_PROJETO)
-DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "reproducao_v1"
+DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "reproducao"
 
 # True = usa exatamente os CSVs versionados em dados/pesquisa_v1.
 USAR_DADOS_PESQUISA_CONGELADOS = False
@@ -255,6 +259,15 @@ arquivos_resultado = save_results(
     soft_result=soft_result,
     soft_metrics=soft_metrics,
     comparison=comparacao,
+)
+
+# %% 11 - BACKTEST ANALYTICS, GRAFICOS E PLANILHA
+# Gera novamente toda a pasta graficos para impedir artefatos obsoletos.
+arquivos_analiticos = gerar_analises_backtest(
+    DIRETORIO_RESULTADOS,
+    manifest=manifesto,
+    control_result=control_result,
+    soft_result=soft_result,
 )
 
 print("[done] reproducao concluida", flush=True)
