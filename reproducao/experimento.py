@@ -6,20 +6,20 @@ from typing import Any
 
 import pandas as pd
 
-from engine.lightgbm import run_lightgbm
-from engine.rotation import (
-    _build_walk_forward_folds,
-    _fold_performance,
-    prepare_rotation_panel,
+from engine.modelo_lightgbm import executar_lightgbm
+from engine.rotacao import (
+    _construir_folds_walk_forward,
+    _desempenho_folds,
+    preparar_painel_rotacao,
 )
-from engine.config import (
+from engine.configuracao import (
     CONFIG,
     SOFT_HORIZON_CONSENSUS_PENALTY,
     StandaloneBacktestConfig,
-    build_control_config,
-    build_soft_config,
+    construir_configuracao_controle,
+    construir_configuracao_soft,
 )
-from engine.execution import aplicar_deslizamento, calcular_taxas_referencia
+from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 
 
 def build_variant_configs(
@@ -27,9 +27,9 @@ def build_variant_configs(
     base: StandaloneBacktestConfig = CONFIG,
 ) -> tuple[StandaloneBacktestConfig, StandaloneBacktestConfig]:
     eligible = tuple(frames)
-    prepared = base.model_copy(update={"assets": eligible})
-    control = build_control_config(prepared, assets=eligible)
-    soft = build_soft_config(
+    prepared = base.copiar_modelo(update={"assets": eligible})
+    control = construir_configuracao_controle(prepared, assets=eligible)
+    soft = construir_configuracao_soft(
         prepared,
         assets=eligible,
         penalty_strength=SOFT_HORIZON_CONSENSUS_PENALTY,
@@ -41,8 +41,8 @@ def build_folds(
     frames: dict[str, pd.DataFrame],
     config: StandaloneBacktestConfig,
 ) -> tuple[pd.DatetimeIndex, list[dict[str, Any]]]:
-    _, common_dates, _ = prepare_rotation_panel(frames, config)
-    folds = _build_walk_forward_folds(common_dates, config)
+    _, common_dates, _ = preparar_painel_rotacao(frames, config)
+    folds = _construir_folds_walk_forward(common_dates, config)
     return common_dates, folds
 
 
@@ -51,7 +51,7 @@ def summarize_metrics(
     folds: list[dict[str, Any]],
     initial_capital: float,
 ) -> dict[str, Any]:
-    fold_rows = _fold_performance(
+    fold_rows = _desempenho_folds(
         result.predictions,
         folds,
         initial_capital,
@@ -107,7 +107,7 @@ def run_variant(
     folds: list[dict[str, Any]],
 ) -> tuple[Any, dict[str, Any]]:
     print(f"[final] starting {label}", flush=True)
-    results = run_lightgbm(
+    results = executar_lightgbm(
         frames,
         config,
         calcular_taxas_referencia,
