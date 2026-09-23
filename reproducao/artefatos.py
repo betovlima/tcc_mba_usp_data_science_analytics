@@ -88,6 +88,12 @@ def save_results(
         "database_access": False,
         "data_transport": "alpaca_raw_sip_to_csv_per_asset",
         "snapshot_sha256": manifest.get("snapshot_sha256"),
+        "analysis_end_date": (
+            (manifest.get("corporate_actions") or {}).get("query_end")
+        ),
+        "bar_snapshot_as_of_end": (
+            (manifest.get("bars") or {}).get("bar_snapshot_as_of_end")
+        ),
         "control": control_metrics,
         "soft_horizon_consensus": soft_metrics,
         "comparison": comparison,
@@ -106,6 +112,14 @@ def save_results(
             f"TCC MBA USP - reproducao v{EXPERIMENT_VERSION}",
             "Backend: CPU",
             f"Snapshot: {manifest.get('snapshot_sha256')}",
+            (
+                "Analysis end: "
+                f"{(manifest.get('corporate_actions') or {}).get('query_end')}"
+            ),
+            (
+                "Bar snapshot as of: "
+                f"{(manifest.get('bars') or {}).get('bar_snapshot_as_of_end')}"
+            ),
             "",
             f"Control: US$ {float(control_metrics['ending_capital']):,.2f}",
             f"Soft:    US$ {float(soft_metrics['ending_capital']):,.2f}",
