@@ -658,4 +658,4 @@ def test_spyder_data_modes_protect_frozen_research_snapshot() -> None:
     assert "CAMINHOS = CAMINHOS_TEMPORARIOS" in source
     assert "CAMINHOS = CAMINHOS_PESQUISA" in source
     assert "modo=atualizar-pesquisa-versionada" not in source
-    assert "replace=FORCAR_DOWNLOAD" in source
+    assert "replace=RECRIAR_DADOS_TEMPORARIOS" in source
