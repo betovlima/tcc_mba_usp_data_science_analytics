@@ -31,15 +31,15 @@ env/
 # Snapshot oficial da pesquisa: versionado no Git.
 dados/*
 !dados/README.md
-!dados/pesquisa_v1/
-!dados/pesquisa_v1/README.md
-!dados/pesquisa_v1/raw_bars/
-!dados/pesquisa_v1/corporate_actions/
-!dados/pesquisa_v1/manifest.json
+!dados/pesquisa/
+!dados/pesquisa/README.md
+!dados/pesquisa/raw_bars/
+!dados/pesquisa/corporate_actions/
+!dados/pesquisa/manifest.json
 
 # Downloads temporarios e layout legado permanecem locais.
 dados/temporario/
-dados/reproducao_v1/
+dados/reproducao/
 
 # Resultados locais
 output/
@@ -58,8 +58,8 @@ artifacts/
 *.zip
 
 # Excecao: CSVs oficiais da pesquisa entram no Git.
-!dados/pesquisa_v1/raw_bars/*.csv
-!dados/pesquisa_v1/corporate_actions/*.csv
+!dados/pesquisa/raw_bars/*.csv
+!dados/pesquisa/corporate_actions/*.csv
 
 # Sistema operacional
 .DS_Store
