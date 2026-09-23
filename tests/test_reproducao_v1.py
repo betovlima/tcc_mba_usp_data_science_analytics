@@ -1,17 +1,28 @@
 import ast
 import importlib
+import json
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from reproducao.dados import SnapshotPaths
+from reproducao.dados import (
+    SnapshotPaths,
+    data_final_temporaria_atual,
+    snapshot_cobre_data_final,
+)
 from reproducao.graficos import (
     calcular_retornos_mensais,
     construir_rotacoes,
     gerar_analises_backtest,
 )
-from engine.rotacao import _executar_compra, _selecionar_ativo_fonte_calendario
+from engine.rotacao import (
+    _datas_decisao_analise,
+    _executar_compra,
+    _selecionar_ativo_fonte_calendario,
+)
 from engine.configuracao import (
     ANALYSIS_END_DATE,
     ASSETS,
@@ -191,6 +202,94 @@ def test_snapshot_layout_is_csv_per_asset() -> None:
     )
 
 
+
+
+def test_temporary_end_date_uses_current_market_date_after_close() -> None:
+    agora = datetime(
+        2026,
+        9,
+        22,
+        23,
+        29,
+        tzinfo=ZoneInfo("America/Asuncion"),
+    )
+    assert data_final_temporaria_atual(agora) == "2026-09-22"
+
+
+def test_temporary_end_date_avoids_incomplete_intraday_bar() -> None:
+    agora = datetime(
+        2026,
+        9,
+        22,
+        15,
+        0,
+        tzinfo=ZoneInfo("America/New_York"),
+    )
+    assert data_final_temporaria_atual(agora) == "2026-09-21"
+
+
+def test_temporary_snapshot_is_refreshed_when_manifest_is_stale(tmp_path) -> None:
+    paths = SnapshotPaths.from_root(tmp_path / "snapshot")
+    paths.ensure()
+    manifest = {
+        "bars": {"bar_snapshot_as_of_end": "2026-09-17"},
+        "corporate_actions": {"query_end": "2026-09-17"},
+    }
+    paths.manifest.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert not snapshot_cobre_data_final(paths, "2026-09-22")
+
+    manifest["bars"]["bar_snapshot_as_of_end"] = "2026-09-22"
+    manifest["corporate_actions"]["query_end"] = "2026-09-22"
+    paths.manifest.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert snapshot_cobre_data_final(paths, "2026-09-22")
+
+
+def test_analysis_window_can_end_on_current_temporary_session() -> None:
+    common_dates = pd.to_datetime(
+        [
+            "2026-09-15",
+            "2026-09-16",
+            "2026-09-17",
+            "2026-09-18",
+            "2026-09-21",
+            "2026-09-22",
+        ],
+        utc=True,
+    )
+    folds = [
+        {
+            "test_start_index": 1,
+            "test_end_index": len(common_dates),
+        }
+    ]
+    config = CONFIG.copiar_modelo(
+        update={
+            "analysis_start_date": "2026-09-15",
+            "analysis_end_date": "2026-09-22",
+        }
+    )
+
+    decision_dates = _datas_decisao_analise(
+        common_dates,
+        folds,
+        config,
+    )
+
+    assert decision_dates[-1].date().isoformat() == "2026-09-22"
+
+
+def test_spyder_refreshes_stale_temporary_snapshot_through_effective_end() -> None:
+    source = (ROOT / "reproduzir_experimento_spyder.py").read_text(
+        encoding="utf-8"
+    )
+    assert "DATA_FINAL_EFETIVA = data_final_temporaria_atual()" in source
+    assert "snapshot_cobre_data_final(" in source
+    assert "modo=download-temporario-atualizacao" in source
+    assert 'update={"analysis_end_date": DATA_FINAL_EFETIVA}' in source
+    assert "bar_snapshot_as_of_end=BAR_SNAPSHOT_AS_OF_EFETIVO" in source
+    assert "query_end=DATA_FINAL_EFETIVA" in source
 
 def test_capital_rotations_follow_backtest_analytics_semantics() -> None:
     trades = pd.DataFrame(
@@ -404,7 +503,7 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
 
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.2.0-dev.7"
+    assert EXPERIMENT_VERSION == "1.2.0-dev.8"
     forbidden = (
         "series_historicas",
         "tiingo",
