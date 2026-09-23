@@ -19,7 +19,7 @@ from engine.config import (
     build_control_config,
     build_soft_config,
 )
-from engine.execution import apply_slippage, calculate_reference_fees
+from engine.execution import aplicar_deslizamento, calcular_taxas_referencia
 
 
 def build_variant_configs(
@@ -110,8 +110,8 @@ def run_variant(
     results = run_lightgbm(
         frames,
         config,
-        calculate_reference_fees,
-        apply_slippage,
+        calcular_taxas_referencia,
+        aplicar_deslizamento,
         progress_callback=lambda p, stage, completed: print(
             f"[final] {label} progress={p:.1f}% "
             f"completed={completed} stage={stage}",
