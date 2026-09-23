@@ -54,6 +54,14 @@ def data_final_temporaria_atual(
         instante = instante.replace(tzinfo=mercado)
     else:
         instante = instante.astimezone(mercado)
+
+    # Nao usa barra diaria potencialmente incompleta durante o pregao.
+    # Depois de 16:15 ET, a data corrente pode ser consultada. Antes disso,
+    # consulta ate o dia calendario anterior; a propria Alpaca determina a
+    # ultima sessao efetivamente disponivel (sexta-feira, feriado etc.).
+    minutos = instante.hour * 60 + instante.minute
+    if minutos < 16 * 60 + 15:
+        return (instante.date() - timedelta(days=1)).isoformat()
     return instante.date().isoformat()
 
 
