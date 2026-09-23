@@ -111,11 +111,11 @@ amostra. Eles não constituem previsão nem garantia de desempenho futuro.
 │   │   └── manifest.json
 │   └── temporario/
 ├── engine/
-│   ├── config.py
-│   ├── diagnostics.py
-│   ├── execution.py
-│   ├── lightgbm.py
-│   └── rotation.py
+│   ├── configuracao.py
+│   ├── diagnosticos.py
+│   ├── execucao.py
+│   ├── modelo_lightgbm.py
+│   └── rotacao.py
 ├── reproducao/
 │   ├── artefatos.py
 │   ├── dados.py
