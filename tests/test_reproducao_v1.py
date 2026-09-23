@@ -1,4 +1,5 @@
 import ast
+import importlib
 from pathlib import Path
 
 import pandas as pd
@@ -19,6 +20,23 @@ from engine.configuracao import (
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
+
+def test_all_runtime_modules_import_successfully() -> None:
+    modules = (
+        "engine.configuracao",
+        "engine.diagnosticos",
+        "engine.execucao",
+        "engine.rotacao",
+        "engine.modelo_lightgbm",
+        "reproducao.artefatos",
+        "reproducao.dados",
+        "reproducao.preparacao",
+        "reproducao.experimento",
+    )
+    for module_name in modules:
+        module = importlib.import_module(module_name)
+        assert module is not None
 
 def test_official_reproduction_has_no_database_dependency() -> None:
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").lower()
@@ -173,7 +191,7 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
 
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.2.0-dev.5"
+    assert EXPERIMENT_VERSION == "1.2.0-dev.6"
     forbidden = (
         "series_historicas",
         "tiingo",
