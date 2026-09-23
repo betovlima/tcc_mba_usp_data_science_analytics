@@ -4,16 +4,16 @@ from pathlib import Path
 import pandas as pd
 
 from reproducao.dados import SnapshotPaths
-from engine.rotation import _execute_buy, _select_calendar_source_symbol
-from engine.config import (
+from engine.rotacao import _executar_compra, _selecionar_ativo_fonte_calendario
+from engine.configuracao import (
     ANALYSIS_END_DATE,
     ASSETS,
     BAR_SNAPSHOT_AS_OF_END,
     CONFIG,
     EXPERIMENT_VERSION,
     SOFT_HORIZON_CONSENSUS_PENALTY,
-    build_control_config,
-    build_soft_config,
+    construir_configuracao_controle,
+    construir_configuracao_soft,
 )
 
 
@@ -30,7 +30,7 @@ def test_official_reproduction_has_no_database_dependency() -> None:
         ROOT / "reproducao" / "dados.py",
         ROOT / "reproducao" / "preparacao.py",
         ROOT / "reproducao" / "experimento.py",
-        ROOT / "engine" / "config.py",
+        ROOT / "engine" / "configuracao.py",
     ]
     joined = "\n".join(path.read_text(encoding="utf-8").lower() for path in official_files)
     assert "pymongo" not in joined
@@ -57,12 +57,12 @@ def test_frozen_universe_and_dates_match_cpu_reference() -> None:
 
 
 def test_asset_universe_has_no_manual_reference_or_candidate_split() -> None:
-    config_source = (ROOT / "engine" / "config.py").read_text(encoding="utf-8")
+    config_source = (ROOT / "engine" / "configuracao.py").read_text(encoding="utf-8")
     runtime_source = "\n".join(
         path.read_text(encoding="utf-8")
         for path in [
-            ROOT / "engine" / "rotation.py",
-            ROOT / "engine" / "lightgbm.py",
+            ROOT / "engine" / "rotacao.py",
+            ROOT / "engine" / "modelo_lightgbm.py",
             ROOT / "reproducao" / "experimento.py",
         ]
     )
@@ -86,11 +86,11 @@ def test_calendar_source_is_derived_from_longest_valid_asset_history() -> None:
         "LONG": pd.DataFrame(index=long_index),
     }
 
-    assert _select_calendar_source_symbol(frames) == "LONG"
+    assert _selecionar_ativo_fonte_calendario(frames) == "LONG"
 
 
 def test_execution_helpers_use_portuguese_names() -> None:
-    execution_source = (ROOT / "engine" / "execution.py").read_text(
+    execution_source = (ROOT / "engine" / "execucao.py").read_text(
         encoding="utf-8"
     )
     experiment_source = (ROOT / "reproducao" / "experimento.py").read_text(
@@ -114,8 +114,8 @@ def test_execution_helpers_use_portuguese_names() -> None:
         assert retired not in experiment_source
 
 def test_control_and_soft_share_same_lightgbm() -> None:
-    control = build_control_config(CONFIG)
-    soft = build_soft_config(CONFIG)
+    control = construir_configuracao_controle(CONFIG)
+    soft = construir_configuracao_soft(CONFIG)
 
     assert control.research_model_settings["lightgbm"] == soft.research_model_settings["lightgbm"]
     assert control.research_model_settings["soft_horizon_consensus"] == {
@@ -164,16 +164,16 @@ def test_snapshot_layout_is_csv_per_asset() -> None:
 
 
 def test_engine_contains_soft_horizon_consensus_policy() -> None:
-    source = (ROOT / "engine" / "lightgbm.py").read_text(
+    source = (ROOT / "engine" / "modelo_lightgbm.py").read_text(
         encoding="utf-8"
     )
-    assert "def _soft_horizon_consensus_policy(" in source
+    assert "def _politica_consenso_horizontes_soft(" in source
     assert "weighted_rank_margin_modifier" in source
     assert "SOFT_CONSENSUS_BLOCK_MARGINAL_SWITCH" in source
 
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.2.0-dev.4"
+    assert EXPERIMENT_VERSION == "1.2.0-dev.5"
     forbidden = (
         "series_historicas",
         "tiingo",
@@ -218,11 +218,11 @@ def test_snapshot_does_not_persist_derived_normalized_bars() -> None:
 def test_engine_contains_only_current_modules() -> None:
     expected = {
         "__init__.py",
-        "config.py",
-        "diagnostics.py",
-        "execution.py",
-        "lightgbm.py",
-        "rotation.py",
+        "configuracao.py",
+        "diagnosticos.py",
+        "execucao.py",
+        "modelo_lightgbm.py",
+        "rotacao.py",
     }
     actual = {
         path.name
@@ -252,7 +252,7 @@ def test_engine_has_no_retired_strategy_modes() -> None:
 
 
 def test_fractional_execution_is_fixed_experiment_semantics() -> None:
-    quantity, execution_price, fees = _execute_buy(
+    quantity, execution_price, fees = _executar_compra(
         100.0,
         30.0,
         CONFIG,
@@ -266,14 +266,14 @@ def test_fractional_execution_is_fixed_experiment_semantics() -> None:
 
 def test_runtime_config_attribute_contract() -> None:
     config_attributes = set(CONFIG.__dataclass_fields__)
-    config_attributes.add("model_copy")
+    config_attributes.add("copiar_modelo")
     runtime_files = [
         *sorted((ROOT / "engine").glob("*.py")),
         *sorted((ROOT / "reproducao").glob("*.py")),
     ]
     runtime_files = [
         path for path in runtime_files
-        if path.name != "config.py"
+        if path.name != "configuracao.py"
     ]
 
     referenced: set[str] = set()
