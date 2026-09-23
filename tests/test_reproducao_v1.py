@@ -1,12 +1,12 @@
 import ast
 import importlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 
 from reproducao.dados import SnapshotPaths
-from reproducao.graficos import calcular_retornos_mensais, construir_rotacoes
-from engine.rotacao import _executar_compra, _selecionar_ativo_fonte_calendario
+from reproducao.graficos import (\n    calcular_retornos_mensais,\n    construir_rotacoes,\n    gerar_analises_backtest,\n)\nfrom engine.rotacao import _executar_compra, _selecionar_ativo_fonte_calendario
 from engine.configuracao import (
     ANALYSIS_END_DATE,
     ASSETS,
@@ -306,6 +306,88 @@ def test_backtest_analytics_output_contract() -> None:
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     assert "matplotlib" in requirements
     assert "openpyxl" in requirements
+
+
+def test_backtest_analytics_generation_creates_expected_files(tmp_path) -> None:
+    index = pd.to_datetime(
+        [
+            "2020-01-31T00:00:00Z",
+            "2020-02-28T00:00:00Z",
+            "2020-03-31T00:00:00Z",
+        ],
+        utc=True,
+    )
+    predictions = pd.DataFrame(
+        {
+            "strategy_equity": [100.0, 110.0, 121.0],
+            "buy_hold_equity": [100.0, 105.0, 110.25],
+        },
+        index=index,
+    )
+    trades = pd.DataFrame(
+        [
+            {
+                "timestamp": "2020-01-31T00:00:00+00:00",
+                "action": "BUY",
+                "asset": "AAA",
+                "rotation_id": "r1",
+                "rotation_from_asset": "CASH",
+                "rotation_to_asset": "AAA",
+                "total_fee": 1.0,
+                "execution_price": 10.0,
+            },
+            {
+                "timestamp": "2020-02-28T00:00:00+00:00",
+                "action": "SELL",
+                "asset": "AAA",
+                "rotation_id": "r2",
+                "rotation_from_asset": "AAA",
+                "rotation_to_asset": "BBB",
+                "total_fee": 1.0,
+                "execution_price": 12.0,
+                "realized_pnl": 200.0,
+                "position_return": 0.20,
+                "holding_bars": 20,
+            },
+            {
+                "timestamp": "2020-02-28T00:00:00+00:00",
+                "action": "BUY",
+                "asset": "BBB",
+                "rotation_id": "r2",
+                "rotation_from_asset": "AAA",
+                "rotation_to_asset": "BBB",
+                "total_fee": 1.0,
+                "execution_price": 20.0,
+            },
+            {
+                "timestamp": "2020-03-31T00:00:00+00:00",
+                "action": "FINAL_SELL",
+                "asset": "BBB",
+                "total_fee": 1.0,
+                "realized_pnl": 100.0,
+                "position_return": 0.05,
+                "holding_bars": 22,
+            },
+        ]
+    )
+    result = SimpleNamespace(predictions=predictions, trades=trades)
+
+    generated = gerar_analises_backtest(
+        tmp_path,
+        manifest={"snapshot_sha256": "test-snapshot"},
+        control_result=result,
+        soft_result=result,
+    )
+
+    graph_dir = tmp_path / "graficos"
+    assert generated["graficos_dir"] == graph_dir
+    assert (graph_dir / "backtest_analytics.xlsx").exists()
+    assert (graph_dir / "capital_rotations_control.csv").exists()
+    assert (graph_dir / "capital_rotations_heatmap_control.png").exists()
+    assert (graph_dir / "capital_rotations_heatmap_control.svg").exists()
+    assert (graph_dir / "monthly_realized_pnl_heatmap_control.png").exists()
+    assert (graph_dir / "monthly_return_heatmap_control_simulation.png").exists()
+    assert (graph_dir / "monthly_return_heatmap_soft_excess.svg").exists()
 
 def test_engine_contains_soft_horizon_consensus_policy() -> None:
     source = (ROOT / "engine" / "modelo_lightgbm.py").read_text(
