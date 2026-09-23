@@ -52,13 +52,13 @@ CAMINHOS_PESQUISA = SnapshotPaths.research(RAIZ_PROJETO)
 CAMINHOS_TEMPORARIOS = SnapshotPaths.temporary(RAIZ_PROJETO)
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "reproducao"
 
-# True = usa exatamente os CSVs versionados em dados/pesquisa_v1.
+# True = usa exatamente os CSVs versionados em dados/pesquisa.
 USAR_DADOS_PESQUISA_CONGELADOS = False
 
 # Quando USAR_DADOS_PESQUISA_CONGELADOS=False:
 # False = reutiliza arquivos existentes em dados/temporario/ quando disponiveis.
 # True = apaga somente dados/temporario/ e baixa novamente todos os arquivos.
-# Esta chave nunca altera dados/pesquisa_v1.
+# Esta chave nunca altera dados/pesquisa.
 FORCAR_DOWNLOAD = False
 
 print("=" * 78, flush=True)
