@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from reproducao.dados import SnapshotPaths
-from engine.config import ASSETS
+from engine.configuracao import ASSETS
 
 
 REFERENCE_FILE = Path(__file__).with_name(
