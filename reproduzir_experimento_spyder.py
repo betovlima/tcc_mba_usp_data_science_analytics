@@ -76,6 +76,9 @@ else:
 CONFIG_EFETIVA = CONFIG.copiar_modelo(
     update={"analysis_end_date": DATA_FINAL_EFETIVA}
 )
+COMPARAR_SNAPSHOT_REFERENCIA = (
+    DATA_FINAL_EFETIVA == ANALYSIS_END_DATE
+)
 
 print("=" * 78, flush=True)
 print("TCC MBA USP - reproducao cientifica independente", flush=True)
@@ -196,7 +199,8 @@ else:
 inicio_preparacao = time.perf_counter()
 frames, exclusoes, diagnosticos_dados, auditoria_dados = prepare_model_frames(
     CAMINHOS,
-    assets=ASSETS
+    assets=ASSETS,
+    comparar_snapshot_referencia=COMPARAR_SNAPSHOT_REFERENCIA,
 )
 print(
     f"[stage] preparation completed eligible={len(frames)} "
