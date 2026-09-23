@@ -255,15 +255,30 @@ Com `USAR_DADOS_PESQUISA_CONGELADOS=True`, o sistema usa somente
 `dados/pesquisa/`, valida os hashes e não acessa a Alpaca.
 
 Com `USAR_DADOS_PESQUISA_CONGELADOS=False` e `FORCAR_DOWNLOAD=False`, o
-sistema usa `dados/temporario/reproducao/`, reaproveitando arquivos já
-existentes e baixando apenas o que estiver ausente. Esses arquivos não entram
-no Git.
+sistema usa `dados/temporario/reproducao/`. O manifesto é comparado com a
+data final efetiva: se o snapshot temporário estiver atrasado, ele é atualizado
+automaticamente; se já cobrir a data alvo, os arquivos são reutilizados. Esses
+arquivos não entram no Git.
 
 Com `USAR_DADOS_PESQUISA_CONGELADOS=False` e `FORCAR_DOWNLOAD=True`, o
 sistema limpa somente `dados/temporario/reproducao/`, baixa novamente
 todos os ativos e Corporate Actions da Alpaca, recria o manifesto temporário e
 executa a partir desse conjunto. O snapshot oficial em `dados/pesquisa/`
 permanece intocado.
+
+### Data final no modo temporário
+
+O snapshot oficial da pesquisa continua congelado em `2026-09-17`.
+
+No modo temporário, a data final é dinâmica. Depois de 16:15 no horário de
+Nova York, a execução consulta também a sessão do próprio dia. Antes desse
+horário, usa como limite o dia calendário anterior para evitar uma barra diária
+ainda incompleta. Em fins de semana e feriados, a Alpaca naturalmente retorna
+como última observação a sessão de mercado mais recente.
+
+Assim, uma execução temporária feita após o fechamento de 22/09/2026 pode
+terminar em 22/09/2026 e a liquidação final do backtest ocorre nessa última
+sessão disponível.
 
 Para migrar o snapshot local antigo para a pasta versionada:
 
