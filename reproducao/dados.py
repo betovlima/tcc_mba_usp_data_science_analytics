@@ -78,17 +78,17 @@ class SnapshotPaths:
 
     @classmethod
     def research(cls, project_root: Path) -> "SnapshotPaths":
-        return cls.from_root(project_root / "dados" / "pesquisa_v1")
+        return cls.from_root(project_root / "dados" / "pesquisa")
 
     @classmethod
     def temporary(cls, project_root: Path) -> "SnapshotPaths":
         return cls.from_root(
-            project_root / "dados" / "temporario" / "reproducao_v1"
+            project_root / "dados" / "temporario" / "reproducao"
         )
 
     @classmethod
     def legacy(cls, project_root: Path) -> "SnapshotPaths":
-        return cls.from_root(project_root / "dados" / "reproducao_v1")
+        return cls.from_root(project_root / "dados" / "reproducao")
 
     @classmethod
     def under(cls, project_root: Path) -> "SnapshotPaths":
