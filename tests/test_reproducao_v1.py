@@ -249,12 +249,12 @@ def test_temporary_snapshot_is_refreshed_when_manifest_is_stale(tmp_path) -> Non
 def test_analysis_window_can_end_on_current_temporary_session() -> None:
     common_dates = pd.to_datetime(
         [
-            "2026-09-15",
-            "2026-09-16",
-            "2026-09-17",
-            "2026-09-18",
-            "2026-09-21",
-            "2026-09-22",
+            "2026-09-15 04:00:00+00:00",
+            "2026-09-16 04:00:00+00:00",
+            "2026-09-17 04:00:00+00:00",
+            "2026-09-18 04:00:00+00:00",
+            "2026-09-21 04:00:00+00:00",
+            "2026-09-22 04:00:00+00:00",
         ],
         utc=True,
     )
@@ -278,6 +278,34 @@ def test_analysis_window_can_end_on_current_temporary_session() -> None:
     )
 
     assert decision_dates[-1].date().isoformat() == "2026-09-22"
+
+
+def test_analysis_end_date_is_inclusive_for_nyse_utc_timestamp() -> None:
+    common_dates = pd.to_datetime(
+        [
+            "2026-09-21 04:00:00+00:00",
+            "2026-09-22 04:00:00+00:00",
+            "2026-09-23 04:00:00+00:00",
+        ],
+        utc=True,
+    )
+    folds = [
+        {
+            "test_start_index": 1,
+            "test_end_index": len(common_dates),
+        }
+    ]
+    config = CONFIG.copiar_modelo(
+        update={
+            "analysis_start_date": "2026-09-21",
+            "analysis_end_date": "2026-09-22",
+        }
+    )
+
+    dates = _datas_decisao_analise(common_dates, folds, config)
+
+    assert dates[-1] == pd.Timestamp("2026-09-22 04:00:00+00:00")
+    assert pd.Timestamp("2026-09-23 04:00:00+00:00") not in dates
 
 
 def test_spyder_refreshes_stale_temporary_snapshot_through_effective_end() -> None:
@@ -503,7 +531,7 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
 
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.2.0-dev.8"
+    assert EXPERIMENT_VERSION == "1.2.0-dev.9"
     forbidden = (
         "series_historicas",
         "tiingo",
