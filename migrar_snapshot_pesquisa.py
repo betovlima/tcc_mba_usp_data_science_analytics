@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 import shutil
 
-from engine.config import ASSETS
+from engine.configuracao import ASSETS
 from reproducao.dados import (
     SnapshotPaths,
     build_snapshot_manifest,
