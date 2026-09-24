@@ -1152,6 +1152,7 @@ def executar_lightgbm(
             )
             best_candidate = candidate_margins[0]
             best_score = float("-inf")
+            calibration_candidate_scores: list[dict[str, float]] = []
             for candidate in candidate_margins:
                 calibration_policy = _politica_utilidade(
                     calibration_models,
@@ -1167,9 +1168,49 @@ def executar_lightgbm(
                     calibration_dates,
                     rep_config,
                 )
+                calibration_candidate_scores.append(
+                    {
+                        "margin": float(candidate),
+                        "risk_adjusted_score": float(score),
+                    }
+                )
                 if score > best_score:
                     best_score = score
                     best_candidate = candidate
+
+            ordered_calibration_scores = sorted(
+                (
+                    float(item["risk_adjusted_score"])
+                    for item in calibration_candidate_scores
+                ),
+                reverse=True,
+            )
+            calibration_score_gap = (
+                float(
+                    ordered_calibration_scores[0]
+                    - ordered_calibration_scores[1]
+                )
+                if len(ordered_calibration_scores) > 1
+                else None
+            )
+            if technical_log_callback is not None:
+                candidate_text = ",".join(
+                    (
+                        f"{item['margin']:.4f}:"
+                        f"{item['risk_adjusted_score']:.12f}"
+                    )
+                    for item in calibration_candidate_scores
+                )
+                technical_log_callback(
+                    "model=lightgbm event=switch_margin_calibration "
+                    f"fold={fold_id} "
+                    f"selected={float(best_candidate):.4f} "
+                    f"base={float(rep_config.rotation_switch_margin):.4f} "
+                    f"effective={max(float(rep_config.rotation_switch_margin), float(best_candidate)):.4f} "
+                    f"best_score={float(best_score):.12f} "
+                    f"gap={calibration_score_gap} "
+                    f"candidates={candidate_text}"
+                )
 
             detail(
                 run_index=run_index,
@@ -1344,6 +1385,13 @@ def executar_lightgbm(
                     "calibrated_candidate_margin": float(best_candidate),
                     "effective_switch_margin": float(effective_margin),
                     "calibration_risk_adjusted_score": float(best_score),
+                    "calibration_candidate_scores": [
+                        dict(item)
+                        for item in calibration_candidate_scores
+                    ],
+                    "calibration_score_gap_best_vs_second": (
+                        calibration_score_gap
+                    ),
                 }
             )
             report(
@@ -1598,6 +1646,19 @@ def executar_lightgbm(
                 "lightgbm_fold_diagnostics": model_fold_diagnostics,
                 "lightgbm_predictive_diagnostics": predictive_diagnostics,
                 "latest_research_tree": latest_tree,
+                "switch_margin_calibration_details": [
+                    {
+                        **dict(item),
+                        "calibration_candidate_scores": [
+                            dict(score)
+                            for score in (
+                                item.get("calibration_candidate_scores")
+                                or []
+                            )
+                        ],
+                    }
+                    for item in margin_details
+                ],
             }
         )
 
