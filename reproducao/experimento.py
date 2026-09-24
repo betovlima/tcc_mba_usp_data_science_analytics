@@ -51,11 +51,15 @@ def summarize_metrics(
     folds: list[dict[str, Any]],
     initial_capital: float,
 ) -> dict[str, Any]:
-    fold_rows = _desempenho_folds(
-        result.predictions,
-        folds,
-        initial_capital,
+    fold_rows = deepcopy(
+        result.metrics.get("walk_forward_folds") or []
     )
+    if not fold_rows:
+        fold_rows = _desempenho_folds(
+            result.predictions,
+            folds,
+            initial_capital,
+        )
     worst_fold = (
         min(float(row["strategy_return"]) for row in fold_rows)
         if fold_rows
@@ -90,6 +94,9 @@ def summarize_metrics(
         ),
         "simulation_profile": simulation,
         "simulation_session_count": simulation.get("session_count"),
+        "switch_margin_calibration_details": deepcopy(
+            result.metrics.get("switch_margin_calibration_details") or []
+        ),
     }
     for key, value in result.metrics.items():
         if (
