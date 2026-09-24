@@ -761,7 +761,7 @@ def test_spyder_data_modes_protect_frozen_research_snapshot() -> None:
     source = (ROOT / "reproduzir_experimento_spyder.py").read_text(
         encoding="utf-8"
     )
-    assert "USAR_DADOS_PESQUISA_CONGELADOS = False" in source
+    assert "USAR_DADOS_PESQUISA_CONGELADOS = True" in source
     assert "CAMINHOS_TEMPORARIOS" in source
     assert "modo=download-temporario-forcado" in source
     assert "modo=download-temporario-reutilizavel" in source
