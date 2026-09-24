@@ -53,6 +53,9 @@ def save_results(
         "soft_predictions": output_dir / "soft_horizon_consensus_predictions.csv",
         "soft_trades": output_dir / "soft_horizon_consensus_trades.csv",
         "folds": output_dir / "folds.csv",
+        "switch_margin_calibration": (
+            output_dir / "switch_margin_calibration.csv"
+        ),
         "data_diagnostics": output_dir / "data_diagnostics.csv",
         "data_audit": output_dir / "data_audit.json",
         "exclusions": output_dir / "structural_exclusions.csv",
@@ -75,6 +78,35 @@ def save_results(
             item["variant"] = label
             fold_rows.append(item)
     pd.DataFrame(fold_rows).to_csv(paths["folds"], index=False)
+
+    calibration_rows: list[dict[str, Any]] = []
+    for label, metrics in (("CONTROL", control_metrics), ("SOFT", soft_metrics)):
+        for fold in metrics.get("switch_margin_calibration_details") or []:
+            selected = float(fold.get("calibrated_candidate_margin") or 0.0)
+            effective = float(fold.get("effective_switch_margin") or 0.0)
+            gap = fold.get("calibration_score_gap_best_vs_second")
+            for candidate in fold.get("calibration_candidate_scores") or []:
+                margin = float(candidate.get("margin") or 0.0)
+                calibration_rows.append(
+                    {
+                        "variant": label,
+                        "fold_id": int(fold.get("fold_id") or 0),
+                        "candidate_margin": margin,
+                        "risk_adjusted_score": float(
+                            candidate.get("risk_adjusted_score")
+                        ),
+                        "selected": bool(
+                            abs(margin - selected) < 1e-15
+                        ),
+                        "calibrated_candidate_margin": selected,
+                        "effective_switch_margin": effective,
+                        "score_gap_best_vs_second": gap,
+                    }
+                )
+    pd.DataFrame(calibration_rows).to_csv(
+        paths["switch_margin_calibration"],
+        index=False,
+    )
 
     paths["data_audit"].write_text(
         json.dumps(audit, indent=2, default=_json_default),
@@ -133,6 +165,10 @@ def save_results(
                 f"{int(comparison['soft_changed_base_actions'])}"
             ),
             "",
+            (
+                "Switch-margin calibration audit: "
+                f"{paths['switch_margin_calibration'].name}"
+            ),
             f"Requested device: {comparison.get('requested_compute_device')}",
             f"Effective device: {comparison.get('effective_compute_device')}",
         ]
