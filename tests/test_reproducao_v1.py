@@ -18,6 +18,7 @@ from reproducao.graficos import (
     construir_rotacoes,
     gerar_analises_backtest,
 )
+from reproducao.experimento import summarize_metrics
 from engine.rotacao import (
     _datas_decisao_analise,
     _executar_compra,
@@ -530,8 +531,90 @@ def test_engine_contains_soft_horizon_consensus_policy() -> None:
     assert "SOFT_CONSENSUS_BLOCK_MARGINAL_SWITCH" in source
 
 
+def test_switch_margin_calibration_audit_is_exported_by_fold() -> None:
+    predictions = pd.DataFrame(
+        {
+            "strategy_equity": [10_000.0, 10_100.0],
+            "buy_hold_equity": [10_000.0, 10_050.0],
+        },
+        index=pd.to_datetime(
+            [
+                "2020-07-22T04:00:00Z",
+                "2020-07-23T04:00:00Z",
+            ],
+            utc=True,
+        ),
+    )
+    calibration_scores = [
+        {"margin": 0.0, "risk_adjusted_score": -1.62},
+        {"margin": 0.0025, "risk_adjusted_score": -1.61},
+        {"margin": 0.005, "risk_adjusted_score": -1.60},
+        {"margin": 0.01, "risk_adjusted_score": -1.59},
+    ]
+    result = SimpleNamespace(
+        predictions=predictions,
+        metrics={
+            "strategy_ending_capital": 10_100.0,
+            "strategy_return": 0.01,
+            "strategy_cagr": 0.10,
+            "strategy_sharpe": 1.0,
+            "strategy_maximum_drawdown": -0.01,
+            "buy_hold_ending_capital": 10_050.0,
+            "buy_hold_return": 0.005,
+            "buy_hold_cagr": 0.05,
+            "buy_hold_sharpe": 0.5,
+            "buy_hold_maximum_drawdown": -0.02,
+            "walk_forward_folds": [
+                {
+                    "fold_id": 1,
+                    "strategy_return": 0.01,
+                    "calibrated_candidate_margin": 0.01,
+                    "effective_switch_margin": 0.01,
+                    "calibration_risk_adjusted_score": -1.59,
+                    "calibration_candidate_scores": calibration_scores,
+                    "calibration_score_gap_best_vs_second": 0.01,
+                }
+            ],
+            "switch_margin_calibration_details": [
+                {
+                    "fold_id": 1,
+                    "calibrated_candidate_margin": 0.01,
+                    "effective_switch_margin": 0.01,
+                    "calibration_risk_adjusted_score": -1.59,
+                    "calibration_candidate_scores": calibration_scores,
+                    "calibration_score_gap_best_vs_second": 0.01,
+                }
+            ],
+        },
+    )
+
+    metrics = summarize_metrics(result, [], 10_000.0)
+
+    assert metrics["folds"][0]["calibrated_candidate_margin"] == 0.01
+    assert (
+        metrics["folds"][0]["calibration_candidate_scores"]
+        == calibration_scores
+    )
+    assert (
+        metrics["switch_margin_calibration_details"][0]
+        ["calibration_candidate_scores"]
+        == calibration_scores
+    )
+
+    engine_source = (ROOT / "engine" / "modelo_lightgbm.py").read_text(
+        encoding="utf-8"
+    )
+    artifact_source = (ROOT / "reproducao" / "artefatos.py").read_text(
+        encoding="utf-8"
+    )
+    assert "calibration_candidate_scores" in engine_source
+    assert "calibration_score_gap_best_vs_second" in engine_source
+    assert "event=switch_margin_calibration" in engine_source
+    assert "switch_margin_calibration.csv" in artifact_source
+
+
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.2.0-dev.9"
+    assert EXPERIMENT_VERSION == "1.2.0-dev.10"
     forbidden = (
         "series_historicas",
         "tiingo",
