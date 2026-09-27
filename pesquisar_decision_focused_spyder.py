@@ -17,7 +17,7 @@ from reproducao.decision_focused_v2 import RESEARCH_VERSION, executar_pesquisa_v
 
 RAIZ = Path(__file__).resolve().parent
 DADOS_ORIGEM = SnapshotPaths.research(RAIZ)
-DIRETORIO_RESULTADOS = RAIZ / "output" / "decision_focused_v2"
+DIRETORIO_RESULTADOS = RAIZ / "output" / "decision_focused" / "active"
 HORIZONTE = 20
 EXECUTAR_BASELINES = True
 
