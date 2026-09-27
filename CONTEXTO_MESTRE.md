@@ -57,7 +57,7 @@ Limitações reconhecidas: rótulos sobrepostos, possível drift de estados, cap
 ## Status dos testes e da execução
 
 <!-- [TCC-DFL:CHECKPOINT-TESTS] -->
-Em 27/09/2026, o commit `682b0cc4d0daa8b822f05f0eb4e65a98b3ade184` passou no `reproduction-tests`: **56 testes aprovados**, Ruff aprovado. O workflow de experimento `36336715959` também passou validação do snapshot SHA-256 e etapas de testes; sua execução completa estava em andamento na consulta feita naquele momento. **Verifique novamente o workflow antes de relatar resultado, e não declare ganho sem `summary.json`.**
+Em 27/09/2026, o commit `682b0cc4d0daa8b822f05f0eb4e65a98b3ade184` passou no `reproduction-tests`: **56 testes aprovados**, Ruff aprovado. O workflow `36336715959` **concluiu com sucesso**, incluindo verificação SHA-256, execução dos backtests e upload do artifact. Resultados auditados e identidade do ZIP constam em `docs/results/v1.3.0-dev.3-oof-run-36336715959.md`. Nenhuma das três variantes experimentais supera Control.
 Workflow: https://github.com/betovlima/tcc_mba_usp_data_science_analytics/actions/runs/36336715959
 
 <!-- [TCC-DFL:FIX-001] -->
@@ -94,3 +94,14 @@ runfile("pesquisar_decision_focused_v2_spyder.py", wdir=".")
 ```
 
 **Critério de fechamento:** testes e backtest completos auditados, documentação e artefatos coerentes, discussão dos resultados e aprovação da versão estável antes de tag/merge.
+
+
+<!-- [TCC-DFL:FIX-002] -->
+**Fix 002 — identidade de artefatos e checkpoint de resultado (27/09/2026).**
+Causa: o arquivo recebido `decision_focused(1).zip` pertence à versão **v1.3.0-dev.2**, não ao novo protocolo OOF; a anotação anterior registrava o workflow como ainda em andamento. Não misturar métricas ou considerar ZIP v1 como teste v2.
+Arquivos: `docs/results/v1.3.0-dev.3-oof-run-36336715959.md` e este `CONTEXTO_MESTRE.md`.
+Impacto: documental e de rastreabilidade; nenhum ajuste no modelo, loss, snapshot, parâmetros ou horizonte. Pesquisa continua em `v1.3.0-dev.3` na MESMA branch.
+Testes: run `36336715959` **success**; 56 testes; snapshot de 112 arquivos verificado; artifact GitHub ID `10937284707`, SHA-256 `8173ada4391acd35b50eeb661ced371b7f9af2768fdba869f5e246ab6f0ad8fa`.
+Resultados (capital final): Control US$ 10.082.425,91; Soft US$ 9.840.028,41; regressão OOF US$ 7.639.150,63; ranking pareado US$ 2.105.511,08; DFL softmax US$ 4.716.464,39. Regressão fez somente 6 overrides locais, ranking 55 e softmax 30 de 1.547 decisões. Nenhuma superou Control. O histórico OOS já foi consultado após a v1; não tratá-lo como holdout totalmente intocado para decidir novos hiperparâmetros.
+Status: resultado negativo da v2 registrado, v1 preservado separadamente. Sem merge nem tag.
+Próximo passo: atribuir efeito das intervenções e estudar um teste confirmatório independente. Não fazer tuning retroativo nos mesmos folds. Próximo marcador: `[TCC-DFL:FIX-003]` quando houver nova mudança concreta.
