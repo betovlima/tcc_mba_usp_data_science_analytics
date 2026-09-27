@@ -37,6 +37,9 @@ from reproducao.decision_focused import (
     _treinar,
 )
 from reproducao.dfl_softmax import escolher_softmax, treinar_softmax_dfl
+from reproducao.auditoria_intervencoes import (
+    AuditoriaIntervencoes, auditar_intervencoes,
+)
 from reproducao.experimento import summarize_metrics
 
 RESEARCH_VERSION = "1.3.0-dev.3"
@@ -71,6 +74,7 @@ class PesquisaV2:
     regression_decisions: pd.DataFrame
     dfl_decisions: pd.DataFrame
     softmax_decisions: pd.DataFrame
+    auditoria_intervencoes: AuditoriaIntervencoes
 
 
 def _parametros_internos(config: Any) -> Any:
@@ -493,6 +497,7 @@ def executar_pesquisa_v2(
     all_labels, all_audit, all_calibration = [], [], []
     variants = ("REGRESSION", "DFL", "SOFTMAX_DFL")
     policies: dict[str, dict[int, Callable]] = {v: {} for v in variants}
+    baseline_policies: dict[int, Callable] = {}
     decisions: dict[str, dict[pd.Timestamp, dict[str, Any]]] = {
         v: {} for v in variants
     }
@@ -567,13 +572,16 @@ def executar_pesquisa_v2(
         )
         if not all(pd.Timestamp(t) in cache for t in fold_dates[:-1]):
             raise AssertionError(f"Fold {fold_id}: cache OOS incompleto")
+        # [TCC-DFL:FIX-004] MESMA politica-base por fold para todos
+        # os cenarios e replays; nao reestimar modelos ou margens na auditoria.
+        baseline = _politica_utilidade(
+            final_models, frames, symbols, config, effective_margin,
+            utility_cache=cache,
+        )
+        baseline_policies[fold_id] = baseline
         for variant, model in (
             ("REGRESSION", reg), ("DFL", dfl), ("SOFTMAX_DFL", softmax),
         ):
-            baseline = _politica_utilidade(
-                final_models, frames, symbols, config, effective_margin,
-                utility_cache=cache,
-            )
             policies[variant][fold_id] = _criar_politica_v2(
                 fold_id=fold_id, variant=variant, model=model,
                 baseline=baseline, utility_cache=cache,
@@ -608,6 +616,27 @@ def executar_pesquisa_v2(
             result,
             summarize_metrics(result, folds, float(config.initial_capital)),
         )
+    # [TCC-DFL:FIX-004] Reconstroi trajetorias completas dos episodios.
+    # O script principal verifica identidade adicional contra Control oficial.
+    original_regression = {
+        pd.Timestamp(key): dict(value)
+        for key, value in decisions["REGRESSION"].items()
+    }
+    intervention_audit = auditar_intervencoes(
+        frames=frames, symbols=symbols, decision_dates=oos_dates, config=config,
+        baseline_policy=_politica_agendada(baseline_policies, date_to_fold),
+        learned_policy=_politica_agendada(policies["REGRESSION"], date_to_fold),
+        original_decisions=original_regression,
+        original_regression=results["REGRESSION"][0],
+        decision_metadata=metadata, horizon=horizonte,
+    )
+    print(
+        "[decision-focused] intervention audit "
+        f"episodes={intervention_audit.checks['episodes']} "
+        f"marginal_sum={intervention_audit.checks['sum_episode_marginal_usd']:.2f} "
+        f"end_to_end={intervention_audit.checks['end_to_end_delta_usd']:.2f}",
+        flush=True,
+    )
     return PesquisaV2(
         regression_result=results["REGRESSION"][0],
         regression_metrics=results["REGRESSION"][1],
@@ -627,4 +656,5 @@ def executar_pesquisa_v2(
         softmax_decisions=pd.DataFrame.from_dict(
             decisions["SOFTMAX_DFL"], orient="index",
         ),
+        auditoria_intervencoes=intervention_audit,
     )
