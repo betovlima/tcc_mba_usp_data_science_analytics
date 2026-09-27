@@ -115,3 +115,45 @@ Impacto: um único script e um único workflow para a pesquisa; a saída ativa u
 Testes: Ruff aprovado e **57 testes aprovados** no run 36345280599 (commit 934c3e7), incluindo teste que exige script e workflow únicos. Nova execução completa pelo arquivo original: run 36345280608, ainda em andamento na última consulta; verifique seu estado antes de declarar resultado. Não confundir o run histórico 36336715959 (script sufixado) com o novo.
 Status: mesma branch `research/decision-focused-oof-v2`, mesma versão de trabalho `v1.3.0-dev.3`; nenhuma tag, branch nova ou merge.
 Próximo passo: executar somente `pesquisar_decision_focused_spyder.py`, verificar comparação e registrar mudanças concretas em `[TCC-DFL:FIX-004]`.
+
+
+<!-- [TCC-DFL:FIX-004] -->
+**Fix 004 — auditoria econômica das intervenções OOF (27/09/2026).**
+Causa: o ZIP anterior não exportava Control/Soft completos nem permitia atribuir
+a diferença entre Control e regressão aos três episódios com um replay de
+carteira completa. As seis intervenções locais são 19/01/2023 (VNCE -> YANG),
+08–11/10/2024 (YANG vs MYE) e 14/01/2026 (CORT vs AVGO).
+Arquivos: `reproducao/auditoria_intervencoes.py` (NOVO MÓDULO INTERNO, não
+um novo script de execução), `reproducao/decision_focused_v2.py`,
+`pesquisar_decision_focused_spyder.py` (ÚNICO ponto de entrada),
+`tests/test_auditoria_intervencoes.py` e workflow ÚNICO
+`.github/workflows/research-decision-focused.yml`.
+Impacto: apenas diagnóstico e exportação. Control, Soft, LightGBM, dados CSV
+congelados, hiperparâmetros, critérios de decisão, loss e folds INTACTOS.
+Exporta séries e trades diários de Control/Soft em
+`output/decision_focused/active/{control,soft}_{predictions,trades}.csv`;
+episódios em `intervention_episode_attribution.csv`, curvas completas
+`intervention_bridge_curves.csv`, diferença diária
+`intervention_episode_daily_pairs.csv`, operações de cada trajetória
+`intervention_bridge_trades.csv`, verificações e reconciliação
+`intervention_reconciliation.json`.
+Método: replay exato BASELINE (nenhum override), depois EP001, EP002 e EP003
+adicionados cronologicamente. Para cada episódio, os cenários possuem passado
+idêntico, diferem apenas nas ações do episódio, e depois ambos seguem a
+MESMA política-base. Os efeitos finais são MARGINAIS CONDICIONAIS à ordem,
+não efeitos independentes/causais. A soma telescópica é confrontada com
+a diferença de capital entre a regressão real e a política-base; o bridge final
+deve reproduzir TODA a curva e os ativos da regressão original. O replay
+base deve reproduzir TODA a curva e os ativos do Control oficial.
+Testes: criar testes unitários sintéticos de agrupamento por sessão,
+reconciliação, integridade da trajetória e fechamento diante de inconsistências.
+Consultar último `reproduction-tests` e o workflow iniciado pelo código
+`649b59a8287fdc080845832623740e18f6e3d841` antes de declarar resultado.
+Status: em validação na mesma branch e versão de trabalho `v1.3.0-dev.3`.
+O resultado anterior documentado permanece o último resultado econômico
+confirmado até uma execução completa COM estes novos replays.
+Próximo passo: conferir `intervention_episode_attribution.csv` e
+`intervention_reconciliation.json`, verificar efeito de 20 sessões,
+persistência, fees, posições e reconciliação de capital antes de
+qualquer hipótese de novo modelo. NÃO ajustar parâmetros no OOS visto.
+Próximo marcador: `[TCC-DFL:FIX-005]` somente se houver correção concreta.
