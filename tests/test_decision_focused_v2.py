@@ -92,7 +92,7 @@ def test_regret_calibration_uses_only_held_out_rows():
 def test_guard_reverts_to_control_and_cache_is_fold_local(variant):
     frames, symbols, dates = _frames()
     diagnostics = {}
-    model = _Regression() if variant == "REGRESSION" else _Pairwise()
+    model = _Pairwise() if variant == "DFL" else _Regression()
     day = dates[10]
     cache = {day: np.array([0.0, 0.10, 0.80])}
     closed = _criar_politica_v2(
