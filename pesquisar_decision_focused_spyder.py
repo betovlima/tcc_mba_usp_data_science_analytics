@@ -12,9 +12,11 @@ from reproducao.dados import SnapshotPaths, validate_snapshot
 from reproducao.preparacao import prepare_model_frames
 from reproducao.experimento import build_folds, build_variant_configs, run_variant
 from reproducao.decision_focused import executar_pesquisa
+from reproducao.snapshot_portatil import preparar_snapshot_verificado
 
 RAIZ = Path(__file__).resolve().parent
-SNAPSHOT = SnapshotPaths.research(RAIZ)
+SNAPSHOT_ORIGEM = SnapshotPaths.research(RAIZ)
+SNAPSHOT = SNAPSHOT_ORIGEM
 SAIDA = RAIZ / "output" / "decision_focused"
 EXECUTAR_BASELINES = True
 HORIZONTE = 20
@@ -22,7 +24,11 @@ print("[research] version=1.3.0-dev.1 source=research-frozen backend=CPU", flush
 print(f"[research] reference_version={EXPERIMENT_VERSION} baseline=main", flush=True)
 
 # %% 1 - Auditoria dos dados; esta execucao nunca acessa a Alpaca
+SNAPSHOT, snapshot_audit = preparar_snapshot_verificado(
+    SNAPSHOT_ORIGEM, SAIDA / "snapshot_verified",
+)
 manifesto = validate_snapshot(SNAPSHOT)
+print(f"[research] snapshot_audit={snapshot_audit}", flush=True)
 frames, exclusoes, diagnosticos, auditoria = prepare_model_frames(
     SNAPSHOT, assets=CONFIG.assets, comparar_snapshot_referencia=True,
 )
@@ -67,7 +73,8 @@ comparacao = {
     "decision_focused_surrogate": pesquisa.dfl_metricas,
     "research_version": "1.3.0-dev.1",
     "reference_experiment_version": EXPERIMENT_VERSION,
-    "data_mode": "dados/pesquisa (frozen)",
+    "data_mode": "dados/pesquisa (frozen, verified bytes)",
+    "snapshot_audit": snapshot_audit,
     "label_horizon_sessions": HORIZONTE,
     "test_fold_count": len(folds),
     "label_generation": "one forced action, then same control policy",
