@@ -210,8 +210,15 @@ def _gerar_rotulos(
     frames: dict[str, pd.DataFrame], symbols: list[str],
     dates: pd.DatetimeIndex, policy: Callable, utility_cache: dict,
     config: Any, fold_id: int, horizonte: int,
+    *, states_override: list[tuple[int, int, int]] | None = None,
+    state_source: str = "CONTROL",
 ) -> pd.DataFrame:
-    states = _estados_calibracao(policy, dates)
+    states = (
+        _estados_calibracao(policy, dates)
+        if states_override is None else states_override
+    )
+    if len(states) != len(dates) - 1:
+        raise ValueError("Estados devem ter uma entrada por data de decisao")
     rows: list[dict[str, Any]] = []
     for index in range(max(0, len(states) - horizonte + 1)):
         now = dates[index]
@@ -242,6 +249,7 @@ def _gerar_rotulos(
                 continue
             group_rows.append({
                 "fold_id": fold_id,
+                "state_source": state_source,
                 "decision_date": now,
                 "outcome_end": dates[index + horizonte],
                 "incumbent": "CASH" if position == 0 else symbols[position - 1],
