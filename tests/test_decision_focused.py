@@ -116,3 +116,49 @@ def test_invalid_horizon_must_be_rejected_before_training():
     from reproducao.decision_focused import executar_pesquisa
     with pytest.raises(ValueError, match="purge"):
         executar_pesquisa({}, CONFIG, horizonte=61)
+
+
+def test_git_line_endings_can_be_restored_without_touching_origin(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    from reproducao.dados import SnapshotPaths
+    from reproducao import snapshot_portatil
+
+    source = tmp_path / "dados" / "pesquisa"
+    source_csv = source / "raw_bars" / "AAA.csv"
+    source_csv.parent.mkdir(parents=True)
+    original = b"timestamp,close\n2020-01-01,1\n"
+    canonical = original.replace(b"\n", b"\r\n")
+    source_csv.write_bytes(original)
+    (source / "manifest.json").write_text(json.dumps({
+        "file_hashes": {"raw_bars/AAA.csv": hashlib.sha256(canonical).hexdigest()},
+    }), encoding="utf-8")
+    monkeypatch.setattr(snapshot_portatil, "validate_snapshot", lambda paths: None)
+    validated, report = snapshot_portatil.preparar_snapshot_verificado(
+        SnapshotPaths.from_root(source), tmp_path / "output" / "snapshot",
+    )
+    assert report["line_endings_rehydrated"] == 1
+    assert source_csv.read_bytes() == original
+    assert (validated.root / "raw_bars" / "AAA.csv").read_bytes() == canonical
+
+
+def test_snapshot_refuses_real_content_mismatch_without_creating_copy(tmp_path):
+    import hashlib
+    import json
+    from reproducao.dados import SnapshotPaths
+    from reproducao.snapshot_portatil import preparar_snapshot_verificado
+
+    root = tmp_path / "pesquisa"
+    entry = root / "raw_bars" / "AAA.csv"
+    entry.parent.mkdir(parents=True)
+    entry.write_bytes(b"2020-01-01,100\n")
+    (root / "manifest.json").write_text(json.dumps({
+        "file_hashes": {
+            "raw_bars/AAA.csv": hashlib.sha256(b"2020-01-01,101\n").hexdigest(),
+        },
+    }), encoding="utf-8")
+    destination = tmp_path / "destination"
+    with pytest.raises(RuntimeError, match="Nenhum arquivo foi alterado"):
+        preparar_snapshot_verificado(SnapshotPaths.from_root(root), destination)
+    assert not destination.exists()
+    assert entry.read_bytes() == b"2020-01-01,100\n"
