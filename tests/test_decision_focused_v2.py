@@ -238,3 +238,27 @@ def test_softmax_model_learns_ranking_without_label_at_inference():
     choice, delta = escolher_softmax(model, rows_df.iloc[:3], 0)
     assert choice == 1
     assert delta > 0
+
+
+
+def test_single_canonical_research_entrypoint_and_workflow():
+    """[TCC-DFL:FIX-003] OOF evolui o primeiro Spyder, sem executavel rival."""
+    from pathlib import Path
+
+    project = Path(__file__).resolve().parents[1]
+    canonical = project / "pesquisar_decision_focused_spyder.py"
+    source = canonical.read_text(encoding="utf-8")
+    assert canonical.is_file()
+    assert not (project / "pesquisar_decision_focused_v2_spyder.py").exists()
+    assert "executar_pesquisa_v2(" in source
+    assert '"research_version": RESEARCH_VERSION' in source
+    assert 'output" / "decision_focused" / "active"' in source
+    workflow = (
+        project / ".github" / "workflows" / "research-decision-focused.yml"
+    )
+    flow_text = workflow.read_text(encoding="utf-8")
+    assert not (
+        project / ".github" / "workflows" / "research-decision-focused-v2.yml"
+    ).exists()
+    assert "python -u pesquisar_decision_focused_spyder.py" in flow_text
+    assert "pesquisar_decision_focused_v2_spyder.py" not in flow_text
