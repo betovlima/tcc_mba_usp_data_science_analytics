@@ -32,7 +32,6 @@ from reproducao.decision_focused import (
     SEMENTE,
     _atributos,
     _candidatos,
-    _criar_politica_fold,
     _escolher_acao,
     _gerar_rotulos,
     _treinar,
