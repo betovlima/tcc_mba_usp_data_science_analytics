@@ -20,7 +20,6 @@ from engine.modelo_lightgbm import (
     _construir_contexto_execucao,
 )
 from engine.rotacao import (
-    ROTATION_FEATURES,
     _crescimento_politica_simples,
     _executar_compra,
     _politica_agendada,
