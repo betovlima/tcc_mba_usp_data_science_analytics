@@ -1,14 +1,16 @@
-name: decision-focused-experiment
+name: decision-focused-research
 
 on:
   push:
     branches:
-      - research/decision-focused-counterfactual-v1
+      - research/decision-focused-oof-v2
     paths:
       - .github/workflows/research-decision-focused.yml
       - reproducao/decision_focused.py
-      - reproducao/snapshot_portatil.py
+      - reproducao/decision_focused_v2.py
+      - reproducao/dfl_softmax.py
       - pesquisar_decision_focused_spyder.py
+      - tests/test_decision_focused_v2.py
   workflow_dispatch:
 
 permissions:
@@ -31,34 +33,37 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
-      - name: Validate frozen snapshot manifest
+      - name: Static checks
+        run: python -m ruff check engine reproducao pesquisar_decision_focused_spyder.py tests --select F401,F811,F821,F841
+      - name: Research tests
+        run: python -m pytest -q
+      - name: Validate SHA-256 research snapshot
         run: |
           python - <<'PY'
           from pathlib import Path
           from reproducao.dados import SnapshotPaths, validate_snapshot
           from reproducao.snapshot_portatil import preparar_snapshot_verificado
           root = Path.cwd()
-          snap, audit = preparar_snapshot_verificado(
-              SnapshotPaths.research(root), root / "output/decision_focused/snapshot_verified",
+          snapshot, audit = preparar_snapshot_verificado(
+              SnapshotPaths.research(root),
+              root / "output/decision_focused/active/snapshot_verified",
           )
-          validate_snapshot(snap)
-          print("Frozen snapshot verified", audit)
+          validate_snapshot(snapshot)
+          print("Research snapshot verified", audit)
           PY
-      - name: Research regression tests
-        run: python -m pytest -q tests/test_decision_focused.py
-      - name: Run full comparison on frozen research data
+      - name: Full Control Soft and v2 decision-focused comparison
         shell: bash
         run: |
           set -o pipefail
           python -u pesquisar_decision_focused_spyder.py 2>&1 | tee decision_focused_run.log
-      - name: Upload logs and results
+      - name: Upload outputs and log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: decision-focused-research-v1
-          if-no-files-found: warn
+          name: decision-focused-research
           retention-days: 30
+          if-no-files-found: warn
           path: |
             decision_focused_run.log
-            output/decision_focused/
-            !output/decision_focused/snapshot_verified/**
+            output/decision_focused/active/
+            !output/decision_focused/active/snapshot_verified/**
