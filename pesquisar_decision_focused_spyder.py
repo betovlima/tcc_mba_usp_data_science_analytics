@@ -14,6 +14,7 @@ from reproducao.snapshot_portatil import preparar_snapshot_verificado
 from reproducao.preparacao import prepare_model_frames
 from reproducao.experimento import build_folds, build_variant_configs, run_variant
 from reproducao.decision_focused_v2 import RESEARCH_VERSION, executar_pesquisa_v2
+from reproducao.auditoria_intervencoes import _validar_equivalencia
 
 RAIZ = Path(__file__).resolve().parent
 DADOS_ORIGEM = SnapshotPaths.research(RAIZ)
@@ -58,8 +59,47 @@ print(
     flush=True,
 )
 
-# %% 4 - Exportacao reprodutivel sem sobrescrever o resultado v1
+# %% 4 - Auditoria e exportacao; preserva resultado anterior
+# [TCC-DFL:FIX-004] Identidade economica do replay BASELINE com Control.
+# Nao ha treino adicional, nem mudanca na politica durante a auditoria.
+auditoria_intervencoes = pesquisa.auditoria_intervencoes
+if control_result is not None:
+    error_control = _validar_equivalencia(
+        auditoria_intervencoes.baseline_result, control_result,
+        context="replay base vs Control oficial",
+        rtol=1e-8, atol=1e-4,
+    )
+    auditoria_intervencoes.checks["baseline_vs_official_control_max_abs"] = error_control
+print(
+    "[decision-focused] audit episodes="
+    f"{auditoria_intervencoes.checks['episodes']} "
+    f"reconciliation={auditoria_intervencoes.checks['marginal_reconciliation_abs_error']:.9f}",
+    flush=True,
+)
 DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
+# Exportar a serie COMPLETA das duas politicas oficiais para permitir
+# comparacao diaria dos estados, capital e custos (sem reconstruir graficos).
+for label, result in (("control", control_result), ("soft", soft_result)):
+    if result is None:
+        continue
+    result.predictions.to_csv(DIRETORIO_RESULTADOS / f"{label}_predictions.csv")
+    result.trades.to_csv(DIRETORIO_RESULTADOS / f"{label}_trades.csv", index=False)
+auditoria_intervencoes.episodios.to_csv(
+    DIRETORIO_RESULTADOS / "intervention_episode_attribution.csv", index=False,
+)
+auditoria_intervencoes.curvas.to_csv(
+    DIRETORIO_RESULTADOS / "intervention_bridge_curves.csv", index=False,
+)
+auditoria_intervencoes.pares_diarios.to_csv(
+    DIRETORIO_RESULTADOS / "intervention_episode_daily_pairs.csv", index=False,
+)
+auditoria_intervencoes.operacoes.to_csv(
+    DIRETORIO_RESULTADOS / "intervention_bridge_trades.csv", index=False,
+)
+(DIRETORIO_RESULTADOS / "intervention_reconciliation.json").write_text(
+    json.dumps(auditoria_intervencoes.checks, indent=2, ensure_ascii=False, default=str),
+    encoding="utf-8",
+)
 pesquisa.labels.to_csv(DIRETORIO_RESULTADOS / "oof_counterfactual_labels.csv", index=False)
 pesquisa.audit.to_csv(DIRETORIO_RESULTADOS / "inner_oof_audit.csv", index=False)
 pesquisa.calibration.to_csv(DIRETORIO_RESULTADOS / "temporal_calibration.csv", index=False)
@@ -101,6 +141,11 @@ summary = {
     "oof_counterfactual_regression": pesquisa.regression_metrics,
     "oof_decision_focused_surrogate": pesquisa.dfl_metrics,
     "oof_softmax_decision_focused": pesquisa.softmax_metrics,
+    "intervention_audit": auditoria_intervencoes.checks,
+    "intervention_attribution_method": (
+        "Cumulative chronological episode toggles; same prior decisions, "
+        "then baseline policy; marginal effects depend on inclusion order."
+    ),
     "previous_negative_result": {
         "research_version": archived_v1["research_version"],
         "source_archive_sha256": archived_v1["source_archive_sha256"],
