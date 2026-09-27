@@ -33,9 +33,13 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           from reproducao.dados import SnapshotPaths, validate_snapshot
-          snap = SnapshotPaths.research(Path.cwd())
-          manifest = validate_snapshot(snap)
-          print("Frozen snapshot verified")
+          from reproducao.snapshot_portatil import preparar_snapshot_verificado
+          root = Path.cwd()
+          snap, audit = preparar_snapshot_verificado(
+              SnapshotPaths.research(root), root / "output/decision_focused/snapshot_verified",
+          )
+          validate_snapshot(snap)
+          print("Frozen snapshot verified", audit)
           PY
       - name: Run full comparison on frozen research data
         shell: bash
@@ -52,3 +56,4 @@ jobs:
           path: |
             decision_focused_run.log
             output/decision_focused/
+            !output/decision_focused/snapshot_verified/**
