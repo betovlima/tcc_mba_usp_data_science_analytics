@@ -363,3 +363,26 @@ comparação Control versus Soft. Os arquivos de predictions e trades permitem
 auditar as decisões individuais, enquanto `data_audit.json` e
 `structural_exclusions.csv` documentam a integridade do snapshot e eventuais
 exclusões estruturais.
+
+
+## Pesquisa experimental Decision-Focused (branch de desenvolvimento)
+
+<!-- [TCC-DFL:FIX-003] -->
+**A pesquisa tem um único executável no Spyder:** `pesquisar_decision_focused_spyder.py`.
+Esse arquivo evolui na mesma branch `research/decision-focused-oof-v2`; não
+existem scripts principais paralelos com sufixo de versão. Os módulos
+`reproducao/decision_focused.py`, `reproducao/decision_focused_v2.py` e
+`reproducao/dfl_softmax.py` são componentes internos, não outros scripts de
+execução. A reprodução oficial `reproduzir_experimento_spyder.py` segue intacta.
+
+Console do Spyder, na raiz do projeto:
+
+```python
+runfile("pesquisar_decision_focused_spyder.py", wdir=".")
+```
+
+A saída ativa fica em `output/decision_focused/active/`. Resultados históricos
+de versões anteriores estão documentados em `docs/results/` e nos commits Git.
+Consulte `CONTEXTO_MESTRE.md` para o checkpoint atual, marcadores FIX, testes
+e instruções de retomada em outro chat. Nenhuma nova branch ou tag é necessária
+para cada correção.
