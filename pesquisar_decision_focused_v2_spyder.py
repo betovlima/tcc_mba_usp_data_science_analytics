@@ -48,7 +48,8 @@ pesquisa = executar_pesquisa_v2(
 )
 print(
     f"[decision-focused-v2] REGRESSION={pesquisa.regression_metrics['ending_capital']:,.2f} "
-    f"DFL_SURROGATE={pesquisa.dfl_metrics['ending_capital']:,.2f}",
+    f"DFL_PAIRWISE={pesquisa.dfl_metrics['ending_capital']:,.2f} "
+    f"DFL_SOFTMAX={pesquisa.softmax_metrics['ending_capital']:,.2f}",
     flush=True,
 )
 
@@ -63,9 +64,13 @@ pesquisa.regression_decisions.to_csv(
 pesquisa.dfl_decisions.to_csv(
     DIRETORIO_RESULTADOS / "dfl_decisions.csv", index_label="decision_date",
 )
+pesquisa.softmax_decisions.to_csv(
+    DIRETORIO_RESULTADOS / "softmax_dfl_decisions.csv", index_label="decision_date",
+)
 for name, result in (
     ("regression", pesquisa.regression_result),
     ("dfl", pesquisa.dfl_result),
+    ("softmax_dfl", pesquisa.softmax_result),
 ):
     result.predictions.to_csv(DIRETORIO_RESULTADOS / f"{name}_predictions.csv")
     result.trades.to_csv(DIRETORIO_RESULTADOS / f"{name}_trades.csv", index=False)
@@ -84,11 +89,13 @@ summary = {
     "label_horizon_sessions": HORIZONTE,
     "method": "chronological nested out-of-fold and on-policy state augmentation",
     "calibration": "prior temporal validation only, no OOS threshold selection",
-    "dfl_definition": "regret-weighted pairwise ranking surrogate; not differentiable DFL",
+    "dfl_pairwise_definition": "regret-weighted pairwise ranking surrogate",
+    "dfl_softmax_definition": "differentiable expected per-decision regret with group softmax; not end-to-end sequential replay",
     "control": control_metrics,
     "soft": soft_metrics,
     "oof_counterfactual_regression": pesquisa.regression_metrics,
     "oof_decision_focused_surrogate": pesquisa.dfl_metrics,
+    "oof_softmax_decision_focused": pesquisa.softmax_metrics,
     "previous_negative_result": {
         "research_version": archived_v1["research_version"],
         "source_archive_sha256": archived_v1["source_archive_sha256"],
