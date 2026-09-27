@@ -28,12 +28,12 @@ O histórico continua neste mesmo arquivo, atualizado por commits na mesma branc
 - Origem da pesquisa anterior: `research/decision-focused-counterfactual-v1`, commit `7847bdf66501b5f341931caeaeb9169e8a414519`.
 - Base oficial preservada: `main` em `f9cf29fdb736676d0d3e26780481be99813c602a`; tag oficial anterior `v1.2.0`.
 - Versão experimental atual: `v1.3.0-dev.3`; esta numeração é identificador do protocolo e não muda por correções de implementação.
-- Principal: `pesquisar_decision_focused_v2_spyder.py`.
+- **Único script principal da pesquisa: `pesquisar_decision_focused_spyder.py`.** Não criar executáveis `_v2`, `_v3` etc. O módulo `reproducao/decision_focused_v2.py` é somente implementação interna importada pelo script principal, não um segundo ponto de entrada.
 - Núcleo: `reproducao/decision_focused_v2.py`, `reproducao/dfl_softmax.py`; mecanismo de rótulos em `reproducao/decision_focused.py`.
 - Testes: `tests/test_decision_focused.py`, `tests/test_decision_focused_v2.py`.
 - Documentação detalhada: `docs/changes/v1.3.0-dev.3-oof-decision-focused.md`.
-- Output gerado, não versionado: `output/decision_focused_v2/`.
-- Workflow de reprodução: `.github/workflows/research-decision-focused-v2.yml`.
+- Output ativo, não versionado: `output/decision_focused/active/` (histórico anterior permanece preservado e separado).
+- **Único workflow da pesquisa ativa:** `.github/workflows/research-decision-focused.yml`.
 
 ## Resultado histórico preservado
 
@@ -90,7 +90,7 @@ Console Spyder, com diretório de trabalho na raiz do projeto:
 ```python
 import subprocess
 subprocess.run(["python", "-m", "pytest", "-q"], check=True)
-runfile("pesquisar_decision_focused_v2_spyder.py", wdir=".")
+runfile("pesquisar_decision_focused_spyder.py", wdir=".")
 ```
 
 **Critério de fechamento:** testes e backtest completos auditados, documentação e artefatos coerentes, discussão dos resultados e aprovação da versão estável antes de tag/merge.
@@ -105,3 +105,13 @@ Testes: run `36336715959` **success**; 56 testes; snapshot de 112 arquivos verif
 Resultados (capital final): Control US$ 10.082.425,91; Soft US$ 9.840.028,41; regressão OOF US$ 7.639.150,63; ranking pareado US$ 2.105.511,08; DFL softmax US$ 4.716.464,39. Regressão fez somente 6 overrides locais, ranking 55 e softmax 30 de 1.547 decisões. Nenhuma superou Control. O histórico OOS já foi consultado após a v1; não tratá-lo como holdout totalmente intocado para decidir novos hiperparâmetros.
 Status: resultado negativo da v2 registrado, v1 preservado separadamente. Sem merge nem tag.
 Próximo passo: atribuir efeito das intervenções e estudar um teste confirmatório independente. Não fazer tuning retroativo nos mesmos folds. Próximo marcador: `[TCC-DFL:FIX-003]` quando houver nova mudança concreta.
+
+
+<!-- [TCC-DFL:FIX-003] -->
+**Fix 003 — retorno ao script original como único ponto de entrada (27/09/2026).**
+Causa: a pesquisa atual foi implementada em `pesquisar_decision_focused_v2_spyder.py` sem evoluir `pesquisar_decision_focused_spyder.py`, gerando executáveis concorrentes e confusão na execução.
+Arquivos: `pesquisar_decision_focused_spyder.py` (agora executa o protocolo OOF), exclusão de `pesquisar_decision_focused_v2_spyder.py`, unificação em `.github/workflows/research-decision-focused.yml`, exclusão do workflow duplicado, testes e documentação.
+Impacto: um único script e um único workflow para a pesquisa; a saída ativa usa `output/decision_focused/active/` para não sobrescrever resultados históricos. O protocolo de modelagem, os dados congelados e as políticas Control/Soft não são alterados. Código histórico permanece acessível pelo Git e métricas anteriores em `docs/results/`.
+Testes: CI da alteração e execução por script original precisam ser verificados no respectivo run. Não confundir o run histórico 36336715959, que executou o antigo script sufixado, com um novo run do script consolidado.
+Status: mesma branch `research/decision-focused-oof-v2`, mesma versão de trabalho `v1.3.0-dev.3`; nenhuma tag, branch nova ou merge.
+Próximo passo: executar somente `pesquisar_decision_focused_spyder.py`, verificar comparação e registrar mudanças concretas em `[TCC-DFL:FIX-004]`.
