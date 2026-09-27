@@ -350,6 +350,67 @@ def _escolher_acao(
     return int(positions[best]), float(points[best])
 
 
+def _criar_politica_fold(
+    *,
+    fold_id: int,
+    variant: str,
+    fitted: Any,
+    baseline: Callable[[pd.Timestamp, int, int], tuple[int, float]],
+    utility_cache: dict[pd.Timestamp, np.ndarray],
+    diagnostics: dict[pd.Timestamp, dict[str, Any]],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    config: Any,
+) -> Callable[[pd.Timestamp, int, int], tuple[int, float]]:
+    """Congela o cache e o modelo deste fold na propria instancia da politica.
+
+    Nao capture final_cache em uma closure criada dentro do laco de folds:
+    uma variavel livre seria compartilhada e apontaria para o ultimo fold.
+    """
+    def policy(timestamp: pd.Timestamp, position: int, holding: int) -> tuple[int, float]:
+        current = pd.Timestamp(timestamp)
+        if current not in utility_cache:
+            raise KeyError(
+                f"Fold {fold_id} ({variant}): data {current} fora de seu cache "
+                f"de {len(utility_cache)} sessoes"
+            )
+        base, base_score = baseline(current, position, holding)
+        utilities = utility_cache[current]
+        candidates = _candidatos(
+            utilities, position, int(base), holding, config,
+        )
+        if len(candidates) < 2:
+            target, learned = int(base), 0.0
+        else:
+            rows = [
+                {"candidate_position": candidate, **_atributos(
+                    frames, symbols, current, position, int(base),
+                    candidate, holding, utilities, config,
+                )}
+                for candidate in candidates
+            ]
+            target, learned = _escolher_acao(
+                variant, fitted, pd.DataFrame(rows), int(base),
+            )
+        diagnostics[current] = {
+            "decision_diagnostics_schema_version": 2,
+            "decision_fold_id": fold_id,
+            "current_asset": "CASH" if position == 0 else symbols[position - 1],
+            "final_action_asset": "CASH" if target == 0 else symbols[target - 1],
+            "final_action_score": _pontuacao(utilities, target),
+            "decision_reason": f"RESEARCH_{variant}",
+            "research_variant": variant,
+            "research_base_action": "CASH" if base == 0 else symbols[base - 1],
+            "research_changed_base_action": bool(target != base),
+            "research_model_score": float(learned),
+        }
+        return (
+            int(target),
+            float(base_score if target == base else _pontuacao(utilities, target)),
+        )
+    return policy
+
+
 def executar_pesquisa(
     bars_by_symbol: dict[str, pd.DataFrame],
     config: Any,
@@ -413,6 +474,14 @@ def executar_pesquisa(
         final_cache, _ = _precalcular_utilidades_modelo(
             final_models, frames, symbols, fold_dates, config,
         )
+        if not all(pd.Timestamp(stamp) in final_cache for stamp in fold_dates[:-1]):
+            missing = [
+                str(stamp) for stamp in fold_dates[:-1]
+                if pd.Timestamp(stamp) not in final_cache
+            ]
+            raise AssertionError(
+                f"Fold {fold_id}: cache OOS incompleto; faltam {missing[:3]}"
+            )
         audit.append({
             "fold_id": fold_id, "base_train_end": train_dates[-1],
             "calibration_start": cal_dates[0], "calibration_end": cal_dates[-1],
@@ -429,42 +498,18 @@ def executar_pesquisa(
             )
             diagnostics = decisions[variant]
 
-            def make_policy(variant=variant, fitted=fitted, baseline=baseline, diagnostics=diagnostics):
-                def policy(timestamp: pd.Timestamp, position: int, holding: int) -> tuple[int, float]:
-                    current = pd.Timestamp(timestamp)
-                    base, base_score = baseline(current, position, holding)
-                    utilities = final_cache[current]
-                    candidates = _candidatos(
-                        utilities, position, int(base), holding, config,
-                    )
-                    if len(candidates) < 2:
-                        target, learned = int(base), 0.0
-                    else:
-                        rows = [
-                            {"candidate_position": candidate, **_atributos(
-                                frames, symbols, current, position, int(base),
-                                candidate, holding, utilities, config,
-                            )}
-                            for candidate in candidates
-                        ]
-                        target, learned = _escolher_acao(
-                            variant, fitted, pd.DataFrame(rows), int(base),
-                        )
-                    diagnostics[current] = {
-                        "decision_diagnostics_schema_version": 2,
-                        "current_asset": "CASH" if position == 0 else symbols[position - 1],
-                        "final_action_asset": "CASH" if target == 0 else symbols[target - 1],
-                        "final_action_score": _pontuacao(utilities, target),
-                        "decision_reason": f"RESEARCH_{variant}",
-                        "research_variant": variant,
-                        "research_base_action": "CASH" if base == 0 else symbols[base - 1],
-                        "research_changed_base_action": bool(target != base),
-                        "research_model_score": float(learned),
-                    }
-                    return int(target), float(base_score if target == base else _pontuacao(utilities, target))
-                return policy
-
-            policies[variant][fold_id] = make_policy()
+            # Parametros explicitos por instancia: modelo, baseline e cache do fold.
+            policies[variant][fold_id] = _criar_politica_fold(
+                fold_id=fold_id,
+                variant=variant,
+                fitted=fitted,
+                baseline=baseline,
+                utility_cache=final_cache,
+                diagnostics=diagnostics,
+                frames=frames,
+                symbols=symbols,
+                config=config,
+            )
         print(
             f"[decision-focused] fold={fold_id} labels={len(labels)} "
             f"end={labels['outcome_end'].max()} before_oos={fold['test_start']}",
