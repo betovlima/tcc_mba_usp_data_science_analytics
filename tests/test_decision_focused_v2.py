@@ -80,14 +80,15 @@ def test_missing_temporal_history_fails_closed():
 
 def test_regret_calibration_uses_only_held_out_rows():
     _, validation, _ = _divisao_temporal(_sample_labels())
-    guard = _calibrar_guardas(_Regression(), _Pairwise(), validation)
+    guard = _calibrar_guardas(_Regression(), _Pairwise(), _Regression(), validation)
     assert guard["validation_decision_dates"] == validation["decision_date"].nunique()
     assert guard["regression_optimism_margin"] > 0
     assert guard["dfl_unsafe_probability_threshold"] >= 0.5
+    assert guard["softmax_unsafe_margin_threshold"] >= 0.0
     assert guard["calibration_role"] == "prior_temporal_oof_only"
 
 
-@pytest.mark.parametrize("variant", ["REGRESSION", "DFL"])
+@pytest.mark.parametrize("variant", ["REGRESSION", "DFL", "SOFTMAX_DFL"])
 def test_guard_reverts_to_control_and_cache_is_fold_local(variant):
     frames, symbols, dates = _frames()
     diagnostics = {}
@@ -101,6 +102,7 @@ def test_guard_reverts_to_control_and_cache_is_fold_local(variant):
         calibration={
             "regression_optimism_margin": 1.0,
             "dfl_unsafe_probability_threshold": 1.0,
+            "softmax_unsafe_margin_threshold": float("inf"),
         },
         frames=frames, symbols=symbols, config=CONFIG,
     )
@@ -116,6 +118,7 @@ def test_guard_reverts_to_control_and_cache_is_fold_local(variant):
         calibration={
             "regression_optimism_margin": 0.1,
             "dfl_unsafe_probability_threshold": 0.55,
+            "softmax_unsafe_margin_threshold": 0.1,
         },
         frames=frames, symbols=symbols, config=CONFIG,
     )
@@ -188,3 +191,50 @@ def test_empty_outer_training_history_is_rejected():
              "test_start": dates[-1]},
             CONFIG, 20,
         )
+
+
+def test_softmax_regret_gradient_matches_numerical_direction():
+    from reproducao.dfl_softmax import gradiente_regret_softmax
+
+    rewards = np.asarray([0.0, 0.04, -0.03], dtype=float)
+    pred = np.asarray([0.1, 0.0, -0.1], dtype=float)
+    grad, hess = gradiente_regret_softmax(
+        pred, rewards, [(0, 3)], scale=1.0,
+    )
+    assert (hess > 0).all()
+    assert grad[1] < 0  # Elevar score da melhor acao reduz perda.
+    def loss(z):
+        p = np.exp(z - max(z))
+        p /= p.sum()
+        return float(np.max(rewards) - np.dot(p, rewards))
+    eps = 1e-5
+    numeric = np.array([
+        (loss(pred + eps * np.eye(3)[i]) -
+         loss(pred - eps * np.eye(3)[i])) / (2 * eps)
+        for i in range(3)
+    ])
+    np.testing.assert_allclose(grad, numeric, atol=1e-7)
+    assert abs(grad.sum()) < 1e-10
+
+
+def test_softmax_model_learns_ranking_without_label_at_inference():
+    from reproducao.dfl_softmax import escolher_softmax, treinar_softmax_dfl
+
+    rows = []
+    dates = pd.date_range("2020-01-01", periods=35, freq="B", tz="UTC")
+    for i, d in enumerate(dates):
+        for candidate in (0, 1, 2):
+            advantage = [0.0, 0.05, -0.05][candidate]
+            rows.append({
+                "fold_id": 1, "decision_date": d,
+                "candidate_position": candidate,
+                "control_position": 0,
+                "log_advantage": advantage,
+                **{k: float(candidate == 1) if k == "candidate_utility" else 0.0
+                   for k in FEATURE_COLUMNS},
+            })
+    rows_df = pd.DataFrame(rows)
+    model = treinar_softmax_dfl(rows_df)
+    choice, delta = escolher_softmax(model, rows_df.iloc[:3], 0)
+    assert choice == 1
+    assert delta > 0
