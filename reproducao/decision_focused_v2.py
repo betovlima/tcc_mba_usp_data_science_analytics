@@ -36,6 +36,7 @@ from reproducao.decision_focused import (
     _gerar_rotulos,
     _treinar,
 )
+from reproducao.dfl_softmax import escolher_softmax, treinar_softmax_dfl
 from reproducao.experimento import summarize_metrics
 
 RESEARCH_VERSION = "1.3.0-dev.3"
@@ -62,11 +63,14 @@ class PesquisaV2:
     regression_metrics: dict[str, Any]
     dfl_result: Any
     dfl_metrics: dict[str, Any]
+    softmax_result: Any
+    softmax_metrics: dict[str, Any]
     labels: pd.DataFrame
     audit: pd.DataFrame
     calibration: pd.DataFrame
     regression_decisions: pd.DataFrame
     dfl_decisions: pd.DataFrame
+    softmax_decisions: pd.DataFrame
 
 
 def _parametros_internos(config: Any) -> Any:
@@ -319,7 +323,7 @@ def _quantile_higher(values: list[float], q: float) -> float:
 
 
 def _calibrar_guardas(
-    regression: Any, dfl: Any, validation: pd.DataFrame,
+    regression: Any, dfl: Any, softmax: Any, validation: pd.DataFrame,
 ) -> dict[str, Any]:
     """Calibra somente na validacao temporal anterior ao OOS externo.
 
@@ -329,6 +333,7 @@ def _calibrar_guardas(
     """
     optimism: list[float] = []
     unsafe_probabilities: list[float] = []
+    unsafe_softmax_margins: list[float] = []
     groups = 0
     for _, group in validation.groupby("decision_date", sort=True):
         control = int(group["control_position"].iloc[0])
@@ -355,6 +360,16 @@ def _calibrar_guardas(
             )
             if true_advantage <= 0:
                 unsafe_probabilities.append(p)
+        softmax_candidate, softmax_delta = escolher_softmax(
+            softmax, group, control,
+        )
+        if softmax_candidate != control:
+            softmax_true = float(
+                group.loc[group["candidate_position"] == softmax_candidate,
+                          "log_advantage"].iloc[0]
+            )
+            if softmax_true <= 0:
+                unsafe_softmax_margins.append(softmax_delta)
         groups += 1
     if groups < 20:
         raise ValueError(f"Apenas {groups} datas independentes de validacao")
@@ -369,9 +384,16 @@ def _calibrar_guardas(
         ))
         if unsafe_probabilities else 1.0
     )
+    softmax_threshold = (
+        max(0.0, _quantile_higher(
+            unsafe_softmax_margins, CALIBRATION_QUANTILE,
+        )) if unsafe_softmax_margins else float("inf")
+    )
     return {
         "regression_optimism_margin": reg_penalty,
         "dfl_unsafe_probability_threshold": dfl_threshold,
+        "softmax_unsafe_margin_threshold": softmax_threshold,
+        "validation_unsafe_softmax_candidates": len(unsafe_softmax_margins),
         "validation_decision_dates": groups,
         "validation_unsafe_dfl_candidates": len(unsafe_probabilities),
         "calibration_quantile": CALIBRATION_QUANTILE,
@@ -416,7 +438,7 @@ def _criar_politica_v2(
                     raw != base and score >
                     float(calibration["regression_optimism_margin"])
                 )
-            else:
+            elif variant == "DFL":
                 raw, _ = _escolher_acao("DFL", model, group, int(base))
                 if raw != base:
                     score = _pairwise_probability(
@@ -428,6 +450,14 @@ def _criar_politica_v2(
                             float(calibration["dfl_unsafe_probability_threshold"]),
                         )
                     )
+            elif variant == "SOFTMAX_DFL":
+                raw, score = escolher_softmax(model, group, int(base))
+                accepted = bool(
+                    raw != base and score >
+                    float(calibration["softmax_unsafe_margin_threshold"])
+                )
+            else:
+                raise ValueError(f"Variante nao suportada: {variant}")
             if accepted:
                 selected = int(raw)
         diagnostics[now] = {
@@ -461,9 +491,10 @@ def executar_pesquisa_v2(
         frames, dates, _, symbols, folds, oos_dates, date_to_fold, metadata,
     ) = _construir_contexto_execucao(bars_by_symbol, config)
     all_labels, all_audit, all_calibration = [], [], []
-    policies: dict[str, dict[int, Callable]] = {"REGRESSION": {}, "DFL": {}}
+    variants = ("REGRESSION", "DFL", "SOFTMAX_DFL")
+    policies: dict[str, dict[int, Callable]] = {v: {} for v in variants}
     decisions: dict[str, dict[pd.Timestamp, dict[str, Any]]] = {
-        "REGRESSION": {}, "DFL": {},
+        v: {} for v in variants
     }
     for fold in folds:
         fold_id = int(fold["fold_id"])
@@ -478,7 +509,8 @@ def executar_pesquisa_v2(
         if augmented["outcome_end"].max() >= validation_start:
             raise AssertionError("Vazamento treino para validacao")
         reg, dfl = _treinar(augmented)
-        guards = _calibrar_guardas(reg, dfl, validation)
+        softmax = treinar_softmax_dfl(augmented)
+        guards = _calibrar_guardas(reg, dfl, softmax, validation)
         if validation["outcome_end"].max() >= fold["test_start"]:
             raise AssertionError("Vazamento da calibracao para OOS")
         all_labels.append(original)
@@ -535,7 +567,9 @@ def executar_pesquisa_v2(
         )
         if not all(pd.Timestamp(t) in cache for t in fold_dates[:-1]):
             raise AssertionError(f"Fold {fold_id}: cache OOS incompleto")
-        for variant, model in (("REGRESSION", reg), ("DFL", dfl)):
+        for variant, model in (
+            ("REGRESSION", reg), ("DFL", dfl), ("SOFTMAX_DFL", softmax),
+        ):
             baseline = _politica_utilidade(
                 final_models, frames, symbols, config, effective_margin,
                 utility_cache=cache,
@@ -556,7 +590,7 @@ def executar_pesquisa_v2(
             flush=True,
         )
     results = {}
-    for variant in ("REGRESSION", "DFL"):
+    for variant in variants:
         scheduled = _politica_agendada(policies[variant], date_to_fold)
         result = _simular_exato(
             "research_v2_" + variant.lower(), scheduled, frames, symbols,
@@ -579,6 +613,8 @@ def executar_pesquisa_v2(
         regression_metrics=results["REGRESSION"][1],
         dfl_result=results["DFL"][0],
         dfl_metrics=results["DFL"][1],
+        softmax_result=results["SOFTMAX_DFL"][0],
+        softmax_metrics=results["SOFTMAX_DFL"][1],
         labels=pd.concat(all_labels, ignore_index=True),
         audit=pd.DataFrame(all_audit),
         calibration=pd.DataFrame(all_calibration),
@@ -587,5 +623,8 @@ def executar_pesquisa_v2(
         ),
         dfl_decisions=pd.DataFrame.from_dict(
             decisions["DFL"], orient="index",
+        ),
+        softmax_decisions=pd.DataFrame.from_dict(
+            decisions["SOFTMAX_DFL"], orient="index",
         ),
     )
