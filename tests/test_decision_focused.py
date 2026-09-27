@@ -162,3 +162,57 @@ def test_snapshot_refuses_real_content_mismatch_without_creating_copy(tmp_path):
         preparar_snapshot_verificado(SnapshotPaths.from_root(root), destination)
     assert not destination.exists()
     assert entry.read_bytes() == b"2020-01-01,100\n"
+
+
+@pytest.mark.parametrize("variant", ["REGRESSION", "DFL"])
+def test_each_oos_fold_uses_its_own_inference_cache(variant):
+    """Reproduz KeyError de 2020 causado por fechamento tardio de final_cache.
+
+    A politica do fold 1 deve continuar operando depois que a do fold 2
+    ja foi criada, inclusive quando as datas e os scores sao diferentes.
+    """
+    from reproducao.decision_focused import _criar_politica_fold
+
+    class RegressionModel:
+        def predict(self, x):
+            return x["candidate_utility"].to_numpy(dtype=float)
+
+    class PairwiseModel:
+        def predict_proba(self, x):
+            z = x["candidate_utility"].to_numpy(dtype=float)
+            p = 1.0 / (1.0 + np.exp(-z))
+            return np.column_stack((1 - p, p))
+
+    frames, symbols, dates = _mercado()
+    first_day = dates[5]
+    second_day = dates[15]
+    first_cache = {first_day: np.array([0.0, 0.3, 0.8])}
+    second_cache = {second_day: np.array([0.0, 0.9, 0.1])}
+    model = RegressionModel() if variant == "REGRESSION" else PairwiseModel()
+    first_log, second_log = {}, {}
+    first_policy = _criar_politica_fold(
+        fold_id=1, variant=variant, fitted=model,
+        baseline=lambda *_: (1, 0.3),
+        utility_cache=first_cache, diagnostics=first_log,
+        frames=frames, symbols=symbols, config=CONFIG,
+    )
+    second_policy = _criar_politica_fold(
+        fold_id=2, variant=variant, fitted=model,
+        baseline=lambda *_: (1, 0.9),
+        utility_cache=second_cache, diagnostics=second_log,
+        frames=frames, symbols=symbols, config=CONFIG,
+    )
+
+    # Primeiro fold consultado APOS criacao do segundo: deve usar cache antigo.
+    first_target, first_score = first_policy(first_day, 1, 3)
+    second_target, second_score = second_policy(second_day, 1, 3)
+    assert first_target == 2
+    assert first_score == pytest.approx(0.8)
+    assert second_target == 1
+    assert second_score == pytest.approx(0.9)
+    assert first_log[first_day]["decision_fold_id"] == 1
+    assert second_log[second_day]["decision_fold_id"] == 2
+    with pytest.raises(KeyError, match="Fold 1"):
+        first_policy(second_day, 1, 3)
+    with pytest.raises(KeyError, match="Fold 2"):
+        second_policy(first_day, 1, 3)
