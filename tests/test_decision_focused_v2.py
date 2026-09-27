@@ -144,7 +144,7 @@ def test_learned_state_rollout_changes_state_without_future_labels():
     assert labels["outcome_end"].max() <= segment.dates[-1]
 
 
-def test_on_policy_augmentation_never_touches_calibration(tmp_path):
+def test_on_policy_augmentation_never_touches_calibration():
     frames, symbols, dates = _frames()
     base = pd.DataFrame([
         {"decision_date": dates[i], "outcome_end": dates[i+3],
@@ -164,7 +164,8 @@ def test_on_policy_augmentation_never_touches_calibration(tmp_path):
         base, [segment], frames, symbols, CONFIG, 3,
     )
     assert len(augmented) >= len(base)
-    assert augmented["outcome_end"].max() <= base["decision_date"].max()
+    extras = augmented.loc[augmented["state_source"] == "OOF_LEARNED_STATE"]
+    assert extras["outcome_end"].max() <= base["decision_date"].max()
     assert audit["augmented_rows"] > 0
 
 
