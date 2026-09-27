@@ -71,7 +71,7 @@ comparacao = {
     "soft": soft_metrics,
     "counterfactual_regression": pesquisa.regressao_metricas,
     "decision_focused_surrogate": pesquisa.dfl_metricas,
-    "research_version": "1.3.0-dev.1",
+    "research_version": "1.3.0-dev.2",
     "reference_experiment_version": EXPERIMENT_VERSION,
     "data_mode": "dados/pesquisa (frozen, verified bytes)",
     "snapshot_audit": snapshot_audit,
