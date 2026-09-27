@@ -1,0 +1,54 @@
+name: decision-focused-experiment
+
+on:
+  push:
+    branches:
+      - research/decision-focused-counterfactual-v1
+    paths:
+      - .github/workflows/research-decision-focused.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Validate frozen snapshot manifest
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from reproducao.dados import SnapshotPaths, validate_snapshot
+          snap = SnapshotPaths.research(Path.cwd())
+          manifest = validate_snapshot(snap)
+          print("Frozen snapshot verified")
+          PY
+      - name: Run full comparison on frozen research data
+        shell: bash
+        run: |
+          set -o pipefail
+          python -u pesquisar_decision_focused_spyder.py 2>&1 | tee decision_focused_run.log
+      - name: Upload logs and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: decision-focused-research-v1
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            decision_focused_run.log
+            output/decision_focused/
