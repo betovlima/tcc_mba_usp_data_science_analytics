@@ -145,11 +145,13 @@ não efeitos independentes/causais. A soma telescópica é confrontada com
 a diferença de capital entre a regressão real e a política-base; o bridge final
 deve reproduzir TODA a curva e os ativos da regressão original. O replay
 base deve reproduzir TODA a curva e os ativos do Control oficial.
-Testes: criar testes unitários sintéticos de agrupamento por sessão,
-reconciliação, integridade da trajetória e fechamento diante de inconsistências.
-Consultar último `reproduction-tests` e o workflow iniciado pelo código
-`649b59a8287fdc080845832623740e18f6e3d841` antes de declarar resultado.
-Status: em validação na mesma branch e versão de trabalho `v1.3.0-dev.3`.
+Testes: **62 aprovados**, Ruff aprovado no run `36349760069`, commit
+`649b59a8287fdc080845832623740e18f6e3d841`. Testes sintéticos incluem
+agrupamento por sessão, reconciliação, integridade da trajetória e fechamento
+diante de inconsistências. Workflow completo (mesma base de código) run
+`36349759992`: verifique conclusão e artefato antes de declarar resultados.
+Status: código e testes validados; replays econômicos completos em validação
+na mesma branch e versão de trabalho `v1.3.0-dev.3`.
 O resultado anterior documentado permanece o último resultado econômico
 confirmado até uma execução completa COM estes novos replays.
 Próximo passo: conferir `intervention_episode_attribution.csv` e
