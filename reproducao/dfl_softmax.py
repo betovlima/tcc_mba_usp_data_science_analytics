@@ -12,8 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from reproducao.decision_focused import FEATURE_COLUMNS
-from reproducao.decision_focused_v2 import SEMENTE
+from reproducao.decision_focused import FEATURE_COLUMNS, SEMENTE
 
 TEMPERATURA = 1.0
 ESCALA_RECOMPENSA = 100.0
