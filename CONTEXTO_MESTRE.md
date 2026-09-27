@@ -149,13 +149,39 @@ Testes: **62 aprovados**, Ruff aprovado no run `36349760069`, commit
 `649b59a8287fdc080845832623740e18f6e3d841`. Testes sintéticos incluem
 agrupamento por sessão, reconciliação, integridade da trajetória e fechamento
 diante de inconsistências. Workflow completo (mesma base de código) run
-`36349759992`: verifique conclusão e artefato antes de declarar resultados.
-Status: código e testes validados; replays econômicos completos em validação
-na mesma branch e versão de trabalho `v1.3.0-dev.3`.
-O resultado anterior documentado permanece o último resultado econômico
-confirmado até uma execução completa COM estes novos replays.
+`36349759992`: **SUCCESS**; arquivo enviado pelo pesquisador contém
+reconciliação completa. Ver `docs/results/decision-focused-fix-004-episode-attribution.md`.
+Status: código, testes e auditoria econômica completos. Mantida a mesma
+branch e versão de trabalho `v1.3.0-dev.3`; nenhuma alteração no modelo.
 Próximo passo: conferir `intervention_episode_attribution.csv` e
 `intervention_reconciliation.json`, verificar efeito de 20 sessões,
 persistência, fees, posições e reconciliação de capital antes de
 qualquer hipótese de novo modelo. NÃO ajustar parâmetros no OOS visto.
 Próximo marcador: `[TCC-DFL:FIX-005]` somente se houver correção concreta.
+
+
+<!-- [TCC-DFL:RESULT-002] -->
+**Resultado auditado do FIX-004 — ZIP decision_focused(3).zip (27/09/2026).**
+Registro completo: `docs/results/decision-focused-fix-004-episode-attribution.md`.
+SHA-256 do ZIP: `c471ed2387e6f55efa1f2bc03089d2cc1688a67c26bb66a0bdbe8f6274246955`.
+O run `36349759992` do commit `649b59a` teve conclusão SUCCESS,
+incluindo backtest, snapshot e artefatos. BASELINE e Control oficial têm
+curvas e posições **idênticas**; bridge EP003 e regressão OOF também;
+erro de reconciliação = **US$ 0,00**. O Control termina com
+US$ 10.082.425,91 e a regressão com US$ 7.639.150,63; perda total
+US$ 2.443.275,28. Efeitos marginais cumulativos: EP001 (19/01/2023)
+−US$ 95.603,28 (3,91%); EP002 (08–11/10/2024) −US$ 96.989,26 (3,97%);
+EP003 (14/01/2026) −US$ 2.250.682,75 (92,12%).
+EP003: a regressão segura CORT em 15/01, passa a AVGO em 16/01;
+os ativos coincidem em 16/01, MAS as carteiras não reconvergem.
+Em 20–21/01 o Control contrafactual retorna a CORT, a regressão
+permanece AVGO e perde exposição ao movimento que gerou P&L realizado
+de +US$ 986.548,86 na venda de CORT de 22/01 do cenário-base.
+`first_same_asset_after_start` significa somente primeira igualdade
+nominal do ativo, não igualdade de capital/holding nem convergência
+duradoura; não tirar conclusões causais ou independentes do OOS.
+**Próximo passo:** discussão metodológica sobre estados de carteira
+e janela confirmatória externa; não ajustar modelo/thresholds olhando
+esse OOS. Nada foi alterado na política nesta análise documental.
+Marcador futuro `[TCC-DFL:FIX-005]` reservado para correção concreta,
+sempre na MESMA branch e script original.
