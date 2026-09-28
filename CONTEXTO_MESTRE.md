@@ -305,12 +305,12 @@ reconstruído e falha caso haja diferença. Isso funciona também com
 o objeto `pesquisa` já computado por um módulo antigo, evitando
 novo treinamento se o namespace estiver disponível. Após recuperar
 os estados, atualiza somente os diagnósticos exportados.
-Testes: sintéticos para estado no replay, campo ausente/presente,
-divergência de holding, descontinuidade, desalinhamento e presença
-de reload no entrypoint. Consultar run `36441325476` para resultado
-dos testes e run `36441325445` para backtest completo do commit
-`6869240a2222d0618b9682cc55a45558fc3a7c85`; NÃO alegar
-sucesso antes de consultar suas conclusões.
+Testes: **71 aprovados**, Ruff aprovado no run `36441325476`
+(commit `6869240a2222d0618b9682cc55a45558fc3a7c85`), incluindo
+estado no replay, campo ausente/presente, divergência de holding,
+descontinuidade, desalinhamento e reload no entrypoint.
+Backtest completo do mesmo commit: run `36441325445`; conferir
+conclusão e artefatos antes de confirmar desempenho econômico.
 Impacto esperado: corrigir APENAS a auditoria, sem alteração de
 LightGBM, Control, Soft, regressão de investimento, loss,
 snapshot, fold, horizonte ou dados financeiros. Mesma branch
