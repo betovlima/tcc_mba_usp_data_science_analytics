@@ -469,6 +469,9 @@ def _criar_politica_v2(
             "decision_diagnostics_schema_version": 2,
             "research_variant": variant,
             "current_asset": "CASH" if position == 0 else symbols[position - 1],
+            # [TCC-DFL:FIX-005] Campo observacional no instante da decisao.
+            # Nao e usado como feature ou para alterar a politica.
+            "research_holding_days_at_decision": int(holding),
             "final_action_asset": "CASH" if selected == 0 else symbols[selected - 1],
             "final_action_score": float(utilities[selected]),
             "decision_reason": "RESEARCH_V2_" + variant,
