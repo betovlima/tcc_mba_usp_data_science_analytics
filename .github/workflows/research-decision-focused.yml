@@ -9,10 +9,12 @@ on:
       - reproducao/decision_focused.py
       - reproducao/decision_focused_v2.py
       - reproducao/auditoria_intervencoes.py
+      - reproducao/diagnostico_estado.py
       - reproducao/dfl_softmax.py
       - pesquisar_decision_focused_spyder.py
       - tests/test_decision_focused_v2.py
       - tests/test_auditoria_intervencoes.py
+      - tests/test_diagnostico_estado.py
   workflow_dispatch:
 
 permissions:
