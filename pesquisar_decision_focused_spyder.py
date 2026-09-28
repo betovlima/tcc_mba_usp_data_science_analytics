@@ -5,6 +5,7 @@ Historico v1.3.0-dev.2 permanece em docs/results; nao usar executavel paralelo.
 Nao muda dados congelados nem Control/Soft oficiais.
 """
 # %% 0 - Imports e configuracao; somente dados da pesquisa congelada
+import importlib
 import json
 from pathlib import Path
 
@@ -13,9 +14,18 @@ from reproducao.dados import SnapshotPaths, validate_snapshot
 from reproducao.snapshot_portatil import preparar_snapshot_verificado
 from reproducao.preparacao import prepare_model_frames
 from reproducao.experimento import build_folds, build_variant_configs, run_variant
-from reproducao.decision_focused_v2 import RESEARCH_VERSION, executar_pesquisa_v2
 from reproducao.auditoria_intervencoes import _validar_equivalencia
-from reproducao.diagnostico_estado import diagnosticar_cobertura_estados
+import reproducao.decision_focused_v2 as _decision_focused_v2
+import reproducao.diagnostico_estado as _diagnostico_estado
+
+# [TCC-DFL:FIX-006] Spyder mantém módulos importados após git pull.
+# Recarregar apenas os módulos atualizados, antes da pesquisa custosa.
+_decision_focused_v2 = importlib.reload(_decision_focused_v2)
+_diagnostico_estado = importlib.reload(_diagnostico_estado)
+RESEARCH_VERSION = _decision_focused_v2.RESEARCH_VERSION
+executar_pesquisa_v2 = _decision_focused_v2.executar_pesquisa_v2
+diagnosticar_cobertura_estados = _diagnostico_estado.diagnosticar_cobertura_estados
+recuperar_holding_regressao = _diagnostico_estado.recuperar_holding_regressao
 
 RAIZ = Path(__file__).resolve().parent
 DADOS_ORIGEM = SnapshotPaths.research(RAIZ)
@@ -82,11 +92,18 @@ DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
 # Consome os outputs do experimento; nunca altera previsoes ou decisões.
 if control_result is None:
     raise RuntimeError("A auditoria de cobertura exige o Control oficial")
+# A curva REAL da regressao e a fonte de verdade do holding, inclusive
+# quando o Spyder reteve uma politica antiga sem a nova coluna auxiliar.
+regression_observations = recuperar_holding_regressao(
+    pesquisa.regression_decisions.rename_axis("decision_date").reset_index(),
+    pesquisa.regression_result.predictions,
+)
+pesquisa.regression_decisions = regression_observations.set_index("decision_date")
 cobertura_estados = diagnosticar_cobertura_estados(
     pesquisa.labels,
     pesquisa.calibration,
     control_result.predictions.reset_index(),
-    pesquisa.regression_decisions.rename_axis("decision_date").reset_index(),
+    regression_observations,
 )
 cobertura_estados.folds.to_csv(
     DIRETORIO_RESULTADOS / "state_support_folds.csv", index=False,
