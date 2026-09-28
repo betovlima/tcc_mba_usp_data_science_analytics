@@ -96,3 +96,51 @@ tuning corretivo nos mesmos três folds. As mudanças desta entrega
 são de instrumentação e testes; a pesquisa econômica continua
 com Control US$ 10.082.425,91 e regressão US$ 7.639.150,63
 até validação efetiva de um novo replay completo.
+
+
+## Confirmação empírica do FIX-006 — ZIP 6
+
+<!-- [TCC-DFL:RESULT-003] -->
+Data: 28/09/2026. Arquivo `decision_focused(6).zip`, SHA-256
+`07a7c3bafea58753ad18f5959df8cd246378919e640c142935b50750c0b3d228`.
+Verificação comparativa com `decision_focused(5).zip`: 31 arquivos anteriores,
+mais quatro CSV/JSON de cobertura de estados; nenhum foi removido.
+Seis tabelas de decisão/previsão experimentais mudaram exclusivamente
+pela nova coluna `research_holding_days_at_decision`. Ao descartar
+essa coluna, os dados antigos e novos dessas seis tabelas são iguais.
+Outros 13 artefatos econômicos importantes, incluindo curvas/trades
+de Control/Soft, trades experimentais, labels OOF e auditoria de
+intervenções, são byte a byte idênticos. Capitais das cinco políticas:
+Control 10.082.425,91; Soft 9.840.028,41; Regressão 7.639.150,63;
+Ranking pareado 2.105.511,08; Softmax DFL 4.716.464,39 (US$).
+A reconciliação continua com três episódios e seis intervenções,
+diferença −US$ 2.443.275,28, erro US$ 0.
+
+`regression_decisions.csv` e `regression_predictions.csv`
+possuem 1.547 linhas, nenhuma com holding ausente;
+datas e holdings batem em todas as linhas. Reconstrução
+independente da sequência `previous_asset` -> `selected_asset`
+também não encontrou divergências. Control e regressão têm
+calendários de decisão idênticos. A auditoria tem 3 folds, 1.547
+sessões por política, 6.119 labels elegíveis para treinamento.
+Por fold, incumbente não visto no treino do Control:
+343/504 (68,06%); 96/504 (19,05%); 259/539 (48,05%).
+Na regressão, respectivamente 343, 96, 260. Pares exatos
+ativo/holding não vistos no Control: 465, 265 e 385 sessões.
+A diferença de holding Control vs regressão ocorre em 34 decisões,
+confirmando a necessidade de auditar cada trajetória separadamente.
+
+Em 14/01/2026, no episódio EP003, o incumbente é CORT com
+holding=3, **já representado nos labels elegíveis de treino**.
+AVGO não aparece como incumbente no treinamento elegível do
+fold 3, embora seja incumbente por 51 sessões OOS do Control
+e 52 da regressão. Isso mede cobertura parcial, não permite
+atribuir a perda econômica a essa ausência.
+
+Status da integração: `reproduction-tests` run `36441325476`
+concluiu com **71 testes aprovados** e Ruff aprovado; run completo
+`decision-focused-research` `36441325445` também
+concluiu **SUCCESS**, incluindo validação SHA-256 do snapshot,
+backtest e upload de artefatos. O ZIP local fornece verificação
+econômica independente dos outputs recebidos. Não houve alteração
+na política ou nos parâmetros; mesma branch/versão/script.
