@@ -4,7 +4,9 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from reproducao.diagnostico_estado import diagnosticar_cobertura_estados
+from reproducao.diagnostico_estado import (
+    diagnosticar_cobertura_estados, recuperar_holding_regressao,
+)
 
 
 def _frames():
@@ -87,3 +89,71 @@ def test_baseline_advantage_must_be_zero():
     labels.loc[labels.candidate_position == 0, "log_advantage"] = 0.02
     with pytest.raises(AssertionError, match="vantagem zero"):
         diagnosticar_cobertura_estados(labels, calibration, control, regression)
+
+
+def _replay_case():
+    dates = pd.date_range("2025-01-02", periods=5, freq="B", tz="UTC")
+    predictions = pd.DataFrame({
+        "timestamp": dates[1:],
+        "decision_date": dates[:-1],
+        "previous_asset": ["CASH", "A", "A", "B"],
+        "selected_asset": ["A", "A", "B", "B"],
+    }).set_index("timestamp")
+    decisions = pd.DataFrame({
+        "decision_date": dates[:-1],
+        "current_asset": ["CASH", "A", "A", "B"],
+        "decision_fold_id": [1, 1, 1, 1],
+    })
+    return predictions, decisions
+
+
+def test_recover_holding_from_real_replay_when_spyder_import_is_stale():
+    predictions, decisions = _replay_case()
+    restored = recuperar_holding_regressao(decisions, predictions)
+    assert restored["research_holding_days_at_decision"].tolist() == [0, 1, 2, 1]
+    assert restored["current_asset"].tolist() == ["CASH", "A", "A", "B"]
+
+
+def test_replay_holding_verifies_original_diagnostic_when_present():
+    predictions, decisions = _replay_case()
+    decisions["research_holding_days_at_decision"] = [0, 1, 2, 1]
+    restored = recuperar_holding_regressao(decisions, predictions)
+    assert restored["research_holding_days_at_decision"].tolist() == [0, 1, 2, 1]
+    decisions.loc[2, "research_holding_days_at_decision"] = 3
+    with pytest.raises(AssertionError, match="Holding original diverge"):
+        recuperar_holding_regressao(decisions, predictions)
+
+
+def test_replay_refuses_wrong_state_and_wrong_dates():
+    predictions, decisions = _replay_case()
+    decisions.loc[0, "current_asset"] = "A"
+    with pytest.raises(AssertionError, match="Ativo incumbente"):
+        recuperar_holding_regressao(decisions, predictions)
+    _, decisions = _replay_case()
+    decisions.loc[0, "decision_date"] = pd.Timestamp("2025-02-01", tz="UTC")
+    with pytest.raises(AssertionError, match="datas distintas"):
+        recuperar_holding_regressao(decisions, predictions)
+
+
+def test_replay_refuses_discontinuous_positions_and_partial_holding():
+    predictions, decisions = _replay_case()
+    broken = predictions.copy()
+    broken.loc[broken.index[1], "previous_asset"] = "B"
+    with pytest.raises(AssertionError, match="descontinuo"):
+        recuperar_holding_regressao(decisions, broken)
+    decisions["research_holding_days_at_decision"] = [0, 1, None, 1]
+    with pytest.raises(ValueError, match="parcialmente ausente"):
+        recuperar_holding_regressao(decisions, predictions)
+
+
+def test_spyder_entrypoint_explicitly_reload_research_modules():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "pesquisar_decision_focused_spyder.py"
+    ).read_text(encoding="utf-8")
+    assert "importlib.reload(_decision_focused_v2)" in source
+    assert "importlib.reload(_diagnostico_estado)" in source
+    assert "recuperar_holding_regressao(" in source
+    assert "pesquisa.regression_result.predictions," in source
