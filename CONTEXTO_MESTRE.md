@@ -233,3 +233,45 @@ Evidência adicional de reprodutibilidade do mesmo snapshot/protocolo,
 NÃO validação confirmatória de modelo novo. Nenhum código ou parâmetro
 alterado, mesma branch `research/decision-focused-oof-v2`, mesma
 versão `v1.3.0-dev.3` e mesmo script original.
+
+
+<!-- [TCC-DFL:FIX-005] -->
+**Fix 005 — instrumentação de cobertura temporal de estados (28/09/2026).**
+Causa: 7.717 linhas de labels ocultam múltiplos candidatos por
+estado/data e cobertura limitada de incumbentes/holding no treino.
+Documento detalhado:
+`docs/research/decision-focused-state-support-fix-005.md`.
+Origem diagnóstica: `decision_focused(5).zip` SHA-256
+`2bad4be01b6dc8b0f22a051d3cbe2e34d28aafab4320aed74f67d37eb9203d1a`.
+Avaliados rótulos de TREINO seguros (decision_date e outcome_end
+estritamente antes de validation_start): Fold1 483 linhas/94 datas;
+Fold2 2038/381; Fold3 3598/647. No OOS Control, incumbentes não
+vistos no treino: 343/504 (68,06%), 96/504 (19,05%),
+259/539 (48,05%). Pares exatos (ativo, holding) não vistos:
+465/504 (92,26%), 265/504 (52,58%), 385/539 (71,43%).
+No fold3 AVGO não aparece como incumbent nos labels disponíveis,
+mas aparece como incumbente OOS no Control em 51 sessões. Isso NÃO
+prova causalidade nem falha de generalização do LightGBM; suas
+features de candidato/incumbente podem generalizar.
+Implementação: módulo INTERNO `reproducao/diagnostico_estado.py`,
+captura puramente observacional de
+`research_holding_days_at_decision` na `reproducao/decision_focused_v2.py`,
+exportação no ÚNICO `pesquisar_decision_focused_spyder.py`,
+testes `tests/test_diagnostico_estado.py` e workflow único atualizado.
+Novos arquivos de output: `state_support_folds.csv`,
+`state_support_assets.csv`, `state_support_oos_sessions.csv`,
+`state_support_checks.json`. Estados aqui PARCIAIS: ativo/holding,
+não riqueza/quantidade/entry price completo. OOS usado para auditoria
+descritiva, NUNCA para retreinamento/guards.
+Testes: `reproduction-tests` run `36416400586` (commit `2f0fee3`):
+**66 aprovados, Ruff aprovado**. Workflow completo
+`decision-focused-research` run `36416400770`: consultar conclusão
+e artefatos para conferir invariância dos capitais; não afirmar
+resultado novo enquanto o backtest não encerrar.
+Impacto: instrumentação apenas; NÃO alterados dataset congelado,
+LightGBM, loss, Control, Soft, decisão da regressão, hiperparâmetros
+ou horizonte. Mesma branch e versão de trabalho `v1.3.0-dev.3`;
+não criar novo entrypoint, branch, tag ou merge.
+Próximo passo: analisar os CSVs novos e, só depois, decidir desenho
+de hipótese state-aware pré-registrada e avaliação futura separada.
+Marcador seguinte `[TCC-DFL:FIX-006]` só se houver mudança concreta.
