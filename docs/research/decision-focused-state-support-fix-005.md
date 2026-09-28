@@ -6,6 +6,9 @@
 **Fonte dos resultados preliminares:** `decision_focused(5).zip`,
 SHA-256 `2bad4be01b6dc8b0f22a051d3cbe2e34d28aafab4320aed74f67d37eb9203d1a`.
 **Não é novo teste confirmatório:** os folds de 2020–2026 já foram examinados.
+**Testes do código:** 66 testes aprovados e Ruff aprovado no workflow
+\`reproduction-tests\` run [36416400586](https://github.com/betovlima/tcc_mba_usp_data_science_analytics/actions/runs/36416400586), commit \`2f0fee3\`.
+**Execução econômica com os novos CSVs:** [run 36416400770](https://github.com/betovlima/tcc_mba_usp_data_science_analytics/actions/runs/36416400770); confirmar conclusão e outputs antes de declarar identidade de capital.
 
 ## Problema observado
 
