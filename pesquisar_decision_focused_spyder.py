@@ -15,6 +15,7 @@ from reproducao.preparacao import prepare_model_frames
 from reproducao.experimento import build_folds, build_variant_configs, run_variant
 from reproducao.decision_focused_v2 import RESEARCH_VERSION, executar_pesquisa_v2
 from reproducao.auditoria_intervencoes import _validar_equivalencia
+from reproducao.diagnostico_estado import diagnosticar_cobertura_estados
 
 RAIZ = Path(__file__).resolve().parent
 DADOS_ORIGEM = SnapshotPaths.research(RAIZ)
@@ -77,6 +78,35 @@ print(
     flush=True,
 )
 DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
+# [TCC-DFL:FIX-005] Diagnostico de suporte dos estados OOF apenas de TREINO.
+# Consome os outputs do experimento; nunca altera previsoes ou decisões.
+if control_result is None:
+    raise RuntimeError("A auditoria de cobertura exige o Control oficial")
+cobertura_estados = diagnosticar_cobertura_estados(
+    pesquisa.labels,
+    pesquisa.calibration,
+    control_result.predictions.reset_index(),
+    pesquisa.regression_decisions.rename_axis("decision_date").reset_index(),
+)
+cobertura_estados.folds.to_csv(
+    DIRETORIO_RESULTADOS / "state_support_folds.csv", index=False,
+)
+cobertura_estados.ativos.to_csv(
+    DIRETORIO_RESULTADOS / "state_support_assets.csv", index=False,
+)
+cobertura_estados.sessoes.to_csv(
+    DIRETORIO_RESULTADOS / "state_support_oos_sessions.csv", index=False,
+)
+(DIRETORIO_RESULTADOS / "state_support_checks.json").write_text(
+    json.dumps(cobertura_estados.checks, indent=2, ensure_ascii=False, default=str),
+    encoding="utf-8",
+)
+print(
+    "[decision-focused] partial-state coverage "
+    f"folds={cobertura_estados.checks['fold_count']} "
+    f"oos_decisions={cobertura_estados.checks['oos_sessions_per_policy']}",
+    flush=True,
+)
 # Exportar a serie COMPLETA das duas politicas oficiais para permitir
 # comparacao diaria dos estados, capital e custos (sem reconstruir graficos).
 for label, result in (("control", control_result), ("soft", soft_result)):
@@ -142,6 +172,7 @@ summary = {
     "oof_decision_focused_surrogate": pesquisa.dfl_metrics,
     "oof_softmax_decision_focused": pesquisa.softmax_metrics,
     "intervention_audit": auditoria_intervencoes.checks,
+    "state_support_audit": cobertura_estados.checks,
     "intervention_attribution_method": (
         "Cumulative chronological episode toggles; same prior decisions, "
         "then baseline policy; marginal effects depend on inclusion order."
