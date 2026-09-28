@@ -98,3 +98,22 @@ mesmo OOS para apresentar ganho estatisticamente independente.
 Dados congelados, modelos e versão permanecem sem alterações.
 Próximo passo: definir uma avaliação futura independente antes
 de eventual mudança de política ou protocolo.
+
+
+## Nova reprodução, sem mudança econômica
+
+<!-- [TCC-DFL:REPRO-001] -->
+Arquivo recebido em 28/09/2026: `decision_focused(5).zip`.
+SHA-256: `2bad4be01b6dc8b0f22a051d3cbe2e34d28aafab4320aed74f67d37eb9203d1a`.
+Comparado byte a byte ao `decision_focused(4).zip`, SHA-256
+`38f409435cbb7c337e527e15d56e9266db5b19f33c8aa113ed2b4c7da2a0202a`:
+ambos têm 31 arquivos regulares, dos quais 30 possuem conteúdo idêntico.
+A única diferença está em `decision_focused/active/summary.json`,
+com 53 campos de tempos de execução (`*_seconds`). Todos os demais
+campos, incluindo métricas financeiras, hashes/identidade dos dados,
+decisões, trades, curvas, rótulos e reconciliação, são idênticos.
+Capital do Control US$ 10.082.425,91, regressão US$ 7.639.150,63;
+3 episódios, 6 overrides, perda marginal reconciliada
+−US$ 2.443.275,28 e erro de reconciliação US$ 0,00.
+Não constitui novo modelo, nova prova independente nem nova validação
+prospectiva; é reprodução do mesmo protocolo e snapshot.
