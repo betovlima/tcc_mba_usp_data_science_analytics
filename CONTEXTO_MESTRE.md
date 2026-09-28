@@ -275,3 +275,48 @@ não criar novo entrypoint, branch, tag ou merge.
 Próximo passo: analisar os CSVs novos e, só depois, decidir desenho
 de hipótese state-aware pré-registrada e avaliação futura separada.
 Marcador seguinte `[TCC-DFL:FIX-006]` só se houver mudança concreta.
+
+
+<!-- [TCC-DFL:FIX-006] -->
+**Fix 006 — fallback seguro para módulos antigos retidos no Spyder (28/09/2026).**
+Causa: a execução local do usuário concluiu a pesquisa mas falhou na
+auditoria descritiva em `pesquisar_decision_focused_spyder.py:85` com
+`ValueError: Colunas ausentes em Regressao:
+['research_holding_days_at_decision']`. O código da branch já produz
+esse campo em `_criar_politica_v2` e o mesmo pipeline passou no GitHub
+run `36416400770` em processo novo. A discrepância é compatível
+com um módulo `reproducao.decision_focused_v2` retido em memória no
+kernel Spyder após `git pull`. Não inferir erro de modelo,
+de alocação ou da fonte Alpaca a partir desse stacktrace.
+Arquivos: `reproducao/diagnostico_estado.py`,
+`pesquisar_decision_focused_spyder.py`, `tests/test_diagnostico_estado.py`,
+este CONTEXTO_MESTRE.md. Nenhum executável novo.
+Correção A: no início do ÚNICO entrypoint, `importlib.reload`
+explícito de `decision_focused_v2` e `diagnostico_estado`
+antes de iniciar a pesquisa, vinculando as funções recarregadas.
+Correção B: `recuperar_holding_regressao` deriva o holding da
+TRAJETÓRIA EXATA da regressão (par `previous_asset` /
+`selected_asset`, ordenado por timestamp de execução), sem
+copiar o holding do Control. Cada data de decisão reconstrói
+estado pré-decisão: CASH=0, nova posição=1, permanência +1.
+Valida datas, ordem, continuidade do incumbente e ativo da
+regressão; caso o campo auxiliar exista, confronta-o com o valor
+reconstruído e falha caso haja diferença. Isso funciona também com
+o objeto `pesquisa` já computado por um módulo antigo, evitando
+novo treinamento se o namespace estiver disponível. Após recuperar
+os estados, atualiza somente os diagnósticos exportados.
+Testes: sintéticos para estado no replay, campo ausente/presente,
+divergência de holding, descontinuidade, desalinhamento e presença
+de reload no entrypoint. Consultar run `36441325476` para resultado
+dos testes e run `36441325445` para backtest completo do commit
+`6869240a2222d0618b9682cc55a45558fc3a7c85`; NÃO alegar
+sucesso antes de consultar suas conclusões.
+Impacto esperado: corrigir APENAS a auditoria, sem alteração de
+LightGBM, Control, Soft, regressão de investimento, loss,
+snapshot, fold, horizonte ou dados financeiros. Mesma branch
+`research/decision-focused-oof-v2`, versão de trabalho
+`v1.3.0-dev.3`; sem tag/merge.
+Próximos passos: conferir 1.547 sessões nos CSVs de suporte,
+`intervention_reconciliation.json` com erro 0, e confirmar que
+capitais reproduzem os valores congelados antes de fechar FIX-006.
+Próximo marcador `[TCC-DFL:FIX-007]` somente se nova mudança concreta.
