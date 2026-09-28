@@ -309,8 +309,9 @@ Testes: **71 aprovados**, Ruff aprovado no run `36441325476`
 (commit `6869240a2222d0618b9682cc55a45558fc3a7c85`), incluindo
 estado no replay, campo ausente/presente, divergência de holding,
 descontinuidade, desalinhamento e reload no entrypoint.
-Backtest completo do mesmo commit: run `36441325445`; conferir
-conclusão e artefatos antes de confirmar desempenho econômico.
+Backtest completo do mesmo commit: run `36441325445` **SUCCESS**, incluindo
+snapshot SHA-256, testes, execução integral e upload. ZIP local recebido
+confirmou os capitais e 1.547 holdings sem divergência.
 Impacto esperado: corrigir APENAS a auditoria, sem alteração de
 LightGBM, Control, Soft, regressão de investimento, loss,
 snapshot, fold, horizonte ou dados financeiros. Mesma branch
@@ -320,3 +321,35 @@ Próximos passos: conferir 1.547 sessões nos CSVs de suporte,
 `intervention_reconciliation.json` com erro 0, e confirmar que
 capitais reproduzem os valores congelados antes de fechar FIX-006.
 Próximo marcador `[TCC-DFL:FIX-007]` somente se nova mudança concreta.
+
+
+<!-- [TCC-DFL:RESULT-003] -->
+**Fix 006 verificado, ZIP `decision_focused(6).zip` recebido em 28/09/2026.**
+SHA-256 `07a7c3bafea58753ad18f5959df8cd246378919e640c142935b50750c0b3d228`.
+Registro completo:
+`docs/research/decision-focused-state-support-fix-005.md`,
+seção "Confirmação empírica do FIX-006 — ZIP 6".
+Comparado ao ZIP 5, aparecem os quatro arquivos
+`state_support_{assets,folds,oos_sessions}.csv` e
+`state_support_checks.json`; nenhum arquivo removido.
+As seis tabelas de previsões/decisões das variantes experimentais
+receberam apenas a coluna de holding observacional;
+sem ela, todas as linhas antigas são iguais. Treze arquivos
+financeiros críticos, incluindo curvas/trades, rótulos e replays
+de intervenção, são byte a byte idênticos.
+1.547 decisões e holdings regressão/previsão conferem;
+reconstrução independente a partir das transições não encontrou
+nenhuma inconsistência. Control e regressão compartilham datas OOS.
+O FIX-006 resolveu o erro Spyder apresentado; run completo
+`36441325445` SUCCESS, testes `36441325476` 71 PASS + Ruff.
+Control US$ 10.082.425,91; Soft US$ 9.840.028,41; Regressão
+US$ 7.639.150,63; ranking US$ 2.105.511,08; softmax DFL
+US$ 4.716.464,39. Três episódios, seis overrides e erro
+de reconciliação US$ 0. Fold3: AVGO nunca incumbente nos labels
+elegíveis de treino, embora Control o visite 51 vezes no OOS;
+CORT com holding=3 na decisão 14/01/2026 era par já visto no treino.
+Não inferir causalidade nem usar esses OOS já vistos para tuning.
+Estado de trabalho: mesma branch `research/decision-focused-oof-v2`,
+versão `v1.3.0-dev.3`, script único; sem tag nem merge.
+Próximo: discutir hipótese de cobertura de estados no desenvolvimento
+e período prospectivo independente antes de nova política.
