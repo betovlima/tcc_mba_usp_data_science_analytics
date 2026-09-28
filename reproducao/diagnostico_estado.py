@@ -30,6 +30,97 @@ def _fold_rows(df: pd.DataFrame, key: str, fold: int) -> pd.DataFrame:
     return df.loc[pd.to_numeric(df[key], errors="raise") == fold].copy()
 
 
+def recuperar_holding_regressao(
+    regression_decisions: pd.DataFrame,
+    regression_predictions: pd.DataFrame,
+) -> pd.DataFrame:
+    """Reconstrói holding PRE-decisão do replay exato, sem usar Control.
+
+    [TCC-DFL:FIX-006] O Spyder pode reter em memória decision_focused_v2
+    importado antes do pull. Nesse caso, as decisões antigas não contêm
+    research_holding_days_at_decision. A série efetivamente executada
+    oferece a fonte independente: para cada linha da curva, previous_asset
+    é a posição ANTES da decisão; selected_asset é a posição APÓS a execução.
+    Uma permanência soma 1 sessão; compra/rotação reinicia em 1; CASH em 0.
+    Se o campo original existe, compara-o ao valor reconstruído e falha se
+    houver qualquer divergência em vez de corrigir silenciosamente dados.
+    """
+    observations = regression_decisions.copy()
+    predictions = regression_predictions.copy()
+    if "timestamp" not in predictions.columns and predictions.index.name == "timestamp":
+        predictions = predictions.reset_index()
+    required = {"timestamp", "decision_date", "previous_asset", "selected_asset"}
+    if not required.issubset(predictions.columns):
+        raise ValueError(
+            "Replay da regressao sem colunas: "
+            + str(sorted(required - set(predictions.columns)))
+        )
+    required_obs = {"decision_date", "current_asset"}
+    if not required_obs.issubset(observations.columns):
+        raise ValueError(
+            "Diagnosticos da regressao sem colunas: "
+            + str(sorted(required_obs - set(observations.columns)))
+        )
+    predictions["timestamp"] = _datetime(predictions["timestamp"])
+    predictions["decision_date"] = _datetime(predictions["decision_date"])
+    observations["decision_date"] = _datetime(observations["decision_date"])
+    if predictions["decision_date"].duplicated().any():
+        raise AssertionError("Replay com data de decisao duplicada")
+    if observations["decision_date"].duplicated().any():
+        raise AssertionError("Diagnosticos com data de decisao duplicada")
+    if not (predictions["timestamp"] > predictions["decision_date"]).all():
+        raise AssertionError("Timestamp de execucao nao sucede decisao")
+    predictions = predictions.sort_values("timestamp")
+    if not predictions["decision_date"].is_monotonic_increasing:
+        raise AssertionError("Datas de decisao do replay nao cronologicas")
+    if set(predictions["decision_date"]) != set(observations["decision_date"]):
+        raise AssertionError("Replay e diagnosticos possuem datas distintas")
+
+    incumbent = "CASH"
+    holding = 0
+    reconstructed: dict[pd.Timestamp, tuple[str, int]] = {}
+    for row in predictions.itertuples(index=False):
+        actual_before = str(row.previous_asset)
+        selected_after = str(row.selected_asset)
+        if actual_before != incumbent:
+            raise AssertionError(
+                f"Replay possui estado anterior descontinuo em {row.decision_date}: "
+                f"{actual_before} != {incumbent}"
+            )
+        if actual_before in {"nan", "None"} or selected_after in {"nan", "None"}:
+            raise ValueError("Ativo ausente no replay da regressao")
+        reconstructed[pd.Timestamp(row.decision_date)] = (incumbent, holding)
+        if selected_after == "CASH":
+            holding = 0
+        elif selected_after == incumbent:
+            holding += 1
+        else:
+            holding = 1
+        incumbent = selected_after
+
+    expected_assets = observations["decision_date"].map(
+        {date: value[0] for date, value in reconstructed.items()}
+    )
+    expected_holding = observations["decision_date"].map(
+        {date: value[1] for date, value in reconstructed.items()}
+    )
+    if not observations["current_asset"].astype(str).eq(expected_assets).all():
+        raise AssertionError(
+            "Ativo incumbente do replay diverge do diagnostico da regressao"
+        )
+    key = "research_holding_days_at_decision"
+    if key in observations.columns:
+        if observations[key].isna().any():
+            raise ValueError("Holding parcialmente ausente no diagnostico")
+        recorded = pd.to_numeric(observations[key], errors="raise")
+        if not recorded.eq(expected_holding).all():
+            raise AssertionError(
+                "Holding original diverge do estado reconstruido do replay"
+            )
+    observations[key] = expected_holding.astype(int)
+    return observations
+
+
 def diagnosticar_cobertura_estados(
     labels: pd.DataFrame,
     calibration: pd.DataFrame,
