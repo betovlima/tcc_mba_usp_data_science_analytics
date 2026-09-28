@@ -185,3 +185,35 @@ e janela confirmatória externa; não ajustar modelo/thresholds olhando
 esse OOS. Nada foi alterado na política nesta análise documental.
 Marcador futuro `[TCC-DFL:FIX-005]` reservado para correção concreta,
 sempre na MESMA branch e script original.
+
+
+<!-- [TCC-DFL:ANALYSIS-003] -->
+**Análise entregue — dependência sequencial e validação confirmatória (27/09/2026).**
+Origem: `decision_focused(4).zip`, SHA-256
+`38f409435cbb7c337e527e15d56e9266db5b19f33c8aa113ed2b4c7da2a0202a`.
+Documento integral:
+`docs/research/decision-focused-sequential-state-analysis.md`.
+Diagnóstico: EP001 teve 2 sessões futuras de ativos distintos + 916 de
+mesmo ativo/capital diferente; EP002, 4 + 482; EP003, 3 + 166.
+Após última divergência de ativo (21/01/2026) em EP003, restaram
+165 sessões de símbolos iguais com riqueza distinta. A relação
+`W_com/W_sem` passou de 0,772429504 no primeiro pregão após a
+última divergência para 0,772424604 no final. Diferença nominal
+no horizonte de 20 sessões: −US$ 1.412.175,96; no fim:
+−US$ 2.250.682,75; aumento do gap nominal após 20 sessões
+de −US$ 838.506,78 é sobretudo capital composto diferente,
+NÃO prova de novas ações divergentes depois desse horizonte.
+O target atual JÁ usa replay contrafactual de 20 sessões,
+portanto não o descrever como retorno isolado de um dia.
+Hipótese futura: aprendizado/avaliação de trajetórias condicionais
+ao estado completo da carteira; não treinado/testado nesta etapa.
+Protocolo confirmatório: pré-registro com parâmetros/cutoffs fixos
+antes de nova janela pós-17/09/2026, snapshot futuro separado,
+purge máximo coerente com outcomes até 60 sessões; nenhum ajuste
+pelos três folds históricos já examinados.
+Impacto: **somente análise/documentação**. Nenhum modelo, dado,
+script, workflow ou versão alterado. Branch única e
+`pesquisar_decision_focused_spyder.py` mantidos; sem tag/merge.
+Testes: sem execução nova necessária para documento; resultado e
+reconciliação históricos seguem íntegros. Próximo marcador de
+código permanece `[TCC-DFL:FIX-005]` apenas se alteração concreta.
