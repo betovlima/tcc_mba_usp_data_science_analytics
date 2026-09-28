@@ -217,3 +217,19 @@ script, workflow ou versão alterado. Branch única e
 Testes: sem execução nova necessária para documento; resultado e
 reconciliação históricos seguem íntegros. Próximo marcador de
 código permanece `[TCC-DFL:FIX-005]` apenas se alteração concreta.
+
+
+<!-- [TCC-DFL:REPRO-001] -->
+**Reprodução recebida em 28/09/2026: `decision_focused(5).zip`.**
+SHA-256 `2bad4be01b6dc8b0f22a051d3cbe2e34d28aafab4320aed74f67d37eb9203d1a`.
+Comparação byte a byte com `decision_focused(4).zip`: 30/31 arquivos
+regulares idênticos; somente `active/summary.json` possui 53 diferenças,
+todas em campos `*_seconds` de duração computacional.
+Curvas, decisões, operações, rótulos e métricas NÃO mudaram.
+Control US$ 10.082.425,91; regressão US$ 7.639.150,63; reconciliação
+de três episódios e seis overrides fecha −US$ 2.443.275,28 com erro zero.
+Registro: `docs/results/decision-focused-fix-004-episode-attribution.md`.
+Evidência adicional de reprodutibilidade do mesmo snapshot/protocolo,
+NÃO validação confirmatória de modelo novo. Nenhum código ou parâmetro
+alterado, mesma branch `research/decision-focused-oof-v2`, mesma
+versão `v1.3.0-dev.3` e mesmo script original.
