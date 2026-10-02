@@ -1,0 +1,1058 @@
+"""Directional Change + LightGBM challenger para o TCC.
+
+Este modulo e experimental e nao altera o Control oficial. Ele adiciona um
+classificador LightGBM causal que estima a probabilidade de uma reversao de
+alta para baixa no ativo atualmente carregado. Quando o Control manteria a
+posicao e a probabilidade calibrada de reversao supera o limiar OOS, o
+challenger sai para CASH na abertura seguinte.
+
+O alvo usa somente informacao futura para rotulagem de treino. As features de
+cada data usam exclusivamente OHLCV e estados Directional Change observados ate
+aquela data.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Callable, Iterable
+
+import numpy as np
+import pandas as pd
+
+from engine.modelo_lightgbm import (
+    _ajustar_modelos_lightgbm,
+    _configuracoes_lightgbm,
+    _construir_contexto_execucao,
+)
+from engine.rotacao import (
+    ROTATION_FEATURES,
+    _crescimento_politica_simples,
+    _desempenho_folds,
+    _politica_agendada,
+    _politica_utilidade,
+    _precalcular_utilidades_modelo,
+    _simular_exato,
+)
+
+RESEARCH_VERSION = "1.3.0-dev.1"
+DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
+REVERSAL_HORIZON_SESSIONS = 5
+REVERSAL_ATR_MULTIPLIER = 1.5
+REVERSAL_THRESHOLD_MIN = 0.02
+REVERSAL_THRESHOLD_MAX = 0.08
+PROBABILITY_THRESHOLD_CANDIDATES = (
+    0.45,
+    0.50,
+    0.55,
+    0.60,
+    0.65,
+    0.70,
+    0.75,
+    0.80,
+    0.85,
+)
+MINIMUM_CLASS_ROWS = 20
+
+
+def _tag_threshold(value: float) -> str:
+    return f"{int(round(float(value) * 100)):02d}pct"
+
+
+def directional_change_feature_names(
+    thresholds: Iterable[float] = DIRECTIONAL_CHANGE_THRESHOLDS,
+) -> tuple[str, ...]:
+    names: list[str] = []
+    for threshold in thresholds:
+        tag = _tag_threshold(threshold)
+        names.extend(
+            [
+                f"dc_regime_{tag}",
+                f"dc_distance_from_extreme_{tag}",
+                f"dc_overshoot_{tag}",
+                f"dc_sessions_since_event_{tag}",
+                f"dc_reversal_pressure_{tag}",
+            ]
+        )
+    names.extend(
+        [
+            "dc_up_regime_share",
+            "dc_down_regime_share",
+            "dc_regime_agreement",
+            "dc_reversal_pressure_max",
+        ]
+    )
+    return tuple(names)
+
+
+DC_FEATURES = directional_change_feature_names()
+MODEL_FEATURES = tuple(ROTATION_FEATURES) + DC_FEATURES
+
+
+@dataclass(frozen=True)
+class CalibrationResult:
+    threshold: float
+    balanced_accuracy: float | None
+    precision: float | None
+    recall: float | None
+    positives: int
+    negatives: int
+    observations: int
+
+    def as_dict(self, *, fold_id: int) -> dict[str, Any]:
+        return {
+            "fold_id": int(fold_id),
+            "probability_threshold": float(self.threshold),
+            "balanced_accuracy": self.balanced_accuracy,
+            "precision": self.precision,
+            "recall": self.recall,
+            "positives": int(self.positives),
+            "negatives": int(self.negatives),
+            "observations": int(self.observations),
+        }
+
+
+def _directional_change_state(
+    close: pd.Series,
+    threshold: float,
+) -> pd.DataFrame:
+    values = pd.to_numeric(close, errors="coerce").to_numpy(dtype=float)
+    regime = np.full(len(values), np.nan, dtype=float)
+    distance = np.full(len(values), np.nan, dtype=float)
+    overshoot = np.full(len(values), np.nan, dtype=float)
+    age = np.full(len(values), np.nan, dtype=float)
+    pressure = np.full(len(values), np.nan, dtype=float)
+
+    mode = 0
+    running_high = np.nan
+    running_low = np.nan
+    confirmation_price = np.nan
+    sessions_since_event = 0
+
+    for index, price in enumerate(values):
+        if not np.isfinite(price) or price <= 0:
+            continue
+
+        if not np.isfinite(running_high):
+            running_high = price
+            running_low = price
+            confirmation_price = price
+            sessions_since_event = 0
+        else:
+            if mode >= 0:
+                running_high = max(float(running_high), price)
+            if mode <= 0:
+                running_low = min(float(running_low), price)
+
+            changed = False
+            if mode in {0, 1} and price <= float(running_high) * (1.0 - threshold):
+                mode = -1
+                running_low = price
+                confirmation_price = price
+                changed = True
+            elif mode in {0, -1} and price >= float(running_low) * (1.0 + threshold):
+                mode = 1
+                running_high = price
+                confirmation_price = price
+                changed = True
+
+            sessions_since_event = 0 if changed else sessions_since_event + 1
+
+        regime[index] = float(mode)
+        age[index] = float(sessions_since_event)
+        overshoot[index] = (
+            float(price / confirmation_price - 1.0)
+            if np.isfinite(confirmation_price) and confirmation_price > 0
+            else np.nan
+        )
+
+        if mode == 1 and np.isfinite(running_high) and running_high > 0:
+            distance[index] = float(price / running_high - 1.0)
+            pressure[index] = max(
+                0.0,
+                float((running_high - price) / running_high / threshold),
+            )
+        elif mode == -1 and np.isfinite(running_low) and running_low > 0:
+            distance[index] = float(price / running_low - 1.0)
+            pressure[index] = max(
+                0.0,
+                float((price - running_low) / running_low / threshold),
+            )
+        else:
+            distance[index] = 0.0
+            pressure[index] = 0.0
+
+    tag = _tag_threshold(threshold)
+    return pd.DataFrame(
+        {
+            f"dc_regime_{tag}": regime,
+            f"dc_distance_from_extreme_{tag}": distance,
+            f"dc_overshoot_{tag}": overshoot,
+            f"dc_sessions_since_event_{tag}": age,
+            f"dc_reversal_pressure_{tag}": pressure,
+        },
+        index=close.index,
+    )
+
+
+def _forward_reversal_targets(
+    frame: pd.DataFrame,
+    *,
+    horizon: int = REVERSAL_HORIZON_SESSIONS,
+    atr_multiplier: float = REVERSAL_ATR_MULTIPLIER,
+    threshold_min: float = REVERSAL_THRESHOLD_MIN,
+    threshold_max: float = REVERSAL_THRESHOLD_MAX,
+) -> pd.DataFrame:
+    close = pd.to_numeric(frame["close"], errors="coerce").to_numpy(dtype=float)
+    atr_pct = pd.to_numeric(frame["atr_pct_14"], errors="coerce").to_numpy(
+        dtype=float
+    )
+
+    down_target = np.full(len(frame), np.nan, dtype=float)
+    up_target = np.full(len(frame), np.nan, dtype=float)
+    down_magnitude = np.full(len(frame), np.nan, dtype=float)
+    up_magnitude = np.full(len(frame), np.nan, dtype=float)
+    effective_threshold = np.full(len(frame), np.nan, dtype=float)
+
+    for index in range(len(frame)):
+        end = index + 1 + int(horizon)
+        if end > len(frame):
+            continue
+        future = close[index + 1:end]
+        if len(future) != int(horizon) or not np.isfinite(future).all():
+            continue
+        current_atr = atr_pct[index]
+        if not np.isfinite(current_atr) or current_atr <= 0:
+            continue
+
+        threshold = float(
+            np.clip(
+                float(atr_multiplier) * float(current_atr),
+                float(threshold_min),
+                float(threshold_max),
+            )
+        )
+        effective_threshold[index] = threshold
+
+        running_peak = -np.inf
+        maximum_drawdown = 0.0
+        running_trough = np.inf
+        maximum_rally = 0.0
+        for future_close in future:
+            running_peak = max(running_peak, float(future_close))
+            if np.isfinite(running_peak) and running_peak > 0:
+                maximum_drawdown = max(
+                    maximum_drawdown,
+                    1.0 - float(future_close) / running_peak,
+                )
+
+            running_trough = min(running_trough, float(future_close))
+            if np.isfinite(running_trough) and running_trough > 0:
+                maximum_rally = max(
+                    maximum_rally,
+                    float(future_close) / running_trough - 1.0,
+                )
+
+        down_magnitude[index] = float(maximum_drawdown)
+        up_magnitude[index] = float(maximum_rally)
+        down_target[index] = float(maximum_drawdown >= threshold)
+        up_target[index] = float(maximum_rally >= threshold)
+
+    return pd.DataFrame(
+        {
+            "forward_down_reversal": down_target,
+            "forward_up_reversal": up_target,
+            "forward_down_reversal_magnitude": down_magnitude,
+            "forward_up_reversal_magnitude": up_magnitude,
+            "forward_reversal_threshold": effective_threshold,
+        },
+        index=frame.index,
+    )
+
+
+def adicionar_directional_change(
+    frame: pd.DataFrame,
+    *,
+    thresholds: Iterable[float] = DIRECTIONAL_CHANGE_THRESHOLDS,
+    horizon: int = REVERSAL_HORIZON_SESSIONS,
+) -> pd.DataFrame:
+    """Adiciona features causais e alvos futuros de reversao a um ativo."""
+    output = frame.copy()
+    close = pd.to_numeric(output["close"], errors="coerce")
+
+    regime_columns: list[str] = []
+    pressure_columns: list[str] = []
+    for threshold in thresholds:
+        dc = _directional_change_state(close, float(threshold))
+        output = output.join(dc)
+        tag = _tag_threshold(float(threshold))
+        regime_columns.append(f"dc_regime_{tag}")
+        pressure_columns.append(f"dc_reversal_pressure_{tag}")
+
+    regimes = output[regime_columns].apply(pd.to_numeric, errors="coerce")
+    output["dc_up_regime_share"] = (regimes > 0).mean(axis=1)
+    output["dc_down_regime_share"] = (regimes < 0).mean(axis=1)
+    output["dc_regime_agreement"] = regimes.mean(axis=1).abs()
+    output["dc_reversal_pressure_max"] = output[pressure_columns].max(axis=1)
+
+    targets = _forward_reversal_targets(output, horizon=int(horizon))
+    output = output.join(targets)
+    return output.replace([np.inf, -np.inf], np.nan)
+
+
+def _preparar_frames_directional_change(
+    frames: dict[str, pd.DataFrame],
+) -> dict[str, pd.DataFrame]:
+    return {
+        symbol: adicionar_directional_change(frame)
+        for symbol, frame in frames.items()
+    }
+
+
+def _ajustar_modelos_reversao(
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    train_dates: pd.DatetimeIndex,
+    config: Any,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    try:
+        from lightgbm import LGBMClassifier
+    except ImportError as exc:
+        raise RuntimeError(
+            "Directional Change research requires lightgbm."
+        ) from exc
+
+    settings = _configuracoes_lightgbm(config)
+    minimum_rows = int(config.rotation_minimum_training_rows)
+    models: dict[str, Any] = {}
+    rows: list[dict[str, Any]] = []
+
+    for symbol in symbols:
+        train = frames[symbol].reindex(train_dates).dropna(
+            subset=["forward_down_reversal", *MODEL_FEATURES]
+        )
+        target = train["forward_down_reversal"].astype(int)
+        positives = int((target == 1).sum())
+        negatives = int((target == 0).sum())
+        diagnostic = {
+            "asset": symbol,
+            "training_rows": int(len(train)),
+            "positive_rows": positives,
+            "negative_rows": negatives,
+            "fitted": False,
+        }
+        if (
+            len(train) < minimum_rows
+            or positives < MINIMUM_CLASS_ROWS
+            or negatives < MINIMUM_CLASS_ROWS
+        ):
+            rows.append(diagnostic)
+            continue
+
+        model = LGBMClassifier(
+            objective="binary",
+            boosting_type="gbdt",
+            n_estimators=int(settings["n_estimators"]),
+            learning_rate=float(settings["learning_rate"]),
+            max_depth=int(settings["max_depth"]),
+            num_leaves=int(settings["num_leaves"]),
+            min_child_samples=int(settings["min_child_samples"]),
+            min_child_weight=float(settings["min_child_weight"]),
+            subsample=float(settings["subsample"]),
+            subsample_freq=int(settings["subsample_freq"]),
+            colsample_bytree=float(settings["colsample_bytree"]),
+            reg_alpha=float(settings["reg_alpha"]),
+            reg_lambda=float(settings["reg_lambda"]),
+            max_bin=int(settings["max_bin"]),
+            random_state=int(config.random_state),
+            n_jobs=int(settings["n_jobs"]),
+            device_type="cpu",
+            deterministic=bool(config.deterministic_execution),
+            force_col_wise=bool(config.deterministic_execution),
+            class_weight="balanced",
+            verbosity=-1,
+        )
+        model.fit(train[list(MODEL_FEATURES)], target)
+        models[symbol] = model
+        diagnostic["fitted"] = True
+        rows.append(diagnostic)
+
+    return models, rows
+
+
+def _precalcular_probabilidades_reversao(
+    models: dict[str, Any],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    dates: pd.DatetimeIndex,
+) -> dict[pd.Timestamp, dict[str, float]]:
+    cache: dict[pd.Timestamp, dict[str, float]] = {
+        pd.Timestamp(date): {} for date in dates
+    }
+    for symbol in symbols:
+        model = models.get(symbol)
+        if model is None:
+            continue
+        frame = frames[symbol].reindex(dates)
+        valid = frame[list(MODEL_FEATURES)].notna().all(axis=1)
+        if not bool(valid.any()):
+            continue
+        rows = frame.loc[valid, list(MODEL_FEATURES)]
+        probabilities = model.predict_proba(rows)[:, 1]
+        for timestamp, probability in zip(rows.index, probabilities, strict=True):
+            cache[pd.Timestamp(timestamp)][symbol] = float(probability)
+    return cache
+
+
+def _classification_score(
+    y_true: np.ndarray,
+    probabilities: np.ndarray,
+    threshold: float,
+) -> tuple[float, float | None, float | None]:
+    predicted = probabilities >= float(threshold)
+    positive = y_true == 1
+    negative = y_true == 0
+
+    tp = int(np.sum(predicted & positive))
+    fn = int(np.sum((~predicted) & positive))
+    tn = int(np.sum((~predicted) & negative))
+    fp = int(np.sum(predicted & negative))
+
+    tpr = tp / (tp + fn) if tp + fn else 0.0
+    tnr = tn / (tn + fp) if tn + fp else 0.0
+    balanced_accuracy = 0.5 * (tpr + tnr)
+    precision = tp / (tp + fp) if tp + fp else None
+    recall = tp / (tp + fn) if tp + fn else None
+    return float(balanced_accuracy), precision, recall
+
+
+def calibrar_limiar_probabilidade(
+    models: dict[str, Any],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    calibration_dates: pd.DatetimeIndex,
+    *,
+    candidates: Iterable[float] = PROBABILITY_THRESHOLD_CANDIDATES,
+) -> CalibrationResult:
+    cache = _precalcular_probabilidades_reversao(
+        models,
+        frames,
+        symbols,
+        calibration_dates,
+    )
+    targets: list[int] = []
+    probabilities: list[float] = []
+    for timestamp in calibration_dates:
+        key = pd.Timestamp(timestamp)
+        for symbol in symbols:
+            probability = cache.get(key, {}).get(symbol)
+            if probability is None:
+                continue
+            value = frames[symbol].reindex([key])["forward_down_reversal"].iloc[0]
+            if pd.isna(value):
+                continue
+            targets.append(int(value))
+            probabilities.append(float(probability))
+
+    if not targets:
+        return CalibrationResult(
+            threshold=0.70,
+            balanced_accuracy=None,
+            precision=None,
+            recall=None,
+            positives=0,
+            negatives=0,
+            observations=0,
+        )
+
+    y_true = np.asarray(targets, dtype=int)
+    probs = np.asarray(probabilities, dtype=float)
+    best: tuple[float, float, float | None, float | None] | None = None
+    for candidate in candidates:
+        score, precision, recall = _classification_score(
+            y_true,
+            probs,
+            float(candidate),
+        )
+        row = (score, float(candidate), precision, recall)
+        if best is None or (row[0], row[1]) > (best[0], best[1]):
+            best = row
+
+    assert best is not None
+    return CalibrationResult(
+        threshold=float(best[1]),
+        balanced_accuracy=float(best[0]),
+        precision=best[2],
+        recall=best[3],
+        positives=int((y_true == 1).sum()),
+        negatives=int((y_true == 0).sum()),
+        observations=int(len(y_true)),
+    )
+
+
+def _envolver_politica_reversao(
+    base_policy: Callable[[pd.Timestamp, int, int], tuple[int, float]],
+    *,
+    probabilities: dict[pd.Timestamp, dict[str, float]],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    probability_threshold: float,
+    config: Any,
+    decision_diagnostics: dict[pd.Timestamp, dict[str, Any]],
+) -> Callable[[pd.Timestamp, int, int], tuple[int, float]]:
+    primary_regime_column = f"dc_regime_{_tag_threshold(0.04)}"
+
+    def policy(
+        timestamp: pd.Timestamp,
+        current_position: int,
+        holding_days: int,
+    ) -> tuple[int, float]:
+        base_target, base_score = base_policy(
+            timestamp,
+            current_position,
+            holding_days,
+        )
+        key = pd.Timestamp(timestamp)
+        diagnostic = decision_diagnostics.setdefault(key, {})
+        symbol = symbols[current_position - 1] if current_position > 0 else None
+        probability = (
+            probabilities.get(key, {}).get(symbol)
+            if symbol is not None
+            else None
+        )
+        regime = None
+        if symbol is not None and key in frames[symbol].index:
+            raw_regime = frames[symbol].at[key, primary_regime_column]
+            if raw_regime is not None and not pd.isna(raw_regime):
+                regime = int(np.sign(float(raw_regime)))
+
+        eligible = bool(
+            current_position > 0
+            and int(base_target) == int(current_position)
+            and holding_days >= int(config.rotation_min_holding_days)
+            and probability is not None
+            and np.isfinite(float(probability))
+        )
+        triggered = bool(
+            eligible
+            and float(probability) >= float(probability_threshold)
+        )
+
+        diagnostic.update(
+            {
+                "directional_change_schema_version": 1,
+                "directional_change_probability": (
+                    float(probability) if probability is not None else None
+                ),
+                "directional_change_probability_threshold": float(
+                    probability_threshold
+                ),
+                "directional_change_primary_regime": regime,
+                "directional_change_base_target_asset": (
+                    "CASH"
+                    if int(base_target) <= 0
+                    else symbols[int(base_target) - 1]
+                ),
+                "directional_change_exit_triggered": triggered,
+            }
+        )
+
+        if not triggered:
+            return int(base_target), float(base_score)
+
+        diagnostic["directional_change_base_reason"] = diagnostic.get(
+            "decision_reason"
+        )
+        diagnostic.update(
+            {
+                "decision_reason": "DIRECTIONAL_CHANGE_REVERSAL_EXIT",
+                "final_action_asset": "CASH",
+                "final_action_score": 0.0,
+                "decision_is_rotation": False,
+                "decision_is_entry": False,
+                "decision_is_exit_to_cash": True,
+            }
+        )
+        return 0, 0.0
+
+    return policy
+
+
+def executar_directional_change_lightgbm(
+    bars_by_symbol: dict[str, pd.DataFrame],
+    config: Any,
+    fee_calculator: Callable,
+    slippage: Callable,
+    *,
+    progress_callback: Callable[[float, str, int], None] | None = None,
+) -> Any:
+    """Executa Control + overlay DC/LightGBM em walk-forward causal."""
+    if int(config.rotation_model_repetitions) != 1:
+        raise ValueError(
+            "v1.3.0-dev.1 locks one repetition to preserve Control parity."
+        )
+
+    (
+        frames,
+        common_dates,
+        calendar_source_asset,
+        symbols,
+        folds,
+        all_decision_dates,
+        decision_to_fold,
+        decision_metadata,
+    ) = _construir_contexto_execucao(bars_by_symbol, config)
+    frames = _preparar_frames_directional_change(frames)
+
+    policies: dict[int, Callable] = {}
+    diagnostics: dict[pd.Timestamp, dict[str, Any]] = {}
+    calibration_rows: list[dict[str, Any]] = []
+    fit_rows: list[dict[str, Any]] = []
+    margin_rows: list[dict[str, Any]] = []
+
+    total_folds = len(folds)
+    for fold_position, fold in enumerate(folds, start=1):
+        fold_id = int(fold["fold_id"])
+        if progress_callback is not None:
+            progress_callback(
+                5.0 + 75.0 * ((fold_position - 1) / max(1, total_folds)),
+                (
+                    f"Directional Change fold {fold_position}/{total_folds} "
+                    "training"
+                ),
+                fold_position - 1,
+            )
+
+        train_dates = common_dates[: int(fold["train_end_index"])]
+        calibration_dates = common_dates[
+            int(fold["calibration_start_index"]):
+            int(fold["calibration_end_index"])
+        ]
+        final_fit_dates = common_dates[: int(fold["final_fit_end_index"])]
+
+        calibration_utility_models = _ajustar_modelos_lightgbm(
+            frames,
+            symbols,
+            train_dates,
+            config,
+            phase=f"dc_fold_{fold_id}_utility_calibration",
+        )
+        candidate_margins = tuple(
+            float(value)
+            for value in config.rotation_switch_margin_candidates
+        )
+        best_candidate = candidate_margins[0]
+        best_score = float("-inf")
+        for candidate in candidate_margins:
+            calibration_policy = _politica_utilidade(
+                calibration_utility_models,
+                frames,
+                symbols,
+                config,
+                candidate,
+            )
+            score = _crescimento_politica_simples(
+                calibration_policy,
+                frames,
+                symbols,
+                calibration_dates,
+                config,
+            )
+            if score > best_score:
+                best_score = score
+                best_candidate = candidate
+
+        reversal_calibration_models, calibration_fit = (
+            _ajustar_modelos_reversao(
+                frames,
+                symbols,
+                train_dates,
+                config,
+            )
+        )
+        calibration = calibrar_limiar_probabilidade(
+            reversal_calibration_models,
+            frames,
+            symbols,
+            calibration_dates,
+        )
+        calibration_rows.append(calibration.as_dict(fold_id=fold_id))
+        for row in calibration_fit:
+            fit_rows.append(
+                {
+                    "fold_id": fold_id,
+                    "phase": "calibration",
+                    **row,
+                }
+            )
+
+        final_utility_models = _ajustar_modelos_lightgbm(
+            frames,
+            symbols,
+            final_fit_dates,
+            config,
+            phase=f"dc_fold_{fold_id}_utility_final",
+        )
+        final_reversal_models, final_fit = _ajustar_modelos_reversao(
+            frames,
+            symbols,
+            final_fit_dates,
+            config,
+        )
+        for row in final_fit:
+            fit_rows.append(
+                {
+                    "fold_id": fold_id,
+                    "phase": "final",
+                    **row,
+                }
+            )
+
+        decision_dates = pd.DatetimeIndex(fold["decision_dates"])
+        utility_cache, _ = _precalcular_utilidades_modelo(
+            final_utility_models,
+            frames,
+            symbols,
+            decision_dates,
+            config,
+        )
+        reversal_cache = _precalcular_probabilidades_reversao(
+            final_reversal_models,
+            frames,
+            symbols,
+            decision_dates,
+        )
+
+        effective_margin = max(
+            float(config.rotation_switch_margin),
+            float(best_candidate),
+        )
+        base_policy = _politica_utilidade(
+            final_utility_models,
+            frames,
+            symbols,
+            config,
+            effective_margin,
+            decision_diagnostics=diagnostics,
+            fold_id=fold_id,
+            calibrated_switch_margin=float(best_candidate),
+            utility_cache=utility_cache,
+        )
+        policies[fold_id] = _envolver_politica_reversao(
+            base_policy,
+            probabilities=reversal_cache,
+            frames=frames,
+            symbols=symbols,
+            probability_threshold=float(calibration.threshold),
+            config=config,
+            decision_diagnostics=diagnostics,
+        )
+        margin_rows.append(
+            {
+                "fold_id": fold_id,
+                "calibrated_candidate_margin": float(best_candidate),
+                "effective_switch_margin": float(effective_margin),
+                "calibration_risk_adjusted_score": float(best_score),
+            }
+        )
+
+    if progress_callback is not None:
+        progress_callback(
+            85.0,
+            "Directional Change out-of-sample portfolio replay",
+            total_folds,
+        )
+
+    scheduled = _politica_agendada(policies, decision_to_fold)
+    result = _simular_exato(
+        "directional_change_lightgbm",
+        scheduled,
+        frames,
+        symbols,
+        all_decision_dates,
+        config,
+        fee_calculator,
+        slippage,
+        decision_metadata=decision_metadata,
+        policy_decision_diagnostics=diagnostics,
+        model_label="Directional Change + LightGBM",
+        method_line=(
+            "- Directional Change + LightGBM estimates a causal probability "
+            "of a near-term downward reversal for the currently held asset; "
+            "when Control would HOLD and the calibrated probability threshold "
+            "is exceeded, the challenger exits to CASH at the next open."
+        ),
+    )
+    result.backend = "directional_change_lightgbm"
+
+    probabilities = pd.to_numeric(
+        result.predictions.get(
+            "directional_change_probability",
+            pd.Series(index=result.predictions.index, dtype=float),
+        ),
+        errors="coerce",
+    )
+    triggers = result.predictions.get(
+        "directional_change_exit_triggered",
+        pd.Series(False, index=result.predictions.index, dtype=bool),
+    ).fillna(False).astype(bool)
+
+    result.metrics.update(
+        {
+            "backend": "directional_change_lightgbm",
+            "model_family": "directional_change_lightgbm",
+            "strategy_label": "Directional Change + LightGBM",
+            "directional_change_research_version": RESEARCH_VERSION,
+            "directional_change_thresholds": list(
+                DIRECTIONAL_CHANGE_THRESHOLDS
+            ),
+            "directional_change_reversal_horizon_sessions": int(
+                REVERSAL_HORIZON_SESSIONS
+            ),
+            "directional_change_reversal_atr_multiplier": float(
+                REVERSAL_ATR_MULTIPLIER
+            ),
+            "directional_change_probability_threshold_mean": float(
+                np.mean(
+                    [
+                        row["probability_threshold"]
+                        for row in calibration_rows
+                    ]
+                )
+            ),
+            "directional_change_exit_triggers": int(triggers.sum()),
+            "directional_change_probability_observations": int(
+                probabilities.notna().sum()
+            ),
+            "directional_change_calibration": calibration_rows,
+            "directional_change_fit": fit_rows,
+            "walk_forward_fold_count": len(folds),
+            "walk_forward_folds": _desempenho_folds(
+                result.predictions,
+                folds,
+                float(config.initial_capital),
+            ),
+            "calendar_source_asset": calendar_source_asset,
+            "requested_compute_device": "cpu",
+            "effective_compute_device": "cpu",
+        }
+    )
+
+    margin_by_fold = {
+        int(row["fold_id"]): row for row in margin_rows
+    }
+    for row in result.metrics["walk_forward_folds"]:
+        row.update(margin_by_fold.get(int(row["fold_id"]), {}))
+
+    if progress_callback is not None:
+        progress_callback(
+            100.0,
+            "Directional Change + LightGBM completed",
+            total_folds,
+        )
+    return result
+
+
+def calcular_peak_exit(
+    trades: pd.DataFrame,
+    frames: dict[str, pd.DataFrame],
+) -> tuple[dict[str, Any], pd.DataFrame]:
+    """Calcula proximidade do topo usando os mesmos OHLC do backtest."""
+    rows: list[dict[str, Any]] = []
+    if trades is None or trades.empty:
+        return {
+            "closed_positions": 0,
+            "median_exit_distance_from_peak_pct": None,
+            "median_peak_capture_pct": None,
+            "median_max_runup_pct": None,
+            "median_days_from_peak_to_exit": None,
+        }, pd.DataFrame()
+
+    for trade in trades.to_dict(orient="records"):
+        action = str(trade.get("action") or "").upper()
+        if action not in {"SELL", "FINAL_SELL"}:
+            continue
+        symbol = str(trade.get("asset") or "")
+        frame = frames.get(symbol)
+        if frame is None or frame.empty:
+            continue
+        entry_at = pd.Timestamp(trade.get("entry_timestamp"))
+        exit_at = pd.Timestamp(trade.get("timestamp"))
+        if entry_at.tzinfo is None:
+            entry_at = entry_at.tz_localize("UTC")
+        if exit_at.tzinfo is None:
+            exit_at = exit_at.tz_localize("UTC")
+        entry_price = float(trade.get("entry_price") or 0.0)
+        exit_price = float(trade.get("execution_price") or 0.0)
+        if entry_price <= 0 or exit_price <= 0:
+            continue
+
+        include_exit = action == "FINAL_SELL"
+        holding = frame.loc[
+            (frame.index >= entry_at)
+            & (
+                (frame.index <= exit_at)
+                if include_exit
+                else (frame.index < exit_at)
+            )
+        ]
+        highs = pd.to_numeric(
+            holding.get("high"),
+            errors="coerce",
+        ).dropna()
+        peak_price = float(entry_price)
+        peak_at = entry_at
+        if not highs.empty:
+            candidate_at = highs.idxmax()
+            candidate_price = float(highs.loc[candidate_at])
+            if candidate_price >= peak_price:
+                peak_price = candidate_price
+                peak_at = pd.Timestamp(candidate_at)
+
+        peak_gain = max(0.0, peak_price / entry_price - 1.0)
+        exit_gain = exit_price / entry_price - 1.0
+        distance = (
+            max(0.0, (peak_price - exit_price) / peak_price) * 100.0
+            if peak_price > 0
+            else None
+        )
+        capture = (
+            min(1.0, max(0.0, exit_gain) / peak_gain) * 100.0
+            if peak_gain > 0
+            else None
+        )
+        days_after_peak = int(
+            ((frame.index > peak_at) & (frame.index <= exit_at)).sum()
+        )
+
+        post = frame.loc[
+            frame.index > exit_at
+            if action == "FINAL_SELL"
+            else frame.index >= exit_at
+        ]
+        post_10 = None
+        if len(post) >= 10:
+            post_highs = pd.to_numeric(
+                post.head(10).get("high"),
+                errors="coerce",
+            ).dropna()
+            if not post_highs.empty:
+                post_10 = max(
+                    0.0,
+                    float(post_highs.max()) / exit_price - 1.0,
+                ) * 100.0
+
+        rows.append(
+            {
+                "asset": symbol,
+                "action": action,
+                "entry_timestamp": entry_at,
+                "exit_timestamp": exit_at,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "peak_price_while_held": peak_price,
+                "peak_timestamp_while_held": peak_at,
+                "exit_distance_from_peak_pct": distance,
+                "peak_capture_pct": capture,
+                "max_runup_pct": peak_gain * 100.0,
+                "days_from_peak_to_exit": days_after_peak,
+                "post_exit_peak_10d_pct": post_10,
+            }
+        )
+
+    detail = pd.DataFrame(rows)
+    if detail.empty:
+        return {
+            "closed_positions": 0,
+            "median_exit_distance_from_peak_pct": None,
+            "median_peak_capture_pct": None,
+            "median_max_runup_pct": None,
+            "median_days_from_peak_to_exit": None,
+        }, detail
+
+    def median(column: str) -> float | None:
+        values = pd.to_numeric(detail[column], errors="coerce").dropna()
+        return float(values.median()) if not values.empty else None
+
+    return {
+        "closed_positions": int(len(detail)),
+        "median_exit_distance_from_peak_pct": median(
+            "exit_distance_from_peak_pct"
+        ),
+        "median_peak_capture_pct": median("peak_capture_pct"),
+        "median_max_runup_pct": median("max_runup_pct"),
+        "median_days_from_peak_to_exit": median(
+            "days_from_peak_to_exit"
+        ),
+        "median_post_exit_peak_10d_pct": median(
+            "post_exit_peak_10d_pct"
+        ),
+    }, detail
+
+
+def comparar_control_directional_change(
+    control_metrics: dict[str, Any],
+    challenger_metrics: dict[str, Any],
+    control_peak: dict[str, Any],
+    challenger_peak: dict[str, Any],
+) -> dict[str, Any]:
+    control_capital = float(control_metrics["ending_capital"])
+    challenger_capital = float(challenger_metrics["ending_capital"])
+    control_distance = control_peak.get(
+        "median_exit_distance_from_peak_pct"
+    )
+    challenger_distance = challenger_peak.get(
+        "median_exit_distance_from_peak_pct"
+    )
+    return {
+        "research_version": RESEARCH_VERSION,
+        "control_ending_capital": control_capital,
+        "directional_change_ending_capital": challenger_capital,
+        "directional_change_minus_control_capital": (
+            challenger_capital - control_capital
+        ),
+        "directional_change_vs_control_ratio": (
+            challenger_capital / control_capital - 1.0
+            if control_capital > 0
+            else None
+        ),
+        "control_cagr": control_metrics.get("cagr"),
+        "directional_change_cagr": challenger_metrics.get("cagr"),
+        "control_sharpe": control_metrics.get("sharpe"),
+        "directional_change_sharpe": challenger_metrics.get("sharpe"),
+        "control_maximum_drawdown": control_metrics.get(
+            "maximum_drawdown"
+        ),
+        "directional_change_maximum_drawdown": challenger_metrics.get(
+            "maximum_drawdown"
+        ),
+        "control_worst_fold_return": control_metrics.get(
+            "worst_fold_return"
+        ),
+        "directional_change_worst_fold_return": challenger_metrics.get(
+            "worst_fold_return"
+        ),
+        "control_median_exit_distance_from_peak_pct": control_distance,
+        "directional_change_median_exit_distance_from_peak_pct": (
+            challenger_distance
+        ),
+        "median_exit_distance_improvement_pct_points": (
+            float(control_distance) - float(challenger_distance)
+            if control_distance is not None
+            and challenger_distance is not None
+            else None
+        ),
+        "control_median_peak_capture_pct": control_peak.get(
+            "median_peak_capture_pct"
+        ),
+        "directional_change_median_peak_capture_pct": challenger_peak.get(
+            "median_peak_capture_pct"
+        ),
+        "control_median_days_from_peak_to_exit": control_peak.get(
+            "median_days_from_peak_to_exit"
+        ),
+        "directional_change_median_days_from_peak_to_exit": (
+            challenger_peak.get("median_days_from_peak_to_exit")
+        ),
+        "directional_change_exit_triggers": int(
+            challenger_metrics.get("directional_change_exit_triggers") or 0
+        ),
+    }
