@@ -441,3 +441,21 @@ O objetivo visual e acompanhar:
 - Nenhum resultado Bottom-Turn existe antes do replay OOS completo.
 - O ZIP antigo e apagado e recriado sempre em
   `output/directional_change/pacote_analise.zip`.
+
+
+### Correcao do sinal sonoro — v1.7.0-dev.2
+
+O sinal de conclusao anterior usava `winsound.Beep()` e retornava assim que a
+chamada terminava sem excecao. Em alguns ambientes Windows/Spyder essa chamada
+pode ser aceita sem produzir som audivel no dispositivo configurado.
+
+A funcao `sinal_sonoro_conclusao()` passa a tentar, em sequencia:
+
+1. `winsound.PlaySound("SystemExclamation", SND_ALIAS | SND_SYNC)`;
+2. `winsound.MessageBeep(MB_ICONASTERISK)`;
+3. os dois tons `winsound.Beep()` anteriores;
+4. bell do terminal somente se nenhum mecanismo Windows estiver disponivel.
+
+O script imprime `[sound] completion mechanisms=...` no final para registrar
+quais mecanismos foram executados. Essa alteracao nao muda modelos, dados,
+folds, sinais ou resultados do backtest.
