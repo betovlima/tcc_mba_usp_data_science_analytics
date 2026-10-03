@@ -1,19 +1,21 @@
-"""Directional Change + LightGBM challenger para o TCC.
+"""Pesquisa Directional Change + LightGBM.
 
-Este modulo e experimental e nao altera o Control oficial. Ele adiciona um
-classificador LightGBM causal que estima a probabilidade de uma reversao de
-alta para baixa no ativo atualmente carregado. Quando o Control manteria a
-posicao e a probabilidade calibrada de reversao supera o limiar OOS, o
-challenger sai para CASH na abertura seguinte.
+Este modulo e o unico ponto de evolucao desta linha de pesquisa. O historico
+fica no Git; novas tentativas substituem a implementacao corrente em vez de
+criar novos arquivos versionados.
 
-O alvo usa somente informacao futura para rotulagem de treino. As features de
-cada data usam exclusivamente OHLCV e estados Directional Change observados ate
-aquela data.
+Versao atual: Top-Turn. O classificador estima uma virada de alta para baixa
+perto de maxima recente, com calibracao orientada a precision e duas
+confirmacoes antes de antecipar a saida do Control.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+import sys
+import time
 from typing import Any, Callable, Iterable
+import zipfile
 
 import numpy as np
 import pandas as pd
@@ -33,15 +35,18 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.3.0-dev.1"
+RESEARCH_VERSION = "1.3.0-dev.2"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
-REVERSAL_HORIZON_SESSIONS = 5
-REVERSAL_ATR_MULTIPLIER = 1.5
-REVERSAL_THRESHOLD_MIN = 0.02
-REVERSAL_THRESHOLD_MAX = 0.08
+TOP_TURN_HORIZON_SESSIONS = 5
+TOP_TURN_ATR_MULTIPLIER = 1.5
+TOP_TURN_THRESHOLD_MIN = 0.02
+TOP_TURN_THRESHOLD_MAX = 0.08
+TOP_TURN_CONTINUATION_RATIO = 0.50
+TOP_TURN_NEAR_HIGH_20 = 0.05
+TOP_TURN_MIN_UP_REGIME_SHARE = 2.0 / 3.0
+TOP_TURN_MIN_RETURN_20 = 0.0
+TOP_TURN_CONFIRMATION_SESSIONS = 2
 PROBABILITY_THRESHOLD_CANDIDATES = (
-    0.45,
-    0.50,
     0.55,
     0.60,
     0.65,
@@ -49,13 +54,13 @@ PROBABILITY_THRESHOLD_CANDIDATES = (
     0.75,
     0.80,
     0.85,
+    0.90,
 )
 MINIMUM_CLASS_ROWS = 20
-
+MINIMUM_CALIBRATION_ALERTS = 5
 
 def _tag_threshold(value: float) -> str:
     return f"{int(round(float(value) * 100)):02d}pct"
-
 
 def directional_change_feature_names(
     thresholds: Iterable[float] = DIRECTIONAL_CHANGE_THRESHOLDS,
@@ -82,17 +87,16 @@ def directional_change_feature_names(
     )
     return tuple(names)
 
-
 DC_FEATURES = directional_change_feature_names()
 MODEL_FEATURES = tuple(ROTATION_FEATURES) + DC_FEATURES
 
-
-@dataclass(frozen=True)
 class CalibrationResult:
     threshold: float
+    fbeta_05: float | None
     balanced_accuracy: float | None
     precision: float | None
     recall: float | None
+    predicted_positives: int
     positives: int
     negatives: int
     observations: int
@@ -101,14 +105,15 @@ class CalibrationResult:
         return {
             "fold_id": int(fold_id),
             "probability_threshold": float(self.threshold),
+            "fbeta_05": self.fbeta_05,
             "balanced_accuracy": self.balanced_accuracy,
             "precision": self.precision,
             "recall": self.recall,
+            "predicted_positives": int(self.predicted_positives),
             "positives": int(self.positives),
             "negatives": int(self.negatives),
             "observations": int(self.observations),
         }
-
 
 def _directional_change_state(
     close: pd.Series,
@@ -192,95 +197,84 @@ def _directional_change_state(
         index=close.index,
     )
 
-
-def _forward_reversal_targets(
+def _top_turn_targets(
     frame: pd.DataFrame,
     *,
-    horizon: int = REVERSAL_HORIZON_SESSIONS,
-    atr_multiplier: float = REVERSAL_ATR_MULTIPLIER,
-    threshold_min: float = REVERSAL_THRESHOLD_MIN,
-    threshold_max: float = REVERSAL_THRESHOLD_MAX,
+    horizon: int = TOP_TURN_HORIZON_SESSIONS,
 ) -> pd.DataFrame:
+    """Primeiro evento: queda relevante antes de uma continuacao da alta."""
     close = pd.to_numeric(frame["close"], errors="coerce").to_numpy(dtype=float)
     atr_pct = pd.to_numeric(frame["atr_pct_14"], errors="coerce").to_numpy(
         dtype=float
     )
-
-    down_target = np.full(len(frame), np.nan, dtype=float)
-    up_target = np.full(len(frame), np.nan, dtype=float)
-    down_magnitude = np.full(len(frame), np.nan, dtype=float)
-    up_magnitude = np.full(len(frame), np.nan, dtype=float)
-    effective_threshold = np.full(len(frame), np.nan, dtype=float)
+    target = np.full(len(frame), np.nan, dtype=float)
+    threshold_values = np.full(len(frame), np.nan, dtype=float)
+    continuation_values = np.full(len(frame), np.nan, dtype=float)
+    event_step = np.full(len(frame), np.nan, dtype=float)
 
     for index in range(len(frame)):
         end = index + 1 + int(horizon)
-        if end > len(frame):
+        current = close[index]
+        current_atr = atr_pct[index]
+        if (
+            end > len(frame)
+            or not np.isfinite(current)
+            or current <= 0
+            or not np.isfinite(current_atr)
+            or current_atr <= 0
+        ):
             continue
+
         future = close[index + 1:end]
         if len(future) != int(horizon) or not np.isfinite(future).all():
-            continue
-        current_atr = atr_pct[index]
-        if not np.isfinite(current_atr) or current_atr <= 0:
             continue
 
         threshold = float(
             np.clip(
-                float(atr_multiplier) * float(current_atr),
-                float(threshold_min),
-                float(threshold_max),
+                float(TOP_TURN_ATR_MULTIPLIER) * float(current_atr),
+                float(TOP_TURN_THRESHOLD_MIN),
+                float(TOP_TURN_THRESHOLD_MAX),
             )
         )
-        effective_threshold[index] = threshold
+        continuation = float(
+            max(
+                0.01,
+                float(TOP_TURN_CONTINUATION_RATIO) * threshold,
+            )
+        )
+        threshold_values[index] = threshold
+        continuation_values[index] = continuation
 
-        running_peak = -np.inf
-        maximum_drawdown = 0.0
-        running_trough = np.inf
-        maximum_rally = 0.0
-        for future_close in future:
-            running_peak = max(running_peak, float(future_close))
-            if np.isfinite(running_peak) and running_peak > 0:
-                maximum_drawdown = max(
-                    maximum_drawdown,
-                    1.0 - float(future_close) / running_peak,
-                )
-
-            running_trough = min(running_trough, float(future_close))
-            if np.isfinite(running_trough) and running_trough > 0:
-                maximum_rally = max(
-                    maximum_rally,
-                    float(future_close) / running_trough - 1.0,
-                )
-
-        down_magnitude[index] = float(maximum_drawdown)
-        up_magnitude[index] = float(maximum_rally)
-        down_target[index] = float(maximum_drawdown >= threshold)
-        up_target[index] = float(maximum_rally >= threshold)
+        label = 0.0
+        for step, future_close in enumerate(future, start=1):
+            move = float(future_close / current - 1.0)
+            if move <= -threshold:
+                label = 1.0
+                event_step[index] = float(step)
+                break
+            if move >= continuation:
+                label = 0.0
+                event_step[index] = float(step)
+                break
+        target[index] = label
 
     return pd.DataFrame(
         {
-            "forward_down_reversal": down_target,
-            "forward_up_reversal": up_target,
-            "forward_down_reversal_magnitude": down_magnitude,
-            "forward_up_reversal_magnitude": up_magnitude,
-            "forward_reversal_threshold": effective_threshold,
+            "forward_down_reversal": target,
+            "forward_top_turn_threshold": threshold_values,
+            "forward_top_turn_continuation": continuation_values,
+            "forward_top_turn_event_step": event_step,
         },
         index=frame.index,
     )
 
-
-def adicionar_directional_change(
-    frame: pd.DataFrame,
-    *,
-    thresholds: Iterable[float] = DIRECTIONAL_CHANGE_THRESHOLDS,
-    horizon: int = REVERSAL_HORIZON_SESSIONS,
-) -> pd.DataFrame:
-    """Adiciona features causais e alvos futuros de reversao a um ativo."""
+def adicionar_top_turn_features(frame: pd.DataFrame) -> pd.DataFrame:
     output = frame.copy()
     close = pd.to_numeric(output["close"], errors="coerce")
-
     regime_columns: list[str] = []
     pressure_columns: list[str] = []
-    for threshold in thresholds:
+
+    for threshold in DIRECTIONAL_CHANGE_THRESHOLDS:
         dc = _directional_change_state(close, float(threshold))
         output = output.join(dc)
         tag = _tag_threshold(float(threshold))
@@ -293,21 +287,29 @@ def adicionar_directional_change(
     output["dc_regime_agreement"] = regimes.mean(axis=1).abs()
     output["dc_reversal_pressure_max"] = output[pressure_columns].max(axis=1)
 
-    targets = _forward_reversal_targets(output, horizon=int(horizon))
-    output = output.join(targets)
+    distance_high = pd.to_numeric(
+        output["distance_from_high_20"],
+        errors="coerce",
+    )
+    return_20 = pd.to_numeric(output["return_20"], errors="coerce")
+    output["top_turn_eligible"] = (
+        (output["dc_up_regime_share"] >= TOP_TURN_MIN_UP_REGIME_SHARE)
+        & (distance_high >= -TOP_TURN_NEAR_HIGH_20)
+        & (return_20 > TOP_TURN_MIN_RETURN_20)
+    )
+
+    output = output.join(_top_turn_targets(output))
     return output.replace([np.inf, -np.inf], np.nan)
 
-
-def _preparar_frames_directional_change(
+def _preparar_frames(
     frames: dict[str, pd.DataFrame],
 ) -> dict[str, pd.DataFrame]:
     return {
-        symbol: adicionar_directional_change(frame)
+        symbol: adicionar_top_turn_features(frame)
         for symbol, frame in frames.items()
     }
 
-
-def _ajustar_modelos_reversao(
+def _ajustar_modelos_top_turn(
     frames: dict[str, pd.DataFrame],
     symbols: list[str],
     train_dates: pd.DatetimeIndex,
@@ -316,9 +318,7 @@ def _ajustar_modelos_reversao(
     try:
         from lightgbm import LGBMClassifier
     except ImportError as exc:
-        raise RuntimeError(
-            "Directional Change research requires lightgbm."
-        ) from exc
+        raise RuntimeError("Top-Turn research requires lightgbm.") from exc
 
     settings = _configuracoes_lightgbm(config)
     minimum_rows = int(config.rotation_minimum_training_rows)
@@ -326,7 +326,9 @@ def _ajustar_modelos_reversao(
     rows: list[dict[str, Any]] = []
 
     for symbol in symbols:
-        train = frames[symbol].reindex(train_dates).dropna(
+        frame = frames[symbol].reindex(train_dates)
+        eligible = frame["top_turn_eligible"].fillna(False).astype(bool)
+        train = frame.loc[eligible].dropna(
             subset=["forward_down_reversal", *MODEL_FEATURES]
         )
         target = train["forward_down_reversal"].astype(int)
@@ -334,13 +336,13 @@ def _ajustar_modelos_reversao(
         negatives = int((target == 0).sum())
         diagnostic = {
             "asset": symbol,
-            "training_rows": int(len(train)),
+            "eligible_training_rows": int(len(train)),
             "positive_rows": positives,
             "negative_rows": negatives,
             "fitted": False,
         }
         if (
-            len(train) < minimum_rows
+            len(train) < max(100, minimum_rows // 4)
             or positives < MINIMUM_CLASS_ROWS
             or negatives < MINIMUM_CLASS_ROWS
         ):
@@ -377,8 +379,7 @@ def _ajustar_modelos_reversao(
 
     return models, rows
 
-
-def _precalcular_probabilidades_reversao(
+def _probabilidades(
     models: dict[str, Any],
     frames: dict[str, pd.DataFrame],
     symbols: list[str],
@@ -392,39 +393,52 @@ def _precalcular_probabilidades_reversao(
         if model is None:
             continue
         frame = frames[symbol].reindex(dates)
-        valid = frame[list(MODEL_FEATURES)].notna().all(axis=1)
+        eligible = frame["top_turn_eligible"].fillna(False).astype(bool)
+        valid = eligible & frame[list(MODEL_FEATURES)].notna().all(axis=1)
         if not bool(valid.any()):
             continue
         rows = frame.loc[valid, list(MODEL_FEATURES)]
-        probabilities = model.predict_proba(rows)[:, 1]
-        for timestamp, probability in zip(rows.index, probabilities, strict=True):
+        predicted = model.predict_proba(rows)[:, 1]
+        for timestamp, probability in zip(
+            rows.index,
+            predicted,
+            strict=True,
+        ):
             cache[pd.Timestamp(timestamp)][symbol] = float(probability)
     return cache
 
-
-def _classification_score(
+def _metricas_classificacao(
     y_true: np.ndarray,
     probabilities: np.ndarray,
     threshold: float,
-) -> tuple[float, float | None, float | None]:
+) -> dict[str, float | int | None]:
     predicted = probabilities >= float(threshold)
     positive = y_true == 1
     negative = y_true == 0
-
     tp = int(np.sum(predicted & positive))
     fn = int(np.sum((~predicted) & positive))
     tn = int(np.sum((~predicted) & negative))
     fp = int(np.sum(predicted & negative))
-
-    tpr = tp / (tp + fn) if tp + fn else 0.0
-    tnr = tn / (tn + fp) if tn + fp else 0.0
-    balanced_accuracy = 0.5 * (tpr + tnr)
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    specificity = tn / (tn + fp) if tn + fp else 0.0
     precision = tp / (tp + fp) if tp + fp else None
-    recall = tp / (tp + fn) if tp + fn else None
-    return float(balanced_accuracy), precision, recall
+    beta2 = 0.25
+    if precision is None or (precision == 0.0 and recall == 0.0):
+        fbeta = 0.0
+    else:
+        fbeta = (
+            (1.0 + beta2) * float(precision) * float(recall)
+            / (beta2 * float(precision) + float(recall))
+        )
+    return {
+        "fbeta_05": float(fbeta),
+        "balanced_accuracy": 0.5 * (float(recall) + float(specificity)),
+        "precision": precision,
+        "recall": float(recall),
+        "predicted_positives": int(np.sum(predicted)),
+    }
 
-
-def calibrar_limiar_probabilidade(
+def calibrar_limiar(
     models: dict[str, Any],
     frames: dict[str, pd.DataFrame],
     symbols: list[str],
@@ -432,21 +446,20 @@ def calibrar_limiar_probabilidade(
     *,
     candidates: Iterable[float] = PROBABILITY_THRESHOLD_CANDIDATES,
 ) -> CalibrationResult:
-    cache = _precalcular_probabilidades_reversao(
-        models,
-        frames,
-        symbols,
-        calibration_dates,
-    )
+    cache = _probabilidades(models, frames, symbols, calibration_dates)
     targets: list[int] = []
     probabilities: list[float] = []
+
     for timestamp in calibration_dates:
         key = pd.Timestamp(timestamp)
         for symbol in symbols:
             probability = cache.get(key, {}).get(symbol)
             if probability is None:
                 continue
-            value = frames[symbol].reindex([key])["forward_down_reversal"].iloc[0]
+            frame = frames[symbol]
+            if key not in frame.index:
+                continue
+            value = frame.at[key, "forward_down_reversal"]
             if pd.isna(value):
                 continue
             targets.append(int(value))
@@ -454,10 +467,12 @@ def calibrar_limiar_probabilidade(
 
     if not targets:
         return CalibrationResult(
-            threshold=0.70,
+            threshold=0.75,
+            fbeta_05=None,
             balanced_accuracy=None,
             precision=None,
             recall=None,
+            predicted_positives=0,
             positives=0,
             negatives=0,
             observations=0,
@@ -465,30 +480,45 @@ def calibrar_limiar_probabilidade(
 
     y_true = np.asarray(targets, dtype=int)
     probs = np.asarray(probabilities, dtype=float)
-    best: tuple[float, float, float | None, float | None] | None = None
+    best: tuple[float, float, dict[str, float | int | None]] | None = None
+
     for candidate in candidates:
-        score, precision, recall = _classification_score(
+        metrics = _metricas_classificacao(
             y_true,
             probs,
             float(candidate),
         )
-        row = (score, float(candidate), precision, recall)
+        if int(metrics["predicted_positives"] or 0) < MINIMUM_CALIBRATION_ALERTS:
+            continue
+        score = float(metrics["fbeta_05"] or 0.0)
+        row = (score, float(candidate), metrics)
         if best is None or (row[0], row[1]) > (best[0], best[1]):
             best = row
 
-    assert best is not None
+    if best is None:
+        threshold = 0.75
+        metrics = _metricas_classificacao(y_true, probs, threshold)
+    else:
+        threshold = float(best[1])
+        metrics = best[2]
+
     return CalibrationResult(
-        threshold=float(best[1]),
-        balanced_accuracy=float(best[0]),
-        precision=best[2],
-        recall=best[3],
+        threshold=threshold,
+        fbeta_05=float(metrics["fbeta_05"] or 0.0),
+        balanced_accuracy=float(metrics["balanced_accuracy"] or 0.0),
+        precision=(
+            float(metrics["precision"])
+            if metrics["precision"] is not None
+            else None
+        ),
+        recall=float(metrics["recall"] or 0.0),
+        predicted_positives=int(metrics["predicted_positives"] or 0),
         positives=int((y_true == 1).sum()),
         negatives=int((y_true == 0).sum()),
         observations=int(len(y_true)),
     )
 
-
-def _envolver_politica_reversao(
+def _envolver_politica_top_turn(
     base_policy: Callable[[pd.Timestamp, int, int], tuple[int, float]],
     *,
     probabilities: dict[pd.Timestamp, dict[str, float]],
@@ -498,7 +528,7 @@ def _envolver_politica_reversao(
     config: Any,
     decision_diagnostics: dict[pd.Timestamp, dict[str, Any]],
 ) -> Callable[[pd.Timestamp, int, int], tuple[int, float]]:
-    primary_regime_column = f"dc_regime_{_tag_threshold(0.04)}"
+    streak_by_symbol: dict[str, int] = {}
 
     def policy(
         timestamp: pd.Timestamp,
@@ -513,39 +543,57 @@ def _envolver_politica_reversao(
         key = pd.Timestamp(timestamp)
         diagnostic = decision_diagnostics.setdefault(key, {})
         symbol = symbols[current_position - 1] if current_position > 0 else None
-        probability = (
-            probabilities.get(key, {}).get(symbol)
-            if symbol is not None
-            else None
-        )
-        regime = None
-        if symbol is not None and key in frames[symbol].index:
-            raw_regime = frames[symbol].at[key, primary_regime_column]
-            if raw_regime is not None and not pd.isna(raw_regime):
-                regime = int(np.sign(float(raw_regime)))
 
-        eligible = bool(
+        probability = None
+        eligible = False
+        if symbol is not None:
+            probability = probabilities.get(key, {}).get(symbol)
+            if key in frames[symbol].index:
+                eligible = bool(
+                    frames[symbol].at[key, "top_turn_eligible"]
+                )
+
+        control_holds = bool(
             current_position > 0
             and int(base_target) == int(current_position)
             and holding_days >= int(config.rotation_min_holding_days)
+        )
+        above_threshold = bool(
+            control_holds
+            and eligible
             and probability is not None
             and np.isfinite(float(probability))
-        )
-        triggered = bool(
-            eligible
             and float(probability) >= float(probability_threshold)
+        )
+
+        if symbol is not None:
+            if above_threshold:
+                streak_by_symbol[symbol] = (
+                    int(streak_by_symbol.get(symbol, 0)) + 1
+                )
+            else:
+                streak_by_symbol[symbol] = 0
+        streak = int(streak_by_symbol.get(symbol, 0)) if symbol else 0
+        triggered = bool(
+            above_threshold
+            and streak >= int(TOP_TURN_CONFIRMATION_SESSIONS)
         )
 
         diagnostic.update(
             {
-                "directional_change_schema_version": 1,
+                "directional_change_schema_version": 2,
+                "directional_change_research_version": RESEARCH_VERSION,
                 "directional_change_probability": (
                     float(probability) if probability is not None else None
                 ),
                 "directional_change_probability_threshold": float(
                     probability_threshold
                 ),
-                "directional_change_primary_regime": regime,
+                "directional_change_top_turn_eligible": bool(eligible),
+                "directional_change_confirmation_streak": int(streak),
+                "directional_change_confirmation_required": int(
+                    TOP_TURN_CONFIRMATION_SESSIONS
+                ),
                 "directional_change_base_target_asset": (
                     "CASH"
                     if int(base_target) <= 0
@@ -556,14 +604,17 @@ def _envolver_politica_reversao(
         )
 
         if not triggered:
+            if not control_holds and symbol is not None:
+                streak_by_symbol[symbol] = 0
             return int(base_target), float(base_score)
 
+        streak_by_symbol[symbol] = 0
         diagnostic["directional_change_base_reason"] = diagnostic.get(
             "decision_reason"
         )
         diagnostic.update(
             {
-                "decision_reason": "DIRECTIONAL_CHANGE_REVERSAL_EXIT",
+                "decision_reason": "DIRECTIONAL_CHANGE_TOP_TURN_EXIT",
                 "final_action_asset": "CASH",
                 "final_action_score": 0.0,
                 "decision_is_rotation": False,
@@ -575,7 +626,6 @@ def _envolver_politica_reversao(
 
     return policy
 
-
 def executar_directional_change_lightgbm(
     bars_by_symbol: dict[str, pd.DataFrame],
     config: Any,
@@ -584,11 +634,8 @@ def executar_directional_change_lightgbm(
     *,
     progress_callback: Callable[[float, str, int], None] | None = None,
 ) -> Any:
-    """Executa Control + overlay DC/LightGBM em walk-forward causal."""
     if int(config.rotation_model_repetitions) != 1:
-        raise ValueError(
-            "v1.3.0-dev.1 locks one repetition to preserve Control parity."
-        )
+        raise ValueError("Top-Turn v1.3.0-dev.2 requires one repetition.")
 
     (
         frames,
@@ -600,7 +647,7 @@ def executar_directional_change_lightgbm(
         decision_to_fold,
         decision_metadata,
     ) = _construir_contexto_execucao(bars_by_symbol, config)
-    frames = _preparar_frames_directional_change(frames)
+    frames = _preparar_frames(frames)
 
     policies: dict[int, Callable] = {}
     diagnostics: dict[pd.Timestamp, dict[str, Any]] = {}
@@ -614,10 +661,7 @@ def executar_directional_change_lightgbm(
         if progress_callback is not None:
             progress_callback(
                 5.0 + 75.0 * ((fold_position - 1) / max(1, total_folds)),
-                (
-                    f"Directional Change fold {fold_position}/{total_folds} "
-                    "training"
-                ),
+                f"Top-Turn fold {fold_position}/{total_folds} training",
                 fold_position - 1,
             )
 
@@ -633,7 +677,7 @@ def executar_directional_change_lightgbm(
             symbols,
             train_dates,
             config,
-            phase=f"dc_fold_{fold_id}_utility_calibration",
+            phase=f"top_turn_fold_{fold_id}_utility_calibration",
         )
         candidate_margins = tuple(
             float(value)
@@ -661,14 +705,14 @@ def executar_directional_change_lightgbm(
                 best_candidate = candidate
 
         reversal_calibration_models, calibration_fit = (
-            _ajustar_modelos_reversao(
+            _ajustar_modelos_top_turn(
                 frames,
                 symbols,
                 train_dates,
                 config,
             )
         )
-        calibration = calibrar_limiar_probabilidade(
+        calibration = calibrar_limiar(
             reversal_calibration_models,
             frames,
             symbols,
@@ -677,11 +721,7 @@ def executar_directional_change_lightgbm(
         calibration_rows.append(calibration.as_dict(fold_id=fold_id))
         for row in calibration_fit:
             fit_rows.append(
-                {
-                    "fold_id": fold_id,
-                    "phase": "calibration",
-                    **row,
-                }
+                {"fold_id": fold_id, "phase": "calibration", **row}
             )
 
         final_utility_models = _ajustar_modelos_lightgbm(
@@ -689,22 +729,16 @@ def executar_directional_change_lightgbm(
             symbols,
             final_fit_dates,
             config,
-            phase=f"dc_fold_{fold_id}_utility_final",
+            phase=f"top_turn_fold_{fold_id}_utility_final",
         )
-        final_reversal_models, final_fit = _ajustar_modelos_reversao(
+        final_reversal_models, final_fit = _ajustar_modelos_top_turn(
             frames,
             symbols,
             final_fit_dates,
             config,
         )
         for row in final_fit:
-            fit_rows.append(
-                {
-                    "fold_id": fold_id,
-                    "phase": "final",
-                    **row,
-                }
-            )
+            fit_rows.append({"fold_id": fold_id, "phase": "final", **row})
 
         decision_dates = pd.DatetimeIndex(fold["decision_dates"])
         utility_cache, _ = _precalcular_utilidades_modelo(
@@ -714,7 +748,7 @@ def executar_directional_change_lightgbm(
             decision_dates,
             config,
         )
-        reversal_cache = _precalcular_probabilidades_reversao(
+        probability_cache = _probabilidades(
             final_reversal_models,
             frames,
             symbols,
@@ -736,9 +770,9 @@ def executar_directional_change_lightgbm(
             calibrated_switch_margin=float(best_candidate),
             utility_cache=utility_cache,
         )
-        policies[fold_id] = _envolver_politica_reversao(
+        policies[fold_id] = _envolver_politica_top_turn(
             base_policy,
-            probabilities=reversal_cache,
+            probabilities=probability_cache,
             frames=frames,
             symbols=symbols,
             probability_threshold=float(calibration.threshold),
@@ -757,7 +791,7 @@ def executar_directional_change_lightgbm(
     if progress_callback is not None:
         progress_callback(
             85.0,
-            "Directional Change out-of-sample portfolio replay",
+            "Directional Change Top-Turn OOS replay",
             total_folds,
         )
 
@@ -775,10 +809,11 @@ def executar_directional_change_lightgbm(
         policy_decision_diagnostics=diagnostics,
         model_label="Directional Change + LightGBM",
         method_line=(
-            "- Directional Change + LightGBM estimates a causal probability "
-            "of a near-term downward reversal for the currently held asset; "
-            "when Control would HOLD and the calibrated probability threshold "
-            "is exceeded, the challenger exits to CASH at the next open."
+            "- Directional Change + LightGBM estimates a "
+            "precision-oriented first-passage probability of a downward "
+            "turn while the held asset is in an up regime near a recent high; "
+            "two consecutive confirmations are required before exiting to "
+            "CASH at the next open."
         ),
     )
     result.backend = "directional_change_lightgbm"
@@ -804,11 +839,14 @@ def executar_directional_change_lightgbm(
             "directional_change_thresholds": list(
                 DIRECTIONAL_CHANGE_THRESHOLDS
             ),
-            "directional_change_reversal_horizon_sessions": int(
-                REVERSAL_HORIZON_SESSIONS
+            "directional_change_top_turn_horizon_sessions": int(
+                TOP_TURN_HORIZON_SESSIONS
             ),
-            "directional_change_reversal_atr_multiplier": float(
-                REVERSAL_ATR_MULTIPLIER
+            "directional_change_top_turn_near_high_20": float(
+                TOP_TURN_NEAR_HIGH_20
+            ),
+            "directional_change_confirmation_sessions": int(
+                TOP_TURN_CONFIRMATION_SESSIONS
             ),
             "directional_change_probability_threshold_mean": float(
                 np.mean(
@@ -836,9 +874,7 @@ def executar_directional_change_lightgbm(
         }
     )
 
-    margin_by_fold = {
-        int(row["fold_id"]): row for row in margin_rows
-    }
+    margin_by_fold = {int(row["fold_id"]): row for row in margin_rows}
     for row in result.metrics["walk_forward_folds"]:
         row.update(margin_by_fold.get(int(row["fold_id"]), {}))
 
@@ -850,6 +886,66 @@ def executar_directional_change_lightgbm(
         )
     return result
 
+def comparar_control_directional_change(
+    control_metrics: dict[str, Any],
+    challenger_metrics: dict[str, Any],
+    control_peak: dict[str, Any],
+    challenger_peak: dict[str, Any],
+) -> dict[str, Any]:
+    control_capital = float(control_metrics["ending_capital"])
+    challenger_capital = float(challenger_metrics["ending_capital"])
+    control_distance = control_peak.get(
+        "median_exit_distance_from_peak_pct"
+    )
+    challenger_distance = challenger_peak.get(
+        "median_exit_distance_from_peak_pct"
+    )
+    return {
+        "research_version": RESEARCH_VERSION,
+        "control_ending_capital": control_capital,
+        "directional_change_ending_capital": challenger_capital,
+        "directional_change_minus_control_capital": challenger_capital - control_capital,
+        "directional_change_vs_control_ratio": (
+            challenger_capital / control_capital - 1.0
+            if control_capital > 0
+            else None
+        ),
+        "control_cagr": control_metrics.get("cagr"),
+        "directional_change_cagr": challenger_metrics.get("cagr"),
+        "control_sharpe": control_metrics.get("sharpe"),
+        "directional_change_sharpe": challenger_metrics.get("sharpe"),
+        "control_maximum_drawdown": control_metrics.get("maximum_drawdown"),
+        "directional_change_maximum_drawdown": challenger_metrics.get(
+            "maximum_drawdown"
+        ),
+        "control_worst_fold_return": control_metrics.get("worst_fold_return"),
+        "directional_change_worst_fold_return": challenger_metrics.get(
+            "worst_fold_return"
+        ),
+        "control_median_exit_distance_from_peak_pct": control_distance,
+        "directional_change_median_exit_distance_from_peak_pct": challenger_distance,
+        "median_exit_distance_improvement_pct_points": (
+            float(control_distance) - float(challenger_distance)
+            if control_distance is not None
+            and challenger_distance is not None
+            else None
+        ),
+        "control_median_peak_capture_pct": control_peak.get(
+            "median_peak_capture_pct"
+        ),
+        "directional_change_median_peak_capture_pct": challenger_peak.get(
+            "median_peak_capture_pct"
+        ),
+        "control_median_days_from_peak_to_exit": control_peak.get(
+            "median_days_from_peak_to_exit"
+        ),
+        "directional_change_median_days_from_peak_to_exit": challenger_peak.get(
+            "median_days_from_peak_to_exit"
+        ),
+        "directional_change_exit_triggers": int(
+            challenger_metrics.get("directional_change_exit_triggers") or 0
+        ),
+    }
 
 def calcular_peak_exit(
     trades: pd.DataFrame,
@@ -988,71 +1084,43 @@ def calcular_peak_exit(
     }, detail
 
 
-def comparar_control_directional_change(
-    control_metrics: dict[str, Any],
-    challenger_metrics: dict[str, Any],
-    control_peak: dict[str, Any],
-    challenger_peak: dict[str, Any],
-) -> dict[str, Any]:
-    control_capital = float(control_metrics["ending_capital"])
-    challenger_capital = float(challenger_metrics["ending_capital"])
-    control_distance = control_peak.get(
-        "median_exit_distance_from_peak_pct"
-    )
-    challenger_distance = challenger_peak.get(
-        "median_exit_distance_from_peak_pct"
-    )
-    return {
-        "research_version": RESEARCH_VERSION,
-        "control_ending_capital": control_capital,
-        "directional_change_ending_capital": challenger_capital,
-        "directional_change_minus_control_capital": (
-            challenger_capital - control_capital
-        ),
-        "directional_change_vs_control_ratio": (
-            challenger_capital / control_capital - 1.0
-            if control_capital > 0
-            else None
-        ),
-        "control_cagr": control_metrics.get("cagr"),
-        "directional_change_cagr": challenger_metrics.get("cagr"),
-        "control_sharpe": control_metrics.get("sharpe"),
-        "directional_change_sharpe": challenger_metrics.get("sharpe"),
-        "control_maximum_drawdown": control_metrics.get(
-            "maximum_drawdown"
-        ),
-        "directional_change_maximum_drawdown": challenger_metrics.get(
-            "maximum_drawdown"
-        ),
-        "control_worst_fold_return": control_metrics.get(
-            "worst_fold_return"
-        ),
-        "directional_change_worst_fold_return": challenger_metrics.get(
-            "worst_fold_return"
-        ),
-        "control_median_exit_distance_from_peak_pct": control_distance,
-        "directional_change_median_exit_distance_from_peak_pct": (
-            challenger_distance
-        ),
-        "median_exit_distance_improvement_pct_points": (
-            float(control_distance) - float(challenger_distance)
-            if control_distance is not None
-            and challenger_distance is not None
-            else None
-        ),
-        "control_median_peak_capture_pct": control_peak.get(
-            "median_peak_capture_pct"
-        ),
-        "directional_change_median_peak_capture_pct": challenger_peak.get(
-            "median_peak_capture_pct"
-        ),
-        "control_median_days_from_peak_to_exit": control_peak.get(
-            "median_days_from_peak_to_exit"
-        ),
-        "directional_change_median_days_from_peak_to_exit": (
-            challenger_peak.get("median_days_from_peak_to_exit")
-        ),
-        "directional_change_exit_triggers": int(
-            challenger_metrics.get("directional_change_exit_triggers") or 0
-        ),
-    }
+def criar_pacote_analise(diretorio_resultados: Path) -> Path:
+    """Gera um unico ZIP estavel com os artefatos da execucao corrente."""
+    diretorio = Path(diretorio_resultados)
+    if not diretorio.exists():
+        raise FileNotFoundError(diretorio)
+
+    destino = diretorio / "pacote_analise.zip"
+    if destino.exists():
+        destino.unlink()
+
+    with zipfile.ZipFile(
+        destino,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+    ) as arquivo:
+        for path in sorted(diretorio.rglob("*")):
+            if not path.is_file() or path.resolve() == destino.resolve():
+                continue
+            arquivo.write(path, arcname=path.relative_to(diretorio))
+
+    return destino
+
+
+def sinal_sonoro_conclusao() -> None:
+    """Emite dois tons no Windows; usa bell do terminal como fallback."""
+    try:
+        import winsound
+
+        winsound.Beep(880, 220)
+        time.sleep(0.08)
+        winsound.Beep(1175, 420)
+        return
+    except (ImportError, RuntimeError, OSError):
+        pass
+
+    try:
+        sys.stdout.write("\\a")
+        sys.stdout.flush()
+    except Exception:
+        return
