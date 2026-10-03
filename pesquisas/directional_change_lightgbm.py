@@ -31,7 +31,7 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.7.0-dev.2"
+RESEARCH_VERSION = "1.8.0-dev.1"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5
@@ -52,6 +52,7 @@ BOTTOM_TURN_NEAR_LOW_20 = 0.05
 BOTTOM_TURN_MIN_DOWN_REGIME_SHARE = 2.0 / 3.0
 BOTTOM_TURN_MAX_RETURN_20 = 0.0
 BOTTOM_TURN_CONFIRMATION_SESSIONS = 2
+BOTTOM_TURN_MAX_WAIT_SESSIONS = BOTTOM_TURN_HORIZON_SESSIONS
 PROBABILITY_THRESHOLD_CANDIDATES = (
     0.55,
     0.60,
@@ -2250,14 +2251,35 @@ def _envolver_politica_bottom_turn(
     symbols: list[str],
     probability_threshold: float,
     decision_diagnostics: dict[pd.Timestamp, dict[str, Any]],
+    activate_only_after_top_turn: bool = False,
+    max_wait_sessions: int | None = None,
 ) -> Callable[[pd.Timestamp, int, int], tuple[int, float]]:
+    """Confirma entradas perto de fundo sem substituir a escolha do Control.
+
+    No modo v2, o gate so e armado por uma saida Top-Turn e pode bloquear no
+    maximo max_wait_sessions sessoes de decisao seguintes.
+    """
     streak_by_symbol: dict[str, int] = {}
+    gate_armed = False
+    gate_wait_sessions = 0
+
+    if activate_only_after_top_turn:
+        if max_wait_sessions is None:
+            max_wait_sessions = int(BOTTOM_TURN_MAX_WAIT_SESSIONS)
+        if int(max_wait_sessions) <= 0:
+            raise ValueError("Bottom-Turn max_wait_sessions must be positive.")
+
+    def reset_streaks() -> None:
+        for known_symbol in list(streak_by_symbol):
+            streak_by_symbol[known_symbol] = 0
 
     def policy(
         timestamp: pd.Timestamp,
         current_position: int,
         holding_days: int,
     ) -> tuple[int, float]:
+        nonlocal gate_armed, gate_wait_sessions
+
         base_target, base_score = base_policy(
             timestamp,
             current_position,
@@ -2266,18 +2288,103 @@ def _envolver_politica_bottom_turn(
         key = pd.Timestamp(timestamp)
         diagnostic = decision_diagnostics.setdefault(key, {})
 
-        # Bottom-Turn only gates CASH -> asset entries. Existing positions and
-        # asset-to-asset rotations remain exactly under the base policy.
-        if current_position > 0 or int(base_target) <= 0:
-            for known_symbol in list(streak_by_symbol):
-                streak_by_symbol[known_symbol] = 0
+        top_exit_triggered = bool(
+            diagnostic.get("directional_change_exit_triggered", False)
+        )
+
+        if (
+            activate_only_after_top_turn
+            and current_position > 0
+            and int(base_target) <= 0
+            and top_exit_triggered
+        ):
+            gate_armed = True
+            gate_wait_sessions = 0
+            reset_streaks()
             diagnostic.update(
                 {
+                    "bottom_turn_schema_version": 2,
+                    "bottom_turn_research_version": RESEARCH_VERSION,
+                    "bottom_turn_gate_armed_event": True,
+                    "bottom_turn_gate_active": True,
+                    "bottom_turn_gate_wait_session": 0,
+                    "bottom_turn_gate_max_wait_sessions": int(
+                        max_wait_sessions
+                    ),
+                    "bottom_turn_gate_expired": False,
                     "bottom_turn_entry_candidate": False,
                     "bottom_turn_entry_triggered": False,
                     "bottom_turn_entry_blocked": False,
                 }
             )
+            return int(base_target), float(base_score)
+
+        if current_position > 0:
+            if activate_only_after_top_turn:
+                gate_armed = False
+                gate_wait_sessions = 0
+            reset_streaks()
+            diagnostic.update(
+                {
+                    "bottom_turn_gate_armed_event": False,
+                    "bottom_turn_gate_active": False,
+                    "bottom_turn_gate_wait_session": 0,
+                    "bottom_turn_gate_expired": False,
+                    "bottom_turn_entry_candidate": False,
+                    "bottom_turn_entry_triggered": False,
+                    "bottom_turn_entry_blocked": False,
+                }
+            )
+            return int(base_target), float(base_score)
+
+        if activate_only_after_top_turn and not gate_armed:
+            reset_streaks()
+            diagnostic.update(
+                {
+                    "bottom_turn_gate_armed_event": False,
+                    "bottom_turn_gate_active": False,
+                    "bottom_turn_gate_wait_session": 0,
+                    "bottom_turn_gate_expired": False,
+                    "bottom_turn_entry_candidate": False,
+                    "bottom_turn_entry_triggered": False,
+                    "bottom_turn_entry_blocked": False,
+                }
+            )
+            return int(base_target), float(base_score)
+
+        if activate_only_after_top_turn:
+            gate_wait_sessions += 1
+            wait_session = int(gate_wait_sessions)
+            max_wait = int(max_wait_sessions)
+        else:
+            wait_session = 0
+            max_wait = 0
+
+        if int(base_target) <= 0:
+            expired = bool(
+                activate_only_after_top_turn
+                and wait_session >= max_wait
+            )
+            diagnostic.update(
+                {
+                    "bottom_turn_gate_armed_event": False,
+                    "bottom_turn_gate_active": bool(
+                        gate_armed if activate_only_after_top_turn else True
+                    ),
+                    "bottom_turn_gate_wait_session": wait_session,
+                    "bottom_turn_gate_max_wait_sessions": (
+                        max_wait if activate_only_after_top_turn else None
+                    ),
+                    "bottom_turn_gate_expired": expired,
+                    "bottom_turn_entry_candidate": False,
+                    "bottom_turn_entry_triggered": False,
+                    "bottom_turn_entry_blocked": False,
+                }
+            )
+            if expired:
+                gate_armed = False
+                gate_wait_sessions = 0
+                reset_streaks()
             return int(base_target), float(base_score)
 
         symbol = symbols[int(base_target) - 1]
@@ -2308,10 +2415,17 @@ def _envolver_politica_bottom_turn(
             above_threshold
             and streak >= int(BOTTOM_TURN_CONFIRMATION_SESSIONS)
         )
+        expires_after_decision = bool(
+            activate_only_after_top_turn
+            and wait_session >= max_wait
+            and not triggered
+        )
 
         diagnostic.update(
             {
-                "bottom_turn_schema_version": 1,
+                "bottom_turn_schema_version": (
+                    2 if activate_only_after_top_turn else 1
+                ),
                 "bottom_turn_research_version": RESEARCH_VERSION,
                 "bottom_turn_probability": (
                     float(probability) if probability is not None else None
@@ -2325,6 +2439,15 @@ def _envolver_politica_bottom_turn(
                     BOTTOM_TURN_CONFIRMATION_SESSIONS
                 ),
                 "bottom_turn_base_target_asset": symbol,
+                "bottom_turn_gate_armed_event": False,
+                "bottom_turn_gate_active": bool(
+                    gate_armed if activate_only_after_top_turn else True
+                ),
+                "bottom_turn_gate_wait_session": wait_session,
+                "bottom_turn_gate_max_wait_sessions": (
+                    max_wait if activate_only_after_top_turn else None
+                ),
+                "bottom_turn_gate_expired": expires_after_decision,
                 "bottom_turn_entry_candidate": True,
                 "bottom_turn_entry_triggered": triggered,
                 "bottom_turn_entry_blocked": not triggered,
@@ -2332,7 +2455,10 @@ def _envolver_politica_bottom_turn(
         )
 
         if triggered:
-            streak_by_symbol[symbol] = 0
+            reset_streaks()
+            if activate_only_after_top_turn:
+                gate_armed = False
+                gate_wait_sessions = 0
             diagnostic["decision_reason"] = "BOTTOM_TURN_CONFIRMED_ENTRY"
             diagnostic["final_action_asset"] = symbol
             diagnostic["final_action_score"] = float(base_score)
@@ -2353,6 +2479,11 @@ def _envolver_politica_bottom_turn(
                 "decision_is_exit_to_cash": False,
             }
         )
+
+        if expires_after_decision:
+            gate_armed = False
+            gate_wait_sessions = 0
+            reset_streaks()
         return 0, 0.0
 
     return policy
