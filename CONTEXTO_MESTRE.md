@@ -171,3 +171,54 @@ A comparacao atual executa Control, Top-Turn congelado e BOCPD e grava todos os
 resultados no mesmo `output/directional_change/pacote_analise.zip`.
 
 Nenhum resultado BOCPD existe antes da execucao local completa.
+
+
+## Resultado BOCPD e proxima tecnica
+
+A comparacao OOS executada para BOCPD produziu:
+
+- Control: US$ 10.082.425,91;
+- Top-Turn: US$ 12.486.768,00;
+- BOCPD: US$ 10.808.663,89;
+- BOCPD vs Control: +7,2030%;
+- BOCPD usou 6 gatilhos OOS;
+- BOCPD melhorou o pior fold para aproximadamente +301,78%;
+- os gatilhos BOCPD apareceram em regioes temporais proximas de varios
+  gatilhos Top-Turn, mas com timing geralmente mais tardio;
+- o ganho do BOCPD nao dependeu do mesmo episodio TSLA/fold 2 que concentrou
+  a vantagem do Top-Turn.
+
+A pesquisa ativa agora adiciona uma quarta tecnica, HSMM de duracao explicita,
+mantendo Control, Top-Turn e BOCPD congelados como comparadores.
+
+HSMM:
+
+- tres estados latentes ordenados como baixa, neutro e alta;
+- emissoes Gaussianas sobre retorno diario padronizado e tendencia EMA
+  padronizada;
+- parametros de emissao estimados somente no treino de cada fold;
+- distribuicoes explicitas de duracao por estado estimadas no treino;
+- filtro semi-Markov causal;
+- score de reversao baseado na probabilidade anterior de alta e na massa
+  posterior atual de baixa/deterioracao;
+- threshold calibrado somente no bloco de calibracao;
+- duas confirmacoes consecutivas antes de antecipar saida para CASH.
+
+A execucao corrente compara:
+
+- Control;
+- Top-Turn;
+- BOCPD;
+- HSMM.
+
+Ao final tambem sao gerados graficos em
+`output/directional_change/graficos/`:
+
+- `capital_comparison.png`;
+- `trigger_timeline.png`;
+- `peak_distance_comparison.png`;
+- `peak_capture_comparison.png`;
+- `triggers_<ATIVO>.png` para cada ativo com algum gatilho de reversao.
+
+Os graficos sao sobrescritos em cada execucao e entram no mesmo
+`pacote_analise.zip`.
