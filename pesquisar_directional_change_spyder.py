@@ -30,6 +30,7 @@ from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 from engine.rotacao import preparar_painel_rotacao
 from pesquisas.directional_change_lightgbm import (
     RESEARCH_VERSION,
+    calcular_metricas_peak_gatilhos,
     calcular_peak_exit,
     comparar_control_directional_change,
     criar_pacote_analise,
@@ -46,7 +47,10 @@ from reproducao.experimento import (
     run_variant,
     summarize_metrics,
 )
-from reproducao.preparacao import prepare_model_frames
+from reproducao.preparacao import (
+    KNOWN_STRUCTURAL_EXCLUSIONS,
+    prepare_model_frames,
+)
 
 RAIZ_PROJETO = Path(__file__).resolve().parent
 CAMINHOS = SnapshotPaths.research(RAIZ_PROJETO)
@@ -83,71 +87,6 @@ def _salvar_e_publicar_grafico(fig, destino: Path) -> None:
         except Exception:
             pass
     plt.close(fig)
-
-
-def _metricas_peak_dos_gatilhos(
-    peak_trades: pd.DataFrame,
-    predictions: pd.DataFrame,
-    trigger_column: str,
-) -> dict[str, float | None]:
-    rows = _trigger_rows(predictions, trigger_column)
-    if rows.empty or peak_trades is None or peak_trades.empty:
-        return {
-            "median_exit_distance_from_peak_pct": None,
-            "median_peak_capture_pct": None,
-        }
-
-    detail = peak_trades.copy()
-    detail["exit_timestamp"] = pd.to_datetime(
-        detail["exit_timestamp"],
-        utc=True,
-    )
-    selected: list[pd.Series] = []
-
-    for _, row in rows.iterrows():
-        asset = str(
-            row.get("current_asset")
-            or row.get("previous_asset")
-            or row.get("selected_asset")
-            or ""
-        )
-        if not asset or asset == "nan":
-            continue
-        decision_at = pd.Timestamp(row["timestamp"])
-        if decision_at.tzinfo is None:
-            decision_at = decision_at.tz_localize("UTC")
-        else:
-            decision_at = decision_at.tz_convert("UTC")
-
-        candidates = detail.loc[
-            (detail["asset"].astype(str) == asset)
-            & (detail["exit_timestamp"] > decision_at)
-        ].sort_values("exit_timestamp")
-        if candidates.empty:
-            continue
-        selected.append(candidates.iloc[0])
-
-    if not selected:
-        return {
-            "median_exit_distance_from_peak_pct": None,
-            "median_peak_capture_pct": None,
-        }
-
-    selected_frame = pd.DataFrame(selected)
-
-    def median(column: str) -> float | None:
-        values = pd.to_numeric(
-            selected_frame[column],
-            errors="coerce",
-        ).dropna()
-        return float(values.median()) if not values.empty else None
-
-    return {
-        "median_exit_distance_from_peak_pct": median(
-            "exit_distance_from_peak_pct"
-        ),
-        "median_peak_capture_pct": median("peak_capture_pct"),
-    }
 
 
 def _gerar_graficos_comparacao(
@@ -345,22 +284,22 @@ def _gerar_graficos_comparacao(
 
     # 6. Peak Exit somente nas saídas provocadas pelos overlays.
     trigger_peak = {
-        "Top-Turn": _metricas_peak_dos_gatilhos(
+        "Top-Turn": calcular_metricas_peak_gatilhos(
             top_turn_peak_trades,
             top_turn_result.predictions,
             "directional_change_exit_triggered",
         ),
-        "BOCPD": _metricas_peak_dos_gatilhos(
+        "BOCPD": calcular_metricas_peak_gatilhos(
             bocpd_peak_trades,
             bocpd_result.predictions,
             "bocpd_exit_triggered",
         ),
-        "HSMM": _metricas_peak_dos_gatilhos(
+        "HSMM": calcular_metricas_peak_gatilhos(
             hsmm_peak_trades,
             hsmm_result.predictions,
             "hsmm_exit_triggered",
         ),
-        "Hazard/Survival": _metricas_peak_dos_gatilhos(
+        "Hazard/Survival": calcular_metricas_peak_gatilhos(
             hazard_peak_trades,
             hazard_result.predictions,
             "hazard_exit_triggered",
@@ -513,6 +452,16 @@ frames, exclusoes, diagnosticos_dados, auditoria_dados = prepare_model_frames(
     comparar_snapshot_referencia=True,
 )
 ativos_elegiveis = tuple(frames)
+known_still_present = sorted(
+    set(KNOWN_STRUCTURAL_EXCLUSIONS).intersection(frames)
+)
+if known_still_present:
+    raise RuntimeError(
+        "Exclusao estrutural nao aplicada para: "
+        + ", ".join(known_still_present)
+        + ". Reinicie o kernel do Spyder e execute novamente."
+    )
+
 print(
     f"[stage] preparation eligible={len(frames)} "
     f"seconds={time.perf_counter() - inicio_preparacao:.3f}",
