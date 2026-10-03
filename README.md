@@ -363,3 +363,37 @@ comparação Control versus Soft. Os arquivos de predictions e trades permitem
 auditar as decisões individuais, enquanto `data_audit.json` e
 `structural_exclusions.csv` documentam a integridade do snapshot e eventuais
 exclusões estruturais.
+
+
+## Pesquisa experimental: Directional Change + LightGBM
+
+A branch `feature/v1.3.0-dev.1-directional-change-lightgbm` adiciona um
+challenger separado para estudar se e possivel sair mais perto da reversao de
+alta para baixa sem alterar o Control oficial.
+
+O experimento usa o mesmo snapshot congelado e os mesmos folds walk-forward do
+Control. Um LightGBM Classifier aprende a probabilidade de uma reversao de
+curto prazo usando features Directional Change em escalas de 2%, 4% e 8%.
+Quando o Control manteria o ativo e a probabilidade supera o limiar calibrado
+no fold, o challenger sai para CASH na abertura seguinte.
+
+Para executar no Spyder, abra:
+
+`pesquisar_directional_change_spyder.py`
+
+e execute as celulas `# %%` de cima para baixo.
+
+A pesquisa compara diretamente:
+
+- capital final, CAGR, Sharpe, MaxDD e pior fold;
+- distancia mediana do topo ate a saida;
+- captura mediana do topo;
+- sessoes entre topo e saida;
+- numero de gatilhos de reversao.
+
+Os resultados sao gravados em
+`output/directional_change_lightgbm/v1_3_0_dev_1/`.
+
+Nenhum resultado desta pesquisa deve ser interpretado como validado antes da
+execucao OOS completa. A reproducao oficial Control vs Soft permanece
+inalterada.
