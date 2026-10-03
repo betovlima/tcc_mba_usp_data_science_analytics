@@ -63,5 +63,33 @@ Ao final do processamento no Spyder:
 2. `pacote_analise.zip` e recriado;
 3. um aviso sonoro e emitido.
 
-Nenhum resultado da implementacao corrente existe antes da proxima execucao
-real.
+## Resultado Top-Turn reproduzido
+
+A implementacao Top-Turn terminou com:
+
+- Control: US$ 10.082.425,91;
+- Top-Turn: US$ 12.486.768,00;
+- delta: +US$ 2.404.342,09;
+- vantagem relativa: +23,8469%;
+- Sharpe: 2,1011 -> 2,1565;
+- MaxDD praticamente inalterado;
+- 10 intervencoes Top-Turn em 1.547 sessoes.
+
+O ganho ficou concentrado principalmente no fold 2 e em poucas intervencoes,
+especialmente TSLA. Por isso a pesquisa atual nao altera o modelo: ela mede a
+robustez por ablation leave-one-trigger-out.
+
+## Pesquisa corrente — ablation
+
+A versao corrente executa o mesmo treinamento Top-Turn uma unica vez e depois
+faz replays OOS sem retreinar:
+
+- remove cada gatilho original individualmente;
+- mede o capital final sem aquele gatilho;
+- calcula a contribuicao marginal de cada intervencao;
+- executa um replay com todos os gatilhos desabilitados para verificar paridade
+  com o Control.
+
+Os resultados de ablation entram no mesmo
+`comparison_directional_change.json` e, portanto, no mesmo
+`pacote_analise.zip`. Nenhum arquivo de pesquisa adicional e criado.
