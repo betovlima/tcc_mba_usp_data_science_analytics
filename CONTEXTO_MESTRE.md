@@ -8,8 +8,10 @@ Control oficial nem o MCT.
 
 ## Regra de continuidade da pesquisa
 
-Esta linha de pesquisa evolui diretamente no `main`, usando commits do Git
-para preservar o historico.
+Esta linha de pesquisa evolui exclusivamente nesta unica branch de pesquisa:
+`feature/v1.3.0-dev.1-directional-change-lightgbm`.
+A `main` permanece intocada durante a pesquisa; o historico fica nos commits
+desta branch.
 
 Evoluir sempre os mesmos arquivos:
 
