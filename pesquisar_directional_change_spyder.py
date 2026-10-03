@@ -2,10 +2,10 @@
 
 Execute no Spyder por celulas (# %%). Esta pesquisa:
 - usa somente o snapshot congelado versionado em dados/pesquisa;
-- nao acessa banco de dados;
 - nao altera o Control oficial;
 - compara Control vs Directional Change + LightGBM;
-- mede capital e proximidade do topo no mesmo protocolo walk-forward.
+- gera ZIP compacto para analise;
+- emite aviso sonoro quando todo o processamento termina.
 """
 
 # %% 0 - Imports e configuracao
@@ -22,7 +22,9 @@ from pesquisas.directional_change_lightgbm import (
     RESEARCH_VERSION,
     calcular_peak_exit,
     comparar_control_directional_change,
+    criar_pacote_analise,
     executar_directional_change_lightgbm,
+    sinal_sonoro_conclusao,
 )
 from reproducao.dados import SnapshotPaths, validate_snapshot
 from reproducao.experimento import (
@@ -35,18 +37,13 @@ from reproducao.preparacao import prepare_model_frames
 
 RAIZ_PROJETO = Path(__file__).resolve().parent
 CAMINHOS = SnapshotPaths.research(RAIZ_PROJETO)
-DIRETORIO_RESULTADOS = (
-    RAIZ_PROJETO
-    / "output"
-    / "directional_change_lightgbm"
-    / RESEARCH_VERSION.replace(".", "_").replace("-", "_")
-)
+DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "directional_change"
 
 print("=" * 78, flush=True)
-print("TCC - pesquisa Directional Change + LightGBM", flush=True)
+print("TCC - Directional Change + LightGBM", flush=True)
 print(f"versao_pesquisa={RESEARCH_VERSION}", flush=True)
 print("dados=SNAPSHOT_CONGELADO_VERSIONADO", flush=True)
-print("comparacao=CONTROL vs DIRECTIONAL_CHANGE_LIGHTGBM", flush=True)
+print("comparacao=CONTROL vs DIRECTIONAL_CHANGE", flush=True)
 print("=" * 78, flush=True)
 
 
@@ -99,15 +96,15 @@ print(
 )
 
 
-# %% 5 - DIRECTIONAL CHANGE + LIGHTGBM
-inicio_dc = time.perf_counter()
-directional_change_result = executar_directional_change_lightgbm(
+# %% 5 - DIRECTIONAL CHANGE TOP-TURN + LIGHTGBM
+inicio_directional_change = time.perf_counter()
+directional_change_result = executar_directional_change(
     frames,
     config_control,
     calcular_taxas_referencia,
     aplicar_deslizamento,
     progress_callback=lambda p, stage, completed: print(
-        f"[dc] progress={p:.1f}% completed={completed} stage={stage}",
+        f"[top-turn] progress={p:.1f}% completed={completed} stage={stage}",
         flush=True,
     ),
 )
@@ -116,18 +113,17 @@ directional_change_metrics = summarize_metrics(
     folds,
     float(config_control.initial_capital),
 )
-# Preserva tambem metricas especificas do challenger no dicionario resumido.
 for chave, valor in directional_change_result.metrics.items():
     if str(chave).startswith("directional_change_"):
         directional_change_metrics[str(chave)] = valor
 
 print(
-    "[stage] DIRECTIONAL_CHANGE_LIGHTGBM "
+    "[stage] DIRECTIONAL_CHANGE "
     f"capital={directional_change_metrics['ending_capital']:,.2f} "
     f"sharpe={directional_change_metrics['sharpe']:.4f} "
     f"maxdd={directional_change_metrics['maximum_drawdown']:.4%} "
     f"triggers={directional_change_metrics.get('directional_change_exit_triggers')} "
-    f"seconds={time.perf_counter() - inicio_dc:.3f}",
+    f"seconds={time.perf_counter() - inicio_directional_change:.3f}",
     flush=True,
 )
 
@@ -147,19 +143,15 @@ directional_change_peak, directional_change_peak_trades = calcular_peak_exit(
 )
 
 print(
-    "[peak] "
-    "CONTROL distance="
-    f"{control_peak.get('median_exit_distance_from_peak_pct')} "
-    "capture="
-    f"{control_peak.get('median_peak_capture_pct')}",
+    "[peak] CONTROL "
+    f"distance={control_peak.get('median_exit_distance_from_peak_pct')} "
+    f"capture={control_peak.get('median_peak_capture_pct')}",
     flush=True,
 )
 print(
-    "[peak] "
-    "DIRECTIONAL_CHANGE distance="
-    f"{directional_change_peak.get('median_exit_distance_from_peak_pct')} "
-    "capture="
-    f"{directional_change_peak.get('median_peak_capture_pct')}",
+    "[peak] DIRECTIONAL_CHANGE "
+    f"distance={directional_change_peak.get('median_exit_distance_from_peak_pct')} "
+    f"capture={directional_change_peak.get('median_peak_capture_pct')}",
     flush=True,
 )
 
@@ -175,7 +167,7 @@ comparacao = comparar_control_directional_change(
 print(
     "[comparison] "
     f"CONTROL={comparacao['control_ending_capital']:,.2f} "
-    f"DC={comparacao['directional_change_ending_capital']:,.2f} "
+    f"DIRECTIONAL_CHANGE={comparacao['directional_change_ending_capital']:,.2f} "
     f"delta={comparacao['directional_change_minus_control_capital']:,.2f} "
     f"ratio={comparacao['directional_change_vs_control_ratio']:+.4%}",
     flush=True,
@@ -184,7 +176,7 @@ print(
     "[comparison] "
     "median_peak_distance_improvement_pp="
     f"{comparacao.get('median_exit_distance_improvement_pct_points')} "
-    "dc_exit_triggers="
+    "directional_change_exit_triggers="
     f"{comparacao.get('directional_change_exit_triggers')}",
     flush=True,
 )
@@ -264,16 +256,12 @@ comparison_table = pd.DataFrame(
         {
             "metric": "median_peak_capture_pct",
             "control": control_peak["median_peak_capture_pct"],
-            "directional_change": directional_change_peak[
-                "median_peak_capture_pct"
-            ],
+            "directional_change": directional_change_peak["median_peak_capture_pct"],
         },
         {
             "metric": "median_days_from_peak_to_exit",
             "control": control_peak["median_days_from_peak_to_exit"],
-            "directional_change": directional_change_peak[
-                "median_days_from_peak_to_exit"
-            ],
+            "directional_change": directional_change_peak["median_days_from_peak_to_exit"],
         },
     ]
 )
@@ -302,4 +290,16 @@ with (DIRETORIO_RESULTADOS / "comparison_directional_change.json").open(
         default=str,
     )
 
-print(f"[done] output={DIRETORIO_RESULTADOS}", flush=True)
+print(f"[output] diretorio={DIRETORIO_RESULTADOS}", flush=True)
+
+
+# %% 9 - PACOTE ZIP PARA ANALISE
+# Este e o unico arquivo que voce precisa enviar para analise.
+PACOTE_ANALISE = criar_pacote_analise(DIRETORIO_RESULTADOS)
+print(f"[package] pronto={PACOTE_ANALISE}", flush=True)
+
+
+# %% 10 - SINAL SONORO DE CONCLUSAO
+# Dois tons no Windows. Em outros sistemas tenta o bell do terminal.
+sinal_sonoro_conclusao()
+print("[done] pesquisa e pacote de analise concluidos", flush=True)
