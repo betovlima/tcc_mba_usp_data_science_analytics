@@ -177,6 +177,63 @@ def test_overlay_can_suppress_one_trigger_and_require_fresh_confirmation() -> No
     ] == 1
 
 
+def test_overlay_suppresses_all_triggers_for_asset() -> None:
+    dates = pd.to_datetime(
+        [
+            "2026-01-05T00:00:00Z",
+            "2026-01-06T00:00:00Z",
+            "2026-01-07T00:00:00Z",
+            "2026-01-08T00:00:00Z",
+        ],
+        utc=True,
+    )
+    frame = pd.DataFrame(
+        {"top_turn_eligible": [True, True, True, True]},
+        index=dates,
+    )
+    diagnostics: dict[pd.Timestamp, dict] = {}
+
+    def base_policy(timestamp, _current_position, _holding_days):
+        diagnostics[pd.Timestamp(timestamp)] = {
+            "decision_reason": "HOLD_CURRENT_BEST",
+            "final_action_asset": "AAA",
+        }
+        return 1, 0.25
+
+    policy = _envolver_politica_top_turn(
+        base_policy,
+        probabilities={
+            date: {"AAA": 0.90}
+            for date in dates
+        },
+        frames={"AAA": frame},
+        symbols=["AAA"],
+        probability_threshold=0.75,
+        config=SimpleNamespace(rotation_min_holding_days=2),
+        decision_diagnostics=diagnostics,
+        suppressed_assets={"AAA"},
+    )
+
+    targets = [
+        policy(date, 1, 4 + index)[0]
+        for index, date in enumerate(dates)
+    ]
+
+    assert targets == [1, 1, 1, 1]
+    assert all(
+        diagnostics[date][
+            "directional_change_exit_triggered"
+        ] is False
+        for date in dates
+    )
+    assert any(
+        diagnostics[date][
+            "directional_change_ablation_suppressed_by_asset"
+        ] is True
+        for date in dates
+    )
+
+
 def test_overlay_can_disable_all_triggers() -> None:
     dates = pd.to_datetime(
         ["2026-01-05T00:00:00Z", "2026-01-06T00:00:00Z"],
