@@ -2056,6 +2056,308 @@ def calibrar_limiar(
         observations=int(len(y_true)),
     )
 
+def _ajustar_modelos_bottom_turn(
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    train_dates: pd.DatetimeIndex,
+    config: Any,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    try:
+        from lightgbm import LGBMClassifier
+    except ImportError as exc:
+        raise RuntimeError("Bottom-Turn research requires lightgbm.") from exc
+
+    settings = _configuracoes_lightgbm(config)
+    minimum_rows = int(config.rotation_minimum_training_rows)
+    models: dict[str, Any] = {}
+    rows: list[dict[str, Any]] = []
+
+    for symbol in symbols:
+        frame = frames[symbol].reindex(train_dates)
+        eligible = frame["bottom_turn_eligible"].fillna(False).astype(bool)
+        train = frame.loc[eligible].dropna(
+            subset=["forward_up_reversal", *MODEL_FEATURES]
+        )
+        target = train["forward_up_reversal"].astype(int)
+        positives = int((target == 1).sum())
+        negatives = int((target == 0).sum())
+        diagnostic = {
+            "asset": symbol,
+            "eligible_training_rows": int(len(train)),
+            "positive_rows": positives,
+            "negative_rows": negatives,
+            "fitted": False,
+        }
+        if (
+            len(train) < max(100, minimum_rows // 4)
+            or positives < MINIMUM_CLASS_ROWS
+            or negatives < MINIMUM_CLASS_ROWS
+        ):
+            rows.append(diagnostic)
+            continue
+
+        model = LGBMClassifier(
+            objective="binary",
+            boosting_type="gbdt",
+            n_estimators=int(settings["n_estimators"]),
+            learning_rate=float(settings["learning_rate"]),
+            max_depth=int(settings["max_depth"]),
+            num_leaves=int(settings["num_leaves"]),
+            min_child_samples=int(settings["min_child_samples"]),
+            min_child_weight=float(settings["min_child_weight"]),
+            subsample=float(settings["subsample"]),
+            subsample_freq=int(settings["subsample_freq"]),
+            colsample_bytree=float(settings["colsample_bytree"]),
+            reg_alpha=float(settings["reg_alpha"]),
+            reg_lambda=float(settings["reg_lambda"]),
+            max_bin=int(settings["max_bin"]),
+            random_state=int(config.random_state),
+            n_jobs=int(settings["n_jobs"]),
+            device_type="cpu",
+            deterministic=bool(config.deterministic_execution),
+            force_col_wise=bool(config.deterministic_execution),
+            class_weight="balanced",
+            verbosity=-1,
+        )
+        model.fit(train[list(MODEL_FEATURES)], target)
+        models[symbol] = model
+        diagnostic["fitted"] = True
+        rows.append(diagnostic)
+
+    return models, rows
+
+
+def _probabilidades_bottom_turn(
+    models: dict[str, Any],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    dates: pd.DatetimeIndex,
+) -> dict[pd.Timestamp, dict[str, float]]:
+    cache: dict[pd.Timestamp, dict[str, float]] = {
+        pd.Timestamp(date): {} for date in dates
+    }
+    for symbol in symbols:
+        model = models.get(symbol)
+        if model is None:
+            continue
+        frame = frames[symbol].reindex(dates)
+        eligible = frame["bottom_turn_eligible"].fillna(False).astype(bool)
+        valid = eligible & frame[list(MODEL_FEATURES)].notna().all(axis=1)
+        if not bool(valid.any()):
+            continue
+        rows = frame.loc[valid, list(MODEL_FEATURES)]
+        predicted = model.predict_proba(rows)[:, 1]
+        for timestamp, probability in zip(
+            rows.index,
+            predicted,
+            strict=True,
+        ):
+            cache[pd.Timestamp(timestamp)][symbol] = float(probability)
+    return cache
+
+
+def calibrar_limiar_bottom_turn(
+    models: dict[str, Any],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    calibration_dates: pd.DatetimeIndex,
+    *,
+    candidates: Iterable[float] = PROBABILITY_THRESHOLD_CANDIDATES,
+) -> CalibrationResult:
+    cache = _probabilidades_bottom_turn(
+        models,
+        frames,
+        symbols,
+        calibration_dates,
+    )
+    targets: list[int] = []
+    probabilities: list[float] = []
+
+    for timestamp in calibration_dates:
+        key = pd.Timestamp(timestamp)
+        for symbol in symbols:
+            probability = cache.get(key, {}).get(symbol)
+            if probability is None:
+                continue
+            frame = frames[symbol]
+            if key not in frame.index:
+                continue
+            value = frame.at[key, "forward_up_reversal"]
+            if pd.isna(value):
+                continue
+            targets.append(int(value))
+            probabilities.append(float(probability))
+
+    if not targets:
+        return CalibrationResult(
+            threshold=0.75,
+            fbeta_05=None,
+            balanced_accuracy=None,
+            precision=None,
+            recall=None,
+            predicted_positives=0,
+            positives=0,
+            negatives=0,
+            observations=0,
+        )
+
+    y_true = np.asarray(targets, dtype=int)
+    probs = np.asarray(probabilities, dtype=float)
+    best: tuple[float, float, dict[str, float | int | None]] | None = None
+
+    for candidate in candidates:
+        metrics = _metricas_classificacao(
+            y_true,
+            probs,
+            float(candidate),
+        )
+        if int(metrics["predicted_positives"] or 0) < MINIMUM_CALIBRATION_ALERTS:
+            continue
+        score = float(metrics["fbeta_05"] or 0.0)
+        row = (score, float(candidate), metrics)
+        if best is None or (row[0], row[1]) > (best[0], best[1]):
+            best = row
+
+    if best is None:
+        threshold = 0.75
+        metrics = _metricas_classificacao(y_true, probs, threshold)
+    else:
+        threshold = float(best[1])
+        metrics = best[2]
+
+    return CalibrationResult(
+        threshold=threshold,
+        fbeta_05=float(metrics["fbeta_05"] or 0.0),
+        balanced_accuracy=float(metrics["balanced_accuracy"] or 0.0),
+        precision=(
+            float(metrics["precision"])
+            if metrics["precision"] is not None
+            else None
+        ),
+        recall=float(metrics["recall"] or 0.0),
+        predicted_positives=int(metrics["predicted_positives"] or 0),
+        positives=int((y_true == 1).sum()),
+        negatives=int((y_true == 0).sum()),
+        observations=int(len(y_true)),
+    )
+
+
+def _envolver_politica_bottom_turn(
+    base_policy: Callable[[pd.Timestamp, int, int], tuple[int, float]],
+    *,
+    probabilities: dict[pd.Timestamp, dict[str, float]],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    probability_threshold: float,
+    decision_diagnostics: dict[pd.Timestamp, dict[str, Any]],
+) -> Callable[[pd.Timestamp, int, int], tuple[int, float]]:
+    streak_by_symbol: dict[str, int] = {}
+
+    def policy(
+        timestamp: pd.Timestamp,
+        current_position: int,
+        holding_days: int,
+    ) -> tuple[int, float]:
+        base_target, base_score = base_policy(
+            timestamp,
+            current_position,
+            holding_days,
+        )
+        key = pd.Timestamp(timestamp)
+        diagnostic = decision_diagnostics.setdefault(key, {})
+
+        # Bottom-Turn only gates CASH -> asset entries. Existing positions and
+        # asset-to-asset rotations remain exactly under the base policy.
+        if current_position > 0 or int(base_target) <= 0:
+            for known_symbol in list(streak_by_symbol):
+                streak_by_symbol[known_symbol] = 0
+            diagnostic.update(
+                {
+                    "bottom_turn_entry_candidate": False,
+                    "bottom_turn_entry_triggered": False,
+                    "bottom_turn_entry_blocked": False,
+                }
+            )
+            return int(base_target), float(base_score)
+
+        symbol = symbols[int(base_target) - 1]
+        for known_symbol in list(streak_by_symbol):
+            if known_symbol != symbol:
+                streak_by_symbol[known_symbol] = 0
+
+        probability = probabilities.get(key, {}).get(symbol)
+        eligible = bool(
+            key in frames[symbol].index
+            and frames[symbol].at[key, "bottom_turn_eligible"]
+        )
+        above_threshold = bool(
+            eligible
+            and probability is not None
+            and np.isfinite(float(probability))
+            and float(probability) >= float(probability_threshold)
+        )
+        if above_threshold:
+            streak_by_symbol[symbol] = int(
+                streak_by_symbol.get(symbol, 0)
+            ) + 1
+        else:
+            streak_by_symbol[symbol] = 0
+
+        streak = int(streak_by_symbol.get(symbol, 0))
+        triggered = bool(
+            above_threshold
+            and streak >= int(BOTTOM_TURN_CONFIRMATION_SESSIONS)
+        )
+
+        diagnostic.update(
+            {
+                "bottom_turn_schema_version": 1,
+                "bottom_turn_research_version": RESEARCH_VERSION,
+                "bottom_turn_probability": (
+                    float(probability) if probability is not None else None
+                ),
+                "bottom_turn_probability_threshold": float(
+                    probability_threshold
+                ),
+                "bottom_turn_eligible": bool(eligible),
+                "bottom_turn_confirmation_streak": int(streak),
+                "bottom_turn_confirmation_required": int(
+                    BOTTOM_TURN_CONFIRMATION_SESSIONS
+                ),
+                "bottom_turn_base_target_asset": symbol,
+                "bottom_turn_entry_candidate": True,
+                "bottom_turn_entry_triggered": triggered,
+                "bottom_turn_entry_blocked": not triggered,
+            }
+        )
+
+        if triggered:
+            streak_by_symbol[symbol] = 0
+            diagnostic["decision_reason"] = "BOTTOM_TURN_CONFIRMED_ENTRY"
+            diagnostic["final_action_asset"] = symbol
+            diagnostic["final_action_score"] = float(base_score)
+            diagnostic["decision_is_entry"] = True
+            diagnostic["decision_is_exit_to_cash"] = False
+            return int(base_target), float(base_score)
+
+        diagnostic["bottom_turn_base_reason"] = diagnostic.get(
+            "decision_reason"
+        )
+        diagnostic.update(
+            {
+                "decision_reason": "BOTTOM_TURN_WAIT_IN_CASH",
+                "final_action_asset": "CASH",
+                "final_action_score": 0.0,
+                "decision_is_rotation": False,
+                "decision_is_entry": False,
+                "decision_is_exit_to_cash": False,
+            }
+        )
+        return 0, 0.0
+
+    return policy
+
+
 def _envolver_politica_top_turn(
     base_policy: Callable[[pd.Timestamp, int, int], tuple[int, float]],
     *,
