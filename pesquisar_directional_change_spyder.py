@@ -223,7 +223,8 @@ if ablation:
         print(
             "[ablation-group] "
             f"{row.get('group_type')}={row.get('group_value')} "
-            f"triggers={row.get('trigger_count')} "
+            f"original_triggers={row.get('original_trigger_count')} "
+            f"scope={row.get('suppression_scope')} "
             f"contribution={contribution:+,.2f} "
             f"without={float(row.get('without_group_ending_capital')):,.2f}",
             flush=True,
