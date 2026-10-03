@@ -364,39 +364,38 @@ auditar as decisões individuais, enquanto `data_audit.json` e
 `structural_exclusions.csv` documentam a integridade do snapshot e eventuais
 exclusões estruturais.
 
-## Pesquisa experimental: reversao Top-Turn vs BOCPD vs HSMM vs Hazard
+## Pesquisa experimental ativa: Top-Turn + Bottom-Turn
 
-A mesma branch e os mesmos arquivos comparam cinco cenarios OOS sob o mesmo
-snapshot congelado, folds walk-forward, custos e execucao next-open:
+A campanha ativa usa a mesma branch, o mesmo snapshot congelado e o mesmo
+protocolo walk-forward para decompor o ciclo de entrada e saida:
 
 ```text
 Control
-Top-Turn Directional Change + LightGBM
-BOCPD
-Explicit-Duration HSMM
-Hazard/Survival
+Control + Bottom-Turn
+Control + Top-Turn
+Control + Top-Turn + Bottom-Turn
 ```
 
-Hazard/Survival usa um modelo de hazard discreto com dados pessoa-periodo.
-Queda e o evento de interesse, continuacao e tratada como evento concorrente e
-trajetorias sem evento sao censuradas no fim da janela de cinco sessoes. A
-calibracao permanece restrita ao bloco de calibracao de cada fold.
+Top-Turn e Directional Change + LightGBM para antecipar saidas proximas de
+reversoes de topo. Bottom-Turn usa a formulacao simetrica para confirmar apenas
+entradas CASH -> ativo que a politica Control ja escolheu. O Bottom-Turn nao
+escolhe outro ativo e nao altera rotacoes ativo -> ativo.
 
-CLMT e excluido da modelagem por uma mudanca estrutural de identidade em
-2024-07-11 que preservou o ticker, mas mudou o CUSIP. O snapshot congelado nao
-e editado nem reconstruido.
+A execucao exporta diagnosticos de topo e de fundo, incluindo distancia da
+entrada ao fundo recente, captura do fundo, dias desde o fundo, retornos
+posteriores em 5/10/20 sessoes e drawdown posterior.
+
+Os calendarios de storytelling usam `TT↓` para saidas Top-Turn e `BT↑`
+para entradas Bottom-Turn.
+
+BOCPD, HSMM e Hazard/Survival permanecem preservados no historico da pesquisa,
+mas nao sao executados nesta campanha focada em fundos.
 
 Para executar no Spyder:
 
 ```python
 %run pesquisar_directional_change_spyder.py
 ```
-
-O script configura Matplotlib como `inline` quando esta em um console IPython,
-salva os PNGs em `output/directional_change/graficos/` e tambem publica cada
-Figure para a aba Plots do Spyder. Alem dos graficos anteriores, gera capital
-relativo ao Control e metricas de Peak Exit somente para as saidas disparadas
-pelos overlays.
 
 O pacote continua sendo recriado sempre no mesmo caminho:
 
