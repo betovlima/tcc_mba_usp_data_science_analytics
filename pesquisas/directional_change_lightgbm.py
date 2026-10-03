@@ -31,7 +31,9 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.8.0-dev.2"
+RESEARCH_VERSION = "1.8.0-dev.3"
+EXPECTED_EXECUTION_SCHEMA = "top-bottom-cycle-v2"
+EXPECTED_COMPARISON_FILE = "comparison_cycle_v2.json"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5
@@ -4695,10 +4697,38 @@ def calcular_metricas_peak_gatilhos(
 
 
 def criar_pacote_analise(diretorio_resultados: Path) -> Path:
-    """Gera um unico ZIP estavel com os artefatos da execucao corrente."""
+    """Gera ZIP estavel e recusa misturar modulo novo com fluxo antigo."""
     diretorio = Path(diretorio_resultados)
     if not diretorio.exists():
         raise FileNotFoundError(diretorio)
+
+    comparison_path = diretorio / EXPECTED_COMPARISON_FILE
+    if not comparison_path.exists():
+        raise RuntimeError(
+            "Pacote recusado: o modulo de pesquisa espera "
+            f"{EXPECTED_COMPARISON_FILE} com schema "
+            f"{EXPECTED_EXECUTION_SCHEMA}, mas o arquivo nao existe. "
+            "Isso normalmente indica que o Spyder executou uma copia antiga "
+            "de pesquisar_directional_change_spyder.py."
+        )
+
+    try:
+        comparison_payload = json.loads(
+            comparison_path.read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Pacote recusado: nao foi possivel validar {comparison_path.name}."
+        ) from exc
+
+    observed_schema = comparison_payload.get("execution_schema")
+    if observed_schema != EXPECTED_EXECUTION_SCHEMA:
+        raise RuntimeError(
+            "Pacote recusado por execution_schema incompatível: "
+            f"esperado={EXPECTED_EXECUTION_SCHEMA!r} "
+            f"observado={observed_schema!r}. "
+            "Atualize e execute o arquivo Spyder correto."
+        )
 
     destino = diretorio / "pacote_analise.zip"
     if destino.exists():
