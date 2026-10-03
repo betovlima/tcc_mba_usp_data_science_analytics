@@ -37,6 +37,24 @@ KNOWN_STRUCTURAL_EXCLUSIONS: dict[str, dict[str, Any]] = {
 }
 
 
+def _normalize_identifier(value: Any) -> str:
+    """Normaliza identificadores CSV que o pandas pode ler como float."""
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+
+    text = str(value).strip()
+    if text.endswith(".0"):
+        candidate = text[:-2]
+        if candidate.isdigit():
+            return candidate
+    return text
+
+
 def _clean_record(row: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in row.items():
@@ -91,10 +109,10 @@ def structural_identity_issue(
                 == normalized
                 and str(action.get("new_symbol") or "").strip().upper()
                 == normalized
-                and str(action.get("old_cusip") or "").strip()
-                == str(known.get("old_cusip") or "")
-                and str(action.get("new_cusip") or "").strip()
-                == str(known.get("new_cusip") or "")
+                and _normalize_identifier(action.get("old_cusip"))
+                == _normalize_identifier(known.get("old_cusip"))
+                and _normalize_identifier(action.get("new_cusip"))
+                == _normalize_identifier(known.get("new_cusip"))
             ),
             None,
         )
