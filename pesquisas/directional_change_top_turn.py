@@ -28,12 +28,10 @@ from engine.rotacao import (
     _simular_exato,
 )
 from pesquisas.directional_change_lightgbm import (
-    DC_FEATURES,
     DIRECTIONAL_CHANGE_THRESHOLDS,
     MODEL_FEATURES,
     _directional_change_state,
     _tag_threshold,
-    calcular_peak_exit,
 )
 
 RESEARCH_VERSION = "1.3.0-dev.2"
