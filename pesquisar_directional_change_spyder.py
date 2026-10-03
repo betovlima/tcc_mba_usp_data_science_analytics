@@ -181,6 +181,41 @@ print(
     flush=True,
 )
 
+ablation = directional_change_metrics.get(
+    "directional_change_ablation",
+    {},
+)
+if ablation:
+    ablation["control_capital_reference"] = float(
+        control_metrics["ending_capital"]
+    )
+    no_overlay = ablation.get("without_all_triggers_ending_capital")
+    if no_overlay is not None:
+        ablation["without_all_triggers_minus_control"] = (
+            float(no_overlay) - float(control_metrics["ending_capital"])
+        )
+    print(
+        "[ablation] "
+        f"triggers={ablation.get('trigger_count')} "
+        f"full={ablation.get('full_top_turn_ending_capital'):,.2f} "
+        f"without_all={float(no_overlay):,.2f} "
+        f"control={float(control_metrics['ending_capital']):,.2f}",
+        flush=True,
+    )
+    for row in ablation.get("rows", []):
+        contribution = float(
+            row.get("trigger_contribution_to_ending_capital") or 0.0
+        )
+        print(
+            "[ablation] "
+            f"#{row.get('trigger_number')} "
+            f"{row.get('decision_timestamp')} "
+            f"{row.get('asset')} "
+            f"contribution={contribution:+,.2f} "
+            f"without={float(row.get('without_trigger_ending_capital')):,.2f}",
+            flush=True,
+        )
+
 
 # %% 8 - Exportacao dos artefatos
 DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
