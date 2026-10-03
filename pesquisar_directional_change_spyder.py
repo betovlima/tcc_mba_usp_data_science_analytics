@@ -561,204 +561,196 @@ print(
 )
 
 
-# %% 6 - BOCPD
-inicio_bocpd = time.perf_counter()
-bocpd_result = executar_bocpd_overlay(
+# %% 6 - BOTTOM-TURN: melhora apenas CASH -> ativo
+inicio_bottom = time.perf_counter()
+bottom_turn_result = executar_bottom_turn_lightgbm(
     frames,
     config_control,
     calcular_taxas_referencia,
     aplicar_deslizamento,
+    include_top_turn_exit=False,
     progress_callback=lambda p, stage, completed: print(
-        f"[bocpd] progress={p:.1f}% completed={completed} stage={stage}",
+        f"[bottom-turn] progress={p:.1f}% completed={completed} stage={stage}",
         flush=True,
     ),
 )
-bocpd_metrics = summarize_metrics(
-    bocpd_result,
+bottom_turn_metrics = summarize_metrics(
+    bottom_turn_result,
     folds,
     float(config_control.initial_capital),
 )
-for chave, valor in bocpd_result.metrics.items():
-    if str(chave).startswith("bocpd_"):
-        bocpd_metrics[str(chave)] = valor
+for chave, valor in bottom_turn_result.metrics.items():
+    if str(chave).startswith("bottom_turn_"):
+        bottom_turn_metrics[str(chave)] = valor
 
 print(
-    "[stage] BOCPD "
-    f"capital={bocpd_metrics['ending_capital']:,.2f} "
-    f"sharpe={bocpd_metrics['sharpe']:.4f} "
-    f"maxdd={bocpd_metrics['maximum_drawdown']:.4%} "
-    f"triggers={bocpd_metrics.get('bocpd_exit_triggers')} "
-    f"seconds={time.perf_counter() - inicio_bocpd:.3f}",
+    "[stage] BOTTOM_TURN "
+    f"capital={bottom_turn_metrics['ending_capital']:,.2f} "
+    f"sharpe={bottom_turn_metrics['sharpe']:.4f} "
+    f"maxdd={bottom_turn_metrics['maximum_drawdown']:.4%} "
+    f"entries={bottom_turn_metrics.get('bottom_turn_entry_triggers')} "
+    f"blocked={bottom_turn_metrics.get('bottom_turn_entry_blocks')} "
+    f"seconds={time.perf_counter() - inicio_bottom:.3f}",
     flush=True,
 )
 
 
-# %% 7 - HSMM
-inicio_hsmm = time.perf_counter()
-hsmm_result = executar_hsmm_overlay(
+# %% 7 - TOP-TURN + BOTTOM-TURN: ciclo completo
+inicio_top_bottom = time.perf_counter()
+top_bottom_result = executar_bottom_turn_lightgbm(
     frames,
     config_control,
     calcular_taxas_referencia,
     aplicar_deslizamento,
+    include_top_turn_exit=True,
     progress_callback=lambda p, stage, completed: print(
-        f"[hsmm] progress={p:.1f}% completed={completed} stage={stage}",
+        f"[top-bottom] progress={p:.1f}% completed={completed} stage={stage}",
         flush=True,
     ),
 )
-hsmm_metrics = summarize_metrics(
-    hsmm_result,
+top_bottom_metrics = summarize_metrics(
+    top_bottom_result,
     folds,
     float(config_control.initial_capital),
 )
-for chave, valor in hsmm_result.metrics.items():
-    if str(chave).startswith("hsmm_"):
-        hsmm_metrics[str(chave)] = valor
+for chave, valor in top_bottom_result.metrics.items():
+    if (
+        str(chave).startswith("bottom_turn_")
+        or str(chave).startswith("combined_top_turn_")
+    ):
+        top_bottom_metrics[str(chave)] = valor
 
 print(
-    "[stage] HSMM "
-    f"capital={hsmm_metrics['ending_capital']:,.2f} "
-    f"sharpe={hsmm_metrics['sharpe']:.4f} "
-    f"maxdd={hsmm_metrics['maximum_drawdown']:.4%} "
-    f"triggers={hsmm_metrics.get('hsmm_exit_triggers')} "
-    f"seconds={time.perf_counter() - inicio_hsmm:.3f}",
+    "[stage] TOP_BOTTOM "
+    f"capital={top_bottom_metrics['ending_capital']:,.2f} "
+    f"sharpe={top_bottom_metrics['sharpe']:.4f} "
+    f"maxdd={top_bottom_metrics['maximum_drawdown']:.4%} "
+    f"bottom_entries={top_bottom_metrics.get('bottom_turn_entry_triggers')} "
+    f"top_exits={top_bottom_metrics.get('combined_top_turn_exit_triggers')} "
+    f"seconds={time.perf_counter() - inicio_top_bottom:.3f}",
     flush=True,
 )
 
 
-# %% 8 - HAZARD / SURVIVAL
-inicio_hazard = time.perf_counter()
-hazard_result = executar_hazard_survival_overlay(
-    frames,
-    config_control,
-    calcular_taxas_referencia,
-    aplicar_deslizamento,
-    progress_callback=lambda p, stage, completed: print(
-        f"[hazard] progress={p:.1f}% completed={completed} stage={stage}",
-        flush=True,
-    ),
-)
-hazard_metrics = summarize_metrics(
-    hazard_result,
-    folds,
-    float(config_control.initial_capital),
-)
-for chave, valor in hazard_result.metrics.items():
-    if str(chave).startswith("hazard_"):
-        hazard_metrics[str(chave)] = valor
-
+# %% 8 - reservado: BOCPD/HSMM/Hazard ficam congelados no historico
 print(
-    "[stage] HAZARD_SURVIVAL "
-    f"capital={hazard_metrics['ending_capital']:,.2f} "
-    f"sharpe={hazard_metrics['sharpe']:.4f} "
-    f"maxdd={hazard_metrics['maximum_drawdown']:.4%} "
-    f"triggers={hazard_metrics.get('hazard_exit_triggers')} "
-    f"seconds={time.perf_counter() - inicio_hazard:.3f}",
+    "[research-focus] BOCPD, HSMM e Hazard permanecem documentados, "
+    "mas nao sao executados nesta campanha Bottom-Turn.",
     flush=True,
 )
 
 
-# %% 9 - Peak Exit: mesma definicao para os cinco cenarios
+# %% 9 - Diagnosticos de topo e fundo
 frames_alinhados, _, _ = preparar_painel_rotacao(
     frames,
     config_control,
 )
+oos_start = pd.Timestamp(control_result.predictions.index.min())
+
 control_peak, control_peak_trades = calcular_peak_exit(
     control_result.trades,
     frames_alinhados,
 )
-directional_change_peak, directional_change_peak_trades = calcular_peak_exit(
+top_turn_peak, top_turn_peak_trades = calcular_peak_exit(
     directional_change_result.trades,
     frames_alinhados,
 )
-bocpd_peak, bocpd_peak_trades = calcular_peak_exit(
-    bocpd_result.trades,
+bottom_turn_peak, bottom_turn_peak_trades = calcular_peak_exit(
+    bottom_turn_result.trades,
     frames_alinhados,
 )
-hsmm_peak, hsmm_peak_trades = calcular_peak_exit(
-    hsmm_result.trades,
-    frames_alinhados,
-)
-hazard_peak, hazard_peak_trades = calcular_peak_exit(
-    hazard_result.trades,
+top_bottom_peak, top_bottom_peak_trades = calcular_peak_exit(
+    top_bottom_result.trades,
     frames_alinhados,
 )
 
+control_bottom, control_bottom_entries = calcular_bottom_entry(
+    control_result.trades,
+    frames_alinhados,
+    oos_start=oos_start,
+)
+bottom_turn_bottom, bottom_turn_entries = calcular_bottom_entry(
+    bottom_turn_result.trades,
+    frames_alinhados,
+    oos_start=oos_start,
+)
+top_turn_bottom, top_turn_entries = calcular_bottom_entry(
+    directional_change_result.trades,
+    frames_alinhados,
+    oos_start=oos_start,
+)
+top_bottom_bottom, top_bottom_entries = calcular_bottom_entry(
+    top_bottom_result.trades,
+    frames_alinhados,
+    oos_start=oos_start,
+)
+
 print(
-    "[peak] CONTROL "
+    "[top-diagnostic] CONTROL "
     f"distance={control_peak.get('median_exit_distance_from_peak_pct')} "
     f"capture={control_peak.get('median_peak_capture_pct')}",
     flush=True,
 )
 print(
-    "[peak] DIRECTIONAL_CHANGE "
-    f"distance={directional_change_peak.get('median_exit_distance_from_peak_pct')} "
-    f"capture={directional_change_peak.get('median_peak_capture_pct')}",
+    "[top-diagnostic] TOP_TURN "
+    f"distance={top_turn_peak.get('median_exit_distance_from_peak_pct')} "
+    f"capture={top_turn_peak.get('median_peak_capture_pct')}",
     flush=True,
 )
 print(
-    "[peak] BOCPD "
-    f"distance={bocpd_peak.get('median_exit_distance_from_peak_pct')} "
-    f"capture={bocpd_peak.get('median_peak_capture_pct')}",
+    "[bottom-diagnostic] CONTROL "
+    f"distance={control_bottom.get('median_entry_distance_from_bottom_pct')} "
+    f"capture={control_bottom.get('median_bottom_capture_pct')} "
+    f"days={control_bottom.get('median_days_from_bottom_to_entry')}",
     flush=True,
 )
 print(
-    "[peak] HSMM "
-    f"distance={hsmm_peak.get('median_exit_distance_from_peak_pct')} "
-    f"capture={hsmm_peak.get('median_peak_capture_pct')}",
+    "[bottom-diagnostic] BOTTOM_TURN "
+    f"distance={bottom_turn_bottom.get('median_entry_distance_from_bottom_pct')} "
+    f"capture={bottom_turn_bottom.get('median_bottom_capture_pct')} "
+    f"days={bottom_turn_bottom.get('median_days_from_bottom_to_entry')}",
     flush=True,
 )
 print(
-    "[peak] HAZARD_SURVIVAL "
-    f"distance={hazard_peak.get('median_exit_distance_from_peak_pct')} "
-    f"capture={hazard_peak.get('median_peak_capture_pct')}",
+    "[bottom-diagnostic] TOP_BOTTOM "
+    f"distance={top_bottom_bottom.get('median_entry_distance_from_bottom_pct')} "
+    f"capture={top_bottom_bottom.get('median_bottom_capture_pct')} "
+    f"days={top_bottom_bottom.get('median_days_from_bottom_to_entry')}",
     flush=True,
 )
 
 
-# %% 10 - Comparacao final
+# %% 10 - Comparacao final do ciclo
 comparacao = comparar_control_directional_change(
     control_metrics,
     directional_change_metrics,
     control_peak,
-    directional_change_peak,
+    top_turn_peak,
 )
 
 print(
-    "[comparison] "
-    f"CONTROL={comparacao['control_ending_capital']:,.2f} "
-    f"DIRECTIONAL_CHANGE={comparacao['directional_change_ending_capital']:,.2f} "
-    f"delta={comparacao['directional_change_minus_control_capital']:,.2f} "
-    f"ratio={comparacao['directional_change_vs_control_ratio']:+.4%}",
-    flush=True,
-)
-print(
-    "[comparison] "
-    "median_peak_distance_improvement_pp="
-    f"{comparacao.get('median_exit_distance_improvement_pct_points')} "
-    "directional_change_exit_triggers="
-    f"{comparacao.get('directional_change_exit_triggers')}",
-    flush=True,
-)
-
-print(
-    "[comparison-reversal] "
+    "[comparison-top-turn] "
     f"CONTROL={float(control_metrics['ending_capital']):,.2f} "
     f"TOP_TURN={float(directional_change_metrics['ending_capital']):,.2f} "
-    f"BOCPD={float(bocpd_metrics['ending_capital']):,.2f} "
-    f"HSMM={float(hsmm_metrics['ending_capital']):,.2f} "
-    f"HAZARD={float(hazard_metrics['ending_capital']):,.2f} "
-    f"BOCPD_vs_CONTROL="
-    f"{float(bocpd_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%} "
-    f"HSMM_vs_CONTROL="
-    f"{float(hsmm_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%} "
-    f"HSMM_vs_TOP_TURN="
-    f"{float(hsmm_metrics['ending_capital']) / float(directional_change_metrics['ending_capital']) - 1.0:+.4%} "
-    f"HAZARD_vs_CONTROL="
-    f"{float(hazard_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%} "
-    f"HAZARD_vs_TOP_TURN="
-    f"{float(hazard_metrics['ending_capital']) / float(directional_change_metrics['ending_capital']) - 1.0:+.4%}",
+    f"ratio="
+    f"{float(directional_change_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%}",
     flush=True,
 )
+print(
+    "[comparison-cycle] "
+    f"CONTROL={float(control_metrics['ending_capital']):,.2f} "
+    f"BOTTOM_TURN={float(bottom_turn_metrics['ending_capital']):,.2f} "
+    f"TOP_TURN={float(directional_change_metrics['ending_capital']):,.2f} "
+    f"TOP_BOTTOM={float(top_bottom_metrics['ending_capital']):,.2f} "
+    f"BOTTOM_vs_CONTROL="
+    f"{float(bottom_turn_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%} "
+    f"TOP_vs_CONTROL="
+    f"{float(directional_change_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%} "
+    f"TOP_BOTTOM_vs_CONTROL="
+    f"{float(top_bottom_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%}",
+    flush=True,
+)
+
 
 # %% 11 - Exportacao dos artefatos
 DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
