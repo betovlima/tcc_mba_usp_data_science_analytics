@@ -31,7 +31,7 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.5.0-dev.1"
+RESEARCH_VERSION = "1.6.0-dev.1"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5
@@ -92,6 +92,37 @@ HSMM_MIN_RETURN_20 = 0.0
 HSMM_CONFIRMATION_SESSIONS = 2
 HSMM_DURATION_SMOOTHING = 0.5
 HSMM_TRANSITION_SMOOTHING = 0.5
+
+HAZARD_HORIZON_SESSIONS = TOP_TURN_HORIZON_SESSIONS
+HAZARD_NEAR_HIGH_20 = 0.05
+HAZARD_MIN_RETURN_20 = 0.0
+HAZARD_CONFIRMATION_SESSIONS = 2
+HAZARD_MIN_TRAINING_ROWS = 500
+HAZARD_SCORE_THRESHOLDS = (
+    0.05,
+    0.08,
+    0.10,
+    0.15,
+    0.20,
+    0.25,
+    0.35,
+    0.50,
+    0.65,
+)
+HAZARD_FEATURES = (
+    "return_1",
+    "return_5",
+    "return_20",
+    "vol_20",
+    "atr_pct_14",
+    "distance_from_high_20",
+    "ema_distance_20",
+    "ema_slope_20_5",
+    "rsi_14",
+    "trend_efficiency_20",
+    "dc_up_regime_share",
+    "dc_reversal_pressure_max",
+)
 
 def _tag_threshold(value: float) -> str:
     return f"{int(round(float(value) * 100)):02d}pct"
@@ -209,6 +240,37 @@ class HSMMCalibrationResult:
 
 
 @dataclass(frozen=True)
+class HazardCalibrationResult:
+    threshold: float
+    fbeta_05: float | None
+    balanced_accuracy: float | None
+    precision: float | None
+    recall: float | None
+    predicted_positives: int
+    positives: int
+    negatives: int
+    observations: int
+    training_rows: int
+    training_events: int
+
+    def as_dict(self, *, fold_id: int) -> dict[str, Any]:
+        return {
+            "fold_id": int(fold_id),
+            "score_threshold": float(self.threshold),
+            "fbeta_05": self.fbeta_05,
+            "balanced_accuracy": self.balanced_accuracy,
+            "precision": self.precision,
+            "recall": self.recall,
+            "predicted_positives": int(self.predicted_positives),
+            "positives": int(self.positives),
+            "negatives": int(self.negatives),
+            "observations": int(self.observations),
+            "training_rows": int(self.training_rows),
+            "training_events": int(self.training_events),
+        }
+
+
+@dataclass(frozen=True)
 class HSMMAssetModel:
     means: np.ndarray
     variances: np.ndarray
@@ -313,6 +375,10 @@ def _top_turn_targets(
     threshold_values = np.full(len(frame), np.nan, dtype=float)
     continuation_values = np.full(len(frame), np.nan, dtype=float)
     event_step = np.full(len(frame), np.nan, dtype=float)
+    down_event_step = np.full(len(frame), np.nan, dtype=float)
+    competing_event_step = np.full(len(frame), np.nan, dtype=float)
+    observed_down_event = np.full(len(frame), np.nan, dtype=float)
+    censored = np.full(len(frame), np.nan, dtype=float)
 
     for index in range(len(frame)):
         end = index + 1 + int(horizon)
@@ -348,15 +414,22 @@ def _top_turn_targets(
         continuation_values[index] = continuation
 
         label = 0.0
+        censored[index] = 1.0
         for step, future_close in enumerate(future, start=1):
             move = float(future_close / current - 1.0)
             if move <= -threshold:
                 label = 1.0
                 event_step[index] = float(step)
+                down_event_step[index] = float(step)
+                observed_down_event[index] = 1.0
+                censored[index] = 0.0
                 break
             if move >= continuation:
                 label = 0.0
                 event_step[index] = float(step)
+                competing_event_step[index] = float(step)
+                observed_down_event[index] = 0.0
+                censored[index] = 0.0
                 break
         target[index] = label
 
@@ -366,6 +439,10 @@ def _top_turn_targets(
             "forward_top_turn_threshold": threshold_values,
             "forward_top_turn_continuation": continuation_values,
             "forward_top_turn_event_step": event_step,
+            "hazard_down_event_step": down_event_step,
+            "hazard_competing_event_step": competing_event_step,
+            "hazard_observed_down_event": observed_down_event,
+            "hazard_right_censored": censored,
         },
         index=frame.index,
     )
@@ -406,6 +483,10 @@ def adicionar_top_turn_features(frame: pd.DataFrame) -> pd.DataFrame:
     output["hsmm_eligible"] = (
         (distance_high >= -HSMM_NEAR_HIGH_20)
         & (return_20 > HSMM_MIN_RETURN_20)
+    )
+    output["hazard_eligible"] = (
+        (distance_high >= -HAZARD_NEAR_HIGH_20)
+        & (return_20 > HAZARD_MIN_RETURN_20)
     )
 
     output = output.join(_top_turn_targets(output))
@@ -742,6 +823,396 @@ def _envolver_politica_bocpd(
         diagnostic.update(
             {
                 "decision_reason": "BOCPD_DOWNWARD_CHANGE_EXIT",
+                "final_action_asset": "CASH",
+                "final_action_score": 0.0,
+                "decision_is_rotation": False,
+                "decision_is_entry": False,
+                "decision_is_exit_to_cash": True,
+            }
+        )
+        return 0, 0.0
+
+    return policy
+
+
+def _hazard_person_period_dataset(
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    dates: pd.DatetimeIndex,
+) -> tuple[np.ndarray, np.ndarray]:
+    rows: list[list[float]] = []
+    labels: list[int] = []
+
+    for symbol in symbols:
+        frame = frames[symbol].reindex(dates)
+        feature_frame = frame.loc[:, list(HAZARD_FEATURES)].apply(
+            pd.to_numeric,
+            errors="coerce",
+        )
+        eligible = frame["hazard_eligible"].fillna(False).astype(bool)
+
+        for position, timestamp in enumerate(frame.index):
+            if not bool(eligible.iloc[position]):
+                continue
+            features = feature_frame.iloc[position].to_numpy(dtype=float)
+            if not np.isfinite(features).all():
+                continue
+
+            down_step_value = frame.iloc[position].get(
+                "hazard_down_event_step"
+            )
+            competing_step_value = frame.iloc[position].get(
+                "hazard_competing_event_step"
+            )
+            censored_value = frame.iloc[position].get(
+                "hazard_right_censored"
+            )
+            if pd.isna(censored_value):
+                continue
+
+            down_step = (
+                int(down_step_value)
+                if pd.notna(down_step_value)
+                else None
+            )
+            competing_step = (
+                int(competing_step_value)
+                if pd.notna(competing_step_value)
+                else None
+            )
+
+            if down_step is not None:
+                risk_end = min(
+                    int(HAZARD_HORIZON_SESSIONS),
+                    int(down_step),
+                )
+            elif competing_step is not None:
+                # Competing continuation censors the downside process
+                # at the start of that interval.
+                risk_end = min(
+                    int(HAZARD_HORIZON_SESSIONS),
+                    max(0, int(competing_step) - 1),
+                )
+            else:
+                # No event observed through the horizon: right-censored
+                # after contributing survival information for all intervals.
+                risk_end = int(HAZARD_HORIZON_SESSIONS)
+
+            for step in range(1, risk_end + 1):
+                rows.append(
+                    [
+                        *features.tolist(),
+                        float(step) / float(HAZARD_HORIZON_SESSIONS),
+                    ]
+                )
+                labels.append(
+                    int(
+                        down_step is not None
+                        and int(step) == int(down_step)
+                    )
+                )
+
+    if not rows:
+        return (
+            np.empty((0, len(HAZARD_FEATURES) + 1), dtype=float),
+            np.empty((0,), dtype=int),
+        )
+    return np.asarray(rows, dtype=float), np.asarray(labels, dtype=int)
+
+
+def _fit_hazard_model(
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    train_dates: pd.DatetimeIndex,
+    *,
+    random_state: int,
+) -> tuple[Any | None, int, int]:
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    x_train, y_train = _hazard_person_period_dataset(
+        frames,
+        symbols,
+        train_dates,
+    )
+    training_rows = int(len(y_train))
+    training_events = int(np.sum(y_train == 1))
+    if (
+        training_rows < int(HAZARD_MIN_TRAINING_ROWS)
+        or training_events < int(MINIMUM_CLASS_ROWS)
+        or int(np.sum(y_train == 0)) < int(MINIMUM_CLASS_ROWS)
+    ):
+        return None, training_rows, training_events
+
+    model = Pipeline(
+        [
+            ("scale", StandardScaler()),
+            (
+                "hazard",
+                LogisticRegression(
+                    class_weight="balanced",
+                    max_iter=2000,
+                    solver="lbfgs",
+                    random_state=int(random_state),
+                ),
+            ),
+        ]
+    )
+    model.fit(x_train, y_train)
+    return model, training_rows, training_events
+
+
+def _predict_hazard_scores(
+    model: Any | None,
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+) -> dict[str, pd.Series]:
+    result: dict[str, pd.Series] = {}
+
+    for symbol in symbols:
+        frame = frames[symbol]
+        output = pd.Series(np.nan, index=frame.index, dtype=float)
+        if model is None:
+            result[symbol] = output
+            continue
+
+        feature_frame = frame.loc[:, list(HAZARD_FEATURES)].apply(
+            pd.to_numeric,
+            errors="coerce",
+        )
+        eligible = frame["hazard_eligible"].fillna(False).astype(bool)
+        valid = eligible & feature_frame.notna().all(axis=1)
+        valid_positions = np.flatnonzero(valid.to_numpy(dtype=bool))
+        if len(valid_positions) == 0:
+            result[symbol] = output
+            continue
+
+        feature_values = feature_frame.iloc[
+            valid_positions
+        ].to_numpy(dtype=float)
+        design_rows: list[list[float]] = []
+        for features in feature_values:
+            for step in range(1, int(HAZARD_HORIZON_SESSIONS) + 1):
+                design_rows.append(
+                    [
+                        *features.tolist(),
+                        float(step) / float(HAZARD_HORIZON_SESSIONS),
+                    ]
+                )
+
+        probabilities = model.predict_proba(
+            np.asarray(design_rows, dtype=float)
+        )[:, 1]
+        probabilities = probabilities.reshape(
+            len(valid_positions),
+            int(HAZARD_HORIZON_SESSIONS),
+        )
+        cumulative = 1.0 - np.prod(
+            1.0 - np.clip(probabilities, 0.0, 1.0),
+            axis=1,
+        )
+        output.iloc[valid_positions] = cumulative
+        result[symbol] = output
+
+    return result
+
+
+def calibrar_hazard(
+    score_cache: dict[str, pd.Series],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    calibration_dates: pd.DatetimeIndex,
+    *,
+    training_rows: int,
+    training_events: int,
+) -> HazardCalibrationResult:
+    targets: list[int] = []
+    scores: list[float] = []
+
+    for symbol in symbols:
+        frame = frames[symbol].reindex(calibration_dates)
+        signal = score_cache[symbol].reindex(calibration_dates)
+        eligible = frame["hazard_eligible"].fillna(False).astype(bool)
+        observed = pd.to_numeric(
+            frame["hazard_observed_down_event"],
+            errors="coerce",
+        )
+        valid = eligible & observed.notna() & signal.notna()
+        if not bool(valid.any()):
+            continue
+        targets.extend(observed.loc[valid].astype(int).tolist())
+        scores.extend(signal.loc[valid].astype(float).tolist())
+
+    if not targets:
+        return HazardCalibrationResult(
+            threshold=0.25,
+            fbeta_05=None,
+            balanced_accuracy=None,
+            precision=None,
+            recall=None,
+            predicted_positives=0,
+            positives=0,
+            negatives=0,
+            observations=0,
+            training_rows=int(training_rows),
+            training_events=int(training_events),
+        )
+
+    y_true = np.asarray(targets, dtype=int)
+    values = np.asarray(scores, dtype=float)
+    best: tuple[
+        float,
+        float,
+        float,
+        dict[str, float | int | None],
+    ] | None = None
+
+    for threshold in HAZARD_SCORE_THRESHOLDS:
+        metrics = _metricas_classificacao(
+            y_true,
+            values,
+            float(threshold),
+        )
+        if int(metrics["predicted_positives"] or 0) < MINIMUM_CALIBRATION_ALERTS:
+            continue
+        candidate = (
+            float(metrics["fbeta_05"] or 0.0),
+            float(metrics["precision"] or 0.0),
+            float(threshold),
+            metrics,
+        )
+        if best is None or candidate[:3] > best[:3]:
+            best = candidate
+
+    if best is None:
+        threshold = 0.25
+        metrics = _metricas_classificacao(
+            y_true,
+            values,
+            threshold,
+        )
+    else:
+        threshold = float(best[2])
+        metrics = best[3]
+
+    return HazardCalibrationResult(
+        threshold=float(threshold),
+        fbeta_05=float(metrics["fbeta_05"] or 0.0),
+        balanced_accuracy=float(
+            metrics["balanced_accuracy"] or 0.0
+        ),
+        precision=(
+            float(metrics["precision"])
+            if metrics["precision"] is not None
+            else None
+        ),
+        recall=float(metrics["recall"] or 0.0),
+        predicted_positives=int(
+            metrics["predicted_positives"] or 0
+        ),
+        positives=int((y_true == 1).sum()),
+        negatives=int((y_true == 0).sum()),
+        observations=int(len(y_true)),
+        training_rows=int(training_rows),
+        training_events=int(training_events),
+    )
+
+
+def _envolver_politica_hazard(
+    base_policy: Callable[[pd.Timestamp, int, int], tuple[int, float]],
+    *,
+    score_cache: dict[str, pd.Series],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    score_threshold: float,
+    config: Any,
+    decision_diagnostics: dict[pd.Timestamp, dict[str, Any]],
+) -> Callable[[pd.Timestamp, int, int], tuple[int, float]]:
+    streak_by_symbol: dict[str, int] = {}
+
+    def policy(
+        timestamp: pd.Timestamp,
+        current_position: int,
+        holding_days: int,
+    ) -> tuple[int, float]:
+        base_target, base_score = base_policy(
+            timestamp,
+            current_position,
+            holding_days,
+        )
+        key = pd.Timestamp(timestamp)
+        diagnostic = decision_diagnostics.setdefault(key, {})
+        symbol = symbols[current_position - 1] if current_position > 0 else None
+
+        score = None
+        eligible = False
+        if symbol is not None and key in frames[symbol].index:
+            eligible = bool(frames[symbol].at[key, "hazard_eligible"])
+            series = score_cache.get(symbol)
+            if series is not None and key in series.index:
+                value = series.loc[key]
+                if pd.notna(value):
+                    score = float(value)
+
+        control_holds = bool(
+            current_position > 0
+            and int(base_target) == int(current_position)
+            and holding_days >= int(config.rotation_min_holding_days)
+        )
+        above_threshold = bool(
+            control_holds
+            and eligible
+            and score is not None
+            and np.isfinite(float(score))
+            and float(score) >= float(score_threshold)
+        )
+
+        if symbol is not None:
+            if above_threshold:
+                streak_by_symbol[symbol] = int(
+                    streak_by_symbol.get(symbol, 0)
+                ) + 1
+            else:
+                streak_by_symbol[symbol] = 0
+        streak = int(streak_by_symbol.get(symbol, 0)) if symbol else 0
+        triggered = bool(
+            above_threshold
+            and streak >= int(HAZARD_CONFIRMATION_SESSIONS)
+        )
+
+        diagnostic.update(
+            {
+                "hazard_schema_version": 1,
+                "hazard_research_version": RESEARCH_VERSION,
+                "hazard_cumulative_downside_probability": score,
+                "hazard_score_threshold": float(score_threshold),
+                "hazard_eligible": bool(eligible),
+                "hazard_confirmation_streak": int(streak),
+                "hazard_confirmation_required": int(
+                    HAZARD_CONFIRMATION_SESSIONS
+                ),
+                "hazard_base_target_asset": (
+                    "CASH"
+                    if int(base_target) <= 0
+                    else symbols[int(base_target) - 1]
+                ),
+                "hazard_exit_triggered": triggered,
+            }
+        )
+
+        if not triggered:
+            if not control_holds and symbol is not None:
+                streak_by_symbol[symbol] = 0
+            return int(base_target), float(base_score)
+
+        streak_by_symbol[symbol] = 0
+        diagnostic["hazard_base_reason"] = diagnostic.get(
+            "decision_reason"
+        )
+        diagnostic.update(
+            {
+                "decision_reason": "HAZARD_SURVIVAL_EXIT",
                 "final_action_asset": "CASH",
                 "final_action_score": 0.0,
                 "decision_is_rotation": False,
@@ -2149,6 +2620,251 @@ def executar_directional_change_lightgbm(
             total_folds,
         )
     return result
+
+def executar_hazard_survival_overlay(
+    bars_by_symbol: dict[str, pd.DataFrame],
+    config: Any,
+    fee_calculator: Callable,
+    slippage: Callable,
+    *,
+    progress_callback: Callable[[float, str, int], None] | None = None,
+) -> Any:
+    if int(config.rotation_model_repetitions) != 1:
+        raise ValueError("Hazard/Survival comparison requires one repetition.")
+
+    (
+        frames,
+        common_dates,
+        calendar_source_asset,
+        symbols,
+        folds,
+        all_decision_dates,
+        decision_to_fold,
+        decision_metadata,
+    ) = _construir_contexto_execucao(bars_by_symbol, config)
+    frames = _preparar_frames(frames)
+
+    policies: dict[int, Callable] = {}
+    diagnostics: dict[pd.Timestamp, dict[str, Any]] = {}
+    calibration_rows: list[dict[str, Any]] = []
+    margin_rows: list[dict[str, Any]] = []
+
+    total_folds = len(folds)
+    for fold_position, fold in enumerate(folds, start=1):
+        fold_id = int(fold["fold_id"])
+        if progress_callback is not None:
+            progress_callback(
+                5.0 + 75.0 * ((fold_position - 1) / max(1, total_folds)),
+                f"Hazard fold {fold_position}/{total_folds} training",
+                fold_position - 1,
+            )
+
+        train_dates = common_dates[: int(fold["train_end_index"])]
+        calibration_dates = common_dates[
+            int(fold["calibration_start_index"]):
+            int(fold["calibration_end_index"])
+        ]
+        final_fit_dates = common_dates[: int(fold["final_fit_end_index"])]
+
+        calibration_utility_models = _ajustar_modelos_lightgbm(
+            frames,
+            symbols,
+            train_dates,
+            config,
+            phase=f"hazard_fold_{fold_id}_utility_calibration",
+        )
+        candidate_margins = tuple(
+            float(value)
+            for value in config.rotation_switch_margin_candidates
+        )
+        best_candidate = candidate_margins[0]
+        best_score = float("-inf")
+        for candidate in candidate_margins:
+            calibration_policy = _politica_utilidade(
+                calibration_utility_models,
+                frames,
+                symbols,
+                config,
+                candidate,
+            )
+            candidate_score = _crescimento_politica_simples(
+                calibration_policy,
+                frames,
+                symbols,
+                calibration_dates,
+                config,
+            )
+            if candidate_score > best_score:
+                best_score = candidate_score
+                best_candidate = candidate
+
+        calibration_model, training_rows, training_events = _fit_hazard_model(
+            frames,
+            symbols,
+            train_dates,
+            random_state=int(config.random_state) + fold_id,
+        )
+        calibration_scores = _predict_hazard_scores(
+            calibration_model,
+            frames,
+            symbols,
+        )
+        calibration = calibrar_hazard(
+            calibration_scores,
+            frames,
+            symbols,
+            calibration_dates,
+            training_rows=training_rows,
+            training_events=training_events,
+        )
+        calibration_rows.append(
+            calibration.as_dict(fold_id=fold_id)
+        )
+
+        final_utility_models = _ajustar_modelos_lightgbm(
+            frames,
+            symbols,
+            final_fit_dates,
+            config,
+            phase=f"hazard_fold_{fold_id}_utility_final",
+        )
+        final_hazard_model, final_training_rows, final_training_events = (
+            _fit_hazard_model(
+                frames,
+                symbols,
+                final_fit_dates,
+                random_state=int(config.random_state) + 1000 + fold_id,
+            )
+        )
+        final_scores = _predict_hazard_scores(
+            final_hazard_model,
+            frames,
+            symbols,
+        )
+
+        decision_dates = pd.DatetimeIndex(fold["decision_dates"])
+        utility_cache, _ = _precalcular_utilidades_modelo(
+            final_utility_models,
+            frames,
+            symbols,
+            decision_dates,
+            config,
+        )
+        effective_margin = max(
+            float(config.rotation_switch_margin),
+            float(best_candidate),
+        )
+        base_policy = _politica_utilidade(
+            final_utility_models,
+            frames,
+            symbols,
+            config,
+            effective_margin,
+            decision_diagnostics=diagnostics,
+            fold_id=fold_id,
+            calibrated_switch_margin=float(best_candidate),
+            utility_cache=utility_cache,
+        )
+        policies[fold_id] = _envolver_politica_hazard(
+            base_policy,
+            score_cache=final_scores,
+            frames=frames,
+            symbols=symbols,
+            score_threshold=float(calibration.threshold),
+            config=config,
+            decision_diagnostics=diagnostics,
+        )
+        margin_rows.append(
+            {
+                "fold_id": fold_id,
+                "calibrated_candidate_margin": float(best_candidate),
+                "effective_switch_margin": float(effective_margin),
+                "calibration_risk_adjusted_score": float(best_score),
+                "hazard_training_rows": int(final_training_rows),
+                "hazard_training_events": int(final_training_events),
+            }
+        )
+
+    if progress_callback is not None:
+        progress_callback(
+            85.0,
+            "Hazard/Survival OOS replay",
+            total_folds,
+        )
+
+    result = _simular_exato(
+        "hazard_survival_overlay",
+        _politica_agendada(policies, decision_to_fold),
+        frames,
+        symbols,
+        all_decision_dates,
+        config,
+        fee_calculator,
+        slippage,
+        decision_metadata=decision_metadata,
+        policy_decision_diagnostics=diagnostics,
+        model_label="Discrete-Time Hazard / Survival",
+        method_line=(
+            "- Cause-specific discrete-time logistic hazard models downside "
+            "events over five sessions. Continuation is treated as a "
+            "competing censoring event and no-event paths are right-censored "
+            "at the horizon. Threshold selection uses calibration-only data."
+        ),
+    )
+    result.backend = "hazard_survival_overlay"
+
+    scores = pd.to_numeric(
+        result.predictions.get(
+            "hazard_cumulative_downside_probability",
+            pd.Series(index=result.predictions.index, dtype=float),
+        ),
+        errors="coerce",
+    )
+    triggers = result.predictions.get(
+        "hazard_exit_triggered",
+        pd.Series(False, index=result.predictions.index, dtype=bool),
+    ).fillna(False).astype(bool)
+
+    result.metrics.update(
+        {
+            "backend": "hazard_survival_overlay",
+            "model_family": "discrete_time_cause_specific_hazard",
+            "strategy_label": "Hazard/Survival",
+            "hazard_research_version": RESEARCH_VERSION,
+            "hazard_horizon_sessions": int(HAZARD_HORIZON_SESSIONS),
+            "hazard_score_threshold_candidates": list(
+                HAZARD_SCORE_THRESHOLDS
+            ),
+            "hazard_confirmation_sessions": int(
+                HAZARD_CONFIRMATION_SESSIONS
+            ),
+            "hazard_exit_triggers": int(triggers.sum()),
+            "hazard_score_observations": int(scores.notna().sum()),
+            "hazard_calibration": calibration_rows,
+            "walk_forward_fold_count": len(folds),
+            "walk_forward_folds": _desempenho_folds(
+                result.predictions,
+                folds,
+                float(config.initial_capital),
+            ),
+            "calendar_source_asset": calendar_source_asset,
+            "requested_compute_device": "cpu",
+            "effective_compute_device": "cpu",
+        }
+    )
+
+    margin_by_fold = {int(row["fold_id"]): row for row in margin_rows}
+    for row in result.metrics["walk_forward_folds"]:
+        row.update(margin_by_fold.get(int(row["fold_id"]), {}))
+
+    if progress_callback is not None:
+        progress_callback(
+            100.0,
+            "Hazard/Survival completed",
+            total_folds,
+        )
+    return result
+
 
 def executar_hsmm_overlay(
     bars_by_symbol: dict[str, pd.DataFrame],
