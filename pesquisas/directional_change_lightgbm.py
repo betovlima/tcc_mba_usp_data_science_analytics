@@ -2538,6 +2538,353 @@ def _agrupar_gatilhos_ablation(
     return groups
 
 
+def executar_bottom_turn_lightgbm(
+    bars_by_symbol: dict[str, pd.DataFrame],
+    config: Any,
+    fee_calculator: Callable,
+    slippage: Callable,
+    *,
+    include_top_turn_exit: bool = False,
+    progress_callback: Callable[[float, str, int], None] | None = None,
+) -> Any:
+    """Executa Bottom-Turn puro ou ciclo combinado Top-Turn + Bottom-Turn."""
+    if int(config.rotation_model_repetitions) != 1:
+        raise ValueError("Bottom-Turn research requires one repetition.")
+
+    (
+        frames,
+        common_dates,
+        calendar_source_asset,
+        symbols,
+        folds,
+        all_decision_dates,
+        decision_to_fold,
+        decision_metadata,
+    ) = _construir_contexto_execucao(bars_by_symbol, config)
+    frames = _preparar_frames(frames)
+
+    policies: dict[int, Callable] = {}
+    diagnostics: dict[pd.Timestamp, dict[str, Any]] = {}
+    bottom_calibration_rows: list[dict[str, Any]] = []
+    bottom_fit_rows: list[dict[str, Any]] = []
+    top_calibration_rows: list[dict[str, Any]] = []
+    margin_rows: list[dict[str, Any]] = []
+
+    total_folds = len(folds)
+    for fold_position, fold in enumerate(folds, start=1):
+        fold_id = int(fold["fold_id"])
+        label = "Top+Bottom" if include_top_turn_exit else "Bottom-Turn"
+        if progress_callback is not None:
+            progress_callback(
+                5.0 + 75.0 * ((fold_position - 1) / max(1, total_folds)),
+                f"{label} fold {fold_position}/{total_folds} training",
+                fold_position - 1,
+            )
+
+        train_dates = common_dates[: int(fold["train_end_index"])]
+        calibration_dates = common_dates[
+            int(fold["calibration_start_index"]):
+            int(fold["calibration_end_index"])
+        ]
+        final_fit_dates = common_dates[: int(fold["final_fit_end_index"])]
+
+        calibration_utility_models = _ajustar_modelos_lightgbm(
+            frames,
+            symbols,
+            train_dates,
+            config,
+            phase=f"bottom_turn_fold_{fold_id}_utility_calibration",
+        )
+        candidate_margins = tuple(
+            float(value)
+            for value in config.rotation_switch_margin_candidates
+        )
+        best_candidate = candidate_margins[0]
+        best_score = float("-inf")
+        for candidate in candidate_margins:
+            calibration_policy = _politica_utilidade(
+                calibration_utility_models,
+                frames,
+                symbols,
+                config,
+                candidate,
+            )
+            score = _crescimento_politica_simples(
+                calibration_policy,
+                frames,
+                symbols,
+                calibration_dates,
+                config,
+            )
+            if score > best_score:
+                best_score = score
+                best_candidate = candidate
+
+        bottom_calibration_models, calibration_fit = (
+            _ajustar_modelos_bottom_turn(
+                frames,
+                symbols,
+                train_dates,
+                config,
+            )
+        )
+        bottom_calibration = calibrar_limiar_bottom_turn(
+            bottom_calibration_models,
+            frames,
+            symbols,
+            calibration_dates,
+        )
+        bottom_calibration_rows.append(
+            bottom_calibration.as_dict(fold_id=fold_id)
+        )
+        for row in calibration_fit:
+            bottom_fit_rows.append(
+                {"fold_id": fold_id, "phase": "calibration", **row}
+            )
+
+        top_calibration = None
+        if include_top_turn_exit:
+            top_calibration_models, _ = _ajustar_modelos_top_turn(
+                frames,
+                symbols,
+                train_dates,
+                config,
+            )
+            top_calibration = calibrar_limiar(
+                top_calibration_models,
+                frames,
+                symbols,
+                calibration_dates,
+            )
+            top_calibration_rows.append(
+                top_calibration.as_dict(fold_id=fold_id)
+            )
+
+        final_utility_models = _ajustar_modelos_lightgbm(
+            frames,
+            symbols,
+            final_fit_dates,
+            config,
+            phase=f"bottom_turn_fold_{fold_id}_utility_final",
+        )
+        final_bottom_models, final_fit = _ajustar_modelos_bottom_turn(
+            frames,
+            symbols,
+            final_fit_dates,
+            config,
+        )
+        for row in final_fit:
+            bottom_fit_rows.append(
+                {"fold_id": fold_id, "phase": "final", **row}
+            )
+
+        final_top_models: dict[str, Any] = {}
+        if include_top_turn_exit:
+            final_top_models, _ = _ajustar_modelos_top_turn(
+                frames,
+                symbols,
+                final_fit_dates,
+                config,
+            )
+
+        decision_dates = pd.DatetimeIndex(fold["decision_dates"])
+        utility_cache, _ = _precalcular_utilidades_modelo(
+            final_utility_models,
+            frames,
+            symbols,
+            decision_dates,
+            config,
+        )
+        bottom_probability_cache = _probabilidades_bottom_turn(
+            final_bottom_models,
+            frames,
+            symbols,
+            decision_dates,
+        )
+        top_probability_cache = (
+            _probabilidades(
+                final_top_models,
+                frames,
+                symbols,
+                decision_dates,
+            )
+            if include_top_turn_exit
+            else {}
+        )
+
+        effective_margin = max(
+            float(config.rotation_switch_margin),
+            float(best_candidate),
+        )
+        base_policy = _politica_utilidade(
+            final_utility_models,
+            frames,
+            symbols,
+            config,
+            effective_margin,
+            decision_diagnostics=diagnostics,
+            fold_id=fold_id,
+            calibrated_switch_margin=float(best_candidate),
+            utility_cache=utility_cache,
+        )
+
+        entry_base_policy = base_policy
+        if include_top_turn_exit:
+            if top_calibration is None:
+                raise RuntimeError("Top-Turn calibration missing.")
+            entry_base_policy = _envolver_politica_top_turn(
+                base_policy,
+                probabilities=top_probability_cache,
+                frames=frames,
+                symbols=symbols,
+                probability_threshold=float(top_calibration.threshold),
+                config=config,
+                decision_diagnostics=diagnostics,
+            )
+
+        policies[fold_id] = _envolver_politica_bottom_turn(
+            entry_base_policy,
+            probabilities=bottom_probability_cache,
+            frames=frames,
+            symbols=symbols,
+            probability_threshold=float(bottom_calibration.threshold),
+            decision_diagnostics=diagnostics,
+        )
+        margin_rows.append(
+            {
+                "fold_id": fold_id,
+                "calibrated_candidate_margin": float(best_candidate),
+                "effective_switch_margin": float(effective_margin),
+                "calibration_risk_adjusted_score": float(best_score),
+            }
+        )
+
+    if progress_callback is not None:
+        progress_callback(
+            85.0,
+            (
+                "Top+Bottom OOS replay"
+                if include_top_turn_exit
+                else "Bottom-Turn OOS replay"
+            ),
+            total_folds,
+        )
+
+    backend = (
+        "top_bottom_turn_lightgbm"
+        if include_top_turn_exit
+        else "bottom_turn_lightgbm"
+    )
+    result = _simular_exato(
+        backend,
+        _politica_agendada(policies, decision_to_fold),
+        frames,
+        symbols,
+        all_decision_dates,
+        config,
+        fee_calculator,
+        slippage,
+        decision_metadata=decision_metadata,
+        policy_decision_diagnostics=diagnostics,
+        model_label=(
+            "Directional Change + LightGBM Top+Bottom"
+            if include_top_turn_exit
+            else "Directional Change + LightGBM Bottom-Turn"
+        ),
+        method_line=(
+            "- Bottom-Turn uses Directional Change + LightGBM to gate only "
+            "CASH-to-asset entries already selected by the Control policy. "
+            "It estimates whether a relevant upward first-passage move occurs "
+            "before renewed downside continuation near a recent low; two "
+            "consecutive confirmations are required."
+        ),
+    )
+    result.backend = backend
+
+    bottom_probabilities = pd.to_numeric(
+        result.predictions.get(
+            "bottom_turn_probability",
+            pd.Series(index=result.predictions.index, dtype=float),
+        ),
+        errors="coerce",
+    )
+    bottom_triggers = result.predictions.get(
+        "bottom_turn_entry_triggered",
+        pd.Series(False, index=result.predictions.index, dtype=bool),
+    ).fillna(False).astype(bool)
+    bottom_blocks = result.predictions.get(
+        "bottom_turn_entry_blocked",
+        pd.Series(False, index=result.predictions.index, dtype=bool),
+    ).fillna(False).astype(bool)
+    top_triggers = result.predictions.get(
+        "directional_change_exit_triggered",
+        pd.Series(False, index=result.predictions.index, dtype=bool),
+    ).fillna(False).astype(bool)
+
+    result.metrics.update(
+        {
+            "backend": backend,
+            "model_family": "directional_change_lightgbm_bottom_turn",
+            "strategy_label": (
+                "Top-Turn + Bottom-Turn"
+                if include_top_turn_exit
+                else "Bottom-Turn"
+            ),
+            "bottom_turn_research_version": RESEARCH_VERSION,
+            "bottom_turn_horizon_sessions": int(
+                BOTTOM_TURN_HORIZON_SESSIONS
+            ),
+            "bottom_turn_near_low_20": float(BOTTOM_TURN_NEAR_LOW_20),
+            "bottom_turn_confirmation_sessions": int(
+                BOTTOM_TURN_CONFIRMATION_SESSIONS
+            ),
+            "bottom_turn_probability_threshold_mean": float(
+                np.mean(
+                    [
+                        row["probability_threshold"]
+                        for row in bottom_calibration_rows
+                    ]
+                )
+            ),
+            "bottom_turn_entry_triggers": int(bottom_triggers.sum()),
+            "bottom_turn_entry_blocks": int(bottom_blocks.sum()),
+            "bottom_turn_probability_observations": int(
+                bottom_probabilities.notna().sum()
+            ),
+            "bottom_turn_calibration": bottom_calibration_rows,
+            "bottom_turn_fit": bottom_fit_rows,
+            "combined_top_turn_enabled": bool(include_top_turn_exit),
+            "combined_top_turn_exit_triggers": int(top_triggers.sum()),
+            "combined_top_turn_calibration": top_calibration_rows,
+            "walk_forward_fold_count": len(folds),
+            "walk_forward_folds": _desempenho_folds(
+                result.predictions,
+                folds,
+                float(config.initial_capital),
+            ),
+            "calendar_source_asset": calendar_source_asset,
+            "requested_compute_device": "cpu",
+            "effective_compute_device": "cpu",
+        }
+    )
+
+    margin_by_fold = {int(row["fold_id"]): row for row in margin_rows}
+    for row in result.metrics["walk_forward_folds"]:
+        row.update(margin_by_fold.get(int(row["fold_id"]), {}))
+
+    if progress_callback is not None:
+        progress_callback(
+            100.0,
+            (
+                "Top+Bottom completed"
+                if include_top_turn_exit
+                else "Bottom-Turn completed"
+            ),
+            total_folds,
+        )
+    return result
+
+
 def executar_directional_change_lightgbm(
     bars_by_symbol: dict[str, pd.DataFrame],
     config: Any,
