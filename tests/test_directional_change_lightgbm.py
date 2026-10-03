@@ -20,6 +20,7 @@ from pesquisas.directional_change_lightgbm import (
     _envolver_politica_top_turn,
     _top_turn_targets,
     adicionar_top_turn_features,
+    calcular_metricas_peak_gatilhos,
     calcular_peak_exit,
     criar_pacote_analise,
 )
@@ -617,6 +618,45 @@ def test_hazard_overlay_requires_two_confirmations() -> None:
     assert second_target == 0
     assert diagnostics[dates[0]]["hazard_confirmation_streak"] == 1
     assert diagnostics[dates[1]]["hazard_exit_triggered"] is True
+
+
+def test_trigger_peak_metrics_match_same_execution_timestamp() -> None:
+    timestamps = pd.to_datetime(
+        ["2026-01-05T00:00:00Z", "2026-01-06T00:00:00Z"],
+        utc=True,
+    )
+    predictions = pd.DataFrame(
+        {
+            "current_asset": ["AAA", "AAA"],
+            "directional_change_exit_triggered": [True, False],
+        },
+        index=timestamps,
+    )
+    peak_trades = pd.DataFrame(
+        [
+            {
+                "asset": "AAA",
+                "exit_timestamp": timestamps[0],
+                "exit_distance_from_peak_pct": 0.5,
+                "peak_capture_pct": 90.0,
+            },
+            {
+                "asset": "AAA",
+                "exit_timestamp": timestamps[1],
+                "exit_distance_from_peak_pct": 9.0,
+                "peak_capture_pct": 10.0,
+            },
+        ]
+    )
+
+    metrics = calcular_metricas_peak_gatilhos(
+        peak_trades,
+        predictions,
+        "directional_change_exit_triggered",
+    )
+
+    assert metrics["median_exit_distance_from_peak_pct"] == 0.5
+    assert metrics["median_peak_capture_pct"] == 90.0
 
 
 def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
