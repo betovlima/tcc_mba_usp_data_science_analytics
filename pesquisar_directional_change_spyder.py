@@ -96,15 +96,15 @@ print(
 )
 
 
-# %% 5 - DIRECTIONAL CHANGE TOP-TURN + LIGHTGBM
+# %% 5 - DIRECTIONAL CHANGE + LIGHTGBM
 inicio_directional_change = time.perf_counter()
-directional_change_result = executar_directional_change(
+directional_change_result = executar_directional_change_lightgbm(
     frames,
     config_control,
     calcular_taxas_referencia,
     aplicar_deslizamento,
     progress_callback=lambda p, stage, completed: print(
-        f"[top-turn] progress={p:.1f}% completed={completed} stage={stage}",
+        f"[directional-change] progress={p:.1f}% completed={completed} stage={stage}",
         flush=True,
     ),
 )
