@@ -912,11 +912,11 @@ def test_trigger_peak_metrics_match_same_execution_timestamp() -> None:
 def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
     output = tmp_path / "directional_change"
     output.mkdir()
-    (output / "comparison_directional_change.json").write_text(
-        '{"ok": true}',
+    (output / "comparison_cycle_v2.json").write_text(
+        '{"research_version":"test","execution_schema":"top-bottom-cycle-v2"}',
         encoding="utf-8",
     )
-    (output / "directional_change_trades.csv").write_text(
+    (output / "top_bottom_v2_trades.csv").write_text(
         "a,b\n1,2\n",
         encoding="utf-8",
     )
@@ -927,6 +927,25 @@ def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
     with zipfile.ZipFile(archive) as zipped:
         names = sorted(zipped.namelist())
     assert names == [
-        "comparison_directional_change.json",
-        "directional_change_trades.csv",
+        "comparison_cycle_v2.json",
+        "top_bottom_v2_trades.csv",
     ]
+
+
+def test_analysis_package_refuses_stale_v1_schema(tmp_path: Path) -> None:
+    output = tmp_path / "directional_change"
+    output.mkdir()
+    (output / "comparison_cycle.json").write_text(
+        '{"research_version":"1.8.0-dev.1","execution_schema":"top-bottom-cycle-v1"}',
+        encoding="utf-8",
+    )
+
+    try:
+        criar_pacote_analise(output)
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("stale v1 package should have been refused")
+
+    assert "comparison_cycle_v2.json" in message
+    assert "copia antiga" in message
