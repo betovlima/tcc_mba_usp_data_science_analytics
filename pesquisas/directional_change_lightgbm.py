@@ -31,7 +31,7 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.8.0-dev.1"
+RESEARCH_VERSION = "1.8.0-dev.2"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5
@@ -4718,39 +4718,40 @@ def criar_pacote_analise(diretorio_resultados: Path) -> Path:
 
 
 def sinal_sonoro_conclusao() -> None:
-    """Sinal audivel robusto para Spyder/Windows, com fallbacks."""
+    """Sinal audivel de conclusao que nunca pode derrubar a pesquisa."""
     mechanisms: list[str] = []
 
     try:
         import winsound
 
-        # O alias de som do Windows costuma ser mais confiavel no Spyder
-        # do que Beep(), pois usa o dispositivo de audio configurado.
+        # PlaySound e sincrono por padrao quando SND_ASYNC nao e usado.
+        # Algumas versoes de Python/Windows nao expoem SND_SYNC.
         try:
-            winsound.PlaySound(
-                "SystemExclamation",
-                winsound.SND_ALIAS | winsound.SND_SYNC,
-            )
-            mechanisms.append("PlaySound:SystemExclamation")
-        except (RuntimeError, OSError):
+            alias_flag = getattr(winsound, "SND_ALIAS", None)
+            if alias_flag is not None:
+                winsound.PlaySound(
+                    "SystemExclamation",
+                    int(alias_flag),
+                )
+                mechanisms.append("PlaySound:SystemExclamation")
+        except Exception:
             pass
 
         try:
-            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+            message_type = getattr(winsound, "MB_ICONASTERISK", -1)
+            winsound.MessageBeep(int(message_type))
             mechanisms.append("MessageBeep")
-        except (RuntimeError, OSError):
+        except Exception:
             pass
 
-        # Mantem o padrao de dois tons como reforco. Nao retorna antes:
-        # alguns ambientes aceitam Beep() sem produzir audio perceptivel.
         try:
             winsound.Beep(880, 220)
             time.sleep(0.08)
             winsound.Beep(1175, 420)
             mechanisms.append("Beep")
-        except (RuntimeError, OSError, ValueError):
+        except Exception:
             pass
-    except ImportError:
+    except Exception:
         pass
 
     if not mechanisms:
@@ -4761,7 +4762,10 @@ def sinal_sonoro_conclusao() -> None:
         except Exception:
             mechanisms.append("none")
 
-    print(
-        "[sound] completion mechanisms=" + ",".join(mechanisms),
-        flush=True,
-    )
+    try:
+        print(
+            "[sound] completion mechanisms=" + ",".join(mechanisms),
+            flush=True,
+        )
+    except Exception:
+        pass
