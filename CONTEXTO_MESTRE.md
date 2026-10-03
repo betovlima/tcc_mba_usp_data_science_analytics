@@ -268,3 +268,26 @@ Graficos:
 O `pacote_analise.zip` antigo continua sendo apagado antes da criacao do
 novo arquivo e o caminho permanece fixo:
 `output/directional_change/pacote_analise.zip`.
+
+
+## Correcao metodologica 1.6.0-dev.2
+
+A primeira execucao Hazard/Survival de 1.6.0-dev.1 mostrou tres problemas que
+nao devem ser tratados como resultado final:
+
+- CLMT ainda apareceu na execucao local, indicando modulo de preparacao
+  desatualizado/cacheado no kernel; o script agora importa a lista de exclusoes
+  estruturais conhecidas e aborta imediatamente se algum ativo excluido
+  continuar em `frames`;
+- os graficos `trigger_peak_distance.png` e
+  `trigger_peak_capture.png` casavam cada gatilho com a saida posterior
+  seguinte; agora o casamento exige o mesmo ativo e o mesmo timestamp de
+  execucao;
+- o modelo logistico de hazard usava `class_weight="balanced"`, o que
+  deslocava as probabilidades de hazard e fazia a probabilidade acumulada ficar
+  quase sempre proxima de 1. A verossimilhanca do hazard agora e estimada sem
+  balanceamento artificial de classes para preservar o significado
+  probabilistico.
+
+Essas alteracoes sao correcoes de metodologia/implementacao, nao tuning sobre
+o resultado observado. A versao corrente e `1.6.0-dev.2`.
