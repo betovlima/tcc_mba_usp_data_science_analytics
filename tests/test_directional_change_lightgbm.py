@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import sys
 import zipfile
 
 import numpy as np
@@ -26,6 +27,7 @@ from pesquisas.directional_change_lightgbm import (
     calcular_metricas_peak_gatilhos,
     calcular_peak_exit,
     criar_pacote_analise,
+    sinal_sonoro_conclusao,
 )
 
 
@@ -52,6 +54,25 @@ def _base_frame(close_values: list[float]) -> pd.DataFrame:
         index=index,
     )
     return frame
+
+
+def test_completion_sound_does_not_require_snd_sync(monkeypatch) -> None:
+    calls: list[str] = []
+
+    fake_winsound = SimpleNamespace(
+        SND_ALIAS=65536,
+        MB_ICONASTERISK=64,
+        PlaySound=lambda _name, _flags: calls.append("PlaySound"),
+        MessageBeep=lambda _kind: calls.append("MessageBeep"),
+        Beep=lambda _freq, _duration: calls.append("Beep"),
+    )
+    monkeypatch.setitem(sys.modules, "winsound", fake_winsound)
+
+    sinal_sonoro_conclusao()
+
+    assert "PlaySound" in calls
+    assert "MessageBeep" in calls
+    assert calls.count("Beep") == 2
 
 
 def test_directional_change_state_detects_up_down_up_transitions() -> None:
