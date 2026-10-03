@@ -8,6 +8,7 @@ import pandas as pd
 
 from pesquisas.directional_change_lightgbm import (
     DC_FEATURES,
+    _agrupar_gatilhos_ablation,
     _directional_change_state,
     _envolver_politica_top_turn,
     _top_turn_targets,
@@ -219,6 +220,38 @@ def test_overlay_can_disable_all_triggers() -> None:
     assert diagnostics[dates[1]][
         "directional_change_exit_triggered"
     ] is False
+
+def test_ablation_groups_original_triggers_by_asset_and_fold() -> None:
+    trigger_rows = pd.DataFrame(
+        [
+            {
+                "decision_date": "2023-06-13T00:00:00Z",
+                "current_asset": "TSLA",
+                "previous_asset": "TSLA",
+                "walk_forward_fold": 2,
+            },
+            {
+                "decision_date": "2023-06-20T00:00:00Z",
+                "current_asset": "TSLA",
+                "previous_asset": "TSLA",
+                "walk_forward_fold": 2,
+            },
+            {
+                "decision_date": "2025-07-17T00:00:00Z",
+                "current_asset": "NVDA",
+                "previous_asset": "NVDA",
+                "walk_forward_fold": 3,
+            },
+        ]
+    )
+
+    groups = _agrupar_gatilhos_ablation(trigger_rows)
+
+    assert len(groups[("asset", "TSLA")]) == 2
+    assert len(groups[("asset", "NVDA")]) == 1
+    assert len(groups[("fold", "2")]) == 2
+    assert len(groups[("fold", "3")]) == 1
+
 
 def test_peak_exit_normal_sell_excludes_exit_session_high() -> None:
     index = pd.to_datetime(
