@@ -55,7 +55,7 @@ RAIZ_PROJETO = Path(__file__).resolve().parent
 CAMINHOS = SnapshotPaths.research(RAIZ_PROJETO)
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "directional_change"
 DIRETORIO_GRAFICOS = DIRETORIO_RESULTADOS / "graficos"
-EXECUTION_SCHEMA = "top-bottom-cycle-v1"
+EXECUTION_SCHEMA = "top-bottom-cycle-v2"
 
 
 def _trigger_rows(predictions: pd.DataFrame, trigger_column: str) -> pd.DataFrame:
@@ -293,9 +293,8 @@ def _trigger_counts_monthly(
 def _gerar_graficos_comparacao(
     *,
     control_result,
-    bottom_turn_result,
     top_turn_result,
-    top_bottom_result,
+    top_bottom_v2_result,
     frames_alinhados,
 ) -> list[Path]:
     DIRETORIO_GRAFICOS.mkdir(parents=True, exist_ok=True)
@@ -305,9 +304,8 @@ def _gerar_graficos_comparacao(
     gerados: list[Path] = []
     strategies = (
         ("Control", control_result),
-        ("Bottom-Turn", bottom_turn_result),
         ("Top-Turn", top_turn_result),
-        ("Top+Bottom", top_bottom_result),
+        ("Top+Bottom-v2", top_bottom_v2_result),
     )
 
     for label, result in strategies:
@@ -354,12 +352,12 @@ def _gerar_graficos_comparacao(
     trigger_specs = (
         (
             "TT↓",
-            top_turn_result.predictions,
+            top_bottom_v2_result.predictions,
             "directional_change_exit_triggered",
         ),
         (
             "BT↑",
-            bottom_turn_result.predictions,
+            top_bottom_v2_result.predictions,
             "bottom_turn_entry_triggered",
         ),
     )
@@ -448,7 +446,7 @@ def _gerar_graficos_comparacao(
             calendar,
             title=(
                 f"{asset}: retorno mensal e ciclo de reversão "
-                "(TT↓=saída Top-Turn, BT↑=entrada Bottom-Turn)"
+                "(TT↓=saída Top-Turn, BT↑=entrada Bottom-Turn v2)"
             ),
             text_builder=asset_text,
             destino=destino,
@@ -466,7 +464,7 @@ print(f"execution_schema={EXECUTION_SCHEMA}", flush=True)
 print(f"script_path={Path(__file__).resolve()}", flush=True)
 print("dados=SNAPSHOT_CONGELADO_VERSIONADO", flush=True)
 print(
-    "comparacao=CONTROL vs BOTTOM_TURN vs TOP_TURN vs TOP_BOTTOM",
+    "comparacao=CONTROL vs TOP_TURN vs TOP_BOTTOM_V2",
     flush=True,
 )
 print("=" * 78, flush=True)
@@ -564,81 +562,59 @@ print(
 )
 
 
-# %% 6 - BOTTOM-TURN: melhora apenas CASH -> ativo
-inicio_bottom = time.perf_counter()
-bottom_turn_result = executar_bottom_turn_lightgbm(
-    frames,
-    config_control,
-    calcular_taxas_referencia,
-    aplicar_deslizamento,
-    include_top_turn_exit=False,
-    progress_callback=lambda p, stage, completed: print(
-        f"[bottom-turn] progress={p:.1f}% completed={completed} stage={stage}",
-        flush=True,
-    ),
-)
-bottom_turn_metrics = summarize_metrics(
-    bottom_turn_result,
-    folds,
-    float(config_control.initial_capital),
-)
-for chave, valor in bottom_turn_result.metrics.items():
-    if str(chave).startswith("bottom_turn_"):
-        bottom_turn_metrics[str(chave)] = valor
-
-print(
-    "[stage] BOTTOM_TURN "
-    f"capital={bottom_turn_metrics['ending_capital']:,.2f} "
-    f"sharpe={bottom_turn_metrics['sharpe']:.4f} "
-    f"maxdd={bottom_turn_metrics['maximum_drawdown']:.4%} "
-    f"entries={bottom_turn_metrics.get('bottom_turn_entry_triggers')} "
-    f"blocked={bottom_turn_metrics.get('bottom_turn_entry_blocks')} "
-    f"seconds={time.perf_counter() - inicio_bottom:.3f}",
-    flush=True,
-)
-
-
-# %% 7 - TOP-TURN + BOTTOM-TURN: ciclo completo
-inicio_top_bottom = time.perf_counter()
-top_bottom_result = executar_bottom_turn_lightgbm(
+# %% 6 - TOP-TURN + BOTTOM-TURN v2: janela maxima de 5 sessoes
+inicio_top_bottom_v2 = time.perf_counter()
+top_bottom_v2_result = executar_bottom_turn_lightgbm(
     frames,
     config_control,
     calcular_taxas_referencia,
     aplicar_deslizamento,
     include_top_turn_exit=True,
+    post_top_turn_only=True,
+    max_wait_sessions=5,
     progress_callback=lambda p, stage, completed: print(
-        f"[top-bottom] progress={p:.1f}% completed={completed} stage={stage}",
+        f"[top-bottom-v2] progress={p:.1f}% completed={completed} stage={stage}",
         flush=True,
     ),
 )
-top_bottom_metrics = summarize_metrics(
-    top_bottom_result,
+top_bottom_v2_metrics = summarize_metrics(
+    top_bottom_v2_result,
     folds,
     float(config_control.initial_capital),
 )
-for chave, valor in top_bottom_result.metrics.items():
+for chave, valor in top_bottom_v2_result.metrics.items():
     if (
         str(chave).startswith("bottom_turn_")
         or str(chave).startswith("combined_top_turn_")
     ):
-        top_bottom_metrics[str(chave)] = valor
+        top_bottom_v2_metrics[str(chave)] = valor
 
 print(
-    "[stage] TOP_BOTTOM "
-    f"capital={top_bottom_metrics['ending_capital']:,.2f} "
-    f"sharpe={top_bottom_metrics['sharpe']:.4f} "
-    f"maxdd={top_bottom_metrics['maximum_drawdown']:.4%} "
-    f"bottom_entries={top_bottom_metrics.get('bottom_turn_entry_triggers')} "
-    f"top_exits={top_bottom_metrics.get('combined_top_turn_exit_triggers')} "
-    f"seconds={time.perf_counter() - inicio_top_bottom:.3f}",
+    "[stage] TOP_BOTTOM_V2 "
+    f"capital={top_bottom_v2_metrics['ending_capital']:,.2f} "
+    f"sharpe={top_bottom_v2_metrics['sharpe']:.4f} "
+    f"maxdd={top_bottom_v2_metrics['maximum_drawdown']:.4%} "
+    f"bottom_entries={top_bottom_v2_metrics.get('bottom_turn_entry_triggers')} "
+    f"blocked={top_bottom_v2_metrics.get('bottom_turn_entry_blocks')} "
+    f"expirations={top_bottom_v2_metrics.get('bottom_turn_gate_expirations')} "
+    f"top_exits={top_bottom_v2_metrics.get('combined_top_turn_exit_triggers')} "
+    f"seconds={time.perf_counter() - inicio_top_bottom_v2:.3f}",
     flush=True,
 )
 
 
-# %% 8 - reservado: BOCPD/HSMM/Hazard ficam congelados no historico
+# %% 7 - foco da campanha
 print(
-    "[research-focus] BOCPD, HSMM e Hazard permanecem documentados, "
-    "mas nao sao executados nesta campanha Bottom-Turn.",
+    "[research-focus] Bottom-Turn v2 atua somente apos TT e por no maximo "
+    "5 sessoes; Bottom-Turn v1, BOCPD, HSMM e Hazard ficam no historico.",
+    flush=True,
+)
+
+
+# %% 8 - protocolo congelado antes do replay
+print(
+    "[protocol] bottom_turn_v2=post_top_only max_wait_sessions=5 "
+    "thresholds/features/calibration=unchanged_from_v1",
     flush=True,
 )
 
@@ -658,12 +634,8 @@ top_turn_peak, top_turn_peak_trades = calcular_peak_exit(
     directional_change_result.trades,
     frames_alinhados,
 )
-bottom_turn_peak, bottom_turn_peak_trades = calcular_peak_exit(
-    bottom_turn_result.trades,
-    frames_alinhados,
-)
-top_bottom_peak, top_bottom_peak_trades = calcular_peak_exit(
-    top_bottom_result.trades,
+top_bottom_v2_peak, top_bottom_v2_peak_trades = calcular_peak_exit(
+    top_bottom_v2_result.trades,
     frames_alinhados,
 )
 
@@ -672,18 +644,13 @@ control_bottom, control_bottom_entries = calcular_bottom_entry(
     frames_alinhados,
     oos_start=oos_start,
 )
-bottom_turn_bottom, bottom_turn_entries = calcular_bottom_entry(
-    bottom_turn_result.trades,
-    frames_alinhados,
-    oos_start=oos_start,
-)
 top_turn_bottom, top_turn_entries = calcular_bottom_entry(
     directional_change_result.trades,
     frames_alinhados,
     oos_start=oos_start,
 )
-top_bottom_bottom, top_bottom_entries = calcular_bottom_entry(
-    top_bottom_result.trades,
+top_bottom_v2_bottom, top_bottom_v2_entries = calcular_bottom_entry(
+    top_bottom_v2_result.trades,
     frames_alinhados,
     oos_start=oos_start,
 )
@@ -701,29 +668,22 @@ print(
     flush=True,
 )
 print(
-    "[bottom-diagnostic] CONTROL "
-    f"distance={control_bottom.get('median_entry_distance_from_bottom_pct')} "
-    f"capture={control_bottom.get('median_bottom_capture_pct')} "
-    f"days={control_bottom.get('median_days_from_bottom_to_entry')}",
+    "[bottom-diagnostic] TOP_TURN "
+    f"distance={top_turn_bottom.get('median_entry_distance_from_bottom_pct')} "
+    f"capture={top_turn_bottom.get('median_bottom_capture_pct')} "
+    f"days={top_turn_bottom.get('median_days_from_bottom_to_entry')}",
     flush=True,
 )
 print(
-    "[bottom-diagnostic] BOTTOM_TURN "
-    f"distance={bottom_turn_bottom.get('median_entry_distance_from_bottom_pct')} "
-    f"capture={bottom_turn_bottom.get('median_bottom_capture_pct')} "
-    f"days={bottom_turn_bottom.get('median_days_from_bottom_to_entry')}",
-    flush=True,
-)
-print(
-    "[bottom-diagnostic] TOP_BOTTOM "
-    f"distance={top_bottom_bottom.get('median_entry_distance_from_bottom_pct')} "
-    f"capture={top_bottom_bottom.get('median_bottom_capture_pct')} "
-    f"days={top_bottom_bottom.get('median_days_from_bottom_to_entry')}",
+    "[bottom-diagnostic] TOP_BOTTOM_V2 "
+    f"distance={top_bottom_v2_bottom.get('median_entry_distance_from_bottom_pct')} "
+    f"capture={top_bottom_v2_bottom.get('median_bottom_capture_pct')} "
+    f"days={top_bottom_v2_bottom.get('median_days_from_bottom_to_entry')}",
     flush=True,
 )
 
 
-# %% 10 - Comparacao final do ciclo
+# %% 10 - Comparacao final
 comparacao = comparar_control_directional_change(
     control_metrics,
     directional_change_metrics,
@@ -732,25 +692,16 @@ comparacao = comparar_control_directional_change(
 )
 
 print(
-    "[comparison-top-turn] "
+    "[comparison-v2] "
     f"CONTROL={float(control_metrics['ending_capital']):,.2f} "
     f"TOP_TURN={float(directional_change_metrics['ending_capital']):,.2f} "
-    f"ratio="
-    f"{float(directional_change_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%}",
-    flush=True,
-)
-print(
-    "[comparison-cycle] "
-    f"CONTROL={float(control_metrics['ending_capital']):,.2f} "
-    f"BOTTOM_TURN={float(bottom_turn_metrics['ending_capital']):,.2f} "
-    f"TOP_TURN={float(directional_change_metrics['ending_capital']):,.2f} "
-    f"TOP_BOTTOM={float(top_bottom_metrics['ending_capital']):,.2f} "
-    f"BOTTOM_vs_CONTROL="
-    f"{float(bottom_turn_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%} "
+    f"TOP_BOTTOM_V2={float(top_bottom_v2_metrics['ending_capital']):,.2f} "
     f"TOP_vs_CONTROL="
     f"{float(directional_change_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%} "
-    f"TOP_BOTTOM_vs_CONTROL="
-    f"{float(top_bottom_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%}",
+    f"TOP_BOTTOM_V2_vs_CONTROL="
+    f"{float(top_bottom_v2_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%} "
+    f"TOP_BOTTOM_V2_vs_TOP="
+    f"{float(top_bottom_v2_metrics['ending_capital']) / float(directional_change_metrics['ending_capital']) - 1.0:+.4%}",
     flush=True,
 )
 
