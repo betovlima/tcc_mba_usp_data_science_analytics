@@ -145,6 +145,97 @@ def test_bottom_turn_gates_cash_entry_until_two_confirmations() -> None:
     assert diagnostics[dates[1]]["bottom_turn_entry_triggered"] is True
 
 
+def test_bottom_turn_v2_does_not_block_initial_cash_entry() -> None:
+    date = pd.Timestamp("2026-01-05T00:00:00Z")
+    diagnostics: dict[pd.Timestamp, dict] = {}
+
+    def base_policy(timestamp, _current_position, _holding_days):
+        diagnostics[pd.Timestamp(timestamp)] = {
+            "decision_reason": "ENTER_BEST_ASSET",
+            "final_action_asset": "AAA",
+        }
+        return 1, 0.40
+
+    policy = _envolver_politica_bottom_turn(
+        base_policy,
+        probabilities={date: {"AAA": 0.10}},
+        frames={
+            "AAA": pd.DataFrame(
+                {"bottom_turn_eligible": [False]},
+                index=[date],
+            )
+        },
+        symbols=["AAA"],
+        probability_threshold=0.75,
+        decision_diagnostics=diagnostics,
+        activate_only_after_top_turn=True,
+        max_wait_sessions=5,
+    )
+
+    target, score = policy(date, 0, 0)
+
+    assert target == 1
+    assert score == 0.40
+    assert diagnostics[date]["bottom_turn_gate_active"] is False
+    assert diagnostics[date]["bottom_turn_entry_blocked"] is False
+
+
+def test_bottom_turn_v2_expires_after_five_post_top_sessions() -> None:
+    dates = pd.date_range(
+        "2026-01-05",
+        periods=7,
+        freq="B",
+        tz="UTC",
+    )
+    diagnostics: dict[pd.Timestamp, dict] = {}
+
+    def base_policy(timestamp, current_position, _holding_days):
+        key = pd.Timestamp(timestamp)
+        if current_position > 0:
+            diagnostics[key] = {
+                "decision_reason": "DIRECTIONAL_CHANGE_TOP_TURN_EXIT",
+                "directional_change_exit_triggered": True,
+                "final_action_asset": "CASH",
+            }
+            return 0, 0.0
+        diagnostics[key] = {
+            "decision_reason": "ENTER_BEST_ASSET",
+            "directional_change_exit_triggered": False,
+            "final_action_asset": "AAA",
+        }
+        return 1, 0.40
+
+    frame = pd.DataFrame(
+        {"bottom_turn_eligible": [False] * len(dates)},
+        index=dates,
+    )
+    policy = _envolver_politica_bottom_turn(
+        base_policy,
+        probabilities={
+            date: {"AAA": 0.10}
+            for date in dates
+        },
+        frames={"AAA": frame},
+        symbols=["AAA"],
+        probability_threshold=0.75,
+        decision_diagnostics=diagnostics,
+        activate_only_after_top_turn=True,
+        max_wait_sessions=5,
+    )
+
+    assert policy(dates[0], 1, 10)[0] == 0
+    blocked = [
+        policy(date, 0, 0)[0]
+        for date in dates[1:6]
+    ]
+    released = policy(dates[6], 0, 0)[0]
+
+    assert blocked == [0, 0, 0, 0, 0]
+    assert diagnostics[dates[5]]["bottom_turn_gate_expired"] is True
+    assert released == 1
+    assert diagnostics[dates[6]]["bottom_turn_entry_blocked"] is False
+
+
 def test_bottom_turn_does_not_change_asset_to_asset_rotation() -> None:
     date = pd.Timestamp("2026-01-05T00:00:00Z")
     diagnostics: dict[pd.Timestamp, dict] = {}
