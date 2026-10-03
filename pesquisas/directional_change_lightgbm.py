@@ -35,7 +35,7 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.3.0-dev.5"
+RESEARCH_VERSION = "1.4.0-dev.1"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5
@@ -58,6 +58,25 @@ PROBABILITY_THRESHOLD_CANDIDATES = (
 )
 MINIMUM_CLASS_ROWS = 20
 MINIMUM_CALIBRATION_ALERTS = 5
+
+BOCPD_HAZARD_LAMBDAS = (20, 60, 120)
+BOCPD_SCORE_THRESHOLDS = (
+    0.01,
+    0.02,
+    0.03,
+    0.05,
+    0.08,
+    0.12,
+    0.18,
+    0.25,
+)
+BOCPD_MAX_RUN_LENGTH = 252
+BOCPD_SHORT_RUN_MAX = 3
+BOCPD_PRIOR_MEAN = 0.0
+BOCPD_PRIOR_KAPPA = 1.0
+BOCPD_NEAR_HIGH_20 = 0.05
+BOCPD_MIN_RETURN_20 = 0.0
+BOCPD_CONFIRMATION_SESSIONS = 2
 
 def _tag_threshold(value: float) -> str:
     return f"{int(round(float(value) * 100)):02d}pct"
@@ -115,6 +134,35 @@ class CalibrationResult:
             "negatives": int(self.negatives),
             "observations": int(self.observations),
         }
+
+@dataclass(frozen=True)
+class BOCPDCalibrationResult:
+    hazard_lambda: int
+    threshold: float
+    fbeta_05: float | None
+    balanced_accuracy: float | None
+    precision: float | None
+    recall: float | None
+    predicted_positives: int
+    positives: int
+    negatives: int
+    observations: int
+
+    def as_dict(self, *, fold_id: int) -> dict[str, Any]:
+        return {
+            "fold_id": int(fold_id),
+            "hazard_lambda": int(self.hazard_lambda),
+            "score_threshold": float(self.threshold),
+            "fbeta_05": self.fbeta_05,
+            "balanced_accuracy": self.balanced_accuracy,
+            "precision": self.precision,
+            "recall": self.recall,
+            "predicted_positives": int(self.predicted_positives),
+            "positives": int(self.positives),
+            "negatives": int(self.negatives),
+            "observations": int(self.observations),
+        }
+
 
 def _directional_change_state(
     close: pd.Series,
@@ -298,6 +346,10 @@ def adicionar_top_turn_features(frame: pd.DataFrame) -> pd.DataFrame:
         & (distance_high >= -TOP_TURN_NEAR_HIGH_20)
         & (return_20 > TOP_TURN_MIN_RETURN_20)
     )
+    output["bocpd_eligible"] = (
+        (distance_high >= -BOCPD_NEAR_HIGH_20)
+        & (return_20 > BOCPD_MIN_RETURN_20)
+    )
 
     output = output.join(_top_turn_targets(output))
     return output.replace([np.inf, -np.inf], np.nan)
@@ -309,6 +361,341 @@ def _preparar_frames(
         symbol: adicionar_top_turn_features(frame)
         for symbol, frame in frames.items()
     }
+
+def _normal_pdf(
+    value: float,
+    mean: np.ndarray,
+    variance: np.ndarray,
+) -> np.ndarray:
+    variance = np.maximum(
+        np.asarray(variance, dtype=float),
+        1e-9,
+    )
+    delta = float(value) - np.asarray(mean, dtype=float)
+    return np.exp(-0.5 * delta * delta / variance) / np.sqrt(
+        2.0 * np.pi * variance
+    )
+
+
+def _bocpd_downward_scores(
+    frame: pd.DataFrame,
+    *,
+    hazard_lambda: int,
+    max_run_length: int = BOCPD_MAX_RUN_LENGTH,
+    short_run_max: int = BOCPD_SHORT_RUN_MAX,
+) -> pd.Series:
+    """Causal BOCPD score for a recent downward regime change."""
+    returns = pd.to_numeric(frame["return_1"], errors="coerce")
+    previous_vol = pd.to_numeric(
+        frame["vol_20"],
+        errors="coerce",
+    ).shift(1)
+    standardized = (returns / previous_vol.replace(0, np.nan)).clip(-8.0, 8.0)
+
+    run_prob = np.asarray([1.0], dtype=float)
+    means = np.asarray([float(BOCPD_PRIOR_MEAN)], dtype=float)
+    kappas = np.asarray([float(BOCPD_PRIOR_KAPPA)], dtype=float)
+    hazard = 1.0 / max(2.0, float(hazard_lambda))
+    scores = np.full(len(frame), np.nan, dtype=float)
+
+    for index, value in enumerate(standardized.to_numpy(dtype=float)):
+        if not np.isfinite(value):
+            continue
+
+        predictive_variance = 1.0 + 1.0 / np.maximum(kappas, 1e-9)
+        predictive = _normal_pdf(
+            float(value),
+            means,
+            predictive_variance,
+        )
+        joint = run_prob * predictive
+
+        changepoint = float(np.sum(joint * hazard))
+        growth = joint * (1.0 - hazard)
+        next_prob = np.concatenate(
+            ([changepoint], growth)
+        )
+
+        if len(next_prob) > int(max_run_length) + 1:
+            next_prob = next_prob[: int(max_run_length) + 1]
+
+        total = float(np.sum(next_prob))
+        if not np.isfinite(total) or total <= 0:
+            next_prob = np.asarray([1.0], dtype=float)
+        else:
+            next_prob = next_prob / total
+
+        updated_kappas = kappas + 1.0
+        updated_means = (
+            kappas * means + float(value)
+        ) / updated_kappas
+        prior_kappa = float(BOCPD_PRIOR_KAPPA)
+        prior_mean = float(BOCPD_PRIOR_MEAN)
+        cp_mean = (
+            prior_kappa * prior_mean + float(value)
+        ) / (prior_kappa + 1.0)
+
+        next_means = np.concatenate(
+            ([cp_mean], updated_means)
+        )
+        next_kappas = np.concatenate(
+            ([prior_kappa + 1.0], updated_kappas)
+        )
+        keep = len(next_prob)
+        means = next_means[:keep]
+        kappas = next_kappas[:keep]
+        run_prob = next_prob
+
+        short_mass = float(
+            np.sum(run_prob[: int(short_run_max) + 1])
+        )
+        downside = max(0.0, -float(value))
+        downside_weight = downside / (1.0 + downside)
+        scores[index] = short_mass * downside_weight
+
+    return pd.Series(scores, index=frame.index, dtype=float)
+
+
+def _precalcular_bocpd_scores(
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    hazard_lambdas: Iterable[int] = BOCPD_HAZARD_LAMBDAS,
+) -> dict[int, dict[str, pd.Series]]:
+    return {
+        int(hazard_lambda): {
+            symbol: _bocpd_downward_scores(
+                frames[symbol],
+                hazard_lambda=int(hazard_lambda),
+            )
+            for symbol in symbols
+        }
+        for hazard_lambda in hazard_lambdas
+    }
+
+
+def calibrar_bocpd(
+    score_cache: dict[int, dict[str, pd.Series]],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    calibration_dates: pd.DatetimeIndex,
+) -> BOCPDCalibrationResult:
+    best: tuple[
+        float,
+        float,
+        float,
+        int,
+        dict[str, float | int | None],
+        int,
+        int,
+        int,
+    ] | None = None
+
+    for hazard_lambda in BOCPD_HAZARD_LAMBDAS:
+        targets: list[int] = []
+        scores: list[float] = []
+
+        for symbol in symbols:
+            frame = frames[symbol].reindex(calibration_dates)
+            eligible = frame["bocpd_eligible"].fillna(False).astype(bool)
+            target = pd.to_numeric(
+                frame["forward_down_reversal"],
+                errors="coerce",
+            )
+            signal = score_cache[int(hazard_lambda)][symbol].reindex(
+                calibration_dates
+            )
+            valid = eligible & target.notna() & signal.notna()
+            if not bool(valid.any()):
+                continue
+            targets.extend(target.loc[valid].astype(int).tolist())
+            scores.extend(signal.loc[valid].astype(float).tolist())
+
+        if not targets:
+            continue
+
+        y_true = np.asarray(targets, dtype=int)
+        values = np.asarray(scores, dtype=float)
+        positives = int((y_true == 1).sum())
+        negatives = int((y_true == 0).sum())
+
+        for threshold in BOCPD_SCORE_THRESHOLDS:
+            metrics = _metricas_classificacao(
+                y_true,
+                values,
+                float(threshold),
+            )
+            predicted = int(metrics["predicted_positives"] or 0)
+            if predicted < MINIMUM_CALIBRATION_ALERTS:
+                continue
+
+            fbeta = float(metrics["fbeta_05"] or 0.0)
+            precision = float(metrics["precision"] or 0.0)
+            candidate = (
+                fbeta,
+                precision,
+                float(threshold),
+                int(hazard_lambda),
+                metrics,
+                positives,
+                negatives,
+                int(len(y_true)),
+            )
+            if best is None or candidate[:4] > best[:4]:
+                best = candidate
+
+    if best is None:
+        return BOCPDCalibrationResult(
+            hazard_lambda=60,
+            threshold=0.05,
+            fbeta_05=None,
+            balanced_accuracy=None,
+            precision=None,
+            recall=None,
+            predicted_positives=0,
+            positives=0,
+            negatives=0,
+            observations=0,
+        )
+
+    (
+        _fbeta,
+        _precision,
+        threshold,
+        hazard_lambda,
+        metrics,
+        positives,
+        negatives,
+        observations,
+    ) = best
+    return BOCPDCalibrationResult(
+        hazard_lambda=int(hazard_lambda),
+        threshold=float(threshold),
+        fbeta_05=float(metrics["fbeta_05"] or 0.0),
+        balanced_accuracy=float(
+            metrics["balanced_accuracy"] or 0.0
+        ),
+        precision=(
+            float(metrics["precision"])
+            if metrics["precision"] is not None
+            else None
+        ),
+        recall=float(metrics["recall"] or 0.0),
+        predicted_positives=int(
+            metrics["predicted_positives"] or 0
+        ),
+        positives=int(positives),
+        negatives=int(negatives),
+        observations=int(observations),
+    )
+
+
+def _envolver_politica_bocpd(
+    base_policy: Callable[[pd.Timestamp, int, int], tuple[int, float]],
+    *,
+    score_cache: dict[str, pd.Series],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    score_threshold: float,
+    hazard_lambda: int,
+    config: Any,
+    decision_diagnostics: dict[pd.Timestamp, dict[str, Any]],
+) -> Callable[[pd.Timestamp, int, int], tuple[int, float]]:
+    streak_by_symbol: dict[str, int] = {}
+
+    def policy(
+        timestamp: pd.Timestamp,
+        current_position: int,
+        holding_days: int,
+    ) -> tuple[int, float]:
+        base_target, base_score = base_policy(
+            timestamp,
+            current_position,
+            holding_days,
+        )
+        key = pd.Timestamp(timestamp)
+        diagnostic = decision_diagnostics.setdefault(key, {})
+        symbol = symbols[current_position - 1] if current_position > 0 else None
+
+        score = None
+        eligible = False
+        if symbol is not None and key in frames[symbol].index:
+            eligible = bool(frames[symbol].at[key, "bocpd_eligible"])
+            series = score_cache.get(symbol)
+            if series is not None and key in series.index:
+                value = series.loc[key]
+                if pd.notna(value):
+                    score = float(value)
+
+        control_holds = bool(
+            current_position > 0
+            and int(base_target) == int(current_position)
+            and holding_days >= int(config.rotation_min_holding_days)
+        )
+        above_threshold = bool(
+            control_holds
+            and eligible
+            and score is not None
+            and np.isfinite(float(score))
+            and float(score) >= float(score_threshold)
+        )
+
+        if symbol is not None:
+            if above_threshold:
+                streak_by_symbol[symbol] = int(
+                    streak_by_symbol.get(symbol, 0)
+                ) + 1
+            else:
+                streak_by_symbol[symbol] = 0
+        streak = int(streak_by_symbol.get(symbol, 0)) if symbol else 0
+        triggered = bool(
+            above_threshold
+            and streak >= int(BOCPD_CONFIRMATION_SESSIONS)
+        )
+
+        diagnostic.update(
+            {
+                "bocpd_schema_version": 1,
+                "bocpd_research_version": RESEARCH_VERSION,
+                "bocpd_score": score,
+                "bocpd_score_threshold": float(score_threshold),
+                "bocpd_hazard_lambda": int(hazard_lambda),
+                "bocpd_eligible": bool(eligible),
+                "bocpd_confirmation_streak": int(streak),
+                "bocpd_confirmation_required": int(
+                    BOCPD_CONFIRMATION_SESSIONS
+                ),
+                "bocpd_base_target_asset": (
+                    "CASH"
+                    if int(base_target) <= 0
+                    else symbols[int(base_target) - 1]
+                ),
+                "bocpd_exit_triggered": triggered,
+            }
+        )
+
+        if not triggered:
+            if not control_holds and symbol is not None:
+                streak_by_symbol[symbol] = 0
+            return int(base_target), float(base_score)
+
+        streak_by_symbol[symbol] = 0
+        diagnostic["bocpd_base_reason"] = diagnostic.get(
+            "decision_reason"
+        )
+        diagnostic.update(
+            {
+                "decision_reason": "BOCPD_DOWNWARD_CHANGE_EXIT",
+                "final_action_asset": "CASH",
+                "final_action_score": 0.0,
+                "decision_is_rotation": False,
+                "decision_is_entry": False,
+                "decision_is_exit_to_cash": True,
+            }
+        )
+        return 0, 0.0
+
+    return policy
+
 
 def _ajustar_modelos_top_turn(
     frames: dict[str, pd.DataFrame],
@@ -706,6 +1093,7 @@ def executar_directional_change_lightgbm(
     slippage: Callable,
     *,
     progress_callback: Callable[[float, str, int], None] | None = None,
+    run_ablation: bool = True,
 ) -> Any:
     if int(config.rotation_model_repetitions) != 1:
         raise ValueError("Directional Change research requires one repetition.")
@@ -960,6 +1348,15 @@ def executar_directional_change_lightgbm(
     for row in result.metrics["walk_forward_folds"]:
         row.update(margin_by_fold.get(int(row["fold_id"]), {}))
 
+    if not run_ablation:
+        if progress_callback is not None:
+            progress_callback(
+                100.0,
+                "Directional Change + LightGBM completed",
+                total_folds,
+            )
+        return result
+
     def replay_with_ablation(
         suppressed_triggers: set[tuple[pd.Timestamp, str]] | None = None,
         *,
@@ -1164,6 +1561,234 @@ def executar_directional_change_lightgbm(
             total_folds,
         )
     return result
+
+def executar_bocpd_overlay(
+    bars_by_symbol: dict[str, pd.DataFrame],
+    config: Any,
+    fee_calculator: Callable,
+    slippage: Callable,
+    *,
+    progress_callback: Callable[[float, str, int], None] | None = None,
+) -> Any:
+    if int(config.rotation_model_repetitions) != 1:
+        raise ValueError("BOCPD comparison requires one repetition.")
+
+    (
+        frames,
+        common_dates,
+        calendar_source_asset,
+        symbols,
+        folds,
+        all_decision_dates,
+        decision_to_fold,
+        decision_metadata,
+    ) = _construir_contexto_execucao(bars_by_symbol, config)
+    frames = _preparar_frames(frames)
+    score_cache = _precalcular_bocpd_scores(
+        frames,
+        symbols,
+    )
+
+    policies: dict[int, Callable] = {}
+    diagnostics: dict[pd.Timestamp, dict[str, Any]] = {}
+    calibration_rows: list[dict[str, Any]] = []
+    margin_rows: list[dict[str, Any]] = []
+
+    total_folds = len(folds)
+    for fold_position, fold in enumerate(folds, start=1):
+        fold_id = int(fold["fold_id"])
+        if progress_callback is not None:
+            progress_callback(
+                5.0 + 75.0 * ((fold_position - 1) / max(1, total_folds)),
+                f"BOCPD fold {fold_position}/{total_folds} training",
+                fold_position - 1,
+            )
+
+        train_dates = common_dates[: int(fold["train_end_index"])]
+        calibration_dates = common_dates[
+            int(fold["calibration_start_index"]):
+            int(fold["calibration_end_index"])
+        ]
+        final_fit_dates = common_dates[: int(fold["final_fit_end_index"])]
+
+        calibration_utility_models = _ajustar_modelos_lightgbm(
+            frames,
+            symbols,
+            train_dates,
+            config,
+            phase=f"bocpd_fold_{fold_id}_utility_calibration",
+        )
+        candidate_margins = tuple(
+            float(value)
+            for value in config.rotation_switch_margin_candidates
+        )
+        best_candidate = candidate_margins[0]
+        best_score = float("-inf")
+        for candidate in candidate_margins:
+            calibration_policy = _politica_utilidade(
+                calibration_utility_models,
+                frames,
+                symbols,
+                config,
+                candidate,
+            )
+            candidate_score = _crescimento_politica_simples(
+                calibration_policy,
+                frames,
+                symbols,
+                calibration_dates,
+                config,
+            )
+            if candidate_score > best_score:
+                best_score = candidate_score
+                best_candidate = candidate
+
+        calibration = calibrar_bocpd(
+            score_cache,
+            frames,
+            symbols,
+            calibration_dates,
+        )
+        calibration_rows.append(
+            calibration.as_dict(fold_id=fold_id)
+        )
+
+        final_utility_models = _ajustar_modelos_lightgbm(
+            frames,
+            symbols,
+            final_fit_dates,
+            config,
+            phase=f"bocpd_fold_{fold_id}_utility_final",
+        )
+        decision_dates = pd.DatetimeIndex(fold["decision_dates"])
+        utility_cache, _ = _precalcular_utilidades_modelo(
+            final_utility_models,
+            frames,
+            symbols,
+            decision_dates,
+            config,
+        )
+
+        effective_margin = max(
+            float(config.rotation_switch_margin),
+            float(best_candidate),
+        )
+        base_policy = _politica_utilidade(
+            final_utility_models,
+            frames,
+            symbols,
+            config,
+            effective_margin,
+            decision_diagnostics=diagnostics,
+            fold_id=fold_id,
+            calibrated_switch_margin=float(best_candidate),
+            utility_cache=utility_cache,
+        )
+        selected_scores = {
+            symbol: score_cache[int(calibration.hazard_lambda)][symbol]
+            for symbol in symbols
+        }
+        policies[fold_id] = _envolver_politica_bocpd(
+            base_policy,
+            score_cache=selected_scores,
+            frames=frames,
+            symbols=symbols,
+            score_threshold=float(calibration.threshold),
+            hazard_lambda=int(calibration.hazard_lambda),
+            config=config,
+            decision_diagnostics=diagnostics,
+        )
+        margin_rows.append(
+            {
+                "fold_id": fold_id,
+                "calibrated_candidate_margin": float(best_candidate),
+                "effective_switch_margin": float(effective_margin),
+                "calibration_risk_adjusted_score": float(best_score),
+            }
+        )
+
+    if progress_callback is not None:
+        progress_callback(
+            85.0,
+            "BOCPD OOS replay",
+            total_folds,
+        )
+
+    result = _simular_exato(
+        "bocpd_overlay",
+        _politica_agendada(policies, decision_to_fold),
+        frames,
+        symbols,
+        all_decision_dates,
+        config,
+        fee_calculator,
+        slippage,
+        decision_metadata=decision_metadata,
+        policy_decision_diagnostics=diagnostics,
+        model_label="Bayesian Online Change Point Detection",
+        method_line=(
+            "- BOCPD tracks causal posterior run-length mass on "
+            "volatility-standardized daily returns. A downward short-run "
+            "change signal near a recent high must exceed a calibration-only "
+            "threshold on two consecutive sessions before an exit to CASH."
+        ),
+    )
+    result.backend = "bocpd_overlay"
+
+    scores = pd.to_numeric(
+        result.predictions.get(
+            "bocpd_score",
+            pd.Series(index=result.predictions.index, dtype=float),
+        ),
+        errors="coerce",
+    )
+    triggers = result.predictions.get(
+        "bocpd_exit_triggered",
+        pd.Series(False, index=result.predictions.index, dtype=bool),
+    ).fillna(False).astype(bool)
+
+    result.metrics.update(
+        {
+            "backend": "bocpd_overlay",
+            "model_family": "bayesian_online_changepoint_detection",
+            "strategy_label": "BOCPD Overlay",
+            "bocpd_research_version": RESEARCH_VERSION,
+            "bocpd_hazard_candidates": list(BOCPD_HAZARD_LAMBDAS),
+            "bocpd_score_threshold_candidates": list(
+                BOCPD_SCORE_THRESHOLDS
+            ),
+            "bocpd_max_run_length": int(BOCPD_MAX_RUN_LENGTH),
+            "bocpd_short_run_max": int(BOCPD_SHORT_RUN_MAX),
+            "bocpd_confirmation_sessions": int(
+                BOCPD_CONFIRMATION_SESSIONS
+            ),
+            "bocpd_exit_triggers": int(triggers.sum()),
+            "bocpd_score_observations": int(scores.notna().sum()),
+            "bocpd_calibration": calibration_rows,
+            "walk_forward_fold_count": len(folds),
+            "walk_forward_folds": _desempenho_folds(
+                result.predictions,
+                folds,
+                float(config.initial_capital),
+            ),
+            "calendar_source_asset": calendar_source_asset,
+            "requested_compute_device": "cpu",
+            "effective_compute_device": "cpu",
+        }
+    )
+
+    margin_by_fold = {int(row["fold_id"]): row for row in margin_rows}
+    for row in result.metrics["walk_forward_folds"]:
+        row.update(margin_by_fold.get(int(row["fold_id"]), {}))
+
+    if progress_callback is not None:
+        progress_callback(
+            100.0,
+            "BOCPD completed",
+            total_folds,
+        )
+    return result
+
 
 def comparar_control_directional_change(
     control_metrics: dict[str, Any],
