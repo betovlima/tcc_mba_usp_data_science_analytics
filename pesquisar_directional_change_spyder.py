@@ -23,6 +23,7 @@ except Exception:
     _ipython = None
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 from engine.configuracao import CONFIG
@@ -89,6 +90,207 @@ def _salvar_e_publicar_grafico(fig, destino: Path) -> None:
     plt.close(fig)
 
 
+def _month_key(index: pd.Index) -> pd.PeriodIndex:
+    return pd.to_datetime(index, utc=True).to_period("M")
+
+
+def _story_strategy_monthly(predictions: pd.DataFrame) -> pd.DataFrame:
+    frame = predictions.copy()
+    frame.index = pd.to_datetime(frame.index, utc=True)
+    frame = frame.sort_index()
+    frame["period"] = _month_key(frame.index)
+    frame["selected_asset"] = (
+        frame["selected_asset"].fillna("CASH").astype(str)
+    )
+    frame["strategy_equity"] = pd.to_numeric(
+        frame["strategy_equity"],
+        errors="coerce",
+    )
+
+    rows: list[dict[str, object]] = []
+    for period, month in frame.groupby("period", sort=True):
+        equity = month["strategy_equity"].dropna()
+        monthly_return = None
+        if len(equity) >= 2 and float(equity.iloc[0]) > 0:
+            monthly_return = float(
+                equity.iloc[-1] / equity.iloc[0] - 1.0
+            )
+
+        counts = month["selected_asset"].value_counts()
+        dominant = str(counts.index[0]) if not counts.empty else "CASH"
+        exposure = (
+            float(counts.iloc[0] / len(month))
+            if len(month) and not counts.empty
+            else 0.0
+        )
+        rotations = int(month["trade_action"].notna().sum())
+
+        rows.append(
+            {
+                "period": period,
+                "year": int(period.year),
+                "month": int(period.month),
+                "dominant_asset": dominant,
+                "dominant_exposure": exposure,
+                "monthly_return": monthly_return,
+                "rotations": rotations,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _asset_monthly_returns(
+    frames: dict[str, pd.DataFrame],
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for asset, frame in sorted(frames.items()):
+        close = pd.to_numeric(frame["close"], errors="coerce").dropna()
+        if close.empty:
+            continue
+        local = pd.DataFrame({"close": close})
+        local["period"] = _month_key(local.index)
+        for period, month in local.groupby("period", sort=True):
+            values = month["close"].dropna()
+            if len(values) < 2 or float(values.iloc[0]) <= 0:
+                continue
+            rows.append(
+                {
+                    "asset": str(asset),
+                    "period": period,
+                    "year": int(period.year),
+                    "month": int(period.month),
+                    "monthly_return": float(
+                        values.iloc[-1] / values.iloc[0] - 1.0
+                    ),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _calendar_axes(
+    data: pd.DataFrame,
+    value_column: str,
+) -> tuple[list[int], np.ndarray]:
+    years = sorted(
+        int(value)
+        for value in data["year"].dropna().unique().tolist()
+    )
+    matrix = np.full((len(years), 12), np.nan, dtype=float)
+    year_to_row = {year: index for index, year in enumerate(years)}
+    for _, row in data.iterrows():
+        year = int(row["year"])
+        month = int(row["month"])
+        value = row.get(value_column)
+        if pd.notna(value):
+            matrix[year_to_row[year], month - 1] = float(value)
+    return years, matrix
+
+
+def _plot_calendar_story(
+    data: pd.DataFrame,
+    *,
+    title: str,
+    text_builder,
+    destino: Path,
+) -> None:
+    if data.empty:
+        return
+
+    years, values = _calendar_axes(data, "monthly_return")
+    finite = values[np.isfinite(values)]
+    limit = (
+        float(np.nanpercentile(np.abs(finite), 90))
+        if finite.size
+        else 0.10
+    )
+    limit = max(limit, 0.05)
+
+    fig, ax = plt.subplots(
+        figsize=(16, max(5.5, 0.65 * len(years) + 2.5))
+    )
+    image = ax.imshow(
+        values,
+        aspect="auto",
+        cmap="RdYlGn",
+        vmin=-limit,
+        vmax=limit,
+    )
+    labels = [
+        "Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
+        "Jul", "Ago", "Set", "Out", "Nov", "Dez",
+    ]
+    ax.set_xticks(range(12), labels)
+    ax.set_yticks(range(len(years)), [str(year) for year in years])
+    ax.set_xlabel("Mês")
+    ax.set_ylabel("Ano")
+    ax.set_title(title)
+
+    lookup = {
+        (int(row["year"]), int(row["month"])): row
+        for _, row in data.iterrows()
+    }
+    for row_index, year in enumerate(years):
+        for month_index in range(12):
+            row = lookup.get((year, month_index + 1))
+            if row is None:
+                continue
+            text = text_builder(row)
+            ax.text(
+                month_index,
+                row_index,
+                text,
+                ha="center",
+                va="center",
+                fontsize=7.5,
+            )
+
+    fig.colorbar(image, ax=ax, label="Retorno mensal")
+    _salvar_e_publicar_grafico(fig, destino)
+
+
+def _trigger_counts_monthly(
+    trigger_specs: tuple[tuple[str, pd.DataFrame, str], ...],
+) -> pd.DataFrame:
+    records: list[dict[str, object]] = []
+    for short_label, predictions, trigger_column in trigger_specs:
+        rows = _trigger_rows(predictions, trigger_column)
+        if rows.empty:
+            continue
+        rows["timestamp"] = pd.to_datetime(rows["timestamp"], utc=True)
+        for _, row in rows.iterrows():
+            asset = str(
+                row.get("current_asset")
+                or row.get("previous_asset")
+                or row.get("selected_asset")
+                or ""
+            )
+            if not asset or asset in {"nan", "CASH"}:
+                continue
+            period = pd.Timestamp(row["timestamp"]).to_period("M")
+            records.append(
+                {
+                    "asset": asset,
+                    "period": period,
+                    "year": int(period.year),
+                    "month": int(period.month),
+                    "method": short_label,
+                }
+            )
+    if not records:
+        return pd.DataFrame(
+            columns=["asset", "period", "year", "month", "method", "count"]
+        )
+    frame = pd.DataFrame(records)
+    return (
+        frame.groupby(
+            ["asset", "period", "year", "month", "method"],
+            as_index=False,
+        )
+        .size()
+        .rename(columns={"size": "count"})
+    )
+
+
 def _gerar_graficos_comparacao(
     *,
     control_result,
@@ -107,325 +309,187 @@ def _gerar_graficos_comparacao(
     hazard_peak_trades,
     frames_alinhados,
 ) -> list[Path]:
+    # Peak arguments remain in the signature because they are exported and
+    # audited elsewhere; storytelling focuses on month/year behavior.
+    _ = (
+        control_peak,
+        top_turn_peak,
+        bocpd_peak,
+        hsmm_peak,
+        hazard_peak,
+        top_turn_peak_trades,
+        bocpd_peak_trades,
+        hsmm_peak_trades,
+        hazard_peak_trades,
+    )
+
     DIRETORIO_GRAFICOS.mkdir(parents=True, exist_ok=True)
     for antigo in DIRETORIO_GRAFICOS.glob("*.png"):
         antigo.unlink()
 
     gerados: list[Path] = []
 
-    # 1. Curvas de capital OOS.
-    fig, ax = plt.subplots(figsize=(14, 7))
-    for label, result in (
+    strategies = (
         ("Control", control_result),
         ("Top-Turn", top_turn_result),
         ("BOCPD", bocpd_result),
         ("HSMM", hsmm_result),
-        ("Hazard/Survival", hazard_result),
-    ):
-        curve = pd.to_numeric(
-            result.predictions["strategy_equity"],
-            errors="coerce",
-        )
-        ax.plot(curve.index, curve.values, label=label, linewidth=1.6)
-    ax.set_title("Curvas de capital OOS")
-    ax.set_xlabel("Data")
-    ax.set_ylabel("Capital")
-    ax.grid(True, alpha=0.25)
-    ax.legend()
-    destino = DIRETORIO_GRAFICOS / "capital_comparison.png"
-    _salvar_e_publicar_grafico(fig, destino)
-    gerados.append(destino)
-
-    # 2. Capital relativo ao Control.
-    control_curve = pd.to_numeric(
-        control_result.predictions["strategy_equity"],
-        errors="coerce",
+        ("Hazard-Survival", hazard_result),
     )
-    fig, ax = plt.subplots(figsize=(14, 6.5))
-    for label, result in (
-        ("Top-Turn", top_turn_result),
-        ("BOCPD", bocpd_result),
-        ("HSMM", hsmm_result),
-        ("Hazard/Survival", hazard_result),
-    ):
-        curve = pd.to_numeric(
-            result.predictions["strategy_equity"],
-            errors="coerce",
-        ).reindex(control_curve.index)
-        relative = (curve / control_curve - 1.0) * 100.0
-        ax.plot(
-            relative.index,
-            relative.values,
-            label=label,
-            linewidth=1.5,
-        )
-    ax.axhline(0.0, linewidth=1.0)
-    ax.set_title("Capital relativo ao Control")
-    ax.set_xlabel("Data")
-    ax.set_ylabel("Diferença percentual")
-    ax.grid(True, alpha=0.25)
-    ax.legend()
-    destino = DIRETORIO_GRAFICOS / "relative_equity_vs_control.png"
-    _salvar_e_publicar_grafico(fig, destino)
-    gerados.append(destino)
 
-    # 3. Linha do tempo dos gatilhos.
+    # Story 1: para cada política, qual ativo dominou cada mês e qual foi
+    # o retorno da estratégia naquele mês.
+    for label, result in strategies:
+        monthly = _story_strategy_monthly(result.predictions)
+        destino = DIRETORIO_GRAFICOS / (
+            "story_" + label.lower().replace("-", "_") + "_monthly.png"
+        )
+
+        def strategy_text(row):
+            value = row.get("monthly_return")
+            value_text = (
+                f"{float(value):+.1%}"
+                if pd.notna(value)
+                else "n/a"
+            )
+            return (
+                f"{row.get('dominant_asset', 'CASH')}\n"
+                f"{value_text}\n"
+                f"{float(row.get('dominant_exposure', 0.0)):.0%} exp"
+            )
+
+        _plot_calendar_story(
+            monthly,
+            title=(
+                f"{label}: ativo dominante e retorno por mês/ano"
+            ),
+            text_builder=strategy_text,
+            destino=destino,
+        )
+        if destino.exists():
+            gerados.append(destino)
+
+    asset_monthly = _asset_monthly_returns(frames_alinhados)
     trigger_specs = (
         (
-            "Top-Turn",
+            "TT",
             top_turn_result.predictions,
             "directional_change_exit_triggered",
         ),
-        ("BOCPD", bocpd_result.predictions, "bocpd_exit_triggered"),
-        ("HSMM", hsmm_result.predictions, "hsmm_exit_triggered"),
-        (
-            "Hazard/Survival",
-            hazard_result.predictions,
-            "hazard_exit_triggered",
-        ),
+        ("BO", bocpd_result.predictions, "bocpd_exit_triggered"),
+        ("HS", hsmm_result.predictions, "hsmm_exit_triggered"),
+        ("HZ", hazard_result.predictions, "hazard_exit_triggered"),
     )
-    fig, ax = plt.subplots(figsize=(15, 5.5))
-    lanes = {
-        "Top-Turn": 3,
-        "BOCPD": 2,
-        "HSMM": 1,
-        "Hazard/Survival": 0,
-    }
-    marker_by_label = {
-        "Top-Turn": "o",
-        "BOCPD": "s",
-        "HSMM": "^",
-        "Hazard/Survival": "D",
-    }
-    for label, predictions, trigger_column in trigger_specs:
-        rows = _trigger_rows(predictions, trigger_column)
-        if rows.empty:
-            continue
-        y = [lanes[label]] * len(rows)
-        ax.scatter(
-            pd.to_datetime(rows["timestamp"], utc=True),
-            y,
-            label=label,
-            marker=marker_by_label[label],
-            s=55,
-        )
-        for _, row in rows.iterrows():
-            asset = str(
-                row.get("current_asset")
-                or row.get("previous_asset")
-                or row.get("selected_asset")
-                or ""
+    trigger_counts = _trigger_counts_monthly(trigger_specs)
+
+    # Story 2: melhor ativo de mercado em cada mês.
+    if not asset_monthly.empty:
+        leaders = (
+            asset_monthly.sort_values(
+                ["period", "monthly_return"],
+                ascending=[True, False],
             )
-            if asset and asset != "nan":
-                ax.annotate(
-                    asset,
-                    (
-                        pd.Timestamp(row["timestamp"]),
-                        lanes[label],
-                    ),
-                    xytext=(3, 5),
-                    textcoords="offset points",
-                    fontsize=8,
-                    rotation=45,
-                )
-    ax.set_yticks(
-        [0, 1, 2, 3],
-        labels=["Hazard/Survival", "HSMM", "BOCPD", "Top-Turn"],
-    )
-    ax.set_title("Linha do tempo dos gatilhos de saída OOS")
-    ax.set_xlabel("Data")
-    ax.grid(True, axis="x", alpha=0.25)
-    ax.legend(loc="upper left")
-    destino = DIRETORIO_GRAFICOS / "trigger_timeline.png"
-    _salvar_e_publicar_grafico(fig, destino)
-    gerados.append(destino)
-
-    # 3. Distância mediana do topo.
-    labels = [
-        "Control",
-        "Top-Turn",
-        "BOCPD",
-        "HSMM",
-        "Hazard/Survival",
-    ]
-    peaks = [
-        control_peak,
-        top_turn_peak,
-        bocpd_peak,
-        hsmm_peak,
-        hazard_peak,
-    ]
-    distance_values = [
-        peak.get("median_exit_distance_from_peak_pct")
-        for peak in peaks
-    ]
-    fig, ax = plt.subplots(figsize=(9, 5.5))
-    ax.bar(labels, distance_values)
-    ax.set_title("Distância mediana da saída ao topo")
-    ax.set_ylabel("Percentual")
-    ax.grid(True, axis="y", alpha=0.25)
-    destino = DIRETORIO_GRAFICOS / "peak_distance_comparison.png"
-    _salvar_e_publicar_grafico(fig, destino)
-    gerados.append(destino)
-
-    # 4. Captura mediana do movimento até o topo.
-    capture_values = [
-        peak.get("median_peak_capture_pct")
-        for peak in peaks
-    ]
-    fig, ax = plt.subplots(figsize=(9, 5.5))
-    ax.bar(labels, capture_values)
-    ax.set_title("Captura mediana do movimento até o topo")
-    ax.set_ylabel("Percentual")
-    ax.grid(True, axis="y", alpha=0.25)
-    destino = DIRETORIO_GRAFICOS / "peak_capture_comparison.png"
-    _salvar_e_publicar_grafico(fig, destino)
-    gerados.append(destino)
-
-    # 6. Peak Exit somente nas saídas provocadas pelos overlays.
-    trigger_peak = {
-        "Top-Turn": calcular_metricas_peak_gatilhos(
-            top_turn_peak_trades,
-            top_turn_result.predictions,
-            "directional_change_exit_triggered",
-        ),
-        "BOCPD": calcular_metricas_peak_gatilhos(
-            bocpd_peak_trades,
-            bocpd_result.predictions,
-            "bocpd_exit_triggered",
-        ),
-        "HSMM": calcular_metricas_peak_gatilhos(
-            hsmm_peak_trades,
-            hsmm_result.predictions,
-            "hsmm_exit_triggered",
-        ),
-        "Hazard/Survival": calcular_metricas_peak_gatilhos(
-            hazard_peak_trades,
-            hazard_result.predictions,
-            "hazard_exit_triggered",
-        ),
-    }
-    trigger_labels = list(trigger_peak)
-
-    fig, ax = plt.subplots(figsize=(10, 5.5))
-    ax.bar(
-        trigger_labels,
-        [
-            trigger_peak[label][
-                "median_exit_distance_from_peak_pct"
-            ]
-            for label in trigger_labels
-        ],
-    )
-    ax.set_title("Distância mediana do topo somente nos gatilhos")
-    ax.set_ylabel("Percentual")
-    ax.grid(True, axis="y", alpha=0.25)
-    destino = DIRETORIO_GRAFICOS / "trigger_peak_distance.png"
-    _salvar_e_publicar_grafico(fig, destino)
-    gerados.append(destino)
-
-    fig, ax = plt.subplots(figsize=(10, 5.5))
-    ax.bar(
-        trigger_labels,
-        [
-            trigger_peak[label]["median_peak_capture_pct"]
-            for label in trigger_labels
-        ],
-    )
-    ax.set_title("Captura mediana do topo somente nos gatilhos")
-    ax.set_ylabel("Percentual")
-    ax.grid(True, axis="y", alpha=0.25)
-    destino = DIRETORIO_GRAFICOS / "trigger_peak_capture.png"
-    _salvar_e_publicar_grafico(fig, destino)
-    gerados.append(destino)
-
-    # 7. Preço por ativo com os gatilhos das quatro técnicas.
-    triggers_by_method: dict[str, pd.DataFrame] = {}
-    for label, predictions, trigger_column in trigger_specs:
-        triggers_by_method[label] = _trigger_rows(
-            predictions,
-            trigger_column,
+            .groupby("period", as_index=False)
+            .head(1)
+            .reset_index(drop=True)
         )
+        destino = DIRETORIO_GRAFICOS / "market_monthly_leaders.png"
 
-    assets: set[str] = set()
-    for rows in triggers_by_method.values():
-        if rows.empty:
-            continue
-        for _, row in rows.iterrows():
-            asset = str(
-                row.get("current_asset")
-                or row.get("previous_asset")
-                or row.get("selected_asset")
-                or ""
+        def leader_text(row):
+            return (
+                f"{row['asset']}\n"
+                f"{float(row['monthly_return']):+.1%}"
             )
-            if asset and asset != "nan" and asset != "CASH":
-                assets.add(asset)
 
-    markers = {
-        "Top-Turn": "o",
-        "BOCPD": "s",
-        "HSMM": "^",
-        "Hazard/Survival": "D",
-    }
-    for asset in sorted(assets):
-        frame = frames_alinhados.get(asset)
-        if frame is None or frame.empty:
+        _plot_calendar_story(
+            leaders,
+            title="Melhor ativo de cada mês",
+            text_builder=leader_text,
+            destino=destino,
+        )
+        if destino.exists():
+            gerados.append(destino)
+
+        # Story 3: pior ativo de mercado em cada mês.
+        laggards = (
+            asset_monthly.sort_values(
+                ["period", "monthly_return"],
+                ascending=[True, True],
+            )
+            .groupby("period", as_index=False)
+            .head(1)
+            .reset_index(drop=True)
+        )
+        destino = DIRETORIO_GRAFICOS / "market_monthly_laggards.png"
+
+        def laggard_text(row):
+            return (
+                f"{row['asset']}\n"
+                f"{float(row['monthly_return']):+.1%}"
+            )
+
+        _plot_calendar_story(
+            laggards,
+            title="Pior ativo de cada mês",
+            text_builder=laggard_text,
+            destino=destino,
+        )
+        if destino.exists():
+            gerados.append(destino)
+
+    # Story 4: calendário individual apenas para ativos que realmente tiveram
+    # gatilhos. Cada célula mostra retorno do ativo e quais técnicas sinalizaram.
+    trigger_assets = (
+        sorted(trigger_counts["asset"].unique().tolist())
+        if not trigger_counts.empty
+        else []
+    )
+    for asset in trigger_assets:
+        calendar = asset_monthly.loc[
+            asset_monthly["asset"] == asset
+        ].copy()
+        if calendar.empty:
             continue
-        close = pd.to_numeric(frame["close"], errors="coerce")
-        fig, ax = plt.subplots(figsize=(15, 6))
-        ax.plot(close.index, close.values, linewidth=1.25, label=f"{asset} close")
 
-        for label, rows in triggers_by_method.items():
-            if rows.empty:
-                continue
-            subset_rows: list[tuple[pd.Timestamp, float]] = []
-            for _, row in rows.iterrows():
-                row_asset = str(
-                    row.get("current_asset")
-                    or row.get("previous_asset")
-                    or row.get("selected_asset")
-                    or ""
-                )
-                if row_asset != asset:
-                    continue
-                timestamp = pd.Timestamp(row["timestamp"])
-                if timestamp.tzinfo is None:
-                    timestamp = timestamp.tz_localize("UTC")
-                if timestamp not in close.index:
-                    nearest_position = close.index.get_indexer(
-                        [timestamp],
-                        method="nearest",
-                    )[0]
-                    if nearest_position < 0:
-                        continue
-                    timestamp = pd.Timestamp(close.index[nearest_position])
-                value = close.loc[timestamp]
-                if pd.notna(value):
-                    subset_rows.append((timestamp, float(value)))
+        counts_asset = trigger_counts.loc[
+            trigger_counts["asset"] == asset
+        ].copy()
+        count_lookup: dict[
+            tuple[int, int], list[str]
+        ] = {}
+        for _, row in counts_asset.iterrows():
+            key = (int(row["year"]), int(row["month"]))
+            count = int(row["count"])
+            tag = str(row["method"])
+            count_lookup.setdefault(key, []).append(
+                f"{tag}{count}" if count > 1 else tag
+            )
 
-            if subset_rows:
-                ax.scatter(
-                    [item[0] for item in subset_rows],
-                    [item[1] for item in subset_rows],
-                    marker=markers[label],
-                    s=65,
-                    label=label,
-                )
+        destino = DIRETORIO_GRAFICOS / f"asset_story_{asset}.png"
 
-        ax.set_title(f"{asset}: preço e gatilhos de reversão")
-        ax.set_xlabel("Data")
-        ax.set_ylabel("Preço de fechamento")
-        ax.grid(True, alpha=0.25)
-        ax.legend()
-        destino = DIRETORIO_GRAFICOS / f"triggers_{asset}.png"
-        _salvar_e_publicar_grafico(fig, destino)
-        gerados.append(destino)
+        def asset_text(row):
+            key = (int(row["year"]), int(row["month"]))
+            signals = " ".join(count_lookup.get(key, []))
+            base = f"{float(row['monthly_return']):+.1%}"
+            return f"{base}\n{signals}" if signals else base
+
+        _plot_calendar_story(
+            calendar,
+            title=(
+                f"{asset}: retorno mensal e gatilhos "
+                "(TT=Top-Turn, BO=BOCPD, HS=HSMM, HZ=Hazard)"
+            ),
+            text_builder=asset_text,
+            destino=destino,
+        )
+        if destino.exists():
+            gerados.append(destino)
 
     return gerados
 
 
 print("=" * 78, flush=True)
-print("TCC - Directional Change + LightGBM", flush=True)
+print("TCC - Reversal Research Storytelling", flush=True)
 print(f"versao_pesquisa={RESEARCH_VERSION}", flush=True)
 print("dados=SNAPSHOT_CONGELADO_VERSIONADO", flush=True)
 print(
