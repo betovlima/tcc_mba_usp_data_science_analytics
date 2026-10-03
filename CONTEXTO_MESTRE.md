@@ -545,3 +545,79 @@ Top-Turn continua congelado como referencia de topo. A proxima formulacao de
 Bottom-Turn deve preservar o objetivo de timing de fundo sem permitir bloqueios
 indefinidos da politica-base. Qualquer nova regra deve ser definida
 conceitualmente antes do replay e nao ajustada para perseguir este resultado.
+
+
+## Checkpoint historico de capital e campanha Bottom-Turn v2 — v1.8.0-dev.1
+
+### Como registrar no TCC os US$ 12,49 milhoes
+
+O resultado historico de Top-Turn de aproximadamente US$ 12.486.768,00 deve
+ser preservado no relato cientifico, mas sempre identificado como pertencente
+ao universo anterior a exclusao estrutural de CLMT.
+
+Checkpoint historico pre-exclusao CLMT:
+
+| Cenario | Capital final | Top-Turn vs Control |
+| --- | ---: | ---: |
+| Control | US$ 10.082.425,91 | - |
+| Top-Turn | US$ 12.486.768,00 | +23,85% |
+
+Depois da identificacao da mudanca estrutural de identidade/CUSIP de CLMT e da
+aplicacao da regra de exclusao estrutural do TCC, o universo corrigido passou a
+produzir:
+
+| Cenario | Capital final | Top-Turn vs Control |
+| --- | ---: | ---: |
+| Control | US$ 5.092.399,32 | - |
+| Top-Turn | US$ 6.306.816,02 | +23,85% |
+
+A queda no capital absoluto nao deve ser interpretada como lucro isolado de
+CLMT. A estrategia e path-dependent: retirar um ativo muda rankings, rotacoes,
+capital disponivel e todas as decisoes compostas posteriores. O ponto
+metodologicamente importante e que a vantagem relativa do Top-Turn permaneceu
+aproximadamente +23,85% mesmo apos a correcao estrutural do universo.
+
+No texto final do TCC, os dois checkpoints podem ser usados para mostrar a
+importancia da integridade do universo, da reproducibilidade e da sensibilidade
+de estrategias de rotacao composta a mudancas estruturais nos dados. O baseline
+cientifico corrente e sempre o universo corrigido; o resultado pre-exclusao e
+historico e nao deve ser apresentado como resultado final vigente.
+
+### Bottom-Turn v2
+
+Versao ativa: `1.8.0-dev.1`.
+Execution schema: `top-bottom-cycle-v2`.
+
+A formulacao v1 mostrou que um veto Bottom-Turn indefinido podia manter a
+carteira em CASH por centenas de sessoes. A v2 muda somente a arquitetura da
+intervencao, sem alterar features, target, LightGBM, thresholds ou calibracao.
+
+Protocolo congelado antes do replay:
+
+1. Top-Turn permanece congelado como detector de saida.
+2. Bottom-Turn so pode ser armado por uma saida efetivamente disparada pelo
+   Top-Turn.
+3. A janela Bottom-Turn dura no maximo 5 sessoes de decisao, igual ao horizonte
+   probabilistico definido previamente.
+4. Dentro da janela, duas confirmacoes Bottom-Turn permitem a reentrada no
+   ativo que o Control ja escolheu.
+5. Se nao houver confirmacao ate a quinta sessao, a quinta ainda pode ser
+   bloqueada; a partir da sessao seguinte a decisao volta integralmente ao
+   Control.
+6. A entrada inicial da carteira nao e bloqueada pelo Bottom-Turn.
+7. Entradas normais nao originadas de uma saida Top-Turn nao sao bloqueadas.
+8. Rotacoes ativo -> ativo continuam sob a politica-base.
+9. Nao ha tuning de threshold ou features com base no resultado do v1.
+
+A campanha ativa compara apenas:
+
+- Control;
+- Top-Turn;
+- Top-Turn + Bottom-Turn v2.
+
+Bottom-Turn v1, BOCPD, HSMM e Hazard permanecem no historico e nos checkpoints,
+mas nao sao executados na campanha v2.
+
+Objetivo do experimento: verificar se o sinal de fundo consegue melhorar a
+reentrada apos uma boa saida Top-Turn sem sacrificar capital por exposicao
+excessiva a CASH.
