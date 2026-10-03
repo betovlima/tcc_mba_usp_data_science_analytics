@@ -13,6 +13,7 @@ from pathlib import Path
 import json
 import time
 
+import matplotlib.pyplot as plt
 import pandas as pd
 
 from engine.configuracao import CONFIG
@@ -25,6 +26,7 @@ from pesquisas.directional_change_lightgbm import (
     criar_pacote_analise,
     executar_bocpd_overlay,
     executar_directional_change_lightgbm,
+    executar_hsmm_overlay,
     sinal_sonoro_conclusao,
 )
 from reproducao.dados import SnapshotPaths, validate_snapshot
@@ -39,12 +41,242 @@ from reproducao.preparacao import prepare_model_frames
 RAIZ_PROJETO = Path(__file__).resolve().parent
 CAMINHOS = SnapshotPaths.research(RAIZ_PROJETO)
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "directional_change"
+DIRETORIO_GRAFICOS = DIRETORIO_RESULTADOS / "graficos"
+
+
+def _trigger_rows(predictions: pd.DataFrame, trigger_column: str) -> pd.DataFrame:
+    frame = predictions.copy()
+    if trigger_column not in frame.columns:
+        return pd.DataFrame()
+    mask = frame[trigger_column].fillna(False).astype(bool)
+    if not bool(mask.any()):
+        return pd.DataFrame()
+    output = frame.loc[mask].copy()
+    output = output.reset_index()
+    if "timestamp" not in output.columns:
+        first = output.columns[0]
+        output = output.rename(columns={first: "timestamp"})
+    return output
+
+
+def _gerar_graficos_comparacao(
+    *,
+    control_result,
+    top_turn_result,
+    bocpd_result,
+    hsmm_result,
+    control_peak,
+    top_turn_peak,
+    bocpd_peak,
+    hsmm_peak,
+    frames_alinhados,
+) -> list[Path]:
+    DIRETORIO_GRAFICOS.mkdir(parents=True, exist_ok=True)
+    for antigo in DIRETORIO_GRAFICOS.glob("*.png"):
+        antigo.unlink()
+
+    gerados: list[Path] = []
+
+    # 1. Curvas de capital OOS.
+    fig, ax = plt.subplots(figsize=(14, 7))
+    for label, result in (
+        ("Control", control_result),
+        ("Top-Turn", top_turn_result),
+        ("BOCPD", bocpd_result),
+        ("HSMM", hsmm_result),
+    ):
+        curve = pd.to_numeric(
+            result.predictions["strategy_equity"],
+            errors="coerce",
+        )
+        ax.plot(curve.index, curve.values, label=label, linewidth=1.6)
+    ax.set_title("Curvas de capital OOS")
+    ax.set_xlabel("Data")
+    ax.set_ylabel("Capital")
+    ax.grid(True, alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    destino = DIRETORIO_GRAFICOS / "capital_comparison.png"
+    fig.savefig(destino, dpi=160)
+    plt.close(fig)
+    gerados.append(destino)
+
+    # 2. Linha do tempo dos gatilhos.
+    trigger_specs = (
+        (
+            "Top-Turn",
+            top_turn_result.predictions,
+            "directional_change_exit_triggered",
+        ),
+        ("BOCPD", bocpd_result.predictions, "bocpd_exit_triggered"),
+        ("HSMM", hsmm_result.predictions, "hsmm_exit_triggered"),
+    )
+    fig, ax = plt.subplots(figsize=(15, 5.5))
+    lanes = {"Top-Turn": 2, "BOCPD": 1, "HSMM": 0}
+    marker_by_label = {"Top-Turn": "o", "BOCPD": "s", "HSMM": "^"}
+    for label, predictions, trigger_column in trigger_specs:
+        rows = _trigger_rows(predictions, trigger_column)
+        if rows.empty:
+            continue
+        y = [lanes[label]] * len(rows)
+        ax.scatter(
+            pd.to_datetime(rows["timestamp"], utc=True),
+            y,
+            label=label,
+            marker=marker_by_label[label],
+            s=55,
+        )
+        for _, row in rows.iterrows():
+            asset = str(
+                row.get("current_asset")
+                or row.get("previous_asset")
+                or row.get("selected_asset")
+                or ""
+            )
+            if asset and asset != "nan":
+                ax.annotate(
+                    asset,
+                    (
+                        pd.Timestamp(row["timestamp"]),
+                        lanes[label],
+                    ),
+                    xytext=(3, 5),
+                    textcoords="offset points",
+                    fontsize=8,
+                    rotation=45,
+                )
+    ax.set_yticks([0, 1, 2], labels=["HSMM", "BOCPD", "Top-Turn"])
+    ax.set_title("Linha do tempo dos gatilhos de saída OOS")
+    ax.set_xlabel("Data")
+    ax.grid(True, axis="x", alpha=0.25)
+    ax.legend(loc="upper left")
+    fig.tight_layout()
+    destino = DIRETORIO_GRAFICOS / "trigger_timeline.png"
+    fig.savefig(destino, dpi=160)
+    plt.close(fig)
+    gerados.append(destino)
+
+    # 3. Distância mediana do topo.
+    labels = ["Control", "Top-Turn", "BOCPD", "HSMM"]
+    peaks = [control_peak, top_turn_peak, bocpd_peak, hsmm_peak]
+    distance_values = [
+        peak.get("median_exit_distance_from_peak_pct")
+        for peak in peaks
+    ]
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    ax.bar(labels, distance_values)
+    ax.set_title("Distância mediana da saída ao topo")
+    ax.set_ylabel("Percentual")
+    ax.grid(True, axis="y", alpha=0.25)
+    fig.tight_layout()
+    destino = DIRETORIO_GRAFICOS / "peak_distance_comparison.png"
+    fig.savefig(destino, dpi=160)
+    plt.close(fig)
+    gerados.append(destino)
+
+    # 4. Captura mediana do movimento até o topo.
+    capture_values = [
+        peak.get("median_peak_capture_pct")
+        for peak in peaks
+    ]
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    ax.bar(labels, capture_values)
+    ax.set_title("Captura mediana do movimento até o topo")
+    ax.set_ylabel("Percentual")
+    ax.grid(True, axis="y", alpha=0.25)
+    fig.tight_layout()
+    destino = DIRETORIO_GRAFICOS / "peak_capture_comparison.png"
+    fig.savefig(destino, dpi=160)
+    plt.close(fig)
+    gerados.append(destino)
+
+    # 5. Preço por ativo com os gatilhos das três técnicas.
+    triggers_by_method: dict[str, pd.DataFrame] = {}
+    for label, predictions, trigger_column in trigger_specs:
+        triggers_by_method[label] = _trigger_rows(
+            predictions,
+            trigger_column,
+        )
+
+    assets: set[str] = set()
+    for rows in triggers_by_method.values():
+        if rows.empty:
+            continue
+        for _, row in rows.iterrows():
+            asset = str(
+                row.get("current_asset")
+                or row.get("previous_asset")
+                or row.get("selected_asset")
+                or ""
+            )
+            if asset and asset != "nan" and asset != "CASH":
+                assets.add(asset)
+
+    markers = {"Top-Turn": "o", "BOCPD": "s", "HSMM": "^"}
+    for asset in sorted(assets):
+        frame = frames_alinhados.get(asset)
+        if frame is None or frame.empty:
+            continue
+        close = pd.to_numeric(frame["close"], errors="coerce")
+        fig, ax = plt.subplots(figsize=(15, 6))
+        ax.plot(close.index, close.values, linewidth=1.25, label=f"{asset} close")
+
+        for label, rows in triggers_by_method.items():
+            if rows.empty:
+                continue
+            subset_rows: list[tuple[pd.Timestamp, float]] = []
+            for _, row in rows.iterrows():
+                row_asset = str(
+                    row.get("current_asset")
+                    or row.get("previous_asset")
+                    or row.get("selected_asset")
+                    or ""
+                )
+                if row_asset != asset:
+                    continue
+                timestamp = pd.Timestamp(row["timestamp"])
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.tz_localize("UTC")
+                if timestamp not in close.index:
+                    nearest_position = close.index.get_indexer(
+                        [timestamp],
+                        method="nearest",
+                    )[0]
+                    if nearest_position < 0:
+                        continue
+                    timestamp = pd.Timestamp(close.index[nearest_position])
+                value = close.loc[timestamp]
+                if pd.notna(value):
+                    subset_rows.append((timestamp, float(value)))
+
+            if subset_rows:
+                ax.scatter(
+                    [item[0] for item in subset_rows],
+                    [item[1] for item in subset_rows],
+                    marker=markers[label],
+                    s=65,
+                    label=label,
+                )
+
+        ax.set_title(f"{asset}: preço e gatilhos de reversão")
+        ax.set_xlabel("Data")
+        ax.set_ylabel("Preço de fechamento")
+        ax.grid(True, alpha=0.25)
+        ax.legend()
+        fig.tight_layout()
+        destino = DIRETORIO_GRAFICOS / f"triggers_{asset}.png"
+        fig.savefig(destino, dpi=160)
+        plt.close(fig)
+        gerados.append(destino)
+
+    return gerados
+
 
 print("=" * 78, flush=True)
 print("TCC - Directional Change + LightGBM", flush=True)
 print(f"versao_pesquisa={RESEARCH_VERSION}", flush=True)
 print("dados=SNAPSHOT_CONGELADO_VERSIONADO", flush=True)
-print("comparacao=CONTROL vs TOP_TURN vs BOCPD", flush=True)
+print("comparacao=CONTROL vs TOP_TURN vs BOCPD vs HSMM", flush=True)
 print("=" * 78, flush=True)
 
 
@@ -162,7 +394,39 @@ print(
 )
 
 
-# %% 7 - Peak Exit: mesma definicao para os tres cenarios
+# %% 7 - HSMM
+inicio_hsmm = time.perf_counter()
+hsmm_result = executar_hsmm_overlay(
+    frames,
+    config_control,
+    calcular_taxas_referencia,
+    aplicar_deslizamento,
+    progress_callback=lambda p, stage, completed: print(
+        f"[hsmm] progress={p:.1f}% completed={completed} stage={stage}",
+        flush=True,
+    ),
+)
+hsmm_metrics = summarize_metrics(
+    hsmm_result,
+    folds,
+    float(config_control.initial_capital),
+)
+for chave, valor in hsmm_result.metrics.items():
+    if str(chave).startswith("hsmm_"):
+        hsmm_metrics[str(chave)] = valor
+
+print(
+    "[stage] HSMM "
+    f"capital={hsmm_metrics['ending_capital']:,.2f} "
+    f"sharpe={hsmm_metrics['sharpe']:.4f} "
+    f"maxdd={hsmm_metrics['maximum_drawdown']:.4%} "
+    f"triggers={hsmm_metrics.get('hsmm_exit_triggers')} "
+    f"seconds={time.perf_counter() - inicio_hsmm:.3f}",
+    flush=True,
+)
+
+
+# %% 8 - Peak Exit: mesma definicao para os quatro cenarios
 frames_alinhados, _, _ = preparar_painel_rotacao(
     frames,
     config_control,
@@ -177,6 +441,10 @@ directional_change_peak, directional_change_peak_trades = calcular_peak_exit(
 )
 bocpd_peak, bocpd_peak_trades = calcular_peak_exit(
     bocpd_result.trades,
+    frames_alinhados,
+)
+hsmm_peak, hsmm_peak_trades = calcular_peak_exit(
+    hsmm_result.trades,
     frames_alinhados,
 )
 
@@ -198,9 +466,15 @@ print(
     f"capture={bocpd_peak.get('median_peak_capture_pct')}",
     flush=True,
 )
+print(
+    "[peak] HSMM "
+    f"distance={hsmm_peak.get('median_exit_distance_from_peak_pct')} "
+    f"capture={hsmm_peak.get('median_peak_capture_pct')}",
+    flush=True,
+)
 
 
-# %% 8 - Comparacao final
+# %% 9 - Comparacao final
 comparacao = comparar_control_directional_change(
     control_metrics,
     directional_change_metrics,
@@ -226,18 +500,21 @@ print(
 )
 
 print(
-    "[comparison-bocpd] "
+    "[comparison-reversal] "
     f"CONTROL={float(control_metrics['ending_capital']):,.2f} "
     f"TOP_TURN={float(directional_change_metrics['ending_capital']):,.2f} "
     f"BOCPD={float(bocpd_metrics['ending_capital']):,.2f} "
+    f"HSMM={float(hsmm_metrics['ending_capital']):,.2f} "
     f"BOCPD_vs_CONTROL="
     f"{float(bocpd_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%} "
-    f"BOCPD_vs_TOP_TURN="
-    f"{float(bocpd_metrics['ending_capital']) / float(directional_change_metrics['ending_capital']) - 1.0:+.4%}",
+    f"HSMM_vs_CONTROL="
+    f"{float(hsmm_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%} "
+    f"HSMM_vs_TOP_TURN="
+    f"{float(hsmm_metrics['ending_capital']) / float(directional_change_metrics['ending_capital']) - 1.0:+.4%}",
     flush=True,
 )
 
-# %% 9 - Exportacao dos artefatos
+# %% 10 - Exportacao dos artefatos
 DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
 
 control_result.predictions.reset_index().to_csv(
@@ -264,6 +541,14 @@ bocpd_result.trades.to_csv(
     DIRETORIO_RESULTADOS / "bocpd_trades.csv",
     index=False,
 )
+hsmm_result.predictions.reset_index().to_csv(
+    DIRETORIO_RESULTADOS / "hsmm_predictions.csv",
+    index=False,
+)
+hsmm_result.trades.to_csv(
+    DIRETORIO_RESULTADOS / "hsmm_trades.csv",
+    index=False,
+)
 control_peak_trades.to_csv(
     DIRETORIO_RESULTADOS / "peak_exit_control.csv",
     index=False,
@@ -274,6 +559,10 @@ directional_change_peak_trades.to_csv(
 )
 bocpd_peak_trades.to_csv(
     DIRETORIO_RESULTADOS / "peak_exit_bocpd.csv",
+    index=False,
+)
+hsmm_peak_trades.to_csv(
+    DIRETORIO_RESULTADOS / "peak_exit_hsmm.csv",
     index=False,
 )
 
@@ -295,6 +584,15 @@ pd.DataFrame(bocpd_calibration_rows).to_csv(
     index=False,
 )
 
+hsmm_calibration_rows = hsmm_result.metrics.get(
+    "hsmm_calibration",
+    [],
+)
+pd.DataFrame(hsmm_calibration_rows).to_csv(
+    DIRETORIO_RESULTADOS / "hsmm_calibration.csv",
+    index=False,
+)
+
 comparison_table = pd.DataFrame(
     [
         {
@@ -302,30 +600,35 @@ comparison_table = pd.DataFrame(
             "control": control_metrics["ending_capital"],
             "directional_change": directional_change_metrics["ending_capital"],
             "bocpd": bocpd_metrics["ending_capital"],
+            "hsmm": hsmm_metrics["ending_capital"],
         },
         {
             "metric": "cagr",
             "control": control_metrics["cagr"],
             "directional_change": directional_change_metrics["cagr"],
             "bocpd": bocpd_metrics["cagr"],
+            "hsmm": hsmm_metrics["cagr"],
         },
         {
             "metric": "sharpe",
             "control": control_metrics["sharpe"],
             "directional_change": directional_change_metrics["sharpe"],
             "bocpd": bocpd_metrics["sharpe"],
+            "hsmm": hsmm_metrics["sharpe"],
         },
         {
             "metric": "maximum_drawdown",
             "control": control_metrics["maximum_drawdown"],
             "directional_change": directional_change_metrics["maximum_drawdown"],
             "bocpd": bocpd_metrics["maximum_drawdown"],
+            "hsmm": hsmm_metrics["maximum_drawdown"],
         },
         {
             "metric": "worst_fold_return",
             "control": control_metrics["worst_fold_return"],
             "directional_change": directional_change_metrics["worst_fold_return"],
             "bocpd": bocpd_metrics["worst_fold_return"],
+            "hsmm": hsmm_metrics["worst_fold_return"],
         },
         {
             "metric": "median_exit_distance_from_peak_pct",
@@ -336,18 +639,23 @@ comparison_table = pd.DataFrame(
             "bocpd": bocpd_peak[
                 "median_exit_distance_from_peak_pct"
             ],
+            "hsmm": hsmm_peak[
+                "median_exit_distance_from_peak_pct"
+            ],
         },
         {
             "metric": "median_peak_capture_pct",
             "control": control_peak["median_peak_capture_pct"],
             "directional_change": directional_change_peak["median_peak_capture_pct"],
             "bocpd": bocpd_peak["median_peak_capture_pct"],
+            "hsmm": hsmm_peak["median_peak_capture_pct"],
         },
         {
             "metric": "median_days_from_peak_to_exit",
             "control": control_peak["median_days_from_peak_to_exit"],
             "directional_change": directional_change_peak["median_days_from_peak_to_exit"],
             "bocpd": bocpd_peak["median_days_from_peak_to_exit"],
+            "hsmm": hsmm_peak["median_days_from_peak_to_exit"],
         },
     ]
 )
@@ -366,9 +674,11 @@ with (DIRETORIO_RESULTADOS / "comparison_directional_change.json").open(
             "control_metrics": control_metrics,
             "directional_change_metrics": directional_change_metrics,
             "bocpd_metrics": bocpd_metrics,
+            "hsmm_metrics": hsmm_metrics,
             "control_peak": control_peak,
             "directional_change_peak": directional_change_peak,
             "bocpd_peak": bocpd_peak,
+            "hsmm_peak": hsmm_peak,
             "structural_exclusions": exclusoes,
             "snapshot_sha256": manifesto.get("snapshot_sha256"),
         },
@@ -378,16 +688,33 @@ with (DIRETORIO_RESULTADOS / "comparison_directional_change.json").open(
         default=str,
     )
 
+graficos_gerados = _gerar_graficos_comparacao(
+    control_result=control_result,
+    top_turn_result=directional_change_result,
+    bocpd_result=bocpd_result,
+    hsmm_result=hsmm_result,
+    control_peak=control_peak,
+    top_turn_peak=directional_change_peak,
+    bocpd_peak=bocpd_peak,
+    hsmm_peak=hsmm_peak,
+    frames_alinhados=frames_alinhados,
+)
+print(
+    f"[graphs] gerados={len(graficos_gerados)} "
+    f"diretorio={DIRETORIO_GRAFICOS}",
+    flush=True,
+)
+
 print(f"[output] diretorio={DIRETORIO_RESULTADOS}", flush=True)
 
 
-# %% 10 - PACOTE ZIP PARA ANALISE
+# %% 11 - PACOTE ZIP PARA ANALISE
 # Este e o unico arquivo que voce precisa enviar para analise.
 PACOTE_ANALISE = criar_pacote_analise(DIRETORIO_RESULTADOS)
 print(f"[package] pronto={PACOTE_ANALISE}", flush=True)
 
 
-# %% 11 - SINAL SONORO DE CONCLUSAO
+# %% 12 - SINAL SONORO DE CONCLUSAO
 # Dois tons no Windows. Em outros sistemas tenta o bell do terminal.
 sinal_sonoro_conclusao()
 print("[done] pesquisa e pacote de analise concluidos", flush=True)
