@@ -123,6 +123,103 @@ def test_overlay_requires_two_confirmations() -> None:
     ] is True
 
 
+
+def test_overlay_can_suppress_one_trigger_and_require_fresh_confirmation() -> None:
+    dates = pd.to_datetime(
+        [
+            "2026-01-05T00:00:00Z",
+            "2026-01-06T00:00:00Z",
+            "2026-01-07T00:00:00Z",
+        ],
+        utc=True,
+    )
+    frame = pd.DataFrame(
+        {"top_turn_eligible": [True, True, True]},
+        index=dates,
+    )
+    diagnostics: dict[pd.Timestamp, dict] = {}
+
+    def base_policy(timestamp, _current_position, _holding_days):
+        diagnostics[pd.Timestamp(timestamp)] = {
+            "decision_reason": "HOLD_CURRENT_BEST",
+            "final_action_asset": "AAA",
+        }
+        return 1, 0.25
+
+    policy = _envolver_politica_top_turn(
+        base_policy,
+        probabilities={
+            dates[0]: {"AAA": 0.80},
+            dates[1]: {"AAA": 0.82},
+            dates[2]: {"AAA": 0.84},
+        },
+        frames={"AAA": frame},
+        symbols=["AAA"],
+        probability_threshold=0.75,
+        config=SimpleNamespace(rotation_min_holding_days=2),
+        decision_diagnostics=diagnostics,
+        suppressed_triggers={(dates[1], "AAA")},
+    )
+
+    first_target, _ = policy(dates[0], 1, 4)
+    second_target, _ = policy(dates[1], 1, 5)
+    third_target, _ = policy(dates[2], 1, 6)
+
+    assert first_target == 1
+    assert second_target == 1
+    assert third_target == 1
+    assert diagnostics[dates[1]][
+        "directional_change_ablation_suppressed"
+    ] is True
+    assert diagnostics[dates[2]][
+        "directional_change_confirmation_streak"
+    ] == 1
+
+
+def test_overlay_can_disable_all_triggers() -> None:
+    dates = pd.to_datetime(
+        ["2026-01-05T00:00:00Z", "2026-01-06T00:00:00Z"],
+        utc=True,
+    )
+    frame = pd.DataFrame(
+        {"top_turn_eligible": [True, True]},
+        index=dates,
+    )
+    diagnostics: dict[pd.Timestamp, dict] = {}
+
+    def base_policy(timestamp, _current_position, _holding_days):
+        diagnostics[pd.Timestamp(timestamp)] = {
+            "decision_reason": "HOLD_CURRENT_BEST",
+            "final_action_asset": "AAA",
+        }
+        return 1, 0.25
+
+    policy = _envolver_politica_top_turn(
+        base_policy,
+        probabilities={
+            dates[0]: {"AAA": 0.90},
+            dates[1]: {"AAA": 0.92},
+        },
+        frames={"AAA": frame},
+        symbols=["AAA"],
+        probability_threshold=0.75,
+        config=SimpleNamespace(rotation_min_holding_days=2),
+        decision_diagnostics=diagnostics,
+        disable_all_triggers=True,
+    )
+
+    first_target, _ = policy(dates[0], 1, 4)
+    second_target, _ = policy(dates[1], 1, 5)
+
+    assert first_target == 1
+    assert second_target == 1
+    assert diagnostics[dates[1]][
+        "directional_change_ablation_disable_all"
+    ] is True
+    assert diagnostics[dates[1]][
+        "directional_change_exit_triggered"
+    ] is False
+
 def test_peak_exit_normal_sell_excludes_exit_session_high() -> None:
     index = pd.to_datetime(
         [
