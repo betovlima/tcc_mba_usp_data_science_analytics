@@ -94,6 +94,26 @@ def test_frozen_universe_and_dates_match_cpu_reference() -> None:
 
 
 
+def test_clmt_cusip_transition_accepts_float_parsed_cusip() -> None:
+    issue = structural_identity_issue(
+        "CLMT",
+        [
+            {
+                "action_type": "name_change",
+                "old_symbol": "CLMT",
+                "new_symbol": "CLMT",
+                "old_cusip": 131476103.0,
+                "new_cusip": 131428104.0,
+                "process_date": "2024-07-11",
+            }
+        ],
+    )
+
+    assert issue is not None
+    assert issue["reason"] == "structural_identity_change"
+    assert issue["symbol"] == "CLMT"
+
+
 def test_clmt_cusip_transition_is_structurally_excluded() -> None:
     issue = structural_identity_issue(
         "CLMT",
