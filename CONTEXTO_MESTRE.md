@@ -321,3 +321,123 @@ Todos os calendarios usam somente a janela OOS para manter a narrativa
 comparavel com os resultados da estrategia. As figuras continuam sendo salvas
 em `output/directional_change/graficos/`, publicadas na aba Plots do Spyder e
 incluidas no mesmo `pacote_analise.zip`.
+
+
+## Checkpoint Top-Turn e inicio da pesquisa Bottom-Turn — v1.7.0-dev.1
+
+A pesquisa passa a focar o ciclo completo de entrada e saida. BOCPD, HSMM e
+Hazard/Survival permanecem preservados no historico e na documentacao, mas nao
+sao executados na campanha ativa de Bottom-Turn.
+
+### O Top-Turn atual se enquadra principalmente em tres camadas
+
+| Camada | Familia / tecnologia | Papel no Top-Turn |
+| --- | --- | --- |
+| Estrutura de mercado | Directional Change (DC) | Transforma movimentos de preco em eventos/regimes de alta, baixa, overshoot e reversao. |
+| Previsao | Supervised Machine Learning | Classifica se uma reversao para baixo tende a acontecer antes da continuacao da alta. |
+| Modelo | LightGBM / Gradient Boosted Decision Trees | Aprende a probabilidade do evento first-passage a partir das features de mercado e Directional Change. |
+| Execucao | Hybrid / Rule-based decision overlay | Exige contexto, threshold e duas confirmacoes; so antecipa a saida quando o Control manteria a posicao. |
+
+Descricao curta oficial:
+
+`Top-Turn = Directional Change + supervised ML com LightGBM + regras causais de confirmacao e execucao.`
+
+O alvo Top-Turn e first-passage com eventos concorrentes: perto de uma maxima,
+pergunta se uma queda relevante acontece antes de uma continuacao relevante da
+alta dentro de cinco sessoes.
+
+### Familias de metodos ja pesquisadas para reversao de topo
+
+1. Event-based / Directional Change:
+   Directional Change + LightGBM -> Top-Turn.
+2. Bayesian Change Point:
+   BOCPD.
+3. Latent Regime Models:
+   HSMM de duracao explicita.
+4. Survival / Event History:
+   Hazard/Survival discreto.
+5. Deep Learning:
+   nao faz parte da linha ativa; nao ha rede neural/neuronios no experimento
+   corrente.
+
+### Ultimo checkpoint OOS valido antes do Bottom-Turn
+
+Execucao `1.6.0-dev.3`, com DOC e CLMT excluidos estruturalmente:
+
+| Metodo | Capital final | vs. Control | Sharpe | MaxDD |
+| --- | ---: | ---: | ---: | ---: |
+| Control | US$ 5.092.399,32 | - | 1,9287 | -36,65% |
+| Top-Turn | US$ 6.306.816,02 | +23,85% | 1,9844 | -36,65% |
+| BOCPD | US$ 5.333.893,64 | +4,74% | 1,9431 | -36,65% |
+| HSMM | US$ 4.614.917,81 | -9,38% | 1,9064 | -37,23% |
+| Hazard/Survival | US$ 3.192.675,93 | -37,31% | 1,8201 | -36,53% |
+
+Top-Turn continua sendo a referencia de topo. A remocao estrutural de CLMT
+alterou o caminho absoluto da carteira, mas a vantagem relativa do Top-Turn
+permaneceu aproximadamente +23,85%.
+
+### Pesquisa ativa: Bottom-Turn
+
+Bottom-Turn e a contraparte simetrica do Top-Turn:
+
+- familia principal: Directional Change + LightGBM;
+- horizonte inicial: 5 sessoes;
+- threshold adaptativo: 1,5 x ATR, limitado entre 2% e 8%;
+- elegibilidade: maioria dos regimes DC em baixa, preco a ate 5% da minima de
+  20 sessoes e retorno de 20 sessoes negativo;
+- alvo positivo: recuperacao relevante ocorre antes de nova continuacao da
+  queda;
+- alvo negativo: nova continuacao da queda ocorre primeiro, ou a recuperacao
+  nao vence dentro da janela;
+- duas confirmacoes consecutivas;
+- atua somente em CASH -> ativo;
+- o ativo continua sendo escolhido pela politica Control/LightGBM;
+- Bottom-Turn pode apenas confirmar ou atrasar a entrada;
+- nao altera rotacoes ativo -> ativo nem posicoes ja abertas.
+
+A campanha ativa compara quatro cenarios:
+
+| Cenario | Entrada | Saida | Objetivo |
+| --- | --- | --- | --- |
+| Control | Control | Control | baseline |
+| Bottom-Turn | Bottom-Turn | Control | medir apenas melhoria de compra |
+| Top-Turn | Control | Top-Turn | referencia de melhoria de venda |
+| Top+Bottom | Bottom-Turn | Top-Turn | medir o ciclo completo |
+
+### Metricas de fundo
+
+A pesquisa passa a exportar `bottom_entry_<cenario>.csv` com:
+
+- `bottom_price_before_entry`;
+- `bottom_timestamp_before_entry`;
+- `entry_distance_from_bottom_pct`;
+- `bottom_capture_pct`;
+- `days_from_bottom_to_entry`;
+- `post_entry_return_5d_pct`, `10d`, `20d`;
+- `continued_drawdown_5d_pct`, `10d`, `20d`.
+
+A distancia do fundo segue a mesma filosofia da distancia do topo: quanto menor
+a distancia de entrada em relacao ao fundo observado durante o periodo em
+CASH, melhor o timing. Gap de entrada abaixo do fundo anterior e tratado como
+distancia zero.
+
+### Storytelling visual do ciclo
+
+Os calendarios mensais permanecem no Spyder/ZIP. Nos graficos individuais:
+
+- `TT↓` = saida Top-Turn;
+- `BT↑` = entrada Bottom-Turn.
+
+O objetivo visual e acompanhar:
+`queda -> BT↑ -> recuperacao -> alta -> TT↓ -> queda`.
+
+### Governanca
+
+- Branch unica ativa: `research/reversal-bocpd-comparison`.
+- `main` permanece intocada.
+- Mesmos arquivos de pesquisa; historico fica nos commits.
+- Snapshot congelado; sem Alpaca durante tuning.
+- DOC e CLMT continuam excluidos estruturalmente.
+- Nenhum resultado Bottom-Turn existe antes do replay OOS completo.
+- O ZIP antigo e apagado e recriado sempre em
+  `output/directional_change/pacote_analise.zip`.
