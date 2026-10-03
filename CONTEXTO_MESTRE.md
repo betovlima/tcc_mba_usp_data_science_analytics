@@ -621,3 +621,26 @@ mas nao sao executados na campanha v2.
 Objetivo do experimento: verificar se o sinal de fundo consegue melhorar a
 reentrada apos uma boa saida Top-Turn sem sacrificar capital por exposicao
 excessiva a CASH.
+
+
+### Correcao do winsound.SND_SYNC — v1.8.0-dev.2
+
+Em Windows/Spyder foi observado:
+
+`AttributeError: module 'winsound' has no attribute 'SND_SYNC'`.
+
+A falha ocorria somente depois da criacao de `pacote_analise.zip`, portanto
+nao invalida o backtest nem o pacote ja gerado. A causa era a suposicao de que
+todas as versoes de `winsound` expunham `SND_SYNC`.
+
+A funcao de conclusao foi tornada auxiliar e nao-fatal:
+
+- `PlaySound` usa apenas `SND_ALIAS`; reproducao sincrona e o comportamento
+  padrao quando `SND_ASYNC` nao e fornecido;
+- constantes opcionais usam `getattr`;
+- falhas de qualquer mecanismo de audio nao propagam excecao;
+- `MessageBeep`, `Beep` e bell de terminal continuam como fallbacks;
+- foi adicionado teste simulando `winsound` sem `SND_SYNC`.
+
+Essa versao altera apenas o sinal sonoro de conclusao. Modelos, dados,
+features, folds, thresholds, sinais e resultados OOS permanecem inalterados.
