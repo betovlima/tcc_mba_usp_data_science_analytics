@@ -755,100 +755,78 @@ print(
 # %% 11 - Exportacao dos artefatos
 DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
 
-control_result.predictions.reset_index().to_csv(
-    DIRETORIO_RESULTADOS / "control_predictions.csv",
-    index=False,
-)
-control_result.trades.to_csv(
-    DIRETORIO_RESULTADOS / "control_trades.csv",
-    index=False,
-)
-directional_change_result.predictions.reset_index().to_csv(
-    DIRETORIO_RESULTADOS / "directional_change_predictions.csv",
-    index=False,
-)
-directional_change_result.trades.to_csv(
-    DIRETORIO_RESULTADOS / "directional_change_trades.csv",
-    index=False,
-)
-bocpd_result.predictions.reset_index().to_csv(
-    DIRETORIO_RESULTADOS / "bocpd_predictions.csv",
-    index=False,
-)
-bocpd_result.trades.to_csv(
-    DIRETORIO_RESULTADOS / "bocpd_trades.csv",
-    index=False,
-)
-hsmm_result.predictions.reset_index().to_csv(
-    DIRETORIO_RESULTADOS / "hsmm_predictions.csv",
-    index=False,
-)
-hsmm_result.trades.to_csv(
-    DIRETORIO_RESULTADOS / "hsmm_trades.csv",
-    index=False,
-)
-hazard_result.predictions.reset_index().to_csv(
-    DIRETORIO_RESULTADOS / "hazard_predictions.csv",
-    index=False,
-)
-hazard_result.trades.to_csv(
-    DIRETORIO_RESULTADOS / "hazard_trades.csv",
-    index=False,
-)
-control_peak_trades.to_csv(
-    DIRETORIO_RESULTADOS / "peak_exit_control.csv",
-    index=False,
-)
-directional_change_peak_trades.to_csv(
-    DIRETORIO_RESULTADOS / "peak_exit_directional_change.csv",
-    index=False,
-)
-bocpd_peak_trades.to_csv(
-    DIRETORIO_RESULTADOS / "peak_exit_bocpd.csv",
-    index=False,
-)
-hsmm_peak_trades.to_csv(
-    DIRETORIO_RESULTADOS / "peak_exit_hsmm.csv",
-    index=False,
-)
-hazard_peak_trades.to_csv(
-    DIRETORIO_RESULTADOS / "peak_exit_hazard.csv",
-    index=False,
-)
+# Limpa artefatos CSV/JSON da campanha anterior para o pacote refletir
+# somente o foco ativo Top-Turn / Bottom-Turn.
+for antigo in DIRETORIO_RESULTADOS.glob("*.csv"):
+    antigo.unlink()
+for antigo in DIRETORIO_RESULTADOS.glob("*.json"):
+    antigo.unlink()
 
-calibration_rows = directional_change_result.metrics.get(
-    "directional_change_calibration",
-    [],
-)
-pd.DataFrame(calibration_rows).to_csv(
-    DIRETORIO_RESULTADOS / "directional_change_calibration.csv",
+for slug, result in (
+    ("control", control_result),
+    ("bottom_turn", bottom_turn_result),
+    ("top_turn", directional_change_result),
+    ("top_bottom", top_bottom_result),
+):
+    result.predictions.reset_index().to_csv(
+        DIRETORIO_RESULTADOS / f"{slug}_predictions.csv",
+        index=False,
+    )
+    result.trades.to_csv(
+        DIRETORIO_RESULTADOS / f"{slug}_trades.csv",
+        index=False,
+    )
+
+for slug, peak_trades in (
+    ("control", control_peak_trades),
+    ("bottom_turn", bottom_turn_peak_trades),
+    ("top_turn", top_turn_peak_trades),
+    ("top_bottom", top_bottom_peak_trades),
+):
+    peak_trades.to_csv(
+        DIRETORIO_RESULTADOS / f"peak_exit_{slug}.csv",
+        index=False,
+    )
+
+for slug, entries in (
+    ("control", control_bottom_entries),
+    ("bottom_turn", bottom_turn_entries),
+    ("top_turn", top_turn_entries),
+    ("top_bottom", top_bottom_entries),
+):
+    entries.to_csv(
+        DIRETORIO_RESULTADOS / f"bottom_entry_{slug}.csv",
+        index=False,
+    )
+
+pd.DataFrame(
+    directional_change_result.metrics.get(
+        "directional_change_calibration",
+        [],
+    )
+).to_csv(
+    DIRETORIO_RESULTADOS / "top_turn_calibration.csv",
     index=False,
 )
-
-bocpd_calibration_rows = bocpd_result.metrics.get(
-    "bocpd_calibration",
-    [],
-)
-pd.DataFrame(bocpd_calibration_rows).to_csv(
-    DIRETORIO_RESULTADOS / "bocpd_calibration.csv",
+pd.DataFrame(
+    bottom_turn_result.metrics.get("bottom_turn_calibration", [])
+).to_csv(
+    DIRETORIO_RESULTADOS / "bottom_turn_calibration.csv",
     index=False,
 )
-
-hsmm_calibration_rows = hsmm_result.metrics.get(
-    "hsmm_calibration",
-    [],
-)
-pd.DataFrame(hsmm_calibration_rows).to_csv(
-    DIRETORIO_RESULTADOS / "hsmm_calibration.csv",
+pd.DataFrame(
+    top_bottom_result.metrics.get("bottom_turn_calibration", [])
+).to_csv(
+    DIRETORIO_RESULTADOS / "top_bottom_bottom_calibration.csv",
     index=False,
 )
-
-hazard_calibration_rows = hazard_result.metrics.get(
-    "hazard_calibration",
-    [],
-)
-pd.DataFrame(hazard_calibration_rows).to_csv(
-    DIRETORIO_RESULTADOS / "hazard_calibration.csv",
+pd.DataFrame(
+    top_bottom_result.metrics.get(
+        "combined_top_turn_calibration",
+        [],
+    )
+).to_csv(
+    DIRETORIO_RESULTADOS / "top_bottom_top_calibration.csv",
     index=False,
 )
 
@@ -857,103 +835,121 @@ comparison_table = pd.DataFrame(
         {
             "metric": "ending_capital",
             "control": control_metrics["ending_capital"],
-            "directional_change": directional_change_metrics["ending_capital"],
-            "bocpd": bocpd_metrics["ending_capital"],
-            "hsmm": hsmm_metrics["ending_capital"],
-            "hazard_survival": hazard_metrics["ending_capital"],
+            "bottom_turn": bottom_turn_metrics["ending_capital"],
+            "top_turn": directional_change_metrics["ending_capital"],
+            "top_bottom": top_bottom_metrics["ending_capital"],
         },
         {
             "metric": "cagr",
             "control": control_metrics["cagr"],
-            "directional_change": directional_change_metrics["cagr"],
-            "bocpd": bocpd_metrics["cagr"],
-            "hsmm": hsmm_metrics["cagr"],
-            "hazard_survival": hazard_metrics["cagr"],
+            "bottom_turn": bottom_turn_metrics["cagr"],
+            "top_turn": directional_change_metrics["cagr"],
+            "top_bottom": top_bottom_metrics["cagr"],
         },
         {
             "metric": "sharpe",
             "control": control_metrics["sharpe"],
-            "directional_change": directional_change_metrics["sharpe"],
-            "bocpd": bocpd_metrics["sharpe"],
-            "hsmm": hsmm_metrics["sharpe"],
-            "hazard_survival": hazard_metrics["sharpe"],
+            "bottom_turn": bottom_turn_metrics["sharpe"],
+            "top_turn": directional_change_metrics["sharpe"],
+            "top_bottom": top_bottom_metrics["sharpe"],
         },
         {
             "metric": "maximum_drawdown",
             "control": control_metrics["maximum_drawdown"],
-            "directional_change": directional_change_metrics["maximum_drawdown"],
-            "bocpd": bocpd_metrics["maximum_drawdown"],
-            "hsmm": hsmm_metrics["maximum_drawdown"],
-            "hazard_survival": hazard_metrics["maximum_drawdown"],
+            "bottom_turn": bottom_turn_metrics["maximum_drawdown"],
+            "top_turn": directional_change_metrics["maximum_drawdown"],
+            "top_bottom": top_bottom_metrics["maximum_drawdown"],
         },
         {
             "metric": "worst_fold_return",
             "control": control_metrics["worst_fold_return"],
-            "directional_change": directional_change_metrics["worst_fold_return"],
-            "bocpd": bocpd_metrics["worst_fold_return"],
-            "hsmm": hsmm_metrics["worst_fold_return"],
-            "hazard_survival": hazard_metrics["worst_fold_return"],
+            "bottom_turn": bottom_turn_metrics["worst_fold_return"],
+            "top_turn": directional_change_metrics["worst_fold_return"],
+            "top_bottom": top_bottom_metrics["worst_fold_return"],
         },
         {
             "metric": "median_exit_distance_from_peak_pct",
-            "control": control_peak["median_exit_distance_from_peak_pct"],
-            "directional_change": directional_change_peak[
+            "control": control_peak.get(
                 "median_exit_distance_from_peak_pct"
-            ],
-            "bocpd": bocpd_peak[
+            ),
+            "bottom_turn": bottom_turn_peak.get(
                 "median_exit_distance_from_peak_pct"
-            ],
-            "hsmm": hsmm_peak[
+            ),
+            "top_turn": top_turn_peak.get(
                 "median_exit_distance_from_peak_pct"
-            ],
-            "hazard_survival": hazard_peak[
+            ),
+            "top_bottom": top_bottom_peak.get(
                 "median_exit_distance_from_peak_pct"
-            ],
+            ),
         },
         {
-            "metric": "median_peak_capture_pct",
-            "control": control_peak["median_peak_capture_pct"],
-            "directional_change": directional_change_peak["median_peak_capture_pct"],
-            "bocpd": bocpd_peak["median_peak_capture_pct"],
-            "hsmm": hsmm_peak["median_peak_capture_pct"],
-            "hazard_survival": hazard_peak[
-                "median_peak_capture_pct"
-            ],
+            "metric": "median_entry_distance_from_bottom_pct",
+            "control": control_bottom.get(
+                "median_entry_distance_from_bottom_pct"
+            ),
+            "bottom_turn": bottom_turn_bottom.get(
+                "median_entry_distance_from_bottom_pct"
+            ),
+            "top_turn": top_turn_bottom.get(
+                "median_entry_distance_from_bottom_pct"
+            ),
+            "top_bottom": top_bottom_bottom.get(
+                "median_entry_distance_from_bottom_pct"
+            ),
         },
         {
-            "metric": "median_days_from_peak_to_exit",
-            "control": control_peak["median_days_from_peak_to_exit"],
-            "directional_change": directional_change_peak["median_days_from_peak_to_exit"],
-            "bocpd": bocpd_peak["median_days_from_peak_to_exit"],
-            "hsmm": hsmm_peak["median_days_from_peak_to_exit"],
-            "hazard_survival": hazard_peak[
-                "median_days_from_peak_to_exit"
-            ],
+            "metric": "median_bottom_capture_pct",
+            "control": control_bottom.get("median_bottom_capture_pct"),
+            "bottom_turn": bottom_turn_bottom.get(
+                "median_bottom_capture_pct"
+            ),
+            "top_turn": top_turn_bottom.get("median_bottom_capture_pct"),
+            "top_bottom": top_bottom_bottom.get(
+                "median_bottom_capture_pct"
+            ),
+        },
+        {
+            "metric": "median_days_from_bottom_to_entry",
+            "control": control_bottom.get(
+                "median_days_from_bottom_to_entry"
+            ),
+            "bottom_turn": bottom_turn_bottom.get(
+                "median_days_from_bottom_to_entry"
+            ),
+            "top_turn": top_turn_bottom.get(
+                "median_days_from_bottom_to_entry"
+            ),
+            "top_bottom": top_bottom_bottom.get(
+                "median_days_from_bottom_to_entry"
+            ),
         },
     ]
 )
 comparison_table.to_csv(
-    DIRETORIO_RESULTADOS / "comparison_directional_change.csv",
+    DIRETORIO_RESULTADOS / "comparison_cycle.csv",
     index=False,
 )
 
-with (DIRETORIO_RESULTADOS / "comparison_directional_change.json").open(
+with (DIRETORIO_RESULTADOS / "comparison_cycle.json").open(
     "w",
     encoding="utf-8",
 ) as arquivo:
     json.dump(
         {
-            "comparison": comparacao,
+            "research_version": RESEARCH_VERSION,
+            "comparison_top_turn": comparacao,
             "control_metrics": control_metrics,
-            "directional_change_metrics": directional_change_metrics,
-            "bocpd_metrics": bocpd_metrics,
-            "hsmm_metrics": hsmm_metrics,
-            "hazard_metrics": hazard_metrics,
+            "bottom_turn_metrics": bottom_turn_metrics,
+            "top_turn_metrics": directional_change_metrics,
+            "top_bottom_metrics": top_bottom_metrics,
             "control_peak": control_peak,
-            "directional_change_peak": directional_change_peak,
-            "bocpd_peak": bocpd_peak,
-            "hsmm_peak": hsmm_peak,
-            "hazard_peak": hazard_peak,
+            "bottom_turn_peak": bottom_turn_peak,
+            "top_turn_peak": top_turn_peak,
+            "top_bottom_peak": top_bottom_peak,
+            "control_bottom_entry": control_bottom,
+            "bottom_turn_bottom_entry": bottom_turn_bottom,
+            "top_turn_bottom_entry": top_turn_bottom,
+            "top_bottom_bottom_entry": top_bottom_bottom,
             "structural_exclusions": exclusoes,
             "snapshot_sha256": manifesto.get("snapshot_sha256"),
         },
@@ -965,19 +961,9 @@ with (DIRETORIO_RESULTADOS / "comparison_directional_change.json").open(
 
 graficos_gerados = _gerar_graficos_comparacao(
     control_result=control_result,
+    bottom_turn_result=bottom_turn_result,
     top_turn_result=directional_change_result,
-    bocpd_result=bocpd_result,
-    hsmm_result=hsmm_result,
-    hazard_result=hazard_result,
-    control_peak=control_peak,
-    top_turn_peak=directional_change_peak,
-    bocpd_peak=bocpd_peak,
-    hsmm_peak=hsmm_peak,
-    hazard_peak=hazard_peak,
-    top_turn_peak_trades=directional_change_peak_trades,
-    bocpd_peak_trades=bocpd_peak_trades,
-    hsmm_peak_trades=hsmm_peak_trades,
-    hazard_peak_trades=hazard_peak_trades,
+    top_bottom_result=top_bottom_result,
     frames_alinhados=frames_alinhados,
 )
 print(
@@ -985,7 +971,6 @@ print(
     f"diretorio={DIRETORIO_GRAFICOS}",
     flush=True,
 )
-
 print(f"[output] diretorio={DIRETORIO_RESULTADOS}", flush=True)
 
 
