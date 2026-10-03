@@ -12,14 +12,17 @@ from pesquisas.directional_change_lightgbm import (
     HSMMAssetModel,
     _agrupar_gatilhos_ablation,
     _bocpd_downward_scores,
+    _bottom_turn_targets,
     _directional_change_state,
     _envolver_politica_bocpd,
+    _envolver_politica_bottom_turn,
     _envolver_politica_hazard,
     _envolver_politica_hsmm,
     _filter_hsmm_asset,
     _envolver_politica_top_turn,
     _top_turn_targets,
     adicionar_top_turn_features,
+    calcular_bottom_entry,
     calcular_metricas_peak_gatilhos,
     calcular_peak_exit,
     criar_pacote_analise,
@@ -43,6 +46,7 @@ def _base_frame(close_values: list[float]) -> pd.DataFrame:
             "volume": 1_000_000.0,
             "atr_pct_14": 0.02,
             "distance_from_high_20": -0.01,
+            "distance_from_low_20": 0.01,
             "return_20": 0.10,
         },
         index=index,
@@ -86,6 +90,89 @@ def test_top_turn_target_rejects_when_continuation_happens_first() -> None:
     target = _top_turn_targets(frame, horizon=5)
 
     assert target.iloc[0]["forward_down_reversal"] == 0.0
+
+
+def test_bottom_turn_target_marks_recovery_before_new_drop() -> None:
+    frame = _base_frame([100.0, 101.0, 103.0, 105.0, 104.0, 103.0])
+    target = _bottom_turn_targets(frame, horizon=5)
+
+    assert target.iloc[0]["forward_up_reversal"] == 1.0
+
+
+def test_bottom_turn_target_rejects_when_downside_continues_first() -> None:
+    frame = _base_frame([100.0, 99.0, 98.0, 104.0, 105.0, 106.0])
+    target = _bottom_turn_targets(frame, horizon=5)
+
+    assert target.iloc[0]["forward_up_reversal"] == 0.0
+
+
+def test_bottom_turn_gates_cash_entry_until_two_confirmations() -> None:
+    dates = pd.to_datetime(
+        ["2026-01-05T00:00:00Z", "2026-01-06T00:00:00Z"],
+        utc=True,
+    )
+    frame = pd.DataFrame(
+        {"bottom_turn_eligible": [True, True]},
+        index=dates,
+    )
+    diagnostics: dict[pd.Timestamp, dict] = {}
+
+    def base_policy(timestamp, _current_position, _holding_days):
+        diagnostics[pd.Timestamp(timestamp)] = {
+            "decision_reason": "ENTER_BEST_ASSET",
+            "final_action_asset": "AAA",
+        }
+        return 1, 0.40
+
+    policy = _envolver_politica_bottom_turn(
+        base_policy,
+        probabilities={
+            dates[0]: {"AAA": 0.80},
+            dates[1]: {"AAA": 0.82},
+        },
+        frames={"AAA": frame},
+        symbols=["AAA"],
+        probability_threshold=0.75,
+        decision_diagnostics=diagnostics,
+    )
+
+    first_target, _ = policy(dates[0], 0, 0)
+    second_target, _ = policy(dates[1], 0, 0)
+
+    assert first_target == 0
+    assert second_target == 1
+    assert diagnostics[dates[0]]["bottom_turn_entry_blocked"] is True
+    assert diagnostics[dates[1]]["bottom_turn_entry_triggered"] is True
+
+
+def test_bottom_turn_does_not_change_asset_to_asset_rotation() -> None:
+    date = pd.Timestamp("2026-01-05T00:00:00Z")
+    diagnostics: dict[pd.Timestamp, dict] = {}
+
+    def base_policy(timestamp, _current_position, _holding_days):
+        diagnostics[pd.Timestamp(timestamp)] = {
+            "decision_reason": "ROTATE_TO_BEST_ASSET",
+            "final_action_asset": "BBB",
+        }
+        return 2, 0.55
+
+    policy = _envolver_politica_bottom_turn(
+        base_policy,
+        probabilities={},
+        frames={
+            "AAA": pd.DataFrame(index=[date]),
+            "BBB": pd.DataFrame(index=[date]),
+        },
+        symbols=["AAA", "BBB"],
+        probability_threshold=0.75,
+        decision_diagnostics=diagnostics,
+    )
+
+    target, score = policy(date, 1, 5)
+
+    assert target == 2
+    assert score == 0.55
+    assert diagnostics[date]["bottom_turn_entry_candidate"] is False
 
 
 def test_overlay_requires_two_confirmations() -> None:
@@ -316,6 +403,57 @@ def test_ablation_groups_original_triggers_by_asset_and_fold() -> None:
     assert len(groups[("asset", "NVDA")]) == 1
     assert len(groups[("fold", "2")]) == 2
     assert len(groups[("fold", "3")]) == 1
+
+
+def test_bottom_entry_measures_distance_from_low_before_entry() -> None:
+    index = pd.date_range(
+        "2026-01-05",
+        periods=25,
+        freq="B",
+        tz="UTC",
+    )
+    close = pd.Series(
+        [110.0, 106.0, 102.0, 100.0, 101.0, 102.0]
+        + [103.0 + index * 0.2 for index in range(19)],
+        index=index,
+    )
+    frame = pd.DataFrame(
+        {
+            "open": close,
+            "high": close + 1.0,
+            "low": close - 1.0,
+            "close": close,
+        },
+        index=index,
+    )
+    trades = pd.DataFrame(
+        [
+            {
+                "timestamp": index[5],
+                "action": "BUY",
+                "asset": "AAA",
+                "execution_price": 102.0,
+                "decision_timestamp": index[4],
+                "rotation_from_asset": "CASH",
+                "rotation_to_asset": "AAA",
+                "walk_forward_fold": 1,
+                "decision_reason": "BOTTOM_TURN_CONFIRMED_ENTRY",
+            }
+        ]
+    )
+
+    summary, detail = calcular_bottom_entry(
+        trades,
+        {"AAA": frame},
+        oos_start=index[0],
+    )
+
+    assert summary["cash_entries"] == 1
+    assert detail.iloc[0]["bottom_price_before_entry"] == 99.0
+    assert abs(
+        detail.iloc[0]["entry_distance_from_bottom_pct"]
+        - (102.0 / 99.0 - 1.0) * 100.0
+    ) < 1e-12
 
 
 def test_peak_exit_normal_sell_excludes_exit_session_high() -> None:
