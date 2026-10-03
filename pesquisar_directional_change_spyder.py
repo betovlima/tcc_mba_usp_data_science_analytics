@@ -216,6 +216,19 @@ if ablation:
             flush=True,
         )
 
+    for row in ablation.get("group_rows", []):
+        contribution = float(
+            row.get("group_contribution_to_ending_capital") or 0.0
+        )
+        print(
+            "[ablation-group] "
+            f"{row.get('group_type')}={row.get('group_value')} "
+            f"triggers={row.get('trigger_count')} "
+            f"contribution={contribution:+,.2f} "
+            f"without={float(row.get('without_group_ending_capital')):,.2f}",
+            flush=True,
+        )
+
 
 # %% 8 - Exportacao dos artefatos
 DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
