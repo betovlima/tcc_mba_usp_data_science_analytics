@@ -364,34 +364,26 @@ auditar as decisões individuais, enquanto `data_audit.json` e
 `structural_exclusions.csv` documentam a integridade do snapshot e eventuais
 exclusões estruturais.
 
-## Pesquisa experimental: reversao Top-Turn vs BOCPD
+## Pesquisa experimental: reversao Top-Turn vs BOCPD vs HSMM
 
-A pesquisa continua usando os mesmos arquivos:
+A pesquisa usa os mesmos arquivos de codigo e a mesma branch ativa. O historico
+fica nos commits do Git.
 
-- `pesquisas/directional_change_lightgbm.py`;
-- `pesquisar_directional_change_spyder.py`;
-- `tests/test_directional_change_lightgbm.py`.
-
-O checkpoint Top-Turn foi fechado com capital final de US$ 12.486.768,00
-contra US$ 10.082.425,91 do Control. A ablation mostrou concentracao relevante
-do ganho em TSLA/fold 2, por isso a etapa seguinte compara essa descoberta com
-uma tecnica estruturalmente diferente: Bayesian Online Change Point Detection
-(BOCPD).
-
-A execucao atual compara:
+A execucao atual compara quatro cenarios OOS sob o mesmo snapshot congelado,
+folds walk-forward, custos e semantica next-open:
 
 ```text
 Control
 Top-Turn Directional Change + LightGBM
 BOCPD
+Explicit-Duration HSMM
 ```
 
-Os tres usam o mesmo snapshot congelado, folds walk-forward, politica-base,
-custos e semantica de execucao next-open. O BOCPD calcula causalmente a
-distribuicao posterior do run length sobre retornos diarios padronizados e
-calibra apenas no bloco de calibracao de cada fold o hazard e o limiar do
-signal de mudanca descendente. Duas confirmacoes consecutivas sao exigidas
-antes de antecipar uma saida para CASH.
+O HSMM estima tres estados latentes de regime usando retorno diario e tendencia
+padronizados, aprende no treino as emissoes, transicoes entre segmentos e
+distribuicoes explicitas de duracao e filtra as probabilidades de estado de
+forma causal. O threshold de reversao e calibrado somente no bloco de
+calibracao de cada fold e exige duas confirmacoes antes de uma saida antecipada.
 
 Para executar no Spyder:
 
@@ -399,11 +391,12 @@ Para executar no Spyder:
 %run pesquisar_directional_change_spyder.py
 ```
 
-Os artefatos continuam sendo sobrescritos em
-`output/directional_change/`, e o unico pacote necessario para analise
-continua sendo:
+Os resultados continuam em `output/directional_change/`. Ao final, o script
+tambem recria `output/directional_change/graficos/` com curvas de capital,
+linha do tempo dos gatilhos, comparacoes de Peak Exit e graficos por ativo com
+marcadores dos gatilhos.
 
-`output/directional_change/pacote_analise.zip`
+O unico pacote necessario para analise continua sendo
+`output/directional_change/pacote_analise.zip`.
 
-Nenhum resultado BOCPD deve ser interpretado antes da execucao OOS completa.
 A `main` e o Control oficial permanecem inalterados.
