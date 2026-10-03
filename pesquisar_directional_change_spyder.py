@@ -31,13 +31,12 @@ from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 from engine.rotacao import preparar_painel_rotacao
 from pesquisas.directional_change_lightgbm import (
     RESEARCH_VERSION,
+    calcular_bottom_entry,
     calcular_peak_exit,
     comparar_control_directional_change,
     criar_pacote_analise,
-    executar_bocpd_overlay,
+    executar_bottom_turn_lightgbm,
     executar_directional_change_lightgbm,
-    executar_hazard_survival_overlay,
-    executar_hsmm_overlay,
     sinal_sonoro_conclusao,
 )
 from reproducao.dados import SnapshotPaths, validate_snapshot
@@ -293,55 +292,28 @@ def _trigger_counts_monthly(
 def _gerar_graficos_comparacao(
     *,
     control_result,
+    bottom_turn_result,
     top_turn_result,
-    bocpd_result,
-    hsmm_result,
-    hazard_result,
-    control_peak,
-    top_turn_peak,
-    bocpd_peak,
-    hsmm_peak,
-    hazard_peak,
-    top_turn_peak_trades,
-    bocpd_peak_trades,
-    hsmm_peak_trades,
-    hazard_peak_trades,
+    top_bottom_result,
     frames_alinhados,
 ) -> list[Path]:
-    # Peak arguments remain in the signature because they are exported and
-    # audited elsewhere; storytelling focuses on month/year behavior.
-    _ = (
-        control_peak,
-        top_turn_peak,
-        bocpd_peak,
-        hsmm_peak,
-        hazard_peak,
-        top_turn_peak_trades,
-        bocpd_peak_trades,
-        hsmm_peak_trades,
-        hazard_peak_trades,
-    )
-
     DIRETORIO_GRAFICOS.mkdir(parents=True, exist_ok=True)
     for antigo in DIRETORIO_GRAFICOS.glob("*.png"):
         antigo.unlink()
 
     gerados: list[Path] = []
-
     strategies = (
         ("Control", control_result),
+        ("Bottom-Turn", bottom_turn_result),
         ("Top-Turn", top_turn_result),
-        ("BOCPD", bocpd_result),
-        ("HSMM", hsmm_result),
-        ("Hazard-Survival", hazard_result),
+        ("Top+Bottom", top_bottom_result),
     )
 
-    # Story 1: para cada política, qual ativo dominou cada mês e qual foi
-    # o retorno da estratégia naquele mês.
     for label, result in strategies:
         monthly = _story_strategy_monthly(result.predictions)
         destino = DIRETORIO_GRAFICOS / (
-            "story_" + label.lower().replace("-", "_") + "_monthly.png"
+            "story_" + label.lower().replace("+", "_").replace("-", "_")
+            + "_monthly.png"
         )
 
         def strategy_text(row):
@@ -359,9 +331,7 @@ def _gerar_graficos_comparacao(
 
         _plot_calendar_story(
             monthly,
-            title=(
-                f"{label}: ativo dominante e retorno por mês/ano"
-            ),
+            title=f"{label}: ativo dominante e retorno por mês/ano",
             text_builder=strategy_text,
             destino=destino,
         )
@@ -369,8 +339,12 @@ def _gerar_graficos_comparacao(
             gerados.append(destino)
 
     asset_monthly = _asset_monthly_returns(frames_alinhados)
-    oos_start = pd.Timestamp(control_result.predictions.index.min()).to_period("M")
-    oos_end = pd.Timestamp(control_result.predictions.index.max()).to_period("M")
+    oos_start = pd.Timestamp(
+        control_result.predictions.index.min()
+    ).to_period("M")
+    oos_end = pd.Timestamp(
+        control_result.predictions.index.max()
+    ).to_period("M")
     asset_monthly = asset_monthly.loc[
         (asset_monthly["period"] >= oos_start)
         & (asset_monthly["period"] <= oos_end)
@@ -378,17 +352,18 @@ def _gerar_graficos_comparacao(
 
     trigger_specs = (
         (
-            "TT",
+            "TT↓",
             top_turn_result.predictions,
             "directional_change_exit_triggered",
         ),
-        ("BO", bocpd_result.predictions, "bocpd_exit_triggered"),
-        ("HS", hsmm_result.predictions, "hsmm_exit_triggered"),
-        ("HZ", hazard_result.predictions, "hazard_exit_triggered"),
+        (
+            "BT↑",
+            bottom_turn_result.predictions,
+            "bottom_turn_entry_triggered",
+        ),
     )
     trigger_counts = _trigger_counts_monthly(trigger_specs)
 
-    # Story 2: melhor ativo de mercado em cada mês.
     if not asset_monthly.empty:
         leaders = (
             asset_monthly.sort_values(
@@ -402,10 +377,7 @@ def _gerar_graficos_comparacao(
         destino = DIRETORIO_GRAFICOS / "market_monthly_leaders.png"
 
         def leader_text(row):
-            return (
-                f"{row['asset']}\n"
-                f"{float(row['monthly_return']):+.1%}"
-            )
+            return f"{row['asset']}\n{float(row['monthly_return']):+.1%}"
 
         _plot_calendar_story(
             leaders,
@@ -416,7 +388,6 @@ def _gerar_graficos_comparacao(
         if destino.exists():
             gerados.append(destino)
 
-        # Story 3: pior ativo de mercado em cada mês.
         laggards = (
             asset_monthly.sort_values(
                 ["period", "monthly_return"],
@@ -429,10 +400,7 @@ def _gerar_graficos_comparacao(
         destino = DIRETORIO_GRAFICOS / "market_monthly_laggards.png"
 
         def laggard_text(row):
-            return (
-                f"{row['asset']}\n"
-                f"{float(row['monthly_return']):+.1%}"
-            )
+            return f"{row['asset']}\n{float(row['monthly_return']):+.1%}"
 
         _plot_calendar_story(
             laggards,
@@ -443,8 +411,6 @@ def _gerar_graficos_comparacao(
         if destino.exists():
             gerados.append(destino)
 
-    # Story 4: calendário individual apenas para ativos que realmente tiveram
-    # gatilhos. Cada célula mostra retorno do ativo e quais técnicas sinalizaram.
     trigger_assets = (
         sorted(trigger_counts["asset"].unique().tolist())
         if not trigger_counts.empty
@@ -460,9 +426,7 @@ def _gerar_graficos_comparacao(
         counts_asset = trigger_counts.loc[
             trigger_counts["asset"] == asset
         ].copy()
-        count_lookup: dict[
-            tuple[int, int], list[str]
-        ] = {}
+        count_lookup: dict[tuple[int, int], list[str]] = {}
         for _, row in counts_asset.iterrows():
             key = (int(row["year"]), int(row["month"]))
             count = int(row["count"])
@@ -482,8 +446,8 @@ def _gerar_graficos_comparacao(
         _plot_calendar_story(
             calendar,
             title=(
-                f"{asset}: retorno mensal e gatilhos "
-                "(TT=Top-Turn, BO=BOCPD, HS=HSMM, HZ=Hazard)"
+                f"{asset}: retorno mensal e ciclo de reversão "
+                "(TT↓=saída Top-Turn, BT↑=entrada Bottom-Turn)"
             ),
             text_builder=asset_text,
             destino=destino,
@@ -495,11 +459,11 @@ def _gerar_graficos_comparacao(
 
 
 print("=" * 78, flush=True)
-print("TCC - Reversal Research Storytelling", flush=True)
+print("TCC - Top-Turn / Bottom-Turn Cycle Research", flush=True)
 print(f"versao_pesquisa={RESEARCH_VERSION}", flush=True)
 print("dados=SNAPSHOT_CONGELADO_VERSIONADO", flush=True)
 print(
-    "comparacao=CONTROL vs TOP_TURN vs BOCPD vs HSMM vs HAZARD_SURVIVAL",
+    "comparacao=CONTROL vs BOTTOM_TURN vs TOP_TURN vs TOP_BOTTOM",
     flush=True,
 )
 print("=" * 78, flush=True)
