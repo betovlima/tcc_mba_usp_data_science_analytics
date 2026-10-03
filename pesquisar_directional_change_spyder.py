@@ -13,6 +13,15 @@ from pathlib import Path
 import json
 import time
 
+try:
+    from IPython import get_ipython
+
+    _ipython = get_ipython()
+    if _ipython is not None:
+        _ipython.run_line_magic("matplotlib", "inline")
+except Exception:
+    _ipython = None
+
 import matplotlib.pyplot as plt
 import pandas as pd
 
