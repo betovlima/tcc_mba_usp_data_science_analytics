@@ -9,7 +9,7 @@ Control oficial nem o MCT.
 ## Regra de continuidade da pesquisa
 
 Esta linha de pesquisa evolui exclusivamente nesta unica branch de pesquisa:
-`feature/v1.3.0-dev.1-directional-change-lightgbm`.
+`research/reversal-bocpd-comparison`.
 A `main` permanece intocada durante a pesquisa; o historico fica nos commits
 desta branch.
 
@@ -222,3 +222,49 @@ Ao final tambem sao gerados graficos em
 
 Os graficos sao sobrescritos em cada execucao e entram no mesmo
 `pacote_analise.zip`.
+
+
+## Pesquisa ativa — Hazard/Survival e Plots no Spyder
+
+Versao corrente: `1.6.0-dev.1`.
+
+A comparacao passa a executar, no mesmo universo e protocolo:
+
+- Control;
+- Top-Turn;
+- BOCPD;
+- HSMM;
+- Hazard/Survival.
+
+Hazard/Survival usa um modelo logistico de hazard discreto por intervalo.
+A construcao pessoa-periodo trata:
+
+- queda como evento de interesse;
+- continuacao da alta como evento concorrente que censura o processo de queda;
+- ausencia de evento dentro das cinco sessoes como censura a direita no fim
+  da janela;
+- threshold calibrado apenas no bloco de calibracao de cada fold;
+- duas confirmacoes consecutivas antes de antecipar uma saida para CASH.
+
+Correcao estrutural de CLMT:
+
+- o snapshot congelado permanece intacto;
+- o Corporate Action de 2024-07-11 registra `name_change` com o ticker CLMT
+  preservado, mas CUSIP alterado de `131476103` para `131428104`;
+- CLMT passa a ser excluido explicitamente do pipeline de modelagem como
+  `structural_identity_change`;
+- a serie nao e reconstruida nem conectada artificialmente.
+
+Graficos:
+
+- os PNGs continuam em `output/directional_change/graficos/`;
+- antes de fechar cada Figure, o script a publica no console IPython;
+- quando executado no Spyder, o backend Matplotlib e configurado como
+  `inline`, permitindo navegar pelas figuras na aba Plots;
+- os graficos adicionais sao `relative_equity_vs_control.png`,
+  `trigger_peak_distance.png` e `trigger_peak_capture.png`;
+- os graficos por ativo passam a incluir tambem Hazard/Survival.
+
+O `pacote_analise.zip` antigo continua sendo apagado antes da criacao do
+novo arquivo e o caminho permanece fixo:
+`output/directional_change/pacote_analise.zip`.
