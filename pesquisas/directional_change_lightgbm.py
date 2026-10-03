@@ -4137,6 +4137,190 @@ def comparar_control_directional_change(
         ),
     }
 
+def calcular_bottom_entry(
+    trades: pd.DataFrame,
+    frames: dict[str, pd.DataFrame],
+    *,
+    oos_start: pd.Timestamp | None = None,
+) -> tuple[dict[str, Any], pd.DataFrame]:
+    """Mede a qualidade de entradas CASH -> ativo em relacao ao fundo recente."""
+    if trades is None or trades.empty:
+        return {"cash_entries": 0}, pd.DataFrame()
+
+    ordered = trades.copy()
+    ordered["timestamp"] = pd.to_datetime(ordered["timestamp"], utc=True)
+    ordered = ordered.sort_values("timestamp", ignore_index=True)
+    if oos_start is not None:
+        start = pd.Timestamp(oos_start)
+        start = (
+            start.tz_localize("UTC")
+            if start.tzinfo is None
+            else start.tz_convert("UTC")
+        )
+    else:
+        start = pd.Timestamp(ordered["timestamp"].min())
+
+    rows: list[dict[str, Any]] = []
+    cash_since = start
+
+    for _, trade in ordered.iterrows():
+        action = str(trade.get("action") or "").upper()
+        from_asset = str(trade.get("rotation_from_asset") or "").upper()
+        to_asset = str(trade.get("rotation_to_asset") or "").upper()
+        timestamp = pd.Timestamp(trade["timestamp"])
+
+        if action == "SELL" and to_asset == "CASH":
+            cash_since = timestamp
+            continue
+
+        if action != "BUY" or from_asset != "CASH":
+            continue
+
+        asset = str(trade.get("asset") or "")
+        frame = frames.get(asset)
+        if frame is None or frame.empty:
+            continue
+        local = frame.copy()
+        local.index = pd.to_datetime(local.index, utc=True)
+        local = local.sort_index()
+
+        decision_value = trade.get("decision_timestamp")
+        decision_at = (
+            pd.Timestamp(decision_value)
+            if decision_value is not None and not pd.isna(decision_value)
+            else timestamp
+        )
+        decision_at = (
+            decision_at.tz_localize("UTC")
+            if decision_at.tzinfo is None
+            else decision_at.tz_convert("UTC")
+        )
+
+        window = local.loc[
+            (local.index >= cash_since)
+            & (local.index <= decision_at)
+        ]
+        lows = pd.to_numeric(window.get("low"), errors="coerce").dropna()
+        if lows.empty:
+            cash_since = timestamp
+            continue
+
+        bottom_at = pd.Timestamp(lows.idxmin())
+        bottom_price = float(lows.loc[bottom_at])
+        entry_price = float(trade.get("execution_price"))
+        raw_distance = (
+            float(entry_price / bottom_price - 1.0)
+            if bottom_price > 0
+            else np.nan
+        )
+        entry_distance = max(0.0, raw_distance) if np.isfinite(raw_distance) else np.nan
+
+        prior = window.loc[window.index <= bottom_at]
+        highs = pd.to_numeric(prior.get("high"), errors="coerce").dropna()
+        prior_high = float(highs.max()) if not highs.empty else np.nan
+        if (
+            np.isfinite(prior_high)
+            and prior_high > bottom_price
+            and np.isfinite(entry_price)
+        ):
+            capture = 100.0 * (
+                1.0
+                - max(0.0, entry_price - bottom_price)
+                / (prior_high - bottom_price)
+            )
+            capture = float(np.clip(capture, 0.0, 100.0))
+        else:
+            capture = None
+
+        positions = local.index.get_indexer([bottom_at, timestamp])
+        if (positions >= 0).all():
+            days_from_bottom = int(max(0, positions[1] - positions[0]))
+        else:
+            days_from_bottom = None
+
+        row: dict[str, Any] = {
+            "asset": asset,
+            "entry_timestamp": timestamp,
+            "decision_timestamp": decision_at,
+            "cash_since": cash_since,
+            "bottom_price_before_entry": bottom_price,
+            "bottom_timestamp_before_entry": bottom_at,
+            "entry_price": entry_price,
+            "entry_distance_from_bottom_pct": (
+                float(entry_distance * 100.0)
+                if np.isfinite(entry_distance)
+                else None
+            ),
+            "bottom_capture_pct": capture,
+            "days_from_bottom_to_entry": days_from_bottom,
+            "walk_forward_fold": trade.get("walk_forward_fold"),
+            "decision_reason": trade.get("decision_reason"),
+        }
+
+        if timestamp in local.index:
+            entry_position = int(local.index.get_loc(timestamp))
+            for horizon in (5, 10, 20):
+                future_position = entry_position + int(horizon)
+                if future_position < len(local):
+                    future_close = float(
+                        pd.to_numeric(
+                            local["close"],
+                            errors="coerce",
+                        ).iloc[future_position]
+                    )
+                    row[f"post_entry_return_{horizon}d_pct"] = float(
+                        (future_close / entry_price - 1.0) * 100.0
+                    )
+                    forward = pd.to_numeric(
+                        local["low"],
+                        errors="coerce",
+                    ).iloc[
+                        entry_position:
+                        future_position + 1
+                    ].dropna()
+                    row[f"continued_drawdown_{horizon}d_pct"] = (
+                        float(
+                            (float(forward.min()) / entry_price - 1.0)
+                            * 100.0
+                        )
+                        if not forward.empty
+                        else None
+                    )
+                else:
+                    row[f"post_entry_return_{horizon}d_pct"] = None
+                    row[f"continued_drawdown_{horizon}d_pct"] = None
+
+        rows.append(row)
+        cash_since = timestamp
+
+    detail = pd.DataFrame(rows)
+    if detail.empty:
+        return {"cash_entries": 0}, detail
+
+    def median(column: str) -> float | None:
+        values = pd.to_numeric(detail[column], errors="coerce").dropna()
+        return float(values.median()) if not values.empty else None
+
+    summary: dict[str, Any] = {
+        "cash_entries": int(len(detail)),
+        "median_entry_distance_from_bottom_pct": median(
+            "entry_distance_from_bottom_pct"
+        ),
+        "median_bottom_capture_pct": median("bottom_capture_pct"),
+        "median_days_from_bottom_to_entry": median(
+            "days_from_bottom_to_entry"
+        ),
+    }
+    for horizon in (5, 10, 20):
+        summary[f"median_post_entry_return_{horizon}d_pct"] = median(
+            f"post_entry_return_{horizon}d_pct"
+        )
+        summary[f"median_continued_drawdown_{horizon}d_pct"] = median(
+            f"continued_drawdown_{horizon}d_pct"
+        )
+    return summary, detail
+
+
 def calcular_peak_exit(
     trades: pd.DataFrame,
     frames: dict[str, pd.DataFrame],
