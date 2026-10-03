@@ -364,21 +364,34 @@ auditar as decisões individuais, enquanto `data_audit.json` e
 `structural_exclusions.csv` documentam a integridade do snapshot e eventuais
 exclusões estruturais.
 
-## Pesquisa experimental: Directional Change + LightGBM
+## Pesquisa experimental: reversao Top-Turn vs BOCPD
 
-Esta linha de pesquisa evolui sempre nos mesmos arquivos:
+A pesquisa continua usando os mesmos arquivos:
 
 - `pesquisas/directional_change_lightgbm.py`;
 - `pesquisar_directional_change_spyder.py`;
 - `tests/test_directional_change_lightgbm.py`.
 
-O historico das tentativas fica no Git. Nao sao criados novos arquivos para
-cada versao do experimento.
+O checkpoint Top-Turn foi fechado com capital final de US$ 12.486.768,00
+contra US$ 10.082.425,91 do Control. A ablation mostrou concentracao relevante
+do ganho em TSLA/fold 2, por isso a etapa seguinte compara essa descoberta com
+uma tecnica estruturalmente diferente: Bayesian Online Change Point Detection
+(BOCPD).
 
-A implementacao atual usa Directional Change em escalas de 2%, 4% e 8% e um
-LightGBM Classifier para estimar uma virada de alta para baixa proxima de uma
-maxima recente. A calibracao privilegia precision e exige duas confirmacoes
-consecutivas antes de antecipar uma saida que o Control ainda nao faria.
+A execucao atual compara:
+
+```text
+Control
+Top-Turn Directional Change + LightGBM
+BOCPD
+```
+
+Os tres usam o mesmo snapshot congelado, folds walk-forward, politica-base,
+custos e semantica de execucao next-open. O BOCPD calcula causalmente a
+distribuicao posterior do run length sobre retornos diarios padronizados e
+calibra apenas no bloco de calibracao de cada fold o hazard e o limiar do
+signal de mudanca descendente. Duas confirmacoes consecutivas sao exigidas
+antes de antecipar uma saida para CASH.
 
 Para executar no Spyder:
 
@@ -386,16 +399,11 @@ Para executar no Spyder:
 %run pesquisar_directional_change_spyder.py
 ```
 
-Os artefatos sao sobrescritos em:
-
-`output/directional_change/`
-
-Ao terminar, o script cria o arquivo fixo:
+Os artefatos continuam sendo sobrescritos em
+`output/directional_change/`, e o unico pacote necessario para analise
+continua sendo:
 
 `output/directional_change/pacote_analise.zip`
 
-Esse e o unico arquivo necessario para uma nova analise. O script tambem emite
-um aviso sonoro ao concluir.
-
-O Control oficial continua inalterado e nenhum resultado experimental e levado
-ao MCT sem validacao OOS.
+Nenhum resultado BOCPD deve ser interpretado antes da execucao OOS completa.
+A `main` e o Control oficial permanecem inalterados.
