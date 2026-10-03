@@ -13,6 +13,7 @@ from reproducao.dados import (
     data_final_temporaria_atual,
     snapshot_cobre_data_final,
 )
+from reproducao.preparacao import structural_identity_issue
 from reproducao.graficos import (
     calcular_retornos_mensais,
     construir_rotacoes,
@@ -91,6 +92,27 @@ def test_frozen_universe_and_dates_match_cpu_reference() -> None:
         0.25,
     )
 
+
+
+def test_clmt_cusip_transition_is_structurally_excluded() -> None:
+    issue = structural_identity_issue(
+        "CLMT",
+        [
+            {
+                "action_type": "name_change",
+                "old_symbol": "CLMT",
+                "new_symbol": "CLMT",
+                "old_cusip": "131476103",
+                "new_cusip": "131428104",
+                "process_date": "2024-07-11",
+            }
+        ],
+    )
+
+    assert issue is not None
+    assert issue["reason"] == "structural_identity_change"
+    assert issue["old_cusip"] == "131476103"
+    assert issue["new_cusip"] == "131428104"
 
 
 def test_asset_universe_has_no_manual_reference_or_candidate_split() -> None:
