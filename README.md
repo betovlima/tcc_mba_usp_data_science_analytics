@@ -364,63 +364,38 @@ auditar as decisões individuais, enquanto `data_audit.json` e
 `structural_exclusions.csv` documentam a integridade do snapshot e eventuais
 exclusões estruturais.
 
-
 ## Pesquisa experimental: Directional Change + LightGBM
 
-A branch `feature/v1.3.0-dev.1-directional-change-lightgbm` adiciona um
-challenger separado para estudar se e possivel sair mais perto da reversao de
-alta para baixa sem alterar o Control oficial.
+Esta linha de pesquisa evolui sempre nos mesmos arquivos:
 
-O experimento usa o mesmo snapshot congelado e os mesmos folds walk-forward do
-Control. Um LightGBM Classifier aprende a probabilidade de uma reversao de
-curto prazo usando features Directional Change em escalas de 2%, 4% e 8%.
-Quando o Control manteria o ativo e a probabilidade supera o limiar calibrado
-no fold, o challenger sai para CASH na abertura seguinte.
+- `pesquisas/directional_change_lightgbm.py`;
+- `pesquisar_directional_change_spyder.py`;
+- `tests/test_directional_change_lightgbm.py`.
 
-Para executar no Spyder, abra:
+O historico das tentativas fica no Git. Nao sao criados novos arquivos para
+cada versao do experimento.
 
-`pesquisar_directional_change_spyder.py`
+A implementacao atual usa Directional Change em escalas de 2%, 4% e 8% e um
+LightGBM Classifier para estimar uma virada de alta para baixa proxima de uma
+maxima recente. A calibracao privilegia precision e exige duas confirmacoes
+consecutivas antes de antecipar uma saida que o Control ainda nao faria.
 
-e execute as celulas `# %%` de cima para baixo.
-
-A pesquisa compara diretamente:
-
-- capital final, CAGR, Sharpe, MaxDD e pior fold;
-- distancia mediana do topo ate a saida;
-- captura mediana do topo;
-- sessoes entre topo e saida;
-- numero de gatilhos de reversao.
-
-Os resultados sao gravados em
-`output/directional_change_lightgbm/v1_3_0_dev_1/`.
-
-Nenhum resultado desta pesquisa deve ser interpretado como validado antes da
-execucao OOS completa. A reproducao oficial Control vs Soft permanece
-inalterada.
-
-
-### Directional Change Top-Turn v1.3.0-dev.2
-
-A v1.3.0-dev.1 foi mantida como evidencia negativa: reduziu pouco a distancia
-do topo, mas gerou falsos positivos e terminou muito abaixo do Control.
-
-A v1.3.0-dev.2 testa um alvo mais especifico de virada perto do topo. Abra no
-Spyder:
-
-`pesquisar_directional_change_top_turn_spyder.py`
-
-e execute as celulas de cima para baixo, ou no console:
+Para executar no Spyder:
 
 ```python
-%run pesquisar_directional_change_top_turn_spyder.py
+%run pesquisar_directional_change_spyder.py
 ```
 
-Ao terminar, o script cria automaticamente:
+Os artefatos sao sobrescritos em:
 
-`output/directional_change_top_turn/pacote_analise_1_3_0_dev_2.zip`
+`output/directional_change/`
 
-Esse ZIP contem somente os CSV/JSON da execucao necessarios para analise. Nao
-e preciso compactar a pasta `dados/` nem enviar os demais outputs do projeto.
+Ao terminar, o script cria o arquivo fixo:
 
-Depois de criar o ZIP, o script emite dois tons no Windows para avisar que a
-pesquisa terminou.
+`output/directional_change/pacote_analise.zip`
+
+Esse e o unico arquivo necessario para uma nova analise. O script tambem emite
+um aviso sonoro ao concluir.
+
+O Control oficial continua inalterado e nenhum resultado experimental e levado
+ao MCT sem validacao OOS.
