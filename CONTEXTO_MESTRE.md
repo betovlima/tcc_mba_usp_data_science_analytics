@@ -103,3 +103,41 @@ bloqueado. Nao se limita mais apenas as datas dos gatilhos originais.
 Os resultados entram no mesmo `comparison_directional_change.json` e,
 portanto, no mesmo `pacote_analise.zip`. Nenhum arquivo de pesquisa adicional
 e criado e a `main` permanece intocada.
+
+
+## Fechamento da linha Top-Turn
+
+Checkpoint final validado antes de encerrar esta branch de pesquisa:
+
+- research_version: 1.3.0-dev.5;
+- Control: US$ 10.082.425,91;
+- Top-Turn: US$ 12.486.768,00;
+- delta: +US$ 2.404.342,09;
+- vantagem relativa: +23,8469%;
+- CAGR: 207,62% -> 218,50%;
+- Sharpe: 2,1011 -> 2,1565;
+- MaxDD: -31,2194% -> -31,2192%;
+- pior fold: +275,05% -> +276,27%;
+- distancia mediana do topo: 2,3844% -> 2,3514%;
+- captura mediana do topo: 32,76% -> 36,43%;
+- 10 gatilhos Top-Turn em 1.547 sessoes OOS.
+
+Ablation de escopo completo:
+
+- sem todos os gatilhos: US$ 10.082.425,91, exatamente o Control;
+- sem LKFT: US$ 12.173.712,96;
+- sem NFLX: US$ 12.766.219,07;
+- sem NVDA: US$ 12.423.034,94;
+- sem TSLA: US$ 10.167.194,50;
+- sem fold 1: US$ 12.446.191,96;
+- sem fold 2: US$ 10.167.194,50;
+- sem fold 3: US$ 12.423.034,94.
+
+A contribuicao agrupada de TSLA/fold 2 foi US$ 2.319.573,50, cerca de
+96,5% da vantagem total observada sobre o Control. Portanto o resultado
+Top-Turn e reproduzivel e supera o Control neste backtest, mas a evidencia de
+generalizacao permanece limitada pela concentracao em TSLA/fold 2.
+
+Esta branch fica encerrada como checkpoint experimental. A proxima pesquisa
+deve comparar este Top-Turn congelado com uma tecnica de deteccao de mudanca
+de regime diferente, sem alterar a main.
