@@ -55,6 +55,7 @@ RAIZ_PROJETO = Path(__file__).resolve().parent
 CAMINHOS = SnapshotPaths.research(RAIZ_PROJETO)
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "directional_change"
 DIRETORIO_GRAFICOS = DIRETORIO_RESULTADOS / "graficos"
+EXECUTION_SCHEMA = "top-bottom-cycle-v1"
 
 
 def _trigger_rows(predictions: pd.DataFrame, trigger_column: str) -> pd.DataFrame:
@@ -461,6 +462,8 @@ def _gerar_graficos_comparacao(
 print("=" * 78, flush=True)
 print("TCC - Top-Turn / Bottom-Turn Cycle Research", flush=True)
 print(f"versao_pesquisa={RESEARCH_VERSION}", flush=True)
+print(f"execution_schema={EXECUTION_SCHEMA}", flush=True)
+print(f"script_path={Path(__file__).resolve()}", flush=True)
 print("dados=SNAPSHOT_CONGELADO_VERSIONADO", flush=True)
 print(
     "comparacao=CONTROL vs BOTTOM_TURN vs TOP_TURN vs TOP_BOTTOM",
@@ -937,6 +940,7 @@ with (DIRETORIO_RESULTADOS / "comparison_cycle.json").open(
     json.dump(
         {
             "research_version": RESEARCH_VERSION,
+            "execution_schema": EXECUTION_SCHEMA,
             "comparison_top_turn": comparacao,
             "control_metrics": control_metrics,
             "bottom_turn_metrics": bottom_turn_metrics,
