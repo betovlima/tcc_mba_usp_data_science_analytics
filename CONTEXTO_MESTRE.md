@@ -459,3 +459,89 @@ A funcao `sinal_sonoro_conclusao()` passa a tentar, em sequencia:
 O script imprime `[sound] completion mechanisms=...` no final para registrar
 quais mecanismos foram executados. Essa alteracao nao muda modelos, dados,
 folds, sinais ou resultados do backtest.
+
+
+## Resultado Bottom-Turn v1 — execucao OOS 1.7.0-dev.1
+
+Pacote validado com `execution_schema=top-bottom-cycle-v1`, 1.547 sessoes OOS,
+DOC e CLMT fora do universo estrutural.
+
+### Comparacao dos quatro cenarios
+
+| Cenario | Capital final | vs Control | CAGR | Sharpe | MaxDD | Worst fold |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Control | US$ 5.092.399,32 | - | 175,31% | 1,9287 | -36,65% | +124,00% |
+| Bottom-Turn | US$ 5.729.695,93 | +12,51% | 180,63% | 1,9624 | -36,65% | +152,01% |
+| Top-Turn | US$ 6.306.816,02 | +23,85% | 185,04% | 1,9844 | -36,65% | +124,72% |
+| Top+Bottom | US$ 5.327.682,44 | +4,62% | 177,33% | 2,0239 | -31,22% | +160,49% |
+
+Top-Turn permanece com o maior capital final. Top+Bottom melhora Sharpe,
+drawdown e pior fold, mas termina 15,53% abaixo do Top-Turn em capital.
+
+### Evidencia Bottom-Turn puro
+
+Bottom-Turn puro gerou somente 1 entrada confirmada e 13 bloqueios. O unico
+gatilho ocorreu em CXW em 2020-08-10, depois de 13 sessoes uteis em CASH desde
+o inicio OOS. A entrada ficou 3,29% acima do fundo observado, dois dias uteis
+depois dele. Retornos posteriores: +14,20% em 5 sessoes, +9,77% em 10 e +7,95%
+em 20; drawdown posterior maximo medido nessas janelas foi -0,80%.
+
+A vantagem de +12,51% sobre Control nao representa generalizacao por varios
+fundos: praticamente toda a diferenca nasce desse unico atraso da implantacao
+inicial no fold 1. Os folds 2 e 3 mantem retornos praticamente iguais ao
+Control.
+
+### Evidencia Top+Bottom
+
+No ciclo combinado houve 7 entradas Bottom-Turn, 318 bloqueios e 6 saidas
+Top-Turn. Entradas confirmadas:
+
+- CXW 2020-08-10;
+- LKFT 2020-10-20;
+- XSD 2021-05-14;
+- VRTS 2022-05-04;
+- LKFT 2023-08-24;
+- MYE 2024-08-13;
+- LLY 2025-08-01.
+
+Tempo aproximado em CASH antes dessas entradas: 13, 5, 14, 208, 51, 32 e
+10 dias uteis, respectivamente. O caso VRTS permaneceu cerca de 208 dias uteis
+em CASH apos a saida NFLX de 2021-07-16, mostrando que o gate obrigatorio pode
+bloquear a politica por tempo excessivo.
+
+Metricas medianas das 7 entradas Top+Bottom:
+
+- distancia do fundo: 3,20%;
+- captura do fundo: 85,56%;
+- dias do fundo ate entrada: 2;
+- retorno +5d: +1,75%;
+- retorno +10d: -0,54%;
+- retorno +20d: -0,89%;
+- drawdown posterior +5d: -1,55%;
+- drawdown posterior +20d: -6,42%.
+
+O caso LKFT de outubro/2020 foi especialmente util: Top-Turn sozinho recomprou
+em 2020-10-14 a 145,59 e sofreu -15,45% nos 5 dias seguintes; Bottom-Turn
+esperou ate 2020-10-20 e recomprou a 132,11, aproximadamente 9,26% abaixo,
+reduzindo o drawdown imediato. Isso mostra que existe sinal util em pelo menos
+alguns episodios.
+
+### Calibracao Bottom-Turn
+
+Thresholds por fold: 0,60 / 0,55 / 0,55. Balanced accuracy ficou entre
+aproximadamente 50,5% e 51,4%, precision entre 23,6% e 29,0% e recall entre
+14,4% e 28,4%. Portanto, a classificacao global ainda e fraca; o valor potencial
+vem de poucos eventos economicamente relevantes, como ocorreu com Top-Turn.
+
+### Conclusao metodologica do v1
+
+Bottom-Turn v1 ainda nao pode ser considerado detector de fundos validado.
+Ha exemplos promissores, mas o desenho como veto obrigatorio de toda entrada
+CASH -> ativo e excessivamente restritivo. O ganho do Bottom-Turn puro depende
+de um unico evento inicial e o ciclo Top+Bottom sacrifica capital por longos
+periodos em CASH.
+
+Top-Turn continua congelado como referencia de topo. A proxima formulacao de
+Bottom-Turn deve preservar o objetivo de timing de fundo sem permitir bloqueios
+indefinidos da politica-base. Qualquer nova regra deve ser definida
+conceitualmente antes do replay e nao ajustada para perseguir este resultado.
