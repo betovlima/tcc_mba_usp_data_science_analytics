@@ -9,7 +9,9 @@ import pandas as pd
 from pesquisas.directional_change_lightgbm import (
     DC_FEATURES,
     _agrupar_gatilhos_ablation,
+    _bocpd_downward_scores,
     _directional_change_state,
+    _envolver_politica_bocpd,
     _envolver_politica_top_turn,
     _top_turn_targets,
     adicionar_top_turn_features,
@@ -368,6 +370,83 @@ def test_peak_exit_normal_sell_excludes_exit_session_high() -> None:
     assert abs(detail.iloc[0]["peak_price_while_held"] - 15.0) < 1e-12
     assert abs(detail.iloc[0]["exit_distance_from_peak_pct"] - 20.0) < 1e-12
     assert abs(detail.iloc[0]["peak_capture_pct"] - 40.0) < 1e-12
+
+
+def test_bocpd_scores_are_causal_on_shared_prefix() -> None:
+    shared = [100.0 + 0.25 * index for index in range(45)]
+    left_close = shared + [108.0, 103.0, 98.0, 96.0, 95.0]
+    right_close = shared + [113.0, 116.0, 119.0, 121.0, 123.0]
+
+    def frame(values: list[float]) -> pd.DataFrame:
+        index = pd.date_range(
+            "2020-01-02",
+            periods=len(values),
+            freq="B",
+            tz="UTC",
+        )
+        close = pd.Series(values, index=index, dtype=float)
+        returns = close.pct_change()
+        return pd.DataFrame(
+            {
+                "return_1": returns,
+                "vol_20": returns.rolling(20).std(),
+            },
+            index=index,
+        )
+
+    left = _bocpd_downward_scores(
+        frame(left_close),
+        hazard_lambda=60,
+    )
+    right = _bocpd_downward_scores(
+        frame(right_close),
+        hazard_lambda=60,
+    )
+
+    pd.testing.assert_series_equal(
+        left.iloc[: len(shared)],
+        right.iloc[: len(shared)],
+    )
+
+
+def test_bocpd_overlay_requires_two_confirmations() -> None:
+    dates = pd.to_datetime(
+        ["2026-01-05T00:00:00Z", "2026-01-06T00:00:00Z"],
+        utc=True,
+    )
+    frame = pd.DataFrame(
+        {"bocpd_eligible": [True, True]},
+        index=dates,
+    )
+    diagnostics: dict[pd.Timestamp, dict] = {}
+
+    def base_policy(timestamp, _current_position, _holding_days):
+        diagnostics[pd.Timestamp(timestamp)] = {
+            "decision_reason": "HOLD_CURRENT_BEST",
+            "final_action_asset": "AAA",
+        }
+        return 1, 0.25
+
+    policy = _envolver_politica_bocpd(
+        base_policy,
+        score_cache={
+            "AAA": pd.Series([0.20, 0.22], index=dates),
+        },
+        frames={"AAA": frame},
+        symbols=["AAA"],
+        score_threshold=0.10,
+        hazard_lambda=60,
+        config=SimpleNamespace(rotation_min_holding_days=2),
+        decision_diagnostics=diagnostics,
+    )
+
+    first_target, _ = policy(dates[0], 1, 4)
+    second_target, _ = policy(dates[1], 1, 5)
+
+    assert first_target == 1
+    assert second_target == 0
+    assert diagnostics[dates[0]]["bocpd_confirmation_streak"] == 1
+    assert diagnostics[dates[1]]["bocpd_exit_triggered"] is True
 
 
 def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
