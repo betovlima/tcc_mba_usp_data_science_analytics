@@ -4,14 +4,18 @@ from pathlib import Path
 from types import SimpleNamespace
 import zipfile
 
+import numpy as np
 import pandas as pd
 
 from pesquisas.directional_change_lightgbm import (
     DC_FEATURES,
+    HSMMAssetModel,
     _agrupar_gatilhos_ablation,
     _bocpd_downward_scores,
     _directional_change_state,
     _envolver_politica_bocpd,
+    _envolver_politica_hsmm,
+    _filter_hsmm_asset,
     _envolver_politica_top_turn,
     _top_turn_targets,
     adicionar_top_turn_features,
@@ -447,6 +451,113 @@ def test_bocpd_overlay_requires_two_confirmations() -> None:
     assert second_target == 0
     assert diagnostics[dates[0]]["bocpd_confirmation_streak"] == 1
     assert diagnostics[dates[1]]["bocpd_exit_triggered"] is True
+
+
+def test_hsmm_filter_is_causal_on_shared_prefix() -> None:
+    shared = [100.0 + 0.35 * index for index in range(50)]
+    left_values = shared + [116.0, 110.0, 103.0, 99.0]
+    right_values = shared + [118.0, 121.0, 124.0, 127.0]
+
+    def frame(values: list[float]) -> pd.DataFrame:
+        index = pd.date_range(
+            "2020-01-02",
+            periods=len(values),
+            freq="B",
+            tz="UTC",
+        )
+        close = pd.Series(values, index=index, dtype=float)
+        daily = close.pct_change()
+        vol = daily.rolling(20).std()
+        ema = close.ewm(span=20, adjust=False).mean()
+        return pd.DataFrame(
+            {
+                "return_1": daily,
+                "vol_20": vol,
+                "ema_slope_20_5": ema.pct_change(5),
+            },
+            index=index,
+        )
+
+    duration = np.ones((3, 60), dtype=float)
+    duration = duration / duration.sum(axis=1, keepdims=True)
+    model = HSMMAssetModel(
+        means=np.asarray(
+            [
+                [-1.5, -1.0],
+                [0.0, 0.0],
+                [1.5, 1.0],
+            ],
+            dtype=float,
+        ),
+        variances=np.ones((3, 2), dtype=float),
+        transition=np.asarray(
+            [
+                [0.0, 0.7, 0.3],
+                [0.5, 0.0, 0.5],
+                [0.3, 0.7, 0.0],
+            ],
+            dtype=float,
+        ),
+        duration_pmf=duration,
+        initial_probabilities=np.asarray(
+            [0.2, 0.3, 0.5],
+            dtype=float,
+        ),
+    )
+
+    left = _filter_hsmm_asset(frame(left_values), model)
+    right = _filter_hsmm_asset(frame(right_values), model)
+
+    pd.testing.assert_frame_equal(
+        left.iloc[: len(shared)],
+        right.iloc[: len(shared)],
+    )
+
+
+def test_hsmm_overlay_requires_two_confirmations() -> None:
+    dates = pd.to_datetime(
+        ["2026-01-05T00:00:00Z", "2026-01-06T00:00:00Z"],
+        utc=True,
+    )
+    frame = pd.DataFrame(
+        {"hsmm_eligible": [True, True]},
+        index=dates,
+    )
+    filtered = pd.DataFrame(
+        {
+            "hsmm_reversal_score": [0.55, 0.62],
+            "hsmm_down_probability": [0.35, 0.42],
+            "hsmm_neutral_probability": [0.45, 0.40],
+            "hsmm_up_probability": [0.20, 0.18],
+        },
+        index=dates,
+    )
+    diagnostics: dict[pd.Timestamp, dict] = {}
+
+    def base_policy(timestamp, _current_position, _holding_days):
+        diagnostics[pd.Timestamp(timestamp)] = {
+            "decision_reason": "HOLD_CURRENT_BEST",
+            "final_action_asset": "AAA",
+        }
+        return 1, 0.25
+
+    policy = _envolver_politica_hsmm(
+        base_policy,
+        filtered={"AAA": filtered},
+        frames={"AAA": frame},
+        symbols=["AAA"],
+        score_threshold=0.50,
+        config=SimpleNamespace(rotation_min_holding_days=2),
+        decision_diagnostics=diagnostics,
+    )
+
+    first_target, _ = policy(dates[0], 1, 4)
+    second_target, _ = policy(dates[1], 1, 5)
+
+    assert first_target == 1
+    assert second_target == 0
+    assert diagnostics[dates[0]]["hsmm_confirmation_streak"] == 1
+    assert diagnostics[dates[1]]["hsmm_exit_triggered"] is True
 
 
 def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
