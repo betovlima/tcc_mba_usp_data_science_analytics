@@ -35,7 +35,7 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.3.0-dev.2"
+RESEARCH_VERSION = "1.3.0-dev.3"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5
@@ -528,8 +528,11 @@ def _envolver_politica_top_turn(
     probability_threshold: float,
     config: Any,
     decision_diagnostics: dict[pd.Timestamp, dict[str, Any]],
+    suppressed_triggers: set[tuple[pd.Timestamp, str]] | None = None,
+    disable_all_triggers: bool = False,
 ) -> Callable[[pd.Timestamp, int, int], tuple[int, float]]:
     streak_by_symbol: dict[str, int] = {}
+    suppressed = suppressed_triggers or set()
 
     def policy(
         timestamp: pd.Timestamp,
@@ -575,10 +578,30 @@ def _envolver_politica_top_turn(
             else:
                 streak_by_symbol[symbol] = 0
         streak = int(streak_by_symbol.get(symbol, 0)) if symbol else 0
-        triggered = bool(
+        candidate_trigger = bool(
             above_threshold
             and streak >= int(TOP_TURN_CONFIRMATION_SESSIONS)
         )
+        trigger_key = (
+            (key, str(symbol))
+            if symbol is not None
+            else None
+        )
+        suppressed_here = bool(
+            candidate_trigger
+            and trigger_key is not None
+            and trigger_key in suppressed
+        )
+        triggered = bool(
+            candidate_trigger
+            and not suppressed_here
+            and not disable_all_triggers
+        )
+        if candidate_trigger and not triggered and symbol is not None:
+            # A suppressed intervention must require a fresh confirmation
+            # sequence before it can fire again on a later date.
+            streak_by_symbol[symbol] = 0
+            streak = 0
 
         diagnostic.update(
             {
@@ -601,6 +624,11 @@ def _envolver_politica_top_turn(
                     else symbols[int(base_target) - 1]
                 ),
                 "directional_change_exit_triggered": triggered,
+                "directional_change_ablation_candidate_trigger": candidate_trigger,
+                "directional_change_ablation_suppressed": suppressed_here,
+                "directional_change_ablation_disable_all": bool(
+                    disable_all_triggers
+                ),
             }
         )
 
@@ -636,7 +664,7 @@ def executar_directional_change_lightgbm(
     progress_callback: Callable[[float, str, int], None] | None = None,
 ) -> Any:
     if int(config.rotation_model_repetitions) != 1:
-        raise ValueError("Top-Turn v1.3.0-dev.2 requires one repetition.")
+        raise ValueError("Directional Change research requires one repetition.")
 
     (
         frames,
@@ -655,6 +683,7 @@ def executar_directional_change_lightgbm(
     calibration_rows: list[dict[str, Any]] = []
     fit_rows: list[dict[str, Any]] = []
     margin_rows: list[dict[str, Any]] = []
+    replay_specs: dict[int, dict[str, Any]] = {}
 
     total_folds = len(folds)
     for fold_position, fold in enumerate(folds, start=1):
@@ -780,6 +809,14 @@ def executar_directional_change_lightgbm(
             config=config,
             decision_diagnostics=diagnostics,
         )
+        replay_specs[fold_id] = {
+            "utility_models": final_utility_models,
+            "utility_cache": utility_cache,
+            "effective_margin": float(effective_margin),
+            "calibrated_margin": float(best_candidate),
+            "probability_cache": probability_cache,
+            "probability_threshold": float(calibration.threshold),
+        }
         margin_rows.append(
             {
                 "fold_id": fold_id,
@@ -879,10 +916,131 @@ def executar_directional_change_lightgbm(
     for row in result.metrics["walk_forward_folds"]:
         row.update(margin_by_fold.get(int(row["fold_id"]), {}))
 
+    def replay_with_ablation(
+        suppressed_triggers: set[tuple[pd.Timestamp, str]] | None = None,
+        *,
+        disable_all_triggers: bool = False,
+    ) -> Any:
+        replay_diagnostics: dict[pd.Timestamp, dict[str, Any]] = {}
+        replay_policies: dict[int, Callable] = {}
+        for replay_fold_id, spec in replay_specs.items():
+            replay_base_policy = _politica_utilidade(
+                spec["utility_models"],
+                frames,
+                symbols,
+                config,
+                float(spec["effective_margin"]),
+                decision_diagnostics=replay_diagnostics,
+                fold_id=int(replay_fold_id),
+                calibrated_switch_margin=float(spec["calibrated_margin"]),
+                utility_cache=spec["utility_cache"],
+            )
+            replay_policies[int(replay_fold_id)] = _envolver_politica_top_turn(
+                replay_base_policy,
+                probabilities=spec["probability_cache"],
+                frames=frames,
+                symbols=symbols,
+                probability_threshold=float(spec["probability_threshold"]),
+                config=config,
+                decision_diagnostics=replay_diagnostics,
+                suppressed_triggers=suppressed_triggers,
+                disable_all_triggers=disable_all_triggers,
+            )
+
+        return _simular_exato(
+            "directional_change_lightgbm_ablation",
+            _politica_agendada(replay_policies, decision_to_fold),
+            frames,
+            symbols,
+            all_decision_dates,
+            config,
+            fee_calculator,
+            slippage,
+            decision_metadata=decision_metadata,
+            policy_decision_diagnostics=replay_diagnostics,
+            model_label="Directional Change + LightGBM ablation",
+            method_line=(
+                "- Ablation replay reuses the exact fitted OOS models and "
+                "suppresses selected Top-Turn interventions without retraining."
+            ),
+        )
+
+    trigger_rows = result.predictions.loc[triggers].copy()
+    ablation_rows: list[dict[str, Any]] = []
+    full_capital = float(result.metrics["strategy_ending_capital"])
+
+    for position, (execution_timestamp, trigger_row) in enumerate(
+        trigger_rows.iterrows(),
+        start=1,
+    ):
+        decision_timestamp = pd.Timestamp(trigger_row["decision_date"])
+        trigger_asset = str(
+            trigger_row.get("current_asset")
+            or trigger_row.get("previous_asset")
+            or ""
+        )
+        key = (decision_timestamp, trigger_asset)
+
+        if progress_callback is not None:
+            progress_callback(
+                90.0 + 8.0 * position / max(1, len(trigger_rows)),
+                (
+                    "Directional Change ablation "
+                    f"{position}/{len(trigger_rows)} "
+                    f"{decision_timestamp.date()} {trigger_asset}"
+                ),
+                total_folds,
+            )
+
+        ablated = replay_with_ablation({key})
+        ablated_capital = float(
+            ablated.metrics["strategy_ending_capital"]
+        )
+        ablation_rows.append(
+            {
+                "trigger_number": int(position),
+                "decision_timestamp": decision_timestamp,
+                "execution_timestamp": pd.Timestamp(execution_timestamp),
+                "asset": trigger_asset,
+                "walk_forward_fold": trigger_row.get("walk_forward_fold"),
+                "probability": trigger_row.get(
+                    "directional_change_probability"
+                ),
+                "probability_threshold": trigger_row.get(
+                    "directional_change_probability_threshold"
+                ),
+                "full_top_turn_ending_capital": full_capital,
+                "without_trigger_ending_capital": ablated_capital,
+                "trigger_contribution_to_ending_capital": (
+                    full_capital - ablated_capital
+                ),
+                "trigger_contribution_ratio": (
+                    full_capital / ablated_capital - 1.0
+                    if ablated_capital > 0
+                    else None
+                ),
+            }
+        )
+
+    no_overlay = replay_with_ablation(disable_all_triggers=True)
+    no_overlay_capital = float(
+        no_overlay.metrics["strategy_ending_capital"]
+    )
+    control_capital_reference = None
+    result.metrics["directional_change_ablation"] = {
+        "schema_version": 1,
+        "method": "leave_one_trigger_out_replay_without_retraining",
+        "trigger_count": int(len(trigger_rows)),
+        "full_top_turn_ending_capital": full_capital,
+        "without_all_triggers_ending_capital": no_overlay_capital,
+        "control_capital_reference": control_capital_reference,
+        "rows": ablation_rows,
+    }
+
     if progress_callback is not None:
         progress_callback(
             100.0,
-            "Directional Change + LightGBM completed",
+            "Directional Change + LightGBM completed with ablation",
             total_folds,
         )
     return result
