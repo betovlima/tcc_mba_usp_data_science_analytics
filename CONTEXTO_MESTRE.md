@@ -141,3 +141,33 @@ generalizacao permanece limitada pela concentracao em TSLA/fold 2.
 Esta branch fica encerrada como checkpoint experimental. A proxima pesquisa
 deve comparar este Top-Turn congelado com uma tecnica de deteccao de mudanca
 de regime diferente, sem alterar a main.
+
+
+## Pesquisa ativa — Top-Turn vs BOCPD
+
+Branch ativa: `research/reversal-bocpd-comparison`.
+
+Base congelada desta comparacao: checkpoint Top-Turn do commit
+`bf9e11338ee9a43b070d65714ca2522332efd771`.
+
+Objetivo: comparar a descoberta Top-Turn com Bayesian Online Change Point
+Detection usando o mesmo Control, snapshot congelado, folds walk-forward,
+custos e semantica de execucao next-open.
+
+BOCPD:
+
+- usa retornos diarios padronizados causalmente pela volatilidade passada;
+- acompanha a distribuicao posterior do run length;
+- transforma a massa posterior em run lengths curtos em um score de mudanca
+  descendente;
+- usa apenas contexto proximo da maxima recente e retorno de 20 sessoes
+  positivo como elegibilidade generica;
+- calibra hazard lambda e threshold somente no bloco de calibracao de cada
+  fold;
+- exige duas confirmacoes consecutivas;
+- somente antecipa uma saida para CASH quando o Control manteria a posicao.
+
+A comparacao atual executa Control, Top-Turn congelado e BOCPD e grava todos os
+resultados no mesmo `output/directional_change/pacote_analise.zip`.
+
+Nenhum resultado BOCPD existe antes da execucao local completa.
