@@ -87,9 +87,14 @@ faz replays OOS sem retreinar:
 - remove cada gatilho original individualmente;
 - mede o capital final sem aquele gatilho;
 - calcula a contribuicao marginal de cada intervencao;
+- remove em conjunto todos os gatilhos de cada ativo;
+- remove em conjunto todos os gatilhos de cada fold;
 - executa um replay com todos os gatilhos desabilitados para verificar paridade
   com o Control.
 
-Os resultados de ablation entram no mesmo
-`comparison_directional_change.json` e, portanto, no mesmo
-`pacote_analise.zip`. Nenhum arquivo de pesquisa adicional e criado.
+O objetivo da ablation agrupada e verificar se a vantagem de +23,8469% depende
+principalmente de um ativo especifico, especialmente TSLA, ou de um unico fold.
+
+Os resultados entram no mesmo `comparison_directional_change.json` e,
+portanto, no mesmo `pacote_analise.zip`. Nenhum arquivo de pesquisa adicional
+e criado e a `main` permanece intocada.
