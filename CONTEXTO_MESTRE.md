@@ -95,6 +95,11 @@ faz replays OOS sem retreinar:
 O objetivo da ablation agrupada e verificar se a vantagem de +23,8469% depende
 principalmente de um ativo especifico, especialmente TSLA, ou de um unico fold.
 
+Correcao metodologica: a ablation agrupada usa supressao de escopo completo.
+Ao testar um ativo, qualquer gatilho Top-Turn desse ativo e bloqueado durante
+todo o OOS. Ao testar um fold, qualquer gatilho Top-Turn daquele fold e
+bloqueado. Nao se limita mais apenas as datas dos gatilhos originais.
+
 Os resultados entram no mesmo `comparison_directional_change.json` e,
 portanto, no mesmo `pacote_analise.zip`. Nenhum arquivo de pesquisa adicional
 e criado e a `main` permanece intocada.
