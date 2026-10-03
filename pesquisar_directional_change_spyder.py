@@ -370,6 +370,13 @@ def _gerar_graficos_comparacao(
             gerados.append(destino)
 
     asset_monthly = _asset_monthly_returns(frames_alinhados)
+    oos_start = pd.Timestamp(control_result.predictions.index.min()).to_period("M")
+    oos_end = pd.Timestamp(control_result.predictions.index.max()).to_period("M")
+    asset_monthly = asset_monthly.loc[
+        (asset_monthly["period"] >= oos_start)
+        & (asset_monthly["period"] <= oos_end)
+    ].copy()
+
     trigger_specs = (
         (
             "TT",
