@@ -31,7 +31,7 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.6.0-dev.3"
+RESEARCH_VERSION = "1.7.0-dev.1"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5
@@ -42,6 +42,16 @@ TOP_TURN_NEAR_HIGH_20 = 0.05
 TOP_TURN_MIN_UP_REGIME_SHARE = 2.0 / 3.0
 TOP_TURN_MIN_RETURN_20 = 0.0
 TOP_TURN_CONFIRMATION_SESSIONS = 2
+
+BOTTOM_TURN_HORIZON_SESSIONS = TOP_TURN_HORIZON_SESSIONS
+BOTTOM_TURN_ATR_MULTIPLIER = TOP_TURN_ATR_MULTIPLIER
+BOTTOM_TURN_THRESHOLD_MIN = TOP_TURN_THRESHOLD_MIN
+BOTTOM_TURN_THRESHOLD_MAX = TOP_TURN_THRESHOLD_MAX
+BOTTOM_TURN_CONTINUATION_RATIO = TOP_TURN_CONTINUATION_RATIO
+BOTTOM_TURN_NEAR_LOW_20 = 0.05
+BOTTOM_TURN_MIN_DOWN_REGIME_SHARE = 2.0 / 3.0
+BOTTOM_TURN_MAX_RETURN_20 = 0.0
+BOTTOM_TURN_CONFIRMATION_SESSIONS = 2
 PROBABILITY_THRESHOLD_CANDIDATES = (
     0.55,
     0.60,
@@ -447,6 +457,78 @@ def _top_turn_targets(
         index=frame.index,
     )
 
+def _bottom_turn_targets(
+    frame: pd.DataFrame,
+    *,
+    horizon: int = BOTTOM_TURN_HORIZON_SESSIONS,
+) -> pd.DataFrame:
+    """Primeiro evento: recuperacao relevante antes de nova continuacao da queda."""
+    close = pd.to_numeric(frame["close"], errors="coerce").to_numpy(dtype=float)
+    atr_pct = pd.to_numeric(frame["atr_pct_14"], errors="coerce").to_numpy(
+        dtype=float
+    )
+    target = np.full(len(frame), np.nan, dtype=float)
+    threshold_values = np.full(len(frame), np.nan, dtype=float)
+    continuation_values = np.full(len(frame), np.nan, dtype=float)
+    event_step = np.full(len(frame), np.nan, dtype=float)
+
+    for index in range(len(frame)):
+        end = index + 1 + int(horizon)
+        current = close[index]
+        current_atr = atr_pct[index]
+        if (
+            end > len(frame)
+            or not np.isfinite(current)
+            or current <= 0
+            or not np.isfinite(current_atr)
+            or current_atr <= 0
+        ):
+            continue
+
+        future = close[index + 1:end]
+        if len(future) != int(horizon) or not np.isfinite(future).all():
+            continue
+
+        threshold = float(
+            np.clip(
+                float(BOTTOM_TURN_ATR_MULTIPLIER) * float(current_atr),
+                float(BOTTOM_TURN_THRESHOLD_MIN),
+                float(BOTTOM_TURN_THRESHOLD_MAX),
+            )
+        )
+        continuation = float(
+            max(
+                0.01,
+                float(BOTTOM_TURN_CONTINUATION_RATIO) * threshold,
+            )
+        )
+        threshold_values[index] = threshold
+        continuation_values[index] = continuation
+
+        label = 0.0
+        for step, future_close in enumerate(future, start=1):
+            move = float(future_close / current - 1.0)
+            if move >= threshold:
+                label = 1.0
+                event_step[index] = float(step)
+                break
+            if move <= -continuation:
+                label = 0.0
+                event_step[index] = float(step)
+                break
+        target[index] = label
+
+    return pd.DataFrame(
+        {
+            "forward_up_reversal": target,
+            "forward_bottom_turn_threshold": threshold_values,
+            "forward_bottom_turn_continuation": continuation_values,
+            "forward_bottom_turn_event_step": event_step,
+        },
+        index=frame.index,
+    )
+
+
 def adicionar_top_turn_features(frame: pd.DataFrame) -> pd.DataFrame:
     output = frame.copy()
     close = pd.to_numeric(output["close"], errors="coerce")
@@ -470,11 +552,20 @@ def adicionar_top_turn_features(frame: pd.DataFrame) -> pd.DataFrame:
         output["distance_from_high_20"],
         errors="coerce",
     )
+    distance_low = pd.to_numeric(
+        output["distance_from_low_20"],
+        errors="coerce",
+    )
     return_20 = pd.to_numeric(output["return_20"], errors="coerce")
     output["top_turn_eligible"] = (
         (output["dc_up_regime_share"] >= TOP_TURN_MIN_UP_REGIME_SHARE)
         & (distance_high >= -TOP_TURN_NEAR_HIGH_20)
         & (return_20 > TOP_TURN_MIN_RETURN_20)
+    )
+    output["bottom_turn_eligible"] = (
+        (output["dc_down_regime_share"] >= BOTTOM_TURN_MIN_DOWN_REGIME_SHARE)
+        & (distance_low <= BOTTOM_TURN_NEAR_LOW_20)
+        & (return_20 < BOTTOM_TURN_MAX_RETURN_20)
     )
     output["bocpd_eligible"] = (
         (distance_high >= -BOCPD_NEAR_HIGH_20)
@@ -490,6 +581,7 @@ def adicionar_top_turn_features(frame: pd.DataFrame) -> pd.DataFrame:
     )
 
     output = output.join(_top_turn_targets(output))
+    output = output.join(_bottom_turn_targets(output))
     return output.replace([np.inf, -np.inf], np.nan)
 
 def _preparar_frames(
