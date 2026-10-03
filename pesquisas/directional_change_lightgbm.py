@@ -90,6 +90,7 @@ def directional_change_feature_names(
 DC_FEATURES = directional_change_feature_names()
 MODEL_FEATURES = tuple(ROTATION_FEATURES) + DC_FEATURES
 
+@dataclass(frozen=True)
 class CalibrationResult:
     threshold: float
     fbeta_05: float | None
