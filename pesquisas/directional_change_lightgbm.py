@@ -2676,6 +2676,8 @@ def executar_bottom_turn_lightgbm(
     slippage: Callable,
     *,
     include_top_turn_exit: bool = False,
+    post_top_turn_only: bool = False,
+    max_wait_sessions: int | None = None,
     progress_callback: Callable[[float, str, int], None] | None = None,
 ) -> Any:
     """Executa Bottom-Turn puro ou ciclo combinado Top-Turn + Bottom-Turn."""
@@ -2880,6 +2882,8 @@ def executar_bottom_turn_lightgbm(
             symbols=symbols,
             probability_threshold=float(bottom_calibration.threshold),
             decision_diagnostics=diagnostics,
+            activate_only_after_top_turn=bool(post_top_turn_only),
+            max_wait_sessions=max_wait_sessions,
         )
         margin_rows.append(
             {
@@ -2987,6 +2991,26 @@ def executar_bottom_turn_lightgbm(
             "combined_top_turn_enabled": bool(include_top_turn_exit),
             "combined_top_turn_exit_triggers": int(top_triggers.sum()),
             "combined_top_turn_calibration": top_calibration_rows,
+            "bottom_turn_post_top_only": bool(post_top_turn_only),
+            "bottom_turn_max_wait_sessions": (
+                int(max_wait_sessions)
+                if max_wait_sessions is not None
+                else (
+                    int(BOTTOM_TURN_MAX_WAIT_SESSIONS)
+                    if post_top_turn_only
+                    else None
+                )
+            ),
+            "bottom_turn_gate_expirations": int(
+                result.predictions.get(
+                    "bottom_turn_gate_expired",
+                    pd.Series(
+                        False,
+                        index=result.predictions.index,
+                        dtype=bool,
+                    ),
+                ).fillna(False).astype(bool).sum()
+            ),
             "walk_forward_fold_count": len(folds),
             "walk_forward_folds": _desempenho_folds(
                 result.predictions,
