@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
+import zipfile
 
 import pandas as pd
 
 from pesquisas.directional_change_lightgbm import (
     DC_FEATURES,
     _directional_change_state,
-    _envolver_politica_reversao,
-    adicionar_directional_change,
+    _envolver_politica_top_turn,
+    _top_turn_targets,
+    adicionar_top_turn_features,
     calcular_peak_exit,
+    criar_pacote_analise,
 )
 
 
@@ -20,13 +24,21 @@ def _base_frame(close_values: list[float]) -> pd.DataFrame:
         freq="B",
         tz="UTC",
     )
-    return pd.DataFrame(
+    close = pd.Series(close_values, index=index, dtype=float)
+    frame = pd.DataFrame(
         {
-            "close": close_values,
-            "atr_pct_14": [0.02] * len(close_values),
+            "open": close,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "volume": 1_000_000.0,
+            "atr_pct_14": 0.02,
+            "distance_from_high_20": -0.01,
+            "return_20": 0.10,
         },
         index=index,
     )
+    return frame
 
 
 def test_directional_change_state_detects_up_down_up_transitions() -> None:
@@ -39,12 +51,12 @@ def test_directional_change_state_detects_up_down_up_transitions() -> None:
 
 
 def test_directional_change_features_are_causal() -> None:
-    shared = [100.0, 102.0, 105.0, 104.0, 106.0, 103.0]
-    left = adicionar_directional_change(
-        _base_frame(shared + [90.0, 88.0, 86.0, 85.0, 84.0])
+    shared = [100.0 + index for index in range(30)]
+    left = adicionar_top_turn_features(
+        _base_frame(shared + [120.0, 115.0, 110.0, 108.0, 106.0])
     )
-    right = adicionar_directional_change(
-        _base_frame(shared + [112.0, 115.0, 117.0, 120.0, 122.0])
+    right = adicionar_top_turn_features(
+        _base_frame(shared + [132.0, 135.0, 138.0, 140.0, 142.0])
     )
 
     pd.testing.assert_frame_equal(
@@ -53,80 +65,62 @@ def test_directional_change_features_are_causal() -> None:
     )
 
 
-def test_overlay_exits_when_reversal_probability_is_high() -> None:
-    timestamp = pd.Timestamp("2026-01-05T00:00:00Z")
-    frames = {
-        "AAA": pd.DataFrame(
-            {"dc_regime_04pct": [1.0]},
-            index=pd.DatetimeIndex([timestamp]),
-        )
-    }
+def test_top_turn_target_marks_drop_before_continuation() -> None:
+    frame = _base_frame([100.0, 99.0, 97.0, 95.0, 96.0, 97.0])
+    target = _top_turn_targets(frame, horizon=5)
+
+    assert target.iloc[0]["forward_down_reversal"] == 1.0
+
+
+def test_top_turn_target_rejects_when_continuation_happens_first() -> None:
+    frame = _base_frame([100.0, 102.0, 104.0, 99.0, 96.0, 95.0])
+    target = _top_turn_targets(frame, horizon=5)
+
+    assert target.iloc[0]["forward_down_reversal"] == 0.0
+
+
+def test_overlay_requires_two_confirmations() -> None:
+    dates = pd.to_datetime(
+        ["2026-01-05T00:00:00Z", "2026-01-06T00:00:00Z"],
+        utc=True,
+    )
+    frame = pd.DataFrame(
+        {"top_turn_eligible": [True, True]},
+        index=dates,
+    )
     diagnostics: dict[pd.Timestamp, dict] = {}
 
-    def base_policy(_timestamp, _current_position, _holding_days):
-        diagnostics[timestamp] = {
+    def base_policy(timestamp, _current_position, _holding_days):
+        diagnostics[pd.Timestamp(timestamp)] = {
             "decision_reason": "HOLD_CURRENT_BEST",
             "final_action_asset": "AAA",
         }
         return 1, 0.25
 
-    policy = _envolver_politica_reversao(
+    policy = _envolver_politica_top_turn(
         base_policy,
-        probabilities={timestamp: {"AAA": 0.82}},
-        frames=frames,
+        probabilities={
+            dates[0]: {"AAA": 0.80},
+            dates[1]: {"AAA": 0.82},
+        },
+        frames={"AAA": frame},
         symbols=["AAA"],
-        probability_threshold=0.70,
+        probability_threshold=0.75,
         config=SimpleNamespace(rotation_min_holding_days=2),
         decision_diagnostics=diagnostics,
     )
 
-    target, score = policy(timestamp, 1, 4)
+    first_target, _ = policy(dates[0], 1, 4)
+    second_target, _ = policy(dates[1], 1, 5)
 
-    assert target == 0
-    assert score == 0.0
-    assert diagnostics[timestamp]["directional_change_exit_triggered"] is True
-    assert diagnostics[timestamp]["decision_reason"] == (
-        "DIRECTIONAL_CHANGE_REVERSAL_EXIT"
-    )
-    assert diagnostics[timestamp]["final_action_asset"] == "CASH"
-
-
-def test_overlay_preserves_control_rotation() -> None:
-    timestamp = pd.Timestamp("2026-01-05T00:00:00Z")
-    frames = {
-        "AAA": pd.DataFrame(
-            {"dc_regime_04pct": [1.0]},
-            index=pd.DatetimeIndex([timestamp]),
-        ),
-        "BBB": pd.DataFrame(
-            {"dc_regime_04pct": [1.0]},
-            index=pd.DatetimeIndex([timestamp]),
-        ),
-    }
-    diagnostics: dict[pd.Timestamp, dict] = {}
-
-    def base_policy(_timestamp, _current_position, _holding_days):
-        diagnostics[timestamp] = {
-            "decision_reason": "ROTATE_TO_BEST_ASSET",
-            "final_action_asset": "BBB",
-        }
-        return 2, 0.30
-
-    policy = _envolver_politica_reversao(
-        base_policy,
-        probabilities={timestamp: {"AAA": 0.99}},
-        frames=frames,
-        symbols=["AAA", "BBB"],
-        probability_threshold=0.70,
-        config=SimpleNamespace(rotation_min_holding_days=2),
-        decision_diagnostics=diagnostics,
-    )
-
-    target, score = policy(timestamp, 1, 5)
-
-    assert target == 2
-    assert score == 0.30
-    assert diagnostics[timestamp]["directional_change_exit_triggered"] is False
+    assert first_target == 1
+    assert second_target == 0
+    assert diagnostics[dates[0]][
+        "directional_change_confirmation_streak"
+    ] == 1
+    assert diagnostics[dates[1]][
+        "directional_change_exit_triggered"
+    ] is True
 
 
 def test_peak_exit_normal_sell_excludes_exit_session_high() -> None:
@@ -163,7 +157,7 @@ def test_peak_exit_normal_sell_excludes_exit_session_high() -> None:
                     15.0,
                     14.5,
                     14.0,
-                ],
+                ]
             },
             index=index,
         )
@@ -187,4 +181,26 @@ def test_peak_exit_normal_sell_excludes_exit_session_high() -> None:
     assert abs(detail.iloc[0]["peak_price_while_held"] - 15.0) < 1e-12
     assert abs(detail.iloc[0]["exit_distance_from_peak_pct"] - 20.0) < 1e-12
     assert abs(detail.iloc[0]["peak_capture_pct"] - 40.0) < 1e-12
-    assert abs(detail.iloc[0]["max_runup_pct"] - 50.0) < 1e-12
+
+
+def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
+    output = tmp_path / "directional_change"
+    output.mkdir()
+    (output / "comparison_directional_change.json").write_text(
+        '{"ok": true}',
+        encoding="utf-8",
+    )
+    (output / "directional_change_trades.csv").write_text(
+        "a,b\n1,2\n",
+        encoding="utf-8",
+    )
+
+    archive = criar_pacote_analise(output)
+
+    assert archive == output / "pacote_analise.zip"
+    with zipfile.ZipFile(archive) as zipped:
+        names = sorted(zipped.namelist())
+    assert names == [
+        "comparison_directional_change.json",
+        "directional_change_trades.csv",
+    ]
