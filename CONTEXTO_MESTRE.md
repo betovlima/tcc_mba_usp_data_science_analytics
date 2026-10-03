@@ -644,3 +644,19 @@ A funcao de conclusao foi tornada auxiliar e nao-fatal:
 
 Essa versao altera apenas o sinal sonoro de conclusao. Modelos, dados,
 features, folds, thresholds, sinais e resultados OOS permanecem inalterados.
+
+
+### Fail-fast contra pacote v1 durante campanha v2 — v1.8.0-dev.3
+
+Foi observado novamente um pacote com `research_version=1.8.0-dev.1`, mas
+`execution_schema=top-bottom-cycle-v1` e artefatos `comparison_cycle.json`,
+`bottom_turn_*` e `top_bottom_*`. Isso prova que um script Spyder antigo
+pode importar o modulo novo e, por isso, exibir uma versao de pesquisa nova
+mesmo executando o fluxo antigo.
+
+Para impedir nova ambiguidade, `criar_pacote_analise()` agora recusa gerar o
+ZIP da campanha v2 se nao existir `comparison_cycle_v2.json` ou se o
+`execution_schema` nao for exatamente `top-bottom-cycle-v2`.
+
+Essa e uma correcao de rastreabilidade/empacotamento. Nao altera modelos,
+features, thresholds, folds, sinais ou resultados OOS.
