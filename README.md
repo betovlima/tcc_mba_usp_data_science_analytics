@@ -364,26 +364,27 @@ auditar as decisões individuais, enquanto `data_audit.json` e
 `structural_exclusions.csv` documentam a integridade do snapshot e eventuais
 exclusões estruturais.
 
-## Pesquisa experimental: reversao Top-Turn vs BOCPD vs HSMM
+## Pesquisa experimental: reversao Top-Turn vs BOCPD vs HSMM vs Hazard
 
-A pesquisa usa os mesmos arquivos de codigo e a mesma branch ativa. O historico
-fica nos commits do Git.
-
-A execucao atual compara quatro cenarios OOS sob o mesmo snapshot congelado,
-folds walk-forward, custos e semantica next-open:
+A mesma branch e os mesmos arquivos comparam cinco cenarios OOS sob o mesmo
+snapshot congelado, folds walk-forward, custos e execucao next-open:
 
 ```text
 Control
 Top-Turn Directional Change + LightGBM
 BOCPD
 Explicit-Duration HSMM
+Hazard/Survival
 ```
 
-O HSMM estima tres estados latentes de regime usando retorno diario e tendencia
-padronizados, aprende no treino as emissoes, transicoes entre segmentos e
-distribuicoes explicitas de duracao e filtra as probabilidades de estado de
-forma causal. O threshold de reversao e calibrado somente no bloco de
-calibracao de cada fold e exige duas confirmacoes antes de uma saida antecipada.
+Hazard/Survival usa um modelo de hazard discreto com dados pessoa-periodo.
+Queda e o evento de interesse, continuacao e tratada como evento concorrente e
+trajetorias sem evento sao censuradas no fim da janela de cinco sessoes. A
+calibracao permanece restrita ao bloco de calibracao de cada fold.
+
+CLMT e excluido da modelagem por uma mudanca estrutural de identidade em
+2024-07-11 que preservou o ticker, mas mudou o CUSIP. O snapshot congelado nao
+e editado nem reconstruido.
 
 Para executar no Spyder:
 
@@ -391,12 +392,14 @@ Para executar no Spyder:
 %run pesquisar_directional_change_spyder.py
 ```
 
-Os resultados continuam em `output/directional_change/`. Ao final, o script
-tambem recria `output/directional_change/graficos/` com curvas de capital,
-linha do tempo dos gatilhos, comparacoes de Peak Exit e graficos por ativo com
-marcadores dos gatilhos.
+O script configura Matplotlib como `inline` quando esta em um console IPython,
+salva os PNGs em `output/directional_change/graficos/` e tambem publica cada
+Figure para a aba Plots do Spyder. Alem dos graficos anteriores, gera capital
+relativo ao Control e metricas de Peak Exit somente para as saidas disparadas
+pelos overlays.
 
-O unico pacote necessario para analise continua sendo
-`output/directional_change/pacote_analise.zip`.
+O pacote continua sendo recriado sempre no mesmo caminho:
+
+`output/directional_change/pacote_analise.zip`
 
 A `main` e o Control oficial permanecem inalterados.
