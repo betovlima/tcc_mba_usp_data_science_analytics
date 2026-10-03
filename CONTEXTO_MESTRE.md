@@ -3,67 +3,64 @@
 ## Baseline preservado
 
 A reproducao oficial permanece Control vs Soft Horizon Consensus, com dados
-congelados em `dados/pesquisa/`. O experimento Directional Change nao altera o
-Control oficial nem o pipeline operacional do Market Cycle Trader.
+congelados em `dados/pesquisa/`. A pesquisa Directional Change nao altera o
+Control oficial nem o MCT.
 
-## Pesquisa ativa — v1.3.0-dev.1
+## Regra de continuidade da pesquisa
 
-Branch: `feature/v1.3.0-dev.1-directional-change-lightgbm`
+Usar uma unica branch ativa para esta linha de pesquisa:
 
-Hipotese: reduzir o giveback entre o topo observado durante uma posicao e a
-saida usando um classificador causal Directional Change + LightGBM.
+`feature/v1.3.0-dev.1-directional-change-lightgbm`
 
-Arquivos principais:
+Evoluir sempre os mesmos arquivos:
 
 - `pesquisas/directional_change_lightgbm.py`;
 - `pesquisar_directional_change_spyder.py`;
-- `tests/test_directional_change_lightgbm.py`;
-- `docs/changes/v1.3.0-dev.1-directional-change-lightgbm.md`.
+- `tests/test_directional_change_lightgbm.py`.
 
-Regra experimental: o challenger somente antecipa uma saida para CASH quando o
-Control manteria a posicao e a probabilidade calibrada de reversao e alta. Uma
-decisao de rotacao/saida ja tomada pelo Control nunca e bloqueada pelo overlay.
+Nao criar arquivos ou branches novos para representar cada tentativa. O
+historico e as diferencas entre tentativas ficam nos commits do Git.
 
-Protocolo: mesmos dados congelados, mesmo calendario, mesmos folds, purge e
-custos do Control. O futuro e usado somente na construcao dos labels de treino.
+Os resultados locais sao sobrescritos em `output/directional_change/`. O
+arquivo `pacote_analise.zip` e recriado ao final de cada execucao e e o unico
+pacote necessario para analise.
 
-Promocao: nenhum resultado deve ser levado ao MCT antes de demonstrar ganho OOS
-no TCC. Avaliar capital, CAGR, Sharpe, MaxDD, pior fold e metricas Peak Exit.
+## Resultado da primeira tentativa Directional Change
 
-Status: codigo de pesquisa implementado; aguarda execucao completa do backtest
-local para produzir resultados reais.
-
-
-## Resultado v1.3.0-dev.1
-
-A primeira versao Directional Change + LightGBM nao foi aprovada:
+A primeira formulacao nao foi aprovada:
 
 - Control: US$ 10.082.425,91;
-- DC v1: US$ 3.653.966,86;
+- Directional Change: US$ 3.653.966,86;
 - delta relativo: -63,76%;
 - distancia mediana do topo: 2,3844% -> 2,3437%;
 - captura mediana do topo: 32,76% -> 26,53%;
-- 52 gatilhos DC;
-- balanced accuracy de calibracao entre aproximadamente 50,5% e 53,0%;
-- precision entre aproximadamente 20,0% e 30,0%.
+- 52 gatilhos adicionais;
+- balanced accuracy de calibracao aproximadamente 50,5% a 53,0%;
+- precision aproximadamente 20% a 30%.
 
-Diagnostico: o alvo generico de drawdown em cinco sessoes gerou falsos
-positivos e saidas de um pregao para CASH seguidas de reentrada. A v1 nao deve
-ser promovida para o MCT.
+Diagnostico: o alvo generico de drawdown em cinco sessoes gerava falsos
+positivos e saidas curtas para CASH seguidas de reentrada.
 
-## Pesquisa ativa — v1.3.0-dev.2
+## Estado atual da pesquisa
 
-Branch: `feature/v1.3.0-dev.2-directional-change-top-turn`
+A implementacao corrente reformula o alvo como um evento de virada perto do
+topo:
 
-A v2 preserva as features Directional Change, mas substitui o alvo por um
-evento Top-Turn first-passage condicionado a tendencia de alta proxima de uma
-maxima. A calibracao prioriza precision com F0.5 e exige duas confirmacoes
-consecutivas antes de uma saida.
+- tendencia de alta nas escalas Directional Change;
+- preco proximo da maxima recente;
+- retorno de 20 sessoes positivo;
+- primeiro evento futuro: queda relevante antes de nova continuacao da alta;
+- calibracao orientada a precision com F0.5;
+- duas confirmacoes consecutivas antes da saida.
 
-Script Spyder:
-`pesquisar_directional_change_top_turn_spyder.py`
+O futuro e usado somente na construcao do label de treino. As features e as
+decisoes OOS permanecem causais.
 
-Ao final, o script gera automaticamente um ZIP compacto de analise e emite um
-sinal sonoro. O ZIP e o unico pacote necessario para enviar em futuras analises.
+Ao final do processamento no Spyder:
 
-Nenhum resultado da v2 existe antes da execucao real.
+1. os CSV/JSON correntes sao atualizados;
+2. `pacote_analise.zip` e recriado;
+3. um aviso sonoro e emitido.
+
+Nenhum resultado da implementacao corrente existe antes da proxima execucao
+real.
