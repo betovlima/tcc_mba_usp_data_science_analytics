@@ -397,3 +397,30 @@ Os resultados sao gravados em
 Nenhum resultado desta pesquisa deve ser interpretado como validado antes da
 execucao OOS completa. A reproducao oficial Control vs Soft permanece
 inalterada.
+
+
+### Directional Change Top-Turn v1.3.0-dev.2
+
+A v1.3.0-dev.1 foi mantida como evidencia negativa: reduziu pouco a distancia
+do topo, mas gerou falsos positivos e terminou muito abaixo do Control.
+
+A v1.3.0-dev.2 testa um alvo mais especifico de virada perto do topo. Abra no
+Spyder:
+
+`pesquisar_directional_change_top_turn_spyder.py`
+
+e execute as celulas de cima para baixo, ou no console:
+
+```python
+%run pesquisar_directional_change_top_turn_spyder.py
+```
+
+Ao terminar, o script cria automaticamente:
+
+`output/directional_change_top_turn/pacote_analise_1_3_0_dev_2.zip`
+
+Esse ZIP contem somente os CSV/JSON da execucao necessarios para analise. Nao
+e preciso compactar a pasta `dados/` nem enviar os demais outputs do projeto.
+
+Depois de criar o ZIP, o script emite dois tons no Windows para avisar que a
+pesquisa terminou.
