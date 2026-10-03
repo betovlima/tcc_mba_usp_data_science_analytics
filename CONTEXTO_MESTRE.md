@@ -291,3 +291,33 @@ nao devem ser tratados como resultado final:
 
 Essas alteracoes sao correcoes de metodologia/implementacao, nao tuning sobre
 o resultado observado. A versao corrente e `1.6.0-dev.2`.
+
+
+## Storytelling mensal/anual de ativos
+
+Versao corrente: `1.6.0-dev.3`.
+
+Os graficos genericos de comparacao deixam de ser o foco principal. O script
+passa a gerar calendarios ano x mes orientados a narrativa:
+
+- `story_control_monthly.png`;
+- `story_top_turn_monthly.png`;
+- `story_bocpd_monthly.png`;
+- `story_hsmm_monthly.png`;
+- `story_hazard_survival_monthly.png`;
+- `market_monthly_leaders.png`;
+- `market_monthly_laggards.png`;
+- `asset_story_<ATIVO>.png` somente para ativos que tiveram gatilhos.
+
+Nos calendarios de estrategia, cada celula mostra o ativo dominante no mes,
+o retorno mensal da estrategia e a porcentagem de sessoes em que esse ativo
+foi dominante.
+
+Nos calendarios individuais de ativo, cada celula mostra o retorno mensal do
+ativo e marcadores dos sinais observados naquele mes:
+`TT` Top-Turn, `BO` BOCPD, `HS` HSMM e `HZ` Hazard/Survival.
+
+Todos os calendarios usam somente a janela OOS para manter a narrativa
+comparavel com os resultados da estrategia. As figuras continuam sendo salvas
+em `output/directional_change/graficos/`, publicadas na aba Plots do Spyder e
+incluidas no mesmo `pacote_analise.zip`.
