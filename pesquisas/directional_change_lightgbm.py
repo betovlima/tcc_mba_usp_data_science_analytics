@@ -35,7 +35,7 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.3.0-dev.4"
+RESEARCH_VERSION = "1.3.0-dev.5"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5
@@ -529,10 +529,12 @@ def _envolver_politica_top_turn(
     config: Any,
     decision_diagnostics: dict[pd.Timestamp, dict[str, Any]],
     suppressed_triggers: set[tuple[pd.Timestamp, str]] | None = None,
+    suppressed_assets: set[str] | None = None,
     disable_all_triggers: bool = False,
 ) -> Callable[[pd.Timestamp, int, int], tuple[int, float]]:
     streak_by_symbol: dict[str, int] = {}
     suppressed = suppressed_triggers or set()
+    suppressed_asset_set = {str(item) for item in (suppressed_assets or set())}
 
     def policy(
         timestamp: pd.Timestamp,
@@ -587,10 +589,18 @@ def _envolver_politica_top_turn(
             if symbol is not None
             else None
         )
-        suppressed_here = bool(
+        suppressed_by_key = bool(
             candidate_trigger
             and trigger_key is not None
             and trigger_key in suppressed
+        )
+        suppressed_by_asset = bool(
+            candidate_trigger
+            and symbol is not None
+            and str(symbol) in suppressed_asset_set
+        )
+        suppressed_here = bool(
+            suppressed_by_key or suppressed_by_asset
         )
         triggered = bool(
             candidate_trigger
@@ -626,6 +636,12 @@ def _envolver_politica_top_turn(
                 "directional_change_exit_triggered": triggered,
                 "directional_change_ablation_candidate_trigger": candidate_trigger,
                 "directional_change_ablation_suppressed": suppressed_here,
+                "directional_change_ablation_suppressed_by_key": (
+                    suppressed_by_key
+                ),
+                "directional_change_ablation_suppressed_by_asset": (
+                    suppressed_by_asset
+                ),
                 "directional_change_ablation_disable_all": bool(
                     disable_all_triggers
                 ),
@@ -947,6 +963,8 @@ def executar_directional_change_lightgbm(
     def replay_with_ablation(
         suppressed_triggers: set[tuple[pd.Timestamp, str]] | None = None,
         *,
+        suppressed_assets: set[str] | None = None,
+        suppressed_folds: set[int] | None = None,
         disable_all_triggers: bool = False,
     ) -> Any:
         replay_diagnostics: dict[pd.Timestamp, dict[str, Any]] = {}
@@ -972,7 +990,11 @@ def executar_directional_change_lightgbm(
                 config=config,
                 decision_diagnostics=replay_diagnostics,
                 suppressed_triggers=suppressed_triggers,
-                disable_all_triggers=disable_all_triggers,
+                suppressed_assets=suppressed_assets,
+                disable_all_triggers=bool(
+                    disable_all_triggers
+                    or int(replay_fold_id) in (suppressed_folds or set())
+                ),
             )
 
         return _simular_exato(
@@ -1072,7 +1094,21 @@ def executar_directional_change_lightgbm(
                 total_folds,
             )
 
-        grouped = replay_with_ablation(set(suppressed_keys))
+        if group_type == "asset":
+            grouped = replay_with_ablation(
+                suppressed_assets={str(group_value)}
+            )
+            suppression_scope = "all_oos_triggers_for_asset"
+        elif group_type == "fold":
+            grouped = replay_with_ablation(
+                suppressed_folds={int(group_value)}
+            )
+            suppression_scope = "all_oos_triggers_for_fold"
+        else:
+            raise ValueError(
+                f"Unsupported ablation group type: {group_type}"
+            )
+
         grouped_capital = float(
             grouped.metrics["strategy_ending_capital"]
         )
@@ -1080,7 +1116,8 @@ def executar_directional_change_lightgbm(
             {
                 "group_type": str(group_type),
                 "group_value": str(group_value),
-                "trigger_count": int(len(suppressed_keys)),
+                "original_trigger_count": int(len(suppressed_keys)),
+                "suppression_scope": suppression_scope,
                 "full_top_turn_ending_capital": full_capital,
                 "without_group_ending_capital": grouped_capital,
                 "group_contribution_to_ending_capital": (
@@ -1107,9 +1144,10 @@ def executar_directional_change_lightgbm(
     )
     control_capital_reference = None
     result.metrics["directional_change_ablation"] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "method": (
-            "leave_one_trigger_and_group_out_replay_without_retraining"
+            "leave_one_trigger_out_plus_full_scope_group_suppression_"
+            "without_retraining"
         ),
         "trigger_count": int(len(trigger_rows)),
         "full_top_turn_ending_capital": full_capital,
