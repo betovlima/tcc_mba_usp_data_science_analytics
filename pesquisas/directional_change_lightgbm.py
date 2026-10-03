@@ -1,12 +1,8 @@
-"""Pesquisa Directional Change + LightGBM.
+"""Pesquisa de reversao: Top-Turn, BOCPD e HSMM.
 
 Este modulo e o unico ponto de evolucao desta linha de pesquisa. O historico
-fica no Git; novas tentativas substituem a implementacao corrente em vez de
-criar novos arquivos versionados.
-
-Versao atual: Top-Turn. O classificador estima uma virada de alta para baixa
-perto de maxima recente, com calibracao orientada a precision e duas
-confirmacoes antes de antecipar a saida do Control.
+fica no Git; novas tecnicas sao comparadas no mesmo protocolo OOS sem criar
+arquivos de codigo paralelos.
 """
 from __future__ import annotations
 
@@ -35,7 +31,7 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.4.0-dev.1"
+RESEARCH_VERSION = "1.5.0-dev.1"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5
@@ -77,6 +73,25 @@ BOCPD_PRIOR_KAPPA = 1.0
 BOCPD_NEAR_HIGH_20 = 0.05
 BOCPD_MIN_RETURN_20 = 0.0
 BOCPD_CONFIRMATION_SESSIONS = 2
+
+HSMM_STATE_COUNT = 3
+HSMM_MAX_DURATION = 60
+HSMM_MIN_TRAINING_ROWS = 160
+HSMM_SCORE_THRESHOLDS = (
+    0.05,
+    0.10,
+    0.15,
+    0.20,
+    0.25,
+    0.35,
+    0.50,
+    0.65,
+)
+HSMM_NEAR_HIGH_20 = 0.05
+HSMM_MIN_RETURN_20 = 0.0
+HSMM_CONFIRMATION_SESSIONS = 2
+HSMM_DURATION_SMOOTHING = 0.5
+HSMM_TRANSITION_SMOOTHING = 0.5
 
 def _tag_threshold(value: float) -> str:
     return f"{int(round(float(value) * 100)):02d}pct"
@@ -162,6 +177,44 @@ class BOCPDCalibrationResult:
             "negatives": int(self.negatives),
             "observations": int(self.observations),
         }
+
+
+@dataclass(frozen=True)
+class HSMMCalibrationResult:
+    threshold: float
+    fbeta_05: float | None
+    balanced_accuracy: float | None
+    precision: float | None
+    recall: float | None
+    predicted_positives: int
+    positives: int
+    negatives: int
+    observations: int
+    fitted_assets: int
+
+    def as_dict(self, *, fold_id: int) -> dict[str, Any]:
+        return {
+            "fold_id": int(fold_id),
+            "score_threshold": float(self.threshold),
+            "fbeta_05": self.fbeta_05,
+            "balanced_accuracy": self.balanced_accuracy,
+            "precision": self.precision,
+            "recall": self.recall,
+            "predicted_positives": int(self.predicted_positives),
+            "positives": int(self.positives),
+            "negatives": int(self.negatives),
+            "observations": int(self.observations),
+            "fitted_assets": int(self.fitted_assets),
+        }
+
+
+@dataclass(frozen=True)
+class HSMMAssetModel:
+    means: np.ndarray
+    variances: np.ndarray
+    transition: np.ndarray
+    duration_pmf: np.ndarray
+    initial_probabilities: np.ndarray
 
 
 def _directional_change_state(
@@ -349,6 +402,10 @@ def adicionar_top_turn_features(frame: pd.DataFrame) -> pd.DataFrame:
     output["bocpd_eligible"] = (
         (distance_high >= -BOCPD_NEAR_HIGH_20)
         & (return_20 > BOCPD_MIN_RETURN_20)
+    )
+    output["hsmm_eligible"] = (
+        (distance_high >= -HSMM_NEAR_HIGH_20)
+        & (return_20 > HSMM_MIN_RETURN_20)
     )
 
     output = output.join(_top_turn_targets(output))
@@ -685,6 +742,537 @@ def _envolver_politica_bocpd(
         diagnostic.update(
             {
                 "decision_reason": "BOCPD_DOWNWARD_CHANGE_EXIT",
+                "final_action_asset": "CASH",
+                "final_action_score": 0.0,
+                "decision_is_rotation": False,
+                "decision_is_entry": False,
+                "decision_is_exit_to_cash": True,
+            }
+        )
+        return 0, 0.0
+
+    return policy
+
+
+def _hsmm_observations(frame: pd.DataFrame) -> pd.DataFrame:
+    previous_vol = pd.to_numeric(
+        frame["vol_20"],
+        errors="coerce",
+    ).shift(1)
+    daily = pd.to_numeric(frame["return_1"], errors="coerce")
+    slope = pd.to_numeric(frame["ema_slope_20_5"], errors="coerce")
+    scale_daily = previous_vol.replace(0, np.nan)
+    scale_slope = (
+        previous_vol.replace(0, np.nan) * np.sqrt(5.0)
+    )
+    return pd.DataFrame(
+        {
+            "hsmm_standardized_return": (
+                daily / scale_daily
+            ).clip(-8.0, 8.0),
+            "hsmm_standardized_trend": (
+                slope / scale_slope
+            ).clip(-8.0, 8.0),
+        },
+        index=frame.index,
+    )
+
+
+def _hsmm_gaussian_logpdf(
+    values: np.ndarray,
+    means: np.ndarray,
+    variances: np.ndarray,
+) -> np.ndarray:
+    variances = np.maximum(
+        np.asarray(variances, dtype=float),
+        1e-6,
+    )
+    delta = (
+        np.asarray(values, dtype=float)[None, :]
+        - np.asarray(means, dtype=float)
+    )
+    return -0.5 * np.sum(
+        np.log(2.0 * np.pi * variances)
+        + delta * delta / variances,
+        axis=1,
+    )
+
+
+def _fit_hsmm_asset(
+    frame: pd.DataFrame,
+    train_dates: pd.DatetimeIndex,
+    *,
+    random_state: int,
+) -> HSMMAssetModel | None:
+    from sklearn.mixture import GaussianMixture
+
+    observations = _hsmm_observations(frame).reindex(train_dates)
+    clean = observations.dropna()
+    if len(clean) < int(HSMM_MIN_TRAINING_ROWS):
+        return None
+
+    values = clean.to_numpy(dtype=float)
+    mixture = GaussianMixture(
+        n_components=int(HSMM_STATE_COUNT),
+        covariance_type="diag",
+        reg_covar=1e-5,
+        random_state=int(random_state),
+        n_init=5,
+    )
+    mixture.fit(values)
+    labels_raw = mixture.predict(values)
+
+    raw_means = np.asarray(mixture.means_, dtype=float)
+    order = np.argsort(
+        raw_means[:, 0] + 0.35 * raw_means[:, 1]
+    )
+    raw_to_state = {
+        int(raw_index): int(state_index)
+        for state_index, raw_index in enumerate(order)
+    }
+    labels = np.asarray(
+        [raw_to_state[int(value)] for value in labels_raw],
+        dtype=int,
+    )
+    means = raw_means[order]
+    variances = np.asarray(
+        mixture.covariances_,
+        dtype=float,
+    )[order]
+
+    state_count = int(HSMM_STATE_COUNT)
+    max_duration = int(HSMM_MAX_DURATION)
+    transition_counts = np.full(
+        (state_count, state_count),
+        float(HSMM_TRANSITION_SMOOTHING),
+        dtype=float,
+    )
+    duration_counts = np.full(
+        (state_count, max_duration),
+        float(HSMM_DURATION_SMOOTHING),
+        dtype=float,
+    )
+    initial_counts = np.full(
+        state_count,
+        1.0,
+        dtype=float,
+    )
+
+    segments: list[tuple[int, int]] = []
+    start = 0
+    for index in range(1, len(labels) + 1):
+        if index == len(labels) or labels[index] != labels[start]:
+            state = int(labels[start])
+            duration = int(index - start)
+            segments.append((state, duration))
+            duration_counts[
+                state,
+                min(duration, max_duration) - 1,
+            ] += 1.0
+            start = index
+
+    if segments:
+        initial_counts[int(segments[0][0])] += 1.0
+    for (left_state, _), (right_state, _) in zip(
+        segments[:-1],
+        segments[1:],
+        strict=True,
+    ):
+        if int(left_state) != int(right_state):
+            transition_counts[
+                int(left_state),
+                int(right_state),
+            ] += 1.0
+
+    for state in range(state_count):
+        transition_counts[state, state] = 0.0
+        total = float(transition_counts[state].sum())
+        if total <= 0:
+            transition_counts[state] = 1.0
+            transition_counts[state, state] = 0.0
+
+    transition = transition_counts / transition_counts.sum(
+        axis=1,
+        keepdims=True,
+    )
+    duration_pmf = duration_counts / duration_counts.sum(
+        axis=1,
+        keepdims=True,
+    )
+    initial_probabilities = initial_counts / initial_counts.sum()
+
+    return HSMMAssetModel(
+        means=means,
+        variances=variances,
+        transition=transition,
+        duration_pmf=duration_pmf,
+        initial_probabilities=initial_probabilities,
+    )
+
+
+def _filter_hsmm_asset(
+    frame: pd.DataFrame,
+    model: HSMMAssetModel,
+) -> pd.DataFrame:
+    observations = _hsmm_observations(frame)
+    state_count = int(HSMM_STATE_COUNT)
+    max_duration = int(HSMM_MAX_DURATION)
+    posterior = np.full(
+        (len(frame), state_count),
+        np.nan,
+        dtype=float,
+    )
+    score = np.full(len(frame), np.nan, dtype=float)
+
+    alpha: np.ndarray | None = None
+    previous_state = np.asarray(
+        model.initial_probabilities,
+        dtype=float,
+    )
+
+    for index, values in enumerate(
+        observations.to_numpy(dtype=float)
+    ):
+        if not np.isfinite(values).all():
+            continue
+
+        log_likelihood = _hsmm_gaussian_logpdf(
+            values,
+            model.means,
+            model.variances,
+        )
+        likelihood = np.exp(
+            log_likelihood - float(np.max(log_likelihood))
+        )
+
+        if alpha is None:
+            alpha = np.zeros(
+                (state_count, max_duration),
+                dtype=float,
+            )
+            for state in range(state_count):
+                alpha[state, :] = (
+                    float(model.initial_probabilities[state])
+                    * model.duration_pmf[state]
+                    * float(likelihood[state])
+                )
+        else:
+            next_alpha = np.zeros_like(alpha)
+
+            # Remaining duration > 1: deterministic persistence.
+            next_alpha[:, :-1] += alpha[:, 1:]
+
+            # Remaining duration == 1: transition to another state
+            # and draw an explicit new duration.
+            ending_mass = alpha[:, 0]
+            for source in range(state_count):
+                source_mass = float(ending_mass[source])
+                if source_mass <= 0:
+                    continue
+                for target in range(state_count):
+                    transition_probability = float(
+                        model.transition[source, target]
+                    )
+                    if transition_probability <= 0:
+                        continue
+                    next_alpha[target, :] += (
+                        source_mass
+                        * transition_probability
+                        * model.duration_pmf[target]
+                    )
+
+            next_alpha *= likelihood[:, None]
+            alpha = next_alpha
+
+        total = float(alpha.sum())
+        if not np.isfinite(total) or total <= 0:
+            alpha = np.zeros(
+                (state_count, max_duration),
+                dtype=float,
+            )
+            for state in range(state_count):
+                alpha[state, :] = (
+                    float(model.initial_probabilities[state])
+                    * model.duration_pmf[state]
+                    * float(likelihood[state])
+                )
+            total = float(alpha.sum())
+
+        if total <= 0:
+            continue
+
+        alpha = alpha / total
+        state_probability = alpha.sum(axis=1)
+        posterior[index, :] = state_probability
+
+        down_probability = float(state_probability[0])
+        neutral_probability = float(state_probability[1])
+        previous_up = float(previous_state[2])
+        score[index] = previous_up * (
+            down_probability + 0.5 * neutral_probability
+        )
+        previous_state = state_probability
+
+    return pd.DataFrame(
+        {
+            "hsmm_down_probability": posterior[:, 0],
+            "hsmm_neutral_probability": posterior[:, 1],
+            "hsmm_up_probability": posterior[:, 2],
+            "hsmm_reversal_score": score,
+        },
+        index=frame.index,
+    )
+
+
+def _fit_hsmm_models(
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    train_dates: pd.DatetimeIndex,
+    *,
+    random_state: int,
+) -> dict[str, HSMMAssetModel]:
+    models: dict[str, HSMMAssetModel] = {}
+    for symbol in symbols:
+        model = _fit_hsmm_asset(
+            frames[symbol],
+            train_dates,
+            random_state=int(random_state),
+        )
+        if model is not None:
+            models[symbol] = model
+    return models
+
+
+def _precalcular_hsmm_scores(
+    models: dict[str, HSMMAssetModel],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+) -> dict[str, pd.DataFrame]:
+    return {
+        symbol: _filter_hsmm_asset(frames[symbol], models[symbol])
+        for symbol in symbols
+        if symbol in models
+    }
+
+
+def calibrar_hsmm(
+    filtered: dict[str, pd.DataFrame],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    calibration_dates: pd.DatetimeIndex,
+) -> HSMMCalibrationResult:
+    targets: list[int] = []
+    scores: list[float] = []
+
+    for symbol in symbols:
+        signal_frame = filtered.get(symbol)
+        if signal_frame is None:
+            continue
+        frame = frames[symbol].reindex(calibration_dates)
+        signals = signal_frame.reindex(calibration_dates)
+        eligible = frame["hsmm_eligible"].fillna(False).astype(bool)
+        target = pd.to_numeric(
+            frame["forward_down_reversal"],
+            errors="coerce",
+        )
+        score = pd.to_numeric(
+            signals["hsmm_reversal_score"],
+            errors="coerce",
+        )
+        valid = eligible & target.notna() & score.notna()
+        if not bool(valid.any()):
+            continue
+        targets.extend(target.loc[valid].astype(int).tolist())
+        scores.extend(score.loc[valid].astype(float).tolist())
+
+    if not targets:
+        return HSMMCalibrationResult(
+            threshold=0.25,
+            fbeta_05=None,
+            balanced_accuracy=None,
+            precision=None,
+            recall=None,
+            predicted_positives=0,
+            positives=0,
+            negatives=0,
+            observations=0,
+            fitted_assets=int(len(filtered)),
+        )
+
+    y_true = np.asarray(targets, dtype=int)
+    values = np.asarray(scores, dtype=float)
+    best: tuple[
+        float,
+        float,
+        float,
+        dict[str, float | int | None],
+    ] | None = None
+
+    for threshold in HSMM_SCORE_THRESHOLDS:
+        metrics = _metricas_classificacao(
+            y_true,
+            values,
+            float(threshold),
+        )
+        if int(metrics["predicted_positives"] or 0) < MINIMUM_CALIBRATION_ALERTS:
+            continue
+        candidate = (
+            float(metrics["fbeta_05"] or 0.0),
+            float(metrics["precision"] or 0.0),
+            float(threshold),
+            metrics,
+        )
+        if best is None or candidate[:3] > best[:3]:
+            best = candidate
+
+    if best is None:
+        threshold = 0.25
+        metrics = _metricas_classificacao(
+            y_true,
+            values,
+            threshold,
+        )
+    else:
+        threshold = float(best[2])
+        metrics = best[3]
+
+    return HSMMCalibrationResult(
+        threshold=float(threshold),
+        fbeta_05=float(metrics["fbeta_05"] or 0.0),
+        balanced_accuracy=float(
+            metrics["balanced_accuracy"] or 0.0
+        ),
+        precision=(
+            float(metrics["precision"])
+            if metrics["precision"] is not None
+            else None
+        ),
+        recall=float(metrics["recall"] or 0.0),
+        predicted_positives=int(
+            metrics["predicted_positives"] or 0
+        ),
+        positives=int((y_true == 1).sum()),
+        negatives=int((y_true == 0).sum()),
+        observations=int(len(y_true)),
+        fitted_assets=int(len(filtered)),
+    )
+
+
+def _envolver_politica_hsmm(
+    base_policy: Callable[[pd.Timestamp, int, int], tuple[int, float]],
+    *,
+    filtered: dict[str, pd.DataFrame],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    score_threshold: float,
+    config: Any,
+    decision_diagnostics: dict[pd.Timestamp, dict[str, Any]],
+) -> Callable[[pd.Timestamp, int, int], tuple[int, float]]:
+    streak_by_symbol: dict[str, int] = {}
+
+    def policy(
+        timestamp: pd.Timestamp,
+        current_position: int,
+        holding_days: int,
+    ) -> tuple[int, float]:
+        base_target, base_score = base_policy(
+            timestamp,
+            current_position,
+            holding_days,
+        )
+        key = pd.Timestamp(timestamp)
+        diagnostic = decision_diagnostics.setdefault(key, {})
+        symbol = symbols[current_position - 1] if current_position > 0 else None
+
+        score = None
+        down_probability = None
+        neutral_probability = None
+        up_probability = None
+        eligible = False
+
+        if symbol is not None and key in frames[symbol].index:
+            eligible = bool(frames[symbol].at[key, "hsmm_eligible"])
+            signal_frame = filtered.get(symbol)
+            if signal_frame is not None and key in signal_frame.index:
+                row = signal_frame.loc[key]
+                for name, target in (
+                    ("hsmm_reversal_score", "score"),
+                    ("hsmm_down_probability", "down"),
+                    ("hsmm_neutral_probability", "neutral"),
+                    ("hsmm_up_probability", "up"),
+                ):
+                    value = row.get(name)
+                    if pd.notna(value):
+                        if target == "score":
+                            score = float(value)
+                        elif target == "down":
+                            down_probability = float(value)
+                        elif target == "neutral":
+                            neutral_probability = float(value)
+                        else:
+                            up_probability = float(value)
+
+        control_holds = bool(
+            current_position > 0
+            and int(base_target) == int(current_position)
+            and holding_days >= int(config.rotation_min_holding_days)
+        )
+        above_threshold = bool(
+            control_holds
+            and eligible
+            and score is not None
+            and np.isfinite(float(score))
+            and float(score) >= float(score_threshold)
+        )
+
+        if symbol is not None:
+            if above_threshold:
+                streak_by_symbol[symbol] = int(
+                    streak_by_symbol.get(symbol, 0)
+                ) + 1
+            else:
+                streak_by_symbol[symbol] = 0
+        streak = int(streak_by_symbol.get(symbol, 0)) if symbol else 0
+        triggered = bool(
+            above_threshold
+            and streak >= int(HSMM_CONFIRMATION_SESSIONS)
+        )
+
+        diagnostic.update(
+            {
+                "hsmm_schema_version": 1,
+                "hsmm_research_version": RESEARCH_VERSION,
+                "hsmm_reversal_score": score,
+                "hsmm_score_threshold": float(score_threshold),
+                "hsmm_down_probability": down_probability,
+                "hsmm_neutral_probability": neutral_probability,
+                "hsmm_up_probability": up_probability,
+                "hsmm_eligible": bool(eligible),
+                "hsmm_confirmation_streak": int(streak),
+                "hsmm_confirmation_required": int(
+                    HSMM_CONFIRMATION_SESSIONS
+                ),
+                "hsmm_base_target_asset": (
+                    "CASH"
+                    if int(base_target) <= 0
+                    else symbols[int(base_target) - 1]
+                ),
+                "hsmm_exit_triggered": triggered,
+            }
+        )
+
+        if not triggered:
+            if not control_holds and symbol is not None:
+                streak_by_symbol[symbol] = 0
+            return int(base_target), float(base_score)
+
+        streak_by_symbol[symbol] = 0
+        diagnostic["hsmm_base_reason"] = diagnostic.get(
+            "decision_reason"
+        )
+        diagnostic.update(
+            {
+                "decision_reason": "HSMM_REGIME_TRANSITION_EXIT",
                 "final_action_asset": "CASH",
                 "final_action_score": 0.0,
                 "decision_is_rotation": False,
@@ -1561,6 +2149,248 @@ def executar_directional_change_lightgbm(
             total_folds,
         )
     return result
+
+def executar_hsmm_overlay(
+    bars_by_symbol: dict[str, pd.DataFrame],
+    config: Any,
+    fee_calculator: Callable,
+    slippage: Callable,
+    *,
+    progress_callback: Callable[[float, str, int], None] | None = None,
+) -> Any:
+    if int(config.rotation_model_repetitions) != 1:
+        raise ValueError("HSMM comparison requires one repetition.")
+
+    (
+        frames,
+        common_dates,
+        calendar_source_asset,
+        symbols,
+        folds,
+        all_decision_dates,
+        decision_to_fold,
+        decision_metadata,
+    ) = _construir_contexto_execucao(bars_by_symbol, config)
+    frames = _preparar_frames(frames)
+
+    policies: dict[int, Callable] = {}
+    diagnostics: dict[pd.Timestamp, dict[str, Any]] = {}
+    calibration_rows: list[dict[str, Any]] = []
+    margin_rows: list[dict[str, Any]] = []
+
+    total_folds = len(folds)
+    for fold_position, fold in enumerate(folds, start=1):
+        fold_id = int(fold["fold_id"])
+        if progress_callback is not None:
+            progress_callback(
+                5.0 + 75.0 * ((fold_position - 1) / max(1, total_folds)),
+                f"HSMM fold {fold_position}/{total_folds} training",
+                fold_position - 1,
+            )
+
+        train_dates = common_dates[: int(fold["train_end_index"])]
+        calibration_dates = common_dates[
+            int(fold["calibration_start_index"]):
+            int(fold["calibration_end_index"])
+        ]
+        final_fit_dates = common_dates[: int(fold["final_fit_end_index"])]
+
+        calibration_utility_models = _ajustar_modelos_lightgbm(
+            frames,
+            symbols,
+            train_dates,
+            config,
+            phase=f"hsmm_fold_{fold_id}_utility_calibration",
+        )
+        candidate_margins = tuple(
+            float(value)
+            for value in config.rotation_switch_margin_candidates
+        )
+        best_candidate = candidate_margins[0]
+        best_score = float("-inf")
+        for candidate in candidate_margins:
+            calibration_policy = _politica_utilidade(
+                calibration_utility_models,
+                frames,
+                symbols,
+                config,
+                candidate,
+            )
+            candidate_score = _crescimento_politica_simples(
+                calibration_policy,
+                frames,
+                symbols,
+                calibration_dates,
+                config,
+            )
+            if candidate_score > best_score:
+                best_score = candidate_score
+                best_candidate = candidate
+
+        calibration_models = _fit_hsmm_models(
+            frames,
+            symbols,
+            train_dates,
+            random_state=int(config.random_state) + fold_id,
+        )
+        calibration_filtered = _precalcular_hsmm_scores(
+            calibration_models,
+            frames,
+            symbols,
+        )
+        calibration = calibrar_hsmm(
+            calibration_filtered,
+            frames,
+            symbols,
+            calibration_dates,
+        )
+        calibration_rows.append(
+            calibration.as_dict(fold_id=fold_id)
+        )
+
+        final_utility_models = _ajustar_modelos_lightgbm(
+            frames,
+            symbols,
+            final_fit_dates,
+            config,
+            phase=f"hsmm_fold_{fold_id}_utility_final",
+        )
+        final_hsmm_models = _fit_hsmm_models(
+            frames,
+            symbols,
+            final_fit_dates,
+            random_state=int(config.random_state) + 1000 + fold_id,
+        )
+        final_filtered = _precalcular_hsmm_scores(
+            final_hsmm_models,
+            frames,
+            symbols,
+        )
+
+        decision_dates = pd.DatetimeIndex(fold["decision_dates"])
+        utility_cache, _ = _precalcular_utilidades_modelo(
+            final_utility_models,
+            frames,
+            symbols,
+            decision_dates,
+            config,
+        )
+        effective_margin = max(
+            float(config.rotation_switch_margin),
+            float(best_candidate),
+        )
+        base_policy = _politica_utilidade(
+            final_utility_models,
+            frames,
+            symbols,
+            config,
+            effective_margin,
+            decision_diagnostics=diagnostics,
+            fold_id=fold_id,
+            calibrated_switch_margin=float(best_candidate),
+            utility_cache=utility_cache,
+        )
+        policies[fold_id] = _envolver_politica_hsmm(
+            base_policy,
+            filtered=final_filtered,
+            frames=frames,
+            symbols=symbols,
+            score_threshold=float(calibration.threshold),
+            config=config,
+            decision_diagnostics=diagnostics,
+        )
+        margin_rows.append(
+            {
+                "fold_id": fold_id,
+                "calibrated_candidate_margin": float(best_candidate),
+                "effective_switch_margin": float(effective_margin),
+                "calibration_risk_adjusted_score": float(best_score),
+                "hsmm_fitted_assets": int(len(final_hsmm_models)),
+            }
+        )
+
+    if progress_callback is not None:
+        progress_callback(
+            85.0,
+            "HSMM OOS replay",
+            total_folds,
+        )
+
+    result = _simular_exato(
+        "hsmm_overlay",
+        _politica_agendada(policies, decision_to_fold),
+        frames,
+        symbols,
+        all_decision_dates,
+        config,
+        fee_calculator,
+        slippage,
+        decision_metadata=decision_metadata,
+        policy_decision_diagnostics=diagnostics,
+        model_label="Explicit-Duration HSMM",
+        method_line=(
+            "- HSMM fits three Gaussian latent regimes on training-only "
+            "standardized return and trend observations, estimates explicit "
+            "state-duration distributions, and filters regime probabilities "
+            "causally. A transition away from the prior up regime near a "
+            "recent high requires two confirmations before exit to CASH."
+        ),
+    )
+    result.backend = "hsmm_overlay"
+
+    scores = pd.to_numeric(
+        result.predictions.get(
+            "hsmm_reversal_score",
+            pd.Series(index=result.predictions.index, dtype=float),
+        ),
+        errors="coerce",
+    )
+    triggers = result.predictions.get(
+        "hsmm_exit_triggered",
+        pd.Series(False, index=result.predictions.index, dtype=bool),
+    ).fillna(False).astype(bool)
+
+    result.metrics.update(
+        {
+            "backend": "hsmm_overlay",
+            "model_family": "explicit_duration_hsmm",
+            "strategy_label": "Explicit-Duration HSMM",
+            "hsmm_research_version": RESEARCH_VERSION,
+            "hsmm_state_count": int(HSMM_STATE_COUNT),
+            "hsmm_max_duration": int(HSMM_MAX_DURATION),
+            "hsmm_score_threshold_candidates": list(
+                HSMM_SCORE_THRESHOLDS
+            ),
+            "hsmm_confirmation_sessions": int(
+                HSMM_CONFIRMATION_SESSIONS
+            ),
+            "hsmm_exit_triggers": int(triggers.sum()),
+            "hsmm_score_observations": int(scores.notna().sum()),
+            "hsmm_calibration": calibration_rows,
+            "walk_forward_fold_count": len(folds),
+            "walk_forward_folds": _desempenho_folds(
+                result.predictions,
+                folds,
+                float(config.initial_capital),
+            ),
+            "calendar_source_asset": calendar_source_asset,
+            "requested_compute_device": "cpu",
+            "effective_compute_device": "cpu",
+        }
+    )
+
+    margin_by_fold = {int(row["fold_id"]): row for row in margin_rows}
+    for row in result.metrics["walk_forward_folds"]:
+        row.update(margin_by_fold.get(int(row["fold_id"]), {}))
+
+    if progress_callback is not None:
+        progress_callback(
+            100.0,
+            "HSMM completed",
+            total_folds,
+        )
+    return result
+
 
 def executar_bocpd_overlay(
     bars_by_symbol: dict[str, pd.DataFrame],
