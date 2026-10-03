@@ -31,7 +31,6 @@ from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 from engine.rotacao import preparar_painel_rotacao
 from pesquisas.directional_change_lightgbm import (
     RESEARCH_VERSION,
-    calcular_metricas_peak_gatilhos,
     calcular_peak_exit,
     comparar_control_directional_change,
     criar_pacote_analise,
