@@ -31,7 +31,7 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.6.0-dev.1"
+RESEARCH_VERSION = "1.6.0-dev.2"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5
@@ -951,7 +951,6 @@ def _fit_hazard_model(
             (
                 "hazard",
                 LogisticRegression(
-                    class_weight="balanced",
                     max_iter=2000,
                     solver="lbfgs",
                     random_state=int(random_state),
@@ -3532,6 +3531,87 @@ def calcular_peak_exit(
             "post_exit_peak_10d_pct"
         ),
     }, detail
+
+
+def calcular_metricas_peak_gatilhos(
+    peak_trades: pd.DataFrame,
+    predictions: pd.DataFrame,
+    trigger_column: str,
+) -> dict[str, float | None]:
+    """Resume Peak Exit apenas das saídas realmente causadas pelo overlay."""
+    if (
+        peak_trades is None
+        or peak_trades.empty
+        or predictions is None
+        or predictions.empty
+        or trigger_column not in predictions.columns
+    ):
+        return {
+            "median_exit_distance_from_peak_pct": None,
+            "median_peak_capture_pct": None,
+        }
+
+    prediction_frame = predictions.copy()
+    mask = prediction_frame[trigger_column].fillna(False).astype(bool)
+    trigger_rows = prediction_frame.loc[mask].copy()
+    if trigger_rows.empty:
+        return {
+            "median_exit_distance_from_peak_pct": None,
+            "median_peak_capture_pct": None,
+        }
+
+    detail = peak_trades.copy()
+    detail["exit_timestamp"] = pd.to_datetime(
+        detail["exit_timestamp"],
+        utc=True,
+    )
+    selected: list[pd.Series] = []
+
+    for timestamp, row in trigger_rows.iterrows():
+        execution_at = pd.Timestamp(timestamp)
+        if execution_at.tzinfo is None:
+            execution_at = execution_at.tz_localize("UTC")
+        else:
+            execution_at = execution_at.tz_convert("UTC")
+
+        asset = str(
+            row.get("current_asset")
+            or row.get("previous_asset")
+            or row.get("selected_asset")
+            or ""
+        )
+        if not asset or asset == "nan":
+            continue
+
+        exact = detail.loc[
+            (detail["asset"].astype(str) == asset)
+            & (detail["exit_timestamp"] == execution_at)
+        ]
+        if exact.empty:
+            continue
+        selected.append(exact.iloc[0])
+
+    if not selected:
+        return {
+            "median_exit_distance_from_peak_pct": None,
+            "median_peak_capture_pct": None,
+        }
+
+    selected_frame = pd.DataFrame(selected)
+
+    def median(column: str) -> float | None:
+        values = pd.to_numeric(
+            selected_frame[column],
+            errors="coerce",
+        ).dropna()
+        return float(values.median()) if not values.empty else None
+
+    return {
+        "median_exit_distance_from_peak_pct": median(
+            "exit_distance_from_peak_pct"
+        ),
+        "median_peak_capture_pct": median("peak_capture_pct"),
+    }
 
 
 def criar_pacote_analise(diretorio_resultados: Path) -> Path:
