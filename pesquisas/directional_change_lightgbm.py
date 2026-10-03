@@ -31,7 +31,7 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.7.0-dev.1"
+RESEARCH_VERSION = "1.7.0-dev.2"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5
@@ -4563,19 +4563,50 @@ def criar_pacote_analise(diretorio_resultados: Path) -> Path:
 
 
 def sinal_sonoro_conclusao() -> None:
-    """Emite dois tons no Windows; usa bell do terminal como fallback."""
+    """Sinal audivel robusto para Spyder/Windows, com fallbacks."""
+    mechanisms: list[str] = []
+
     try:
         import winsound
 
-        winsound.Beep(880, 220)
-        time.sleep(0.08)
-        winsound.Beep(1175, 420)
-        return
-    except (ImportError, RuntimeError, OSError):
+        # O alias de som do Windows costuma ser mais confiavel no Spyder
+        # do que Beep(), pois usa o dispositivo de audio configurado.
+        try:
+            winsound.PlaySound(
+                "SystemExclamation",
+                winsound.SND_ALIAS | winsound.SND_SYNC,
+            )
+            mechanisms.append("PlaySound:SystemExclamation")
+        except (RuntimeError, OSError):
+            pass
+
+        try:
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+            mechanisms.append("MessageBeep")
+        except (RuntimeError, OSError):
+            pass
+
+        # Mantem o padrao de dois tons como reforco. Nao retorna antes:
+        # alguns ambientes aceitam Beep() sem produzir audio perceptivel.
+        try:
+            winsound.Beep(880, 220)
+            time.sleep(0.08)
+            winsound.Beep(1175, 420)
+            mechanisms.append("Beep")
+        except (RuntimeError, OSError, ValueError):
+            pass
+    except ImportError:
         pass
 
-    try:
-        sys.stdout.write("\\a")
-        sys.stdout.flush()
-    except Exception:
-        return
+    if not mechanisms:
+        try:
+            sys.stdout.write("\\a")
+            sys.stdout.flush()
+            mechanisms.append("terminal-bell")
+        except Exception:
+            mechanisms.append("none")
+
+    print(
+        "[sound] completion mechanisms=" + ",".join(mechanisms),
+        flush=True,
+    )
