@@ -851,7 +851,7 @@ def _hazard_person_period_dataset(
         )
         eligible = frame["hazard_eligible"].fillna(False).astype(bool)
 
-        for position, timestamp in enumerate(frame.index):
+        for position, _timestamp in enumerate(frame.index):
             if not bool(eligible.iloc[position]):
                 continue
             features = feature_frame.iloc[position].to_numpy(dtype=float)
