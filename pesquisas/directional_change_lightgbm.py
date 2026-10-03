@@ -35,7 +35,7 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.3.0-dev.3"
+RESEARCH_VERSION = "1.3.0-dev.4"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5
@@ -655,6 +655,34 @@ def _envolver_politica_top_turn(
 
     return policy
 
+def _agrupar_gatilhos_ablation(
+    trigger_rows: pd.DataFrame,
+) -> dict[tuple[str, str], set[tuple[pd.Timestamp, str]]]:
+    """Agrupa gatilhos originais por ativo e por fold para replays OOS."""
+    groups: dict[
+        tuple[str, str],
+        set[tuple[pd.Timestamp, str]],
+    ] = {}
+
+    for _, trigger_row in trigger_rows.iterrows():
+        decision_timestamp = pd.Timestamp(trigger_row["decision_date"])
+        asset = str(
+            trigger_row.get("current_asset")
+            or trigger_row.get("previous_asset")
+            or ""
+        )
+        key = (decision_timestamp, asset)
+
+        groups.setdefault(("asset", asset), set()).add(key)
+
+        fold_value = trigger_row.get("walk_forward_fold")
+        if fold_value is not None and not pd.isna(fold_value):
+            fold_id = str(int(fold_value))
+            groups.setdefault(("fold", fold_id), set()).add(key)
+
+    return groups
+
+
 def executar_directional_change_lightgbm(
     bars_by_symbol: dict[str, pd.DataFrame],
     config: Any,
@@ -1022,19 +1050,73 @@ def executar_directional_change_lightgbm(
             }
         )
 
+    group_rows: list[dict[str, Any]] = []
+    groups = _agrupar_gatilhos_ablation(trigger_rows)
+    ordered_groups = sorted(groups.items(), key=lambda item: item[0])
+
+    for group_position, (
+        (group_type, group_value),
+        suppressed_keys,
+    ) in enumerate(ordered_groups, start=1):
+        if progress_callback is not None:
+            progress_callback(
+                98.0
+                + 1.5
+                * group_position
+                / max(1, len(ordered_groups)),
+                (
+                    "Directional Change grouped ablation "
+                    f"{group_position}/{len(ordered_groups)} "
+                    f"{group_type}={group_value}"
+                ),
+                total_folds,
+            )
+
+        grouped = replay_with_ablation(set(suppressed_keys))
+        grouped_capital = float(
+            grouped.metrics["strategy_ending_capital"]
+        )
+        group_rows.append(
+            {
+                "group_type": str(group_type),
+                "group_value": str(group_value),
+                "trigger_count": int(len(suppressed_keys)),
+                "full_top_turn_ending_capital": full_capital,
+                "without_group_ending_capital": grouped_capital,
+                "group_contribution_to_ending_capital": (
+                    full_capital - grouped_capital
+                ),
+                "group_contribution_ratio": (
+                    full_capital / grouped_capital - 1.0
+                    if grouped_capital > 0
+                    else None
+                ),
+            }
+        )
+
+    if progress_callback is not None:
+        progress_callback(
+            99.7,
+            "Directional Change ablation without all triggers",
+            total_folds,
+        )
+
     no_overlay = replay_with_ablation(disable_all_triggers=True)
     no_overlay_capital = float(
         no_overlay.metrics["strategy_ending_capital"]
     )
     control_capital_reference = None
     result.metrics["directional_change_ablation"] = {
-        "schema_version": 1,
-        "method": "leave_one_trigger_out_replay_without_retraining",
+        "schema_version": 2,
+        "method": (
+            "leave_one_trigger_and_group_out_replay_without_retraining"
+        ),
         "trigger_count": int(len(trigger_rows)),
         "full_top_turn_ending_capital": full_capital,
         "without_all_triggers_ending_capital": no_overlay_capital,
         "control_capital_reference": control_capital_reference,
         "rows": ablation_rows,
+        "group_rows": group_rows,
     }
 
     if progress_callback is not None:
