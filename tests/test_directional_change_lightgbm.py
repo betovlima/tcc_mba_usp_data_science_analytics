@@ -14,6 +14,7 @@ from pesquisas.directional_change_lightgbm import (
     _bocpd_downward_scores,
     _directional_change_state,
     _envolver_politica_bocpd,
+    _envolver_politica_hazard,
     _envolver_politica_hsmm,
     _filter_hsmm_asset,
     _envolver_politica_top_turn,
@@ -558,6 +559,64 @@ def test_hsmm_overlay_requires_two_confirmations() -> None:
     assert second_target == 0
     assert diagnostics[dates[0]]["hsmm_confirmation_streak"] == 1
     assert diagnostics[dates[1]]["hsmm_exit_triggered"] is True
+
+
+def test_hazard_target_marks_competing_event_and_right_censoring() -> None:
+    competing = _top_turn_targets(
+        _base_frame([100.0, 102.0, 102.2, 102.1, 102.0, 101.9]),
+        horizon=5,
+    )
+    censored = _top_turn_targets(
+        _base_frame([100.0, 100.4, 100.2, 100.3, 100.1, 100.5]),
+        horizon=5,
+    )
+
+    assert competing.iloc[0]["hazard_observed_down_event"] == 0.0
+    assert competing.iloc[0]["hazard_competing_event_step"] == 1.0
+    assert competing.iloc[0]["hazard_right_censored"] == 0.0
+
+    assert pd.isna(censored.iloc[0]["hazard_observed_down_event"])
+    assert pd.isna(censored.iloc[0]["hazard_competing_event_step"])
+    assert censored.iloc[0]["hazard_right_censored"] == 1.0
+
+
+def test_hazard_overlay_requires_two_confirmations() -> None:
+    dates = pd.to_datetime(
+        ["2026-01-05T00:00:00Z", "2026-01-06T00:00:00Z"],
+        utc=True,
+    )
+    frame = pd.DataFrame(
+        {"hazard_eligible": [True, True]},
+        index=dates,
+    )
+    diagnostics: dict[pd.Timestamp, dict] = {}
+
+    def base_policy(timestamp, _current_position, _holding_days):
+        diagnostics[pd.Timestamp(timestamp)] = {
+            "decision_reason": "HOLD_CURRENT_BEST",
+            "final_action_asset": "AAA",
+        }
+        return 1, 0.25
+
+    policy = _envolver_politica_hazard(
+        base_policy,
+        score_cache={
+            "AAA": pd.Series([0.60, 0.62], index=dates),
+        },
+        frames={"AAA": frame},
+        symbols=["AAA"],
+        score_threshold=0.50,
+        config=SimpleNamespace(rotation_min_holding_days=2),
+        decision_diagnostics=diagnostics,
+    )
+
+    first_target, _ = policy(dates[0], 1, 4)
+    second_target, _ = policy(dates[1], 1, 5)
+
+    assert first_target == 1
+    assert second_target == 0
+    assert diagnostics[dates[0]]["hazard_confirmation_streak"] == 1
+    assert diagnostics[dates[1]]["hazard_exit_triggered"] is True
 
 
 def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
