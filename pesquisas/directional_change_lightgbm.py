@@ -32,9 +32,9 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.9.0-dev.1"
-EXPECTED_EXECUTION_SCHEMA = "top-bottom-cooldown-ablation-v1"
-EXPECTED_COMPARISON_FILE = "comparison_cycle_ablation.json"
+RESEARCH_VERSION = "1.10.0-dev.1"
+EXPECTED_EXECUTION_SCHEMA = "universe-sensitivity-54-55-56-v1"
+EXPECTED_COMPARISON_FILE = "comparison_universe_sensitivity.json"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5
