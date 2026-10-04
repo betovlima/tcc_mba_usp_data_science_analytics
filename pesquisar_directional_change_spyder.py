@@ -56,7 +56,7 @@ RAIZ_PROJETO = Path(__file__).resolve().parent
 CAMINHOS = SnapshotPaths.research(RAIZ_PROJETO)
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "directional_change"
 DIRETORIO_GRAFICOS = DIRETORIO_RESULTADOS / "graficos"
-EXECUTION_SCHEMA = "top-bottom-cycle-v2"
+EXECUTION_SCHEMA = "top-bottom-cooldown-ablation-v1"
 
 
 def _trigger_rows(predictions: pd.DataFrame, trigger_column: str) -> pd.DataFrame:
@@ -307,6 +307,7 @@ def _gerar_graficos_comparacao(
     *,
     control_result,
     top_turn_result,
+    top_cooldown5_result,
     top_bottom_v2_result,
     frames_alinhados,
 ) -> list[Path]:
@@ -318,6 +319,7 @@ def _gerar_graficos_comparacao(
     strategies = (
         ("Control", control_result),
         ("Top-Turn", top_turn_result),
+        ("Top+Cooldown5", top_cooldown5_result),
         ("Top+Bottom-v2", top_bottom_v2_result),
     )
 
@@ -486,7 +488,7 @@ print(f"execution_schema={EXECUTION_SCHEMA}", flush=True)
 print(f"script_path={Path(__file__).resolve()}", flush=True)
 print("dados=SNAPSHOT_CONGELADO_VERSIONADO", flush=True)
 print(
-    "comparacao=CONTROL vs TOP_TURN vs TOP_BOTTOM_V2",
+    "comparacao=CONTROL vs TOP_TURN vs TOP_COOLDOWN5 vs TOP_BOTTOM_V2",
     flush=True,
 )
 print("=" * 78, flush=True)
@@ -584,9 +586,9 @@ print(
 )
 
 
-# %% 6 - TOP-TURN + BOTTOM-TURN v2: janela maxima de 5 sessoes
+# %% 6 - TOP-TURN + BOTTOM-TURN v2 e ablacao cooldown fixo
 inicio_top_bottom_v2 = time.perf_counter()
-top_bottom_v2_result = executar_bottom_turn_lightgbm(
+top_bottom_v2_result, top_cooldown5_result = executar_bottom_turn_lightgbm(
     frames,
     config_control,
     calcular_taxas_referencia,
@@ -594,6 +596,7 @@ top_bottom_v2_result = executar_bottom_turn_lightgbm(
     include_top_turn_exit=True,
     post_top_turn_only=True,
     max_wait_sessions=5,
+    include_fixed_cooldown_ablation=True,
     progress_callback=lambda p, stage, completed: print(
         f"[top-bottom-v2] progress={p:.1f}% completed={completed} stage={stage}",
         flush=True,
@@ -604,6 +607,14 @@ top_bottom_v2_metrics = summarize_metrics(
     folds,
     float(config_control.initial_capital),
 )
+top_cooldown5_metrics = summarize_metrics(
+    top_cooldown5_result,
+    folds,
+    float(config_control.initial_capital),
+)
+for chave, valor in top_cooldown5_result.metrics.items():
+    if str(chave).startswith("cooldown_"):
+        top_cooldown5_metrics[str(chave)] = valor
 for chave, valor in top_bottom_v2_result.metrics.items():
     if (
         str(chave).startswith("bottom_turn_")
@@ -624,19 +635,31 @@ print(
     flush=True,
 )
 
+print(
+    "[stage] TOP_COOLDOWN5 "
+    f"capital={top_cooldown5_metrics['ending_capital']:,.2f} "
+    f"sharpe={top_cooldown5_metrics['sharpe']:.4f} "
+    f"maxdd={top_cooldown5_metrics['maximum_drawdown']:.4%} "
+    f"armed={top_cooldown5_metrics.get('cooldown_gate_armed_events')} "
+    f"blocked={top_cooldown5_metrics.get('cooldown_entry_blocks')} "
+    f"expirations={top_cooldown5_metrics.get('cooldown_gate_expirations')}",
+    flush=True,
+)
+
 
 # %% 7 - foco da campanha
 print(
-    "[research-focus] Bottom-Turn v2 atua somente apos TT e por no maximo "
-    "5 sessoes; Bottom-Turn v1, BOCPD, HSMM e Hazard ficam no historico.",
+    "[research-focus] ablacao separa cooldown fixo de 5 sessoes do valor "
+    "incremental do Bottom-Turn ML; linhas antigas ficam no historico.",
     flush=True,
 )
 
 
 # %% 8 - protocolo congelado antes do replay
 print(
-    "[protocol] bottom_turn_v2=post_top_only max_wait_sessions=5 "
-    "thresholds/features/calibration=unchanged_from_v1",
+    "[protocol] cooldown5=no_bottom_ml fixed_sessions=5; "
+    "bottom_turn_v2=post_top_only max_wait_sessions=5; "
+    "thresholds/features/calibration=unchanged",
     flush=True,
 )
 
@@ -656,6 +679,10 @@ top_turn_peak, top_turn_peak_trades = calcular_peak_exit(
     directional_change_result.trades,
     frames_alinhados,
 )
+top_cooldown5_peak, top_cooldown5_peak_trades = calcular_peak_exit(
+    top_cooldown5_result.trades,
+    frames_alinhados,
+)
 top_bottom_v2_peak, top_bottom_v2_peak_trades = calcular_peak_exit(
     top_bottom_v2_result.trades,
     frames_alinhados,
@@ -668,6 +695,11 @@ control_bottom, control_bottom_entries = calcular_bottom_entry(
 )
 top_turn_bottom, top_turn_entries = calcular_bottom_entry(
     directional_change_result.trades,
+    frames_alinhados,
+    oos_start=oos_start,
+)
+top_cooldown5_bottom, top_cooldown5_entries = calcular_bottom_entry(
+    top_cooldown5_result.trades,
     frames_alinhados,
     oos_start=oos_start,
 )
@@ -697,6 +729,13 @@ print(
     flush=True,
 )
 print(
+    "[bottom-diagnostic] TOP_COOLDOWN5 "
+    f"distance={top_cooldown5_bottom.get('median_entry_distance_from_bottom_pct')} "
+    f"capture={top_cooldown5_bottom.get('median_bottom_capture_pct')} "
+    f"days={top_cooldown5_bottom.get('median_days_from_bottom_to_entry')}",
+    flush=True,
+)
+print(
     "[bottom-diagnostic] TOP_BOTTOM_V2 "
     f"distance={top_bottom_v2_bottom.get('median_entry_distance_from_bottom_pct')} "
     f"capture={top_bottom_v2_bottom.get('median_bottom_capture_pct')} "
@@ -714,15 +753,18 @@ comparacao = comparar_control_directional_change(
 )
 
 print(
-    "[comparison-v2] "
+    "[comparison-ablation] "
     f"CONTROL={float(control_metrics['ending_capital']):,.2f} "
     f"TOP_TURN={float(directional_change_metrics['ending_capital']):,.2f} "
+    f"TOP_COOLDOWN5={float(top_cooldown5_metrics['ending_capital']):,.2f} "
     f"TOP_BOTTOM_V2={float(top_bottom_v2_metrics['ending_capital']):,.2f} "
     f"TOP_vs_CONTROL="
     f"{float(directional_change_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%} "
-    f"TOP_BOTTOM_V2_vs_CONTROL="
-    f"{float(top_bottom_v2_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%} "
-    f"TOP_BOTTOM_V2_vs_TOP="
+    f"COOLDOWN5_vs_TOP="
+    f"{float(top_cooldown5_metrics['ending_capital']) / float(directional_change_metrics['ending_capital']) - 1.0:+.4%} "
+    f"BOTTOM_V2_vs_COOLDOWN5="
+    f"{float(top_bottom_v2_metrics['ending_capital']) / float(top_cooldown5_metrics['ending_capital']) - 1.0:+.4%} "
+    f"BOTTOM_V2_vs_TOP="
     f"{float(top_bottom_v2_metrics['ending_capital']) / float(directional_change_metrics['ending_capital']) - 1.0:+.4%}",
     flush=True,
 )
@@ -739,6 +781,7 @@ for antigo in DIRETORIO_RESULTADOS.glob("*.json"):
 for slug, result in (
     ("control", control_result),
     ("top_turn", directional_change_result),
+    ("top_cooldown5", top_cooldown5_result),
     ("top_bottom_v2", top_bottom_v2_result),
 ):
     result.predictions.reset_index().to_csv(
@@ -753,6 +796,7 @@ for slug, result in (
 for slug, peak_trades in (
     ("control", control_peak_trades),
     ("top_turn", top_turn_peak_trades),
+    ("top_cooldown5", top_cooldown5_peak_trades),
     ("top_bottom_v2", top_bottom_v2_peak_trades),
 ):
     peak_trades.to_csv(
@@ -763,6 +807,7 @@ for slug, peak_trades in (
 for slug, entries in (
     ("control", control_bottom_entries),
     ("top_turn", top_turn_entries),
+    ("top_cooldown5", top_cooldown5_entries),
     ("top_bottom_v2", top_bottom_v2_entries),
 ):
     entries.to_csv(
@@ -801,30 +846,35 @@ comparison_table = pd.DataFrame(
             "metric": "ending_capital",
             "control": control_metrics["ending_capital"],
             "top_turn": directional_change_metrics["ending_capital"],
+            "top_cooldown5": top_cooldown5_metrics["ending_capital"],
             "top_bottom_v2": top_bottom_v2_metrics["ending_capital"],
         },
         {
             "metric": "cagr",
             "control": control_metrics["cagr"],
             "top_turn": directional_change_metrics["cagr"],
+            "top_cooldown5": top_cooldown5_metrics["cagr"],
             "top_bottom_v2": top_bottom_v2_metrics["cagr"],
         },
         {
             "metric": "sharpe",
             "control": control_metrics["sharpe"],
             "top_turn": directional_change_metrics["sharpe"],
+            "top_cooldown5": top_cooldown5_metrics["sharpe"],
             "top_bottom_v2": top_bottom_v2_metrics["sharpe"],
         },
         {
             "metric": "maximum_drawdown",
             "control": control_metrics["maximum_drawdown"],
             "top_turn": directional_change_metrics["maximum_drawdown"],
+            "top_cooldown5": top_cooldown5_metrics["maximum_drawdown"],
             "top_bottom_v2": top_bottom_v2_metrics["maximum_drawdown"],
         },
         {
             "metric": "worst_fold_return",
             "control": control_metrics["worst_fold_return"],
             "top_turn": directional_change_metrics["worst_fold_return"],
+            "top_cooldown5": top_cooldown5_metrics["worst_fold_return"],
             "top_bottom_v2": top_bottom_v2_metrics["worst_fold_return"],
         },
         {
@@ -833,6 +883,9 @@ comparison_table = pd.DataFrame(
                 "median_exit_distance_from_peak_pct"
             ),
             "top_turn": top_turn_peak.get(
+                "median_exit_distance_from_peak_pct"
+            ),
+            "top_cooldown5": top_cooldown5_peak.get(
                 "median_exit_distance_from_peak_pct"
             ),
             "top_bottom_v2": top_bottom_v2_peak.get(
@@ -847,6 +900,9 @@ comparison_table = pd.DataFrame(
             "top_turn": top_turn_bottom.get(
                 "median_entry_distance_from_bottom_pct"
             ),
+            "top_cooldown5": top_cooldown5_bottom.get(
+                "median_entry_distance_from_bottom_pct"
+            ),
             "top_bottom_v2": top_bottom_v2_bottom.get(
                 "median_entry_distance_from_bottom_pct"
             ),
@@ -855,6 +911,9 @@ comparison_table = pd.DataFrame(
             "metric": "median_bottom_capture_pct",
             "control": control_bottom.get("median_bottom_capture_pct"),
             "top_turn": top_turn_bottom.get("median_bottom_capture_pct"),
+            "top_cooldown5": top_cooldown5_bottom.get(
+                "median_bottom_capture_pct"
+            ),
             "top_bottom_v2": top_bottom_v2_bottom.get(
                 "median_bottom_capture_pct"
             ),
@@ -867,6 +926,9 @@ comparison_table = pd.DataFrame(
             "top_turn": top_turn_bottom.get(
                 "median_days_from_bottom_to_entry"
             ),
+            "top_cooldown5": top_cooldown5_bottom.get(
+                "median_days_from_bottom_to_entry"
+            ),
             "top_bottom_v2": top_bottom_v2_bottom.get(
                 "median_days_from_bottom_to_entry"
             ),
@@ -874,11 +936,11 @@ comparison_table = pd.DataFrame(
     ]
 )
 comparison_table.to_csv(
-    DIRETORIO_RESULTADOS / "comparison_cycle_v2.csv",
+    DIRETORIO_RESULTADOS / "comparison_cycle_ablation.csv",
     index=False,
 )
 
-with (DIRETORIO_RESULTADOS / "comparison_cycle_v2.json").open(
+with (DIRETORIO_RESULTADOS / "comparison_cycle_ablation.json").open(
     "w",
     encoding="utf-8",
 ) as arquivo:
@@ -889,7 +951,13 @@ with (DIRETORIO_RESULTADOS / "comparison_cycle_v2.json").open(
             "protocol": {
                 "bottom_turn_post_top_only": True,
                 "bottom_turn_max_wait_sessions": 5,
-                "thresholds_features_calibration": "unchanged_from_v1",
+                "fixed_cooldown_sessions": 5,
+                "fixed_cooldown_uses_bottom_turn_ml": False,
+                "thresholds_features_calibration": "unchanged_from_v2",
+                "ablation_question": (
+                    "Does Bottom-Turn ML add value beyond a fixed "
+                    "five-session wait after Top-Turn exits?"
+                ),
             },
             "historical_reference": {
                 "pre_clmt_exclusion_top_turn": 12486768.002342533,
@@ -903,12 +971,15 @@ with (DIRETORIO_RESULTADOS / "comparison_cycle_v2.json").open(
             "comparison_top_turn": comparacao,
             "control_metrics": control_metrics,
             "top_turn_metrics": directional_change_metrics,
+            "top_cooldown5_metrics": top_cooldown5_metrics,
             "top_bottom_v2_metrics": top_bottom_v2_metrics,
             "control_peak": control_peak,
             "top_turn_peak": top_turn_peak,
+            "top_cooldown5_peak": top_cooldown5_peak,
             "top_bottom_v2_peak": top_bottom_v2_peak,
             "control_bottom_entry": control_bottom,
             "top_turn_bottom_entry": top_turn_bottom,
+            "top_cooldown5_bottom_entry": top_cooldown5_bottom,
             "top_bottom_v2_bottom_entry": top_bottom_v2_bottom,
             "structural_exclusions": exclusoes,
             "snapshot_sha256": manifesto.get("snapshot_sha256"),
@@ -922,6 +993,7 @@ with (DIRETORIO_RESULTADOS / "comparison_cycle_v2.json").open(
 graficos_gerados = _gerar_graficos_comparacao(
     control_result=control_result,
     top_turn_result=directional_change_result,
+    top_cooldown5_result=top_cooldown5_result,
     top_bottom_v2_result=top_bottom_v2_result,
     frames_alinhados=frames_alinhados,
 )
