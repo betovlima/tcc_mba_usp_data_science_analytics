@@ -204,14 +204,25 @@ def prepare_model_frames(
     *,
     assets: tuple[str, ...] = ASSETS,
     comparar_snapshot_referencia: bool = True,
+    allow_structural_assets: frozenset[str] = frozenset(),
 ) -> tuple[
     dict[str, pd.DataFrame],
     list[dict[str, Any]],
     list[dict[str, Any]],
     dict[str, Any],
 ]:
-    """Carrega o snapshot, exclui identidades quebradas e normaliza splits."""
+    """Carrega o snapshot, exclui identidades quebradas e normaliza splits.
+
+    allow_structural_assets existe apenas para campanhas de sensibilidade:
+    o evento estrutural continua auditado, mas o ativo pode ser mantido no
+    replay de forma explícita e registrada. O comportamento padrao continua
+    sendo excluir.
+    """
     paths.ensure()
+    allowed_structural = {
+        str(symbol).strip().upper()
+        for symbol in allow_structural_assets
+    }
     frames: dict[str, pd.DataFrame] = {}
     exclusions: list[dict[str, Any]] = []
     diagnostics: list[dict[str, Any]] = []
@@ -222,8 +233,12 @@ def prepare_model_frames(
         raw = load_raw_bar_file(raw_path)
         actions = load_actions_file(action_path)
         issue = structural_identity_issue(symbol, actions)
+        structural_override = bool(
+            issue is not None
+            and symbol.strip().upper() in allowed_structural
+        )
 
-        if issue is not None:
+        if issue is not None and not structural_override:
             exclusions.append(issue)
             detail = (
                 issue.get("acquirer_symbol")
@@ -248,6 +263,14 @@ def prepare_model_frames(
             )
             continue
 
+        if structural_override:
+            print(
+                f"[data] {position}/{len(assets)} {symbol} "
+                f"structural_override=True reason={issue['reason']} "
+                f"action={issue['action_type']}",
+                flush=True,
+            )
+
         normalized, applied = split_normalize(raw, actions)
         frames[symbol] = normalized
         diagnostics.append(
@@ -258,6 +281,11 @@ def prepare_model_frames(
                 "splits_applied": len(applied),
                 "excluded": False,
                 "exclusion_reason": None,
+                "structural_override": bool(structural_override),
+                "structural_issue": (
+                    dict(issue) if structural_override and issue is not None
+                    else None
+                ),
             }
         )
         print(
