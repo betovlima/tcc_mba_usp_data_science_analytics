@@ -56,7 +56,7 @@ RAIZ_PROJETO = Path(__file__).resolve().parent
 CAMINHOS = SnapshotPaths.research(RAIZ_PROJETO)
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "directional_change"
 DIRETORIO_GRAFICOS = DIRETORIO_RESULTADOS / "graficos"
-EXECUTION_SCHEMA = "top-bottom-cooldown-ablation-v1"
+EXECUTION_SCHEMA = "universe-sensitivity-54-55-56-v1"
 
 
 def _trigger_rows(predictions: pd.DataFrame, trigger_column: str) -> pd.DataFrame:
@@ -482,13 +482,13 @@ if EXECUTION_SCHEMA != EXPECTED_EXECUTION_SCHEMA:
 
 
 print("=" * 78, flush=True)
-print("TCC - Top-Turn / Bottom-Turn Cycle Research", flush=True)
+print("TCC - Top-Turn Universe Sensitivity Research", flush=True)
 print(f"versao_pesquisa={RESEARCH_VERSION}", flush=True)
 print(f"execution_schema={EXECUTION_SCHEMA}", flush=True)
 print(f"script_path={Path(__file__).resolve()}", flush=True)
 print("dados=SNAPSHOT_CONGELADO_VERSIONADO", flush=True)
 print(
-    "comparacao=CONTROL vs TOP_TURN vs TOP_COOLDOWN5 vs TOP_BOTTOM_V2",
+    "comparacao=U54 vs U55_CLMT vs U56_RAW | CONTROL vs TOP_TURN",
     flush=True,
 )
 print("=" * 78, flush=True)
@@ -503,486 +503,328 @@ print(
 )
 
 
-# %% 2 - Preparacao dos dados
-inicio_preparacao = time.perf_counter()
-frames, exclusoes, diagnosticos_dados, auditoria_dados = prepare_model_frames(
-    CAMINHOS,
-    assets=CONFIG.assets,
-    comparar_snapshot_referencia=True,
+# %% 2 - Campanha de sensibilidade do universo
+UNIVERSE_SCENARIOS = (
+    {
+        "slug": "u54_current",
+        "label": "U54 atual",
+        "allow_structural_assets": frozenset(),
+        "scientific_role": "baseline_current",
+        "reference_comparison": True,
+    },
+    {
+        "slug": "u55_clmt",
+        "label": "U55 com CLMT restaurado",
+        "allow_structural_assets": frozenset({"CLMT"}),
+        "scientific_role": "historical_reference_candidate",
+        "reference_comparison": True,
+    },
+    {
+        "slug": "u56_raw",
+        "label": "U56 original por ticker",
+        "allow_structural_assets": frozenset({"CLMT", "DOC"}),
+        "scientific_role": "diagnostic_only",
+        "reference_comparison": False,
+    },
 )
-ativos_elegiveis = tuple(frames)
-known_still_present = sorted(
-    set(KNOWN_STRUCTURAL_EXCLUSIONS).intersection(frames)
-)
-if known_still_present:
-    raise RuntimeError(
-        "Exclusao estrutural nao aplicada para: "
-        + ", ".join(known_still_present)
-        + ". Reinicie o kernel do Spyder e execute novamente."
+
+
+def _structural_overrides(diagnostics):
+    return [
+        {
+            "symbol": row.get("symbol"),
+            "structural_issue": row.get("structural_issue"),
+        }
+        for row in diagnostics
+        if bool(row.get("structural_override"))
+    ]
+
+
+def _executar_cenario_universo(spec):
+    slug = str(spec["slug"])
+    label = str(spec["label"])
+    allowed = frozenset(spec["allow_structural_assets"])
+
+    print(
+        f"[universe] start slug={slug} label={label} "
+        f"allow_structural={','.join(sorted(allowed)) or 'NONE'}",
+        flush=True,
+    )
+    inicio = time.perf_counter()
+
+    frames_local, exclusoes_local, diagnosticos_local, auditoria_local = (
+        prepare_model_frames(
+            CAMINHOS,
+            assets=CONFIG.assets,
+            comparar_snapshot_referencia=bool(
+                spec["reference_comparison"]
+            ),
+            allow_structural_assets=allowed,
+        )
+    )
+    overrides_local = _structural_overrides(diagnosticos_local)
+
+    expected_count = {
+        "u54_current": 54,
+        "u55_clmt": 55,
+        "u56_raw": 56,
+    }[slug]
+    if len(frames_local) != expected_count:
+        raise RuntimeError(
+            f"{slug}: esperados {expected_count} ativos, "
+            f"obtidos {len(frames_local)}."
+        )
+
+    config_local, _ = build_variant_configs(frames_local, CONFIG)
+    datas_comuns_local, folds_local = build_folds(
+        frames_local,
+        config_local,
     )
 
-print(
-    f"[stage] preparation eligible={len(frames)} "
-    f"seconds={time.perf_counter() - inicio_preparacao:.3f}",
-    flush=True,
-)
+    control_result_local, control_metrics_local = run_variant(
+        f"CONTROL_{slug.upper()}",
+        frames_local,
+        config_local,
+        folds_local,
+    )
 
+    top_result_local = executar_directional_change_lightgbm(
+        frames_local,
+        config_local,
+        calcular_taxas_referencia,
+        aplicar_deslizamento,
+        progress_callback=lambda p, stage, completed: print(
+            f"[top-turn:{slug}] progress={p:.1f}% "
+            f"completed={completed} stage={stage}",
+            flush=True,
+        ),
+        run_ablation=False,
+    )
+    top_metrics_local = summarize_metrics(
+        top_result_local,
+        folds_local,
+        float(config_local.initial_capital),
+    )
+    for chave, valor in top_result_local.metrics.items():
+        if str(chave).startswith("directional_change_"):
+            top_metrics_local[str(chave)] = valor
 
-# %% 3 - Control e folds identicos ao baseline
-config_control, _ = build_variant_configs(frames, CONFIG)
-datas_comuns, folds = build_folds(frames, config_control)
+    frames_alinhados_local, _, _ = preparar_painel_rotacao(
+        frames_local,
+        config_local,
+    )
+    control_peak_local, control_peak_trades_local = calcular_peak_exit(
+        control_result_local.trades,
+        frames_alinhados_local,
+    )
+    top_peak_local, top_peak_trades_local = calcular_peak_exit(
+        top_result_local.trades,
+        frames_alinhados_local,
+    )
 
-print(
-    f"[folds] common_dates={len(datas_comuns)} folds={len(folds)} "
-    f"first={datas_comuns.min().date()} last={datas_comuns.max().date()}",
-    flush=True,
-)
+    control_capital = float(control_metrics_local["ending_capital"])
+    top_capital = float(top_metrics_local["ending_capital"])
+    top_vs_control = top_capital / control_capital - 1.0
 
+    summary = {
+        "slug": slug,
+        "label": label,
+        "scientific_role": spec["scientific_role"],
+        "eligible_assets": len(frames_local),
+        "assets": list(frames_local),
+        "allowed_structural_assets": sorted(allowed),
+        "structural_exclusions": exclusoes_local,
+        "structural_overrides": overrides_local,
+        "data_audit": auditoria_local,
+        "common_dates": len(datas_comuns_local),
+        "fold_count": len(folds_local),
+        "first_common_date": str(datas_comuns_local.min().date()),
+        "last_common_date": str(datas_comuns_local.max().date()),
+        "control_metrics": control_metrics_local,
+        "top_turn_metrics": top_metrics_local,
+        "control_peak": control_peak_local,
+        "top_turn_peak": top_peak_local,
+        "top_turn_vs_control": top_vs_control,
+    }
 
-# %% 4 - CONTROL
-inicio_control = time.perf_counter()
-control_result, control_metrics = run_variant(
-    "CONTROL",
-    frames,
-    config_control,
-    folds,
-)
-print(
-    f"[stage] CONTROL seconds={time.perf_counter() - inicio_control:.3f}",
-    flush=True,
-)
-
-
-# %% 5 - DIRECTIONAL CHANGE + LIGHTGBM
-inicio_directional_change = time.perf_counter()
-directional_change_result = executar_directional_change_lightgbm(
-    frames,
-    config_control,
-    calcular_taxas_referencia,
-    aplicar_deslizamento,
-    progress_callback=lambda p, stage, completed: print(
-        f"[top-turn] progress={p:.1f}% completed={completed} stage={stage}",
+    print(
+        f"[universe-result] {slug} assets={len(frames_local)} "
+        f"CONTROL={control_capital:,.2f} "
+        f"TOP_TURN={top_capital:,.2f} "
+        f"TOP_vs_CONTROL={top_vs_control:+.4%} "
+        f"seconds={time.perf_counter() - inicio:.3f}",
         flush=True,
-    ),
-    run_ablation=False,
-)
-directional_change_metrics = summarize_metrics(
-    directional_change_result,
-    folds,
-    float(config_control.initial_capital),
-)
-for chave, valor in directional_change_result.metrics.items():
-    if str(chave).startswith("directional_change_"):
-        directional_change_metrics[str(chave)] = valor
+    )
+
+    return {
+        "summary": summary,
+        "frames": frames_local,
+        "control_result": control_result_local,
+        "top_result": top_result_local,
+        "control_peak_trades": control_peak_trades_local,
+        "top_peak_trades": top_peak_trades_local,
+    }
+
+
+resultados_universo = {}
+for scenario in UNIVERSE_SCENARIOS:
+    resultado = _executar_cenario_universo(scenario)
+    resultados_universo[str(scenario["slug"])] = resultado
+
+
+# %% 3 - Comparacao 54 vs 55 vs 56
+summaries = {
+    slug: item["summary"]
+    for slug, item in resultados_universo.items()
+}
+
+u54 = summaries["u54_current"]
+u55 = summaries["u55_clmt"]
+u56 = summaries["u56_raw"]
 
 print(
-    "[stage] DIRECTIONAL_CHANGE "
-    f"capital={directional_change_metrics['ending_capital']:,.2f} "
-    f"sharpe={directional_change_metrics['sharpe']:.4f} "
-    f"maxdd={directional_change_metrics['maximum_drawdown']:.4%} "
-    f"triggers={directional_change_metrics.get('directional_change_exit_triggers')} "
-    f"seconds={time.perf_counter() - inicio_directional_change:.3f}",
-    flush=True,
-)
-
-
-# %% 6 - TOP-TURN + BOTTOM-TURN v2 e ablacao cooldown fixo
-inicio_top_bottom_v2 = time.perf_counter()
-top_bottom_v2_result, top_cooldown5_result = executar_bottom_turn_lightgbm(
-    frames,
-    config_control,
-    calcular_taxas_referencia,
-    aplicar_deslizamento,
-    include_top_turn_exit=True,
-    post_top_turn_only=True,
-    max_wait_sessions=5,
-    include_fixed_cooldown_ablation=True,
-    progress_callback=lambda p, stage, completed: print(
-        f"[top-bottom-v2] progress={p:.1f}% completed={completed} stage={stage}",
-        flush=True,
-    ),
-)
-top_bottom_v2_metrics = summarize_metrics(
-    top_bottom_v2_result,
-    folds,
-    float(config_control.initial_capital),
-)
-top_cooldown5_metrics = summarize_metrics(
-    top_cooldown5_result,
-    folds,
-    float(config_control.initial_capital),
-)
-for chave, valor in top_cooldown5_result.metrics.items():
-    if str(chave).startswith("cooldown_"):
-        top_cooldown5_metrics[str(chave)] = valor
-for chave, valor in top_bottom_v2_result.metrics.items():
-    if (
-        str(chave).startswith("bottom_turn_")
-        or str(chave).startswith("combined_top_turn_")
-    ):
-        top_bottom_v2_metrics[str(chave)] = valor
-
-print(
-    "[stage] TOP_BOTTOM_V2 "
-    f"capital={top_bottom_v2_metrics['ending_capital']:,.2f} "
-    f"sharpe={top_bottom_v2_metrics['sharpe']:.4f} "
-    f"maxdd={top_bottom_v2_metrics['maximum_drawdown']:.4%} "
-    f"bottom_entries={top_bottom_v2_metrics.get('bottom_turn_entry_triggers')} "
-    f"blocked={top_bottom_v2_metrics.get('bottom_turn_entry_blocks')} "
-    f"expirations={top_bottom_v2_metrics.get('bottom_turn_gate_expirations')} "
-    f"top_exits={top_bottom_v2_metrics.get('combined_top_turn_exit_triggers')} "
-    f"seconds={time.perf_counter() - inicio_top_bottom_v2:.3f}",
+    "[comparison-universe] "
+    f"U54_CONTROL={float(u54['control_metrics']['ending_capital']):,.2f} "
+    f"U54_TOP={float(u54['top_turn_metrics']['ending_capital']):,.2f} "
+    f"U55_CONTROL={float(u55['control_metrics']['ending_capital']):,.2f} "
+    f"U55_TOP={float(u55['top_turn_metrics']['ending_capital']):,.2f} "
+    f"U56_CONTROL={float(u56['control_metrics']['ending_capital']):,.2f} "
+    f"U56_TOP={float(u56['top_turn_metrics']['ending_capital']):,.2f}",
     flush=True,
 )
 
 print(
-    "[stage] TOP_COOLDOWN5 "
-    f"capital={top_cooldown5_metrics['ending_capital']:,.2f} "
-    f"sharpe={top_cooldown5_metrics['sharpe']:.4f} "
-    f"maxdd={top_cooldown5_metrics['maximum_drawdown']:.4%} "
-    f"armed={top_cooldown5_metrics.get('cooldown_gate_armed_events')} "
-    f"blocked={top_cooldown5_metrics.get('cooldown_entry_blocks')} "
-    f"expirations={top_cooldown5_metrics.get('cooldown_gate_expirations')}",
+    "[universe-deltas] "
+    f"CLMT_effect_control="
+    f"{float(u55['control_metrics']['ending_capital']) / float(u54['control_metrics']['ending_capital']) - 1.0:+.4%} "
+    f"CLMT_effect_top="
+    f"{float(u55['top_turn_metrics']['ending_capital']) / float(u54['top_turn_metrics']['ending_capital']) - 1.0:+.4%} "
+    f"DOC_increment_control="
+    f"{float(u56['control_metrics']['ending_capital']) / float(u55['control_metrics']['ending_capital']) - 1.0:+.4%} "
+    f"DOC_increment_top="
+    f"{float(u56['top_turn_metrics']['ending_capital']) / float(u55['top_turn_metrics']['ending_capital']) - 1.0:+.4%}",
     flush=True,
 )
 
 
-# %% 7 - foco da campanha
-print(
-    "[research-focus] ablacao separa cooldown fixo de 5 sessoes do valor "
-    "incremental do Bottom-Turn ML; linhas antigas ficam no historico.",
-    flush=True,
-)
-
-
-# %% 8 - protocolo congelado antes do replay
-print(
-    "[protocol] cooldown5=no_bottom_ml fixed_sessions=5; "
-    "bottom_turn_v2=post_top_only max_wait_sessions=5; "
-    "thresholds/features/calibration=unchanged",
-    flush=True,
-)
-
-
-# %% 9 - Diagnosticos de topo e fundo
-frames_alinhados, _, _ = preparar_painel_rotacao(
-    frames,
-    config_control,
-)
-oos_start = pd.Timestamp(control_result.predictions.index.min())
-
-control_peak, control_peak_trades = calcular_peak_exit(
-    control_result.trades,
-    frames_alinhados,
-)
-top_turn_peak, top_turn_peak_trades = calcular_peak_exit(
-    directional_change_result.trades,
-    frames_alinhados,
-)
-top_cooldown5_peak, top_cooldown5_peak_trades = calcular_peak_exit(
-    top_cooldown5_result.trades,
-    frames_alinhados,
-)
-top_bottom_v2_peak, top_bottom_v2_peak_trades = calcular_peak_exit(
-    top_bottom_v2_result.trades,
-    frames_alinhados,
-)
-
-control_bottom, control_bottom_entries = calcular_bottom_entry(
-    control_result.trades,
-    frames_alinhados,
-    oos_start=oos_start,
-)
-top_turn_bottom, top_turn_entries = calcular_bottom_entry(
-    directional_change_result.trades,
-    frames_alinhados,
-    oos_start=oos_start,
-)
-top_cooldown5_bottom, top_cooldown5_entries = calcular_bottom_entry(
-    top_cooldown5_result.trades,
-    frames_alinhados,
-    oos_start=oos_start,
-)
-top_bottom_v2_bottom, top_bottom_v2_entries = calcular_bottom_entry(
-    top_bottom_v2_result.trades,
-    frames_alinhados,
-    oos_start=oos_start,
-)
-
-print(
-    "[top-diagnostic] CONTROL "
-    f"distance={control_peak.get('median_exit_distance_from_peak_pct')} "
-    f"capture={control_peak.get('median_peak_capture_pct')}",
-    flush=True,
-)
-print(
-    "[top-diagnostic] TOP_TURN "
-    f"distance={top_turn_peak.get('median_exit_distance_from_peak_pct')} "
-    f"capture={top_turn_peak.get('median_peak_capture_pct')}",
-    flush=True,
-)
-print(
-    "[bottom-diagnostic] TOP_TURN "
-    f"distance={top_turn_bottom.get('median_entry_distance_from_bottom_pct')} "
-    f"capture={top_turn_bottom.get('median_bottom_capture_pct')} "
-    f"days={top_turn_bottom.get('median_days_from_bottom_to_entry')}",
-    flush=True,
-)
-print(
-    "[bottom-diagnostic] TOP_COOLDOWN5 "
-    f"distance={top_cooldown5_bottom.get('median_entry_distance_from_bottom_pct')} "
-    f"capture={top_cooldown5_bottom.get('median_bottom_capture_pct')} "
-    f"days={top_cooldown5_bottom.get('median_days_from_bottom_to_entry')}",
-    flush=True,
-)
-print(
-    "[bottom-diagnostic] TOP_BOTTOM_V2 "
-    f"distance={top_bottom_v2_bottom.get('median_entry_distance_from_bottom_pct')} "
-    f"capture={top_bottom_v2_bottom.get('median_bottom_capture_pct')} "
-    f"days={top_bottom_v2_bottom.get('median_days_from_bottom_to_entry')}",
-    flush=True,
-)
-
-
-# %% 10 - Comparacao final
-comparacao = comparar_control_directional_change(
-    control_metrics,
-    directional_change_metrics,
-    control_peak,
-    top_turn_peak,
-)
-
-print(
-    "[comparison-ablation] "
-    f"CONTROL={float(control_metrics['ending_capital']):,.2f} "
-    f"TOP_TURN={float(directional_change_metrics['ending_capital']):,.2f} "
-    f"TOP_COOLDOWN5={float(top_cooldown5_metrics['ending_capital']):,.2f} "
-    f"TOP_BOTTOM_V2={float(top_bottom_v2_metrics['ending_capital']):,.2f} "
-    f"TOP_vs_CONTROL="
-    f"{float(directional_change_metrics['ending_capital']) / float(control_metrics['ending_capital']) - 1.0:+.4%} "
-    f"COOLDOWN5_vs_TOP="
-    f"{float(top_cooldown5_metrics['ending_capital']) / float(directional_change_metrics['ending_capital']) - 1.0:+.4%} "
-    f"BOTTOM_V2_vs_COOLDOWN5="
-    f"{float(top_bottom_v2_metrics['ending_capital']) / float(top_cooldown5_metrics['ending_capital']) - 1.0:+.4%} "
-    f"BOTTOM_V2_vs_TOP="
-    f"{float(top_bottom_v2_metrics['ending_capital']) / float(directional_change_metrics['ending_capital']) - 1.0:+.4%}",
-    flush=True,
-)
-
-
-# %% 11 - Exportacao dos artefatos
+# %% 4 - Exportacao
 DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
-
 for antigo in DIRETORIO_RESULTADOS.glob("*.csv"):
     antigo.unlink()
 for antigo in DIRETORIO_RESULTADOS.glob("*.json"):
     antigo.unlink()
 
-for slug, result in (
-    ("control", control_result),
-    ("top_turn", directional_change_result),
-    ("top_cooldown5", top_cooldown5_result),
-    ("top_bottom_v2", top_bottom_v2_result),
-):
-    result.predictions.reset_index().to_csv(
-        DIRETORIO_RESULTADOS / f"{slug}_predictions.csv",
+comparison_rows = []
+for slug, item in resultados_universo.items():
+    summary = item["summary"]
+    control_metrics_local = summary["control_metrics"]
+    top_metrics_local = summary["top_turn_metrics"]
+
+    comparison_rows.append(
+        {
+            "universe": slug,
+            "scientific_role": summary["scientific_role"],
+            "eligible_assets": summary["eligible_assets"],
+            "control_ending_capital": control_metrics_local[
+                "ending_capital"
+            ],
+            "top_turn_ending_capital": top_metrics_local[
+                "ending_capital"
+            ],
+            "top_turn_vs_control": summary["top_turn_vs_control"],
+            "control_cagr": control_metrics_local["cagr"],
+            "top_turn_cagr": top_metrics_local["cagr"],
+            "control_sharpe": control_metrics_local["sharpe"],
+            "top_turn_sharpe": top_metrics_local["sharpe"],
+            "control_maxdd": control_metrics_local[
+                "maximum_drawdown"
+            ],
+            "top_turn_maxdd": top_metrics_local[
+                "maximum_drawdown"
+            ],
+            "control_worst_fold": control_metrics_local[
+                "worst_fold_return"
+            ],
+            "top_turn_worst_fold": top_metrics_local[
+                "worst_fold_return"
+            ],
+        }
+    )
+
+    item["control_result"].predictions.reset_index().to_csv(
+        DIRETORIO_RESULTADOS / f"{slug}_control_predictions.csv",
         index=False,
     )
-    result.trades.to_csv(
-        DIRETORIO_RESULTADOS / f"{slug}_trades.csv",
+    item["control_result"].trades.to_csv(
+        DIRETORIO_RESULTADOS / f"{slug}_control_trades.csv",
+        index=False,
+    )
+    item["top_result"].predictions.reset_index().to_csv(
+        DIRETORIO_RESULTADOS / f"{slug}_top_turn_predictions.csv",
+        index=False,
+    )
+    item["top_result"].trades.to_csv(
+        DIRETORIO_RESULTADOS / f"{slug}_top_turn_trades.csv",
+        index=False,
+    )
+    item["control_peak_trades"].to_csv(
+        DIRETORIO_RESULTADOS / f"{slug}_control_peak_exit.csv",
+        index=False,
+    )
+    item["top_peak_trades"].to_csv(
+        DIRETORIO_RESULTADOS / f"{slug}_top_turn_peak_exit.csv",
         index=False,
     )
 
-for slug, peak_trades in (
-    ("control", control_peak_trades),
-    ("top_turn", top_turn_peak_trades),
-    ("top_cooldown5", top_cooldown5_peak_trades),
-    ("top_bottom_v2", top_bottom_v2_peak_trades),
-):
-    peak_trades.to_csv(
-        DIRETORIO_RESULTADOS / f"peak_exit_{slug}.csv",
-        index=False,
-    )
-
-for slug, entries in (
-    ("control", control_bottom_entries),
-    ("top_turn", top_turn_entries),
-    ("top_cooldown5", top_cooldown5_entries),
-    ("top_bottom_v2", top_bottom_v2_entries),
-):
-    entries.to_csv(
-        DIRETORIO_RESULTADOS / f"bottom_entry_{slug}.csv",
-        index=False,
-    )
-
-pd.DataFrame(
-    directional_change_result.metrics.get(
-        "directional_change_calibration",
-        [],
-    )
-).to_csv(
-    DIRETORIO_RESULTADOS / "top_turn_calibration.csv",
-    index=False,
-)
-pd.DataFrame(
-    top_bottom_v2_result.metrics.get("bottom_turn_calibration", [])
-).to_csv(
-    DIRETORIO_RESULTADOS / "top_bottom_v2_bottom_calibration.csv",
-    index=False,
-)
-pd.DataFrame(
-    top_bottom_v2_result.metrics.get(
-        "combined_top_turn_calibration",
-        [],
-    )
-).to_csv(
-    DIRETORIO_RESULTADOS / "top_bottom_v2_top_calibration.csv",
-    index=False,
-)
-
-comparison_table = pd.DataFrame(
-    [
-        {
-            "metric": "ending_capital",
-            "control": control_metrics["ending_capital"],
-            "top_turn": directional_change_metrics["ending_capital"],
-            "top_cooldown5": top_cooldown5_metrics["ending_capital"],
-            "top_bottom_v2": top_bottom_v2_metrics["ending_capital"],
-        },
-        {
-            "metric": "cagr",
-            "control": control_metrics["cagr"],
-            "top_turn": directional_change_metrics["cagr"],
-            "top_cooldown5": top_cooldown5_metrics["cagr"],
-            "top_bottom_v2": top_bottom_v2_metrics["cagr"],
-        },
-        {
-            "metric": "sharpe",
-            "control": control_metrics["sharpe"],
-            "top_turn": directional_change_metrics["sharpe"],
-            "top_cooldown5": top_cooldown5_metrics["sharpe"],
-            "top_bottom_v2": top_bottom_v2_metrics["sharpe"],
-        },
-        {
-            "metric": "maximum_drawdown",
-            "control": control_metrics["maximum_drawdown"],
-            "top_turn": directional_change_metrics["maximum_drawdown"],
-            "top_cooldown5": top_cooldown5_metrics["maximum_drawdown"],
-            "top_bottom_v2": top_bottom_v2_metrics["maximum_drawdown"],
-        },
-        {
-            "metric": "worst_fold_return",
-            "control": control_metrics["worst_fold_return"],
-            "top_turn": directional_change_metrics["worst_fold_return"],
-            "top_cooldown5": top_cooldown5_metrics["worst_fold_return"],
-            "top_bottom_v2": top_bottom_v2_metrics["worst_fold_return"],
-        },
-        {
-            "metric": "median_exit_distance_from_peak_pct",
-            "control": control_peak.get(
-                "median_exit_distance_from_peak_pct"
-            ),
-            "top_turn": top_turn_peak.get(
-                "median_exit_distance_from_peak_pct"
-            ),
-            "top_cooldown5": top_cooldown5_peak.get(
-                "median_exit_distance_from_peak_pct"
-            ),
-            "top_bottom_v2": top_bottom_v2_peak.get(
-                "median_exit_distance_from_peak_pct"
-            ),
-        },
-        {
-            "metric": "median_entry_distance_from_bottom_pct",
-            "control": control_bottom.get(
-                "median_entry_distance_from_bottom_pct"
-            ),
-            "top_turn": top_turn_bottom.get(
-                "median_entry_distance_from_bottom_pct"
-            ),
-            "top_cooldown5": top_cooldown5_bottom.get(
-                "median_entry_distance_from_bottom_pct"
-            ),
-            "top_bottom_v2": top_bottom_v2_bottom.get(
-                "median_entry_distance_from_bottom_pct"
-            ),
-        },
-        {
-            "metric": "median_bottom_capture_pct",
-            "control": control_bottom.get("median_bottom_capture_pct"),
-            "top_turn": top_turn_bottom.get("median_bottom_capture_pct"),
-            "top_cooldown5": top_cooldown5_bottom.get(
-                "median_bottom_capture_pct"
-            ),
-            "top_bottom_v2": top_bottom_v2_bottom.get(
-                "median_bottom_capture_pct"
-            ),
-        },
-        {
-            "metric": "median_days_from_bottom_to_entry",
-            "control": control_bottom.get(
-                "median_days_from_bottom_to_entry"
-            ),
-            "top_turn": top_turn_bottom.get(
-                "median_days_from_bottom_to_entry"
-            ),
-            "top_cooldown5": top_cooldown5_bottom.get(
-                "median_days_from_bottom_to_entry"
-            ),
-            "top_bottom_v2": top_bottom_v2_bottom.get(
-                "median_days_from_bottom_to_entry"
-            ),
-        },
-    ]
-)
+comparison_table = pd.DataFrame(comparison_rows)
 comparison_table.to_csv(
-    DIRETORIO_RESULTADOS / "comparison_cycle_ablation.csv",
+    DIRETORIO_RESULTADOS / "comparison_universe_sensitivity.csv",
     index=False,
 )
 
-with (DIRETORIO_RESULTADOS / "comparison_cycle_ablation.json").open(
-    "w",
-    encoding="utf-8",
-) as arquivo:
+with (
+    DIRETORIO_RESULTADOS / "comparison_universe_sensitivity.json"
+).open("w", encoding="utf-8") as arquivo:
     json.dump(
         {
             "research_version": RESEARCH_VERSION,
             "execution_schema": EXECUTION_SCHEMA,
-            "protocol": {
-                "bottom_turn_post_top_only": True,
-                "bottom_turn_max_wait_sessions": 5,
-                "fixed_cooldown_sessions": 5,
-                "fixed_cooldown_uses_bottom_turn_ml": False,
-                "thresholds_features_calibration": "unchanged_from_v2",
-                "ablation_question": (
-                    "Does Bottom-Turn ML add value beyond a fixed "
-                    "five-session wait after Top-Turn exits?"
-                ),
-            },
-            "historical_reference": {
-                "pre_clmt_exclusion_top_turn": 12486768.002342533,
-                "corrected_universe_control": 5092399.32,
-                "corrected_universe_top_turn": 6306816.02,
-                "note": (
-                    "Pre-CLMT absolute capital is historical only; "
-                    "current scientific baseline uses the corrected universe."
-                ),
-            },
-            "comparison_top_turn": comparacao,
-            "control_metrics": control_metrics,
-            "top_turn_metrics": directional_change_metrics,
-            "top_cooldown5_metrics": top_cooldown5_metrics,
-            "top_bottom_v2_metrics": top_bottom_v2_metrics,
-            "control_peak": control_peak,
-            "top_turn_peak": top_turn_peak,
-            "top_cooldown5_peak": top_cooldown5_peak,
-            "top_bottom_v2_peak": top_bottom_v2_peak,
-            "control_bottom_entry": control_bottom,
-            "top_turn_bottom_entry": top_turn_bottom,
-            "top_cooldown5_bottom_entry": top_cooldown5_bottom,
-            "top_bottom_v2_bottom_entry": top_bottom_v2_bottom,
-            "structural_exclusions": exclusoes,
             "snapshot_sha256": manifesto.get("snapshot_sha256"),
+            "question": (
+                "How do Control and Top-Turn change across the current "
+                "54-asset universe, the historical 55-asset universe with "
+                "CLMT restored, and the raw 56-ticker diagnostic universe?"
+            ),
+            "protocol": {
+                "model_parameters_unchanged": True,
+                "top_turn_parameters_unchanged": True,
+                "snapshot_unchanged": True,
+                "fold_method_unchanged": True,
+                "u54_current": {
+                    "allow_structural_assets": [],
+                    "role": "current baseline",
+                },
+                "u55_clmt": {
+                    "allow_structural_assets": ["CLMT"],
+                    "role": (
+                        "historical reference candidate; CLMT continuity "
+                        "override only"
+                    ),
+                },
+                "u56_raw": {
+                    "allow_structural_assets": ["CLMT", "DOC"],
+                    "role": (
+                        "diagnostic only; DOC crosses a documented merger/"
+                        "ticker-identity transition"
+                    ),
+                },
+            },
+            "reference_snapshot": {
+                "reference_eligible_assets": 55,
+                "reference_includes_clmt": True,
+                "reference_excludes_doc": True,
+            },
+            "scenarios": summaries,
         },
         arquivo,
         ensure_ascii=False,
@@ -990,28 +832,14 @@ with (DIRETORIO_RESULTADOS / "comparison_cycle_ablation.json").open(
         default=str,
     )
 
-graficos_gerados = _gerar_graficos_comparacao(
-    control_result=control_result,
-    top_turn_result=directional_change_result,
-    top_cooldown5_result=top_cooldown5_result,
-    top_bottom_v2_result=top_bottom_v2_result,
-    frames_alinhados=frames_alinhados,
-)
-print(
-    f"[graphs] gerados={len(graficos_gerados)} "
-    f"diretorio={DIRETORIO_GRAFICOS}",
-    flush=True,
-)
 print(f"[output] diretorio={DIRETORIO_RESULTADOS}", flush=True)
 
 
-# %% 12 - PACOTE ZIP PARA ANALISE
-# Este e o unico arquivo que voce precisa enviar para analise.
+# %% 5 - PACOTE ZIP PARA ANALISE
 PACOTE_ANALISE = criar_pacote_analise(DIRETORIO_RESULTADOS)
 print(f"[package] pronto={PACOTE_ANALISE}", flush=True)
 
 
-# %% 13 - SINAL SONORO DE CONCLUSAO
-# Dois tons no Windows. Em outros sistemas tenta o bell do terminal.
+# %% 6 - SINAL SONORO DE CONCLUSAO
 sinal_sonoro_conclusao()
-print("[done] pesquisa e pacote de analise concluidos", flush=True)
+print("[done] sensibilidade do universo concluida", flush=True)
