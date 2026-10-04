@@ -1,16 +1,20 @@
-"""Sensibilidade de universo do Top-Turn no TCC.
+"""Contribuicao marginal de ativos para a inteligencia de rotacao do TCC.
 
 Execute no Spyder por celulas (# %%). Esta campanha:
 - usa somente o snapshot congelado versionado em dados/pesquisa;
-- mantem modelos, folds e parametros congelados;
-- compara Control e Top-Turn nos universos U54, U55 e U56;
-- gera ZIP compacto para analise;
-- emite aviso sonoro quando todo o processamento termina.
+- preserva modelos, folds, parametros e candidatos de switch margin;
+- reproduz U54/U55/U56 e usa CLMT em um desenho fatorial 2x2;
+- separa efeito de disponibilidade do ativo, efeito indireto de calibracao e
+  interacao entre ambos;
+- usa DOC como controle negativo de sensibilidade;
+- gera ZIP compacto para analise e emite aviso sonoro ao final.
 """
 
 # %% 0 - Imports e configuracao
+from copy import deepcopy
 from pathlib import Path
 import json
+import math
 import time
 
 try:
@@ -52,7 +56,7 @@ RAIZ_PROJETO = Path(__file__).resolve().parent
 CAMINHOS = SnapshotPaths.research(RAIZ_PROJETO)
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "directional_change"
 DIRETORIO_GRAFICOS = DIRETORIO_RESULTADOS / "graficos"
-EXECUTION_SCHEMA = "universe-sensitivity-54-55-56-v1"
+EXECUTION_SCHEMA = "rotation-contribution-factorial-v1"
 
 
 def _trigger_rows(predictions: pd.DataFrame, trigger_column: str) -> pd.DataFrame:
@@ -478,13 +482,13 @@ if EXECUTION_SCHEMA != EXPECTED_EXECUTION_SCHEMA:
 
 
 print("=" * 78, flush=True)
-print("TCC - Top-Turn Universe Sensitivity Research", flush=True)
+print("TCC - Rotation Contribution Factorial Research", flush=True)
 print(f"versao_pesquisa={RESEARCH_VERSION}", flush=True)
 print(f"execution_schema={EXECUTION_SCHEMA}", flush=True)
 print(f"script_path={Path(__file__).resolve()}", flush=True)
 print("dados=SNAPSHOT_CONGELADO_VERSIONADO", flush=True)
 print(
-    "comparacao=U54 vs U55_CLMT vs U56_RAW | CONTROL vs TOP_TURN",
+    "comparacao=U54/U55/U56 + CLMT factorial 2x2 | CONTROL + TOP_TURN",
     flush=True,
 )
 print("=" * 78, flush=True)
@@ -499,7 +503,7 @@ print(
 )
 
 
-# %% 2 - Campanha de sensibilidade do universo
+# %% 2 - Reproducao natural U54/U55/U56
 UNIVERSE_SCENARIOS = (
     {
         "slug": "u54_current",
@@ -519,7 +523,7 @@ UNIVERSE_SCENARIOS = (
         "slug": "u56_raw",
         "label": "U56 original por ticker",
         "allow_structural_assets": frozenset({"CLMT", "DOC"}),
-        "scientific_role": "diagnostic_only",
+        "scientific_role": "diagnostic_negative_control",
         "reference_comparison": False,
     },
 )
@@ -536,46 +540,20 @@ def _structural_overrides(diagnostics):
     ]
 
 
-def _executar_cenario_universo(spec):
-    slug = str(spec["slug"])
-    label = str(spec["label"])
-    allowed = frozenset(spec["allow_structural_assets"])
-
+def _executar_par(
+    *,
+    slug,
+    label,
+    frames_local,
+    config_local,
+    folds_local,
+    metadata,
+):
     print(
-        f"[universe] start slug={slug} label={label} "
-        f"allow_structural={','.join(sorted(allowed)) or 'NONE'}",
+        f"[scenario] start slug={slug} label={label}",
         flush=True,
     )
     inicio = time.perf_counter()
-
-    frames_local, exclusoes_local, diagnosticos_local, auditoria_local = (
-        prepare_model_frames(
-            CAMINHOS,
-            assets=CONFIG.assets,
-            comparar_snapshot_referencia=bool(
-                spec["reference_comparison"]
-            ),
-            allow_structural_assets=allowed,
-        )
-    )
-    overrides_local = _structural_overrides(diagnosticos_local)
-
-    expected_count = {
-        "u54_current": 54,
-        "u55_clmt": 55,
-        "u56_raw": 56,
-    }[slug]
-    if len(frames_local) != expected_count:
-        raise RuntimeError(
-            f"{slug}: esperados {expected_count} ativos, "
-            f"obtidos {len(frames_local)}."
-        )
-
-    config_local, _ = build_variant_configs(frames_local, CONFIG)
-    datas_comuns_local, folds_local = build_folds(
-        frames_local,
-        config_local,
-    )
 
     control_result_local, control_metrics_local = run_variant(
         f"CONTROL_{slug.upper()}",
@@ -625,17 +603,9 @@ def _executar_cenario_universo(spec):
     summary = {
         "slug": slug,
         "label": label,
-        "scientific_role": spec["scientific_role"],
+        **dict(metadata),
         "eligible_assets": len(frames_local),
         "assets": list(frames_local),
-        "allowed_structural_assets": sorted(allowed),
-        "structural_exclusions": exclusoes_local,
-        "structural_overrides": overrides_local,
-        "data_audit": auditoria_local,
-        "common_dates": len(datas_comuns_local),
-        "fold_count": len(folds_local),
-        "first_common_date": str(datas_comuns_local.min().date()),
-        "last_common_date": str(datas_comuns_local.max().date()),
         "control_metrics": control_metrics_local,
         "top_turn_metrics": top_metrics_local,
         "control_peak": control_peak_local,
@@ -644,7 +614,7 @@ def _executar_cenario_universo(spec):
     }
 
     print(
-        f"[universe-result] {slug} assets={len(frames_local)} "
+        f"[scenario-result] {slug} assets={len(frames_local)} "
         f"CONTROL={control_capital:,.2f} "
         f"TOP_TURN={top_capital:,.2f} "
         f"TOP_vs_CONTROL={top_vs_control:+.4%} "
@@ -655,11 +625,69 @@ def _executar_cenario_universo(spec):
     return {
         "summary": summary,
         "frames": frames_local,
+        "config": config_local,
+        "folds": folds_local,
         "control_result": control_result_local,
         "top_result": top_result_local,
         "control_peak_trades": control_peak_trades_local,
         "top_peak_trades": top_peak_trades_local,
     }
+
+
+def _executar_cenario_universo(spec):
+    slug = str(spec["slug"])
+    label = str(spec["label"])
+    allowed = frozenset(spec["allow_structural_assets"])
+
+    frames_local, exclusoes_local, diagnosticos_local, auditoria_local = (
+        prepare_model_frames(
+            CAMINHOS,
+            assets=CONFIG.assets,
+            comparar_snapshot_referencia=bool(
+                spec["reference_comparison"]
+            ),
+            allow_structural_assets=allowed,
+        )
+    )
+    overrides_local = _structural_overrides(diagnosticos_local)
+
+    expected_count = {
+        "u54_current": 54,
+        "u55_clmt": 55,
+        "u56_raw": 56,
+    }[slug]
+    if len(frames_local) != expected_count:
+        raise RuntimeError(
+            f"{slug}: esperados {expected_count} ativos, "
+            f"obtidos {len(frames_local)}."
+        )
+
+    config_local, _ = build_variant_configs(frames_local, CONFIG)
+    datas_comuns_local, folds_local = build_folds(
+        frames_local,
+        config_local,
+    )
+
+    return _executar_par(
+        slug=slug,
+        label=label,
+        frames_local=frames_local,
+        config_local=config_local,
+        folds_local=folds_local,
+        metadata={
+            "scientific_role": spec["scientific_role"],
+            "allowed_structural_assets": sorted(allowed),
+            "structural_exclusions": exclusoes_local,
+            "structural_overrides": overrides_local,
+            "data_audit": auditoria_local,
+            "common_dates": len(datas_comuns_local),
+            "fold_count": len(folds_local),
+            "first_common_date": str(datas_comuns_local.min().date()),
+            "last_common_date": str(datas_comuns_local.max().date()),
+            "policy_margin_source": slug,
+            "counterfactual": False,
+        },
+    )
 
 
 resultados_universo = {}
@@ -668,59 +696,309 @@ for scenario in UNIVERSE_SCENARIOS:
     resultados_universo[str(scenario["slug"])] = resultado
 
 
-# %% 3 - Comparacao 54 vs 55 vs 56
-summaries = {
-    slug: item["summary"]
-    for slug, item in resultados_universo.items()
+# %% 3 - Recuperacao das margens naturais por fold
+
+def _margens_por_fold(result) -> dict[int, float]:
+    predictions = result.predictions
+    required = {"decision_fold_id", "calibrated_switch_margin"}
+    missing = required.difference(predictions.columns)
+    if missing:
+        raise RuntimeError(
+            "Predictions sem diagnostico de margem por fold: "
+            + ", ".join(sorted(missing))
+        )
+
+    output: dict[int, float] = {}
+    rows = predictions.dropna(
+        subset=["decision_fold_id", "calibrated_switch_margin"]
+    )
+    for fold_id, group in rows.groupby("decision_fold_id"):
+        values = pd.to_numeric(
+            group["calibrated_switch_margin"],
+            errors="coerce",
+        ).dropna().unique()
+        if len(values) != 1:
+            raise RuntimeError(
+                f"Fold {fold_id}: margem nao e unica: {values.tolist()}"
+            )
+        output[int(fold_id)] = float(values[0])
+    if not output:
+        raise RuntimeError("Nenhuma margem calibrada foi recuperada.")
+    return output
+
+
+margens_u54 = _margens_por_fold(
+    resultados_universo["u54_current"]["control_result"]
+)
+margens_u55 = _margens_por_fold(
+    resultados_universo["u55_clmt"]["control_result"]
+)
+margens_u56 = _margens_por_fold(
+    resultados_universo["u56_raw"]["control_result"]
+)
+
+print(
+    "[natural-margins] "
+    f"U54={margens_u54} U55={margens_u55} U56={margens_u56}",
+    flush=True,
+)
+
+
+# %% 4 - Contrafactuais fatoriais de CLMT
+
+def _config_com_margens_forcadas(
+    frames_local,
+    margens_por_fold,
+):
+    config_local, _ = build_variant_configs(frames_local, CONFIG)
+    settings = deepcopy(config_local.research_model_settings)
+    settings["counterfactual_switch_margin_by_fold"] = {
+        str(int(fold_id)): float(value)
+        for fold_id, value in sorted(margens_por_fold.items())
+    }
+    return config_local.copiar_modelo(
+        update={"research_model_settings": settings}
+    )
+
+
+def _executar_counterfactual(
+    *,
+    slug,
+    label,
+    asset_universe_slug,
+    policy_margin_slug,
+    forced_margins,
+):
+    base = resultados_universo[asset_universe_slug]
+    frames_local = base["frames"]
+    config_local = _config_com_margens_forcadas(
+        frames_local,
+        forced_margins,
+    )
+    datas_comuns_local, folds_local = build_folds(
+        frames_local,
+        config_local,
+    )
+
+    return _executar_par(
+        slug=slug,
+        label=label,
+        frames_local=frames_local,
+        config_local=config_local,
+        folds_local=folds_local,
+        metadata={
+            "scientific_role": "factorial_counterfactual",
+            "asset_universe_source": asset_universe_slug,
+            "policy_margin_source": policy_margin_slug,
+            "forced_switch_margin_by_fold": {
+                str(k): float(v)
+                for k, v in sorted(forced_margins.items())
+            },
+            "common_dates": len(datas_comuns_local),
+            "fold_count": len(folds_local),
+            "first_common_date": str(datas_comuns_local.min().date()),
+            "last_common_date": str(datas_comuns_local.max().date()),
+            "counterfactual": True,
+        },
+    )
+
+
+resultados_counterfactual = {
+    "u54_policy_u55": _executar_counterfactual(
+        slug="u54_policy_u55",
+        label="U54 ativos + politica calibrada no U55",
+        asset_universe_slug="u54_current",
+        policy_margin_slug="u55_clmt",
+        forced_margins=margens_u55,
+    ),
+    "u55_policy_u54": _executar_counterfactual(
+        slug="u55_policy_u54",
+        label="U55 ativos + politica calibrada no U54",
+        asset_universe_slug="u55_clmt",
+        policy_margin_slug="u54_current",
+        forced_margins=margens_u54,
+    ),
 }
 
-u54 = summaries["u54_current"]
-u55 = summaries["u55_clmt"]
-u56 = summaries["u56_raw"]
+
+# %% 5 - Decomposicao fatorial e controle negativo DOC
+factorial_cells = {
+    "asset0_policy0": resultados_universo["u54_current"],
+    "asset0_policy1": resultados_counterfactual["u54_policy_u55"],
+    "asset1_policy0": resultados_counterfactual["u55_policy_u54"],
+    "asset1_policy1": resultados_universo["u55_clmt"],
+}
+
+
+def _capital_cell(cell, strategy):
+    key = (
+        "control_metrics"
+        if strategy == "control"
+        else "top_turn_metrics"
+    )
+    return float(factorial_cells[cell]["summary"][key]["ending_capital"])
+
+
+def _decomposicao_fatorial(strategy):
+    a00 = _capital_cell("asset0_policy0", strategy)
+    a01 = _capital_cell("asset0_policy1", strategy)
+    a10 = _capital_cell("asset1_policy0", strategy)
+    a11 = _capital_cell("asset1_policy1", strategy)
+    if min(a00, a01, a10, a11) <= 0:
+        raise RuntimeError("Capital fatorial precisa ser positivo.")
+
+    policy_log = math.log(a01 / a00)
+    asset_log = math.log(a10 / a00)
+    full_log = math.log(a11 / a00)
+    interaction_log = full_log - policy_log - asset_log
+
+    return {
+        "strategy": strategy,
+        "cell_asset0_policy0": a00,
+        "cell_asset0_policy1": a01,
+        "cell_asset1_policy0": a10,
+        "cell_asset1_policy1": a11,
+        "full_clmt_effect_pct": a11 / a00 - 1.0,
+        "policy_only_effect_pct": a01 / a00 - 1.0,
+        "investability_only_effect_pct": a10 / a00 - 1.0,
+        "policy_effect_log": policy_log,
+        "investability_effect_log": asset_log,
+        "interaction_effect_log": interaction_log,
+        "interaction_multiplier_pct": math.exp(interaction_log) - 1.0,
+        "full_effect_log": full_log,
+        "additive_interaction_capital": (
+            a11 - a01 - a10 + a00
+        ),
+    }
+
+
+def _path_difference(left_result, right_result):
+    left = left_result.predictions[["selected_asset"]].copy()
+    right = right_result.predictions[["selected_asset"]].copy()
+    left.columns = ["left_asset"]
+    right.columns = ["right_asset"]
+    joined = left.join(right, how="inner")
+    different = (
+        joined["left_asset"].fillna("CASH").astype(str)
+        != joined["right_asset"].fillna("CASH").astype(str)
+    )
+    first = (
+        str(joined.index[different][0])
+        if bool(different.any())
+        else None
+    )
+    return {
+        "comparable_sessions": int(len(joined)),
+        "different_selected_asset_sessions": int(different.sum()),
+        "different_selected_asset_rate": (
+            float(different.mean()) if len(joined) else None
+        ),
+        "first_divergence": first,
+    }
+
+
+factorial_decomposition = {
+    "control": _decomposicao_fatorial("control"),
+    "top_turn": _decomposicao_fatorial("top_turn"),
+}
+
+policy_path_control = _path_difference(
+    factorial_cells["asset0_policy0"]["control_result"],
+    factorial_cells["asset0_policy1"]["control_result"],
+)
+policy_path_top = _path_difference(
+    factorial_cells["asset0_policy0"]["top_result"],
+    factorial_cells["asset0_policy1"]["top_result"],
+)
+doc_negative_control = {
+    "control_capital_delta": (
+        float(
+            resultados_universo["u56_raw"]["summary"][
+                "control_metrics"
+            ]["ending_capital"]
+        )
+        - float(
+            resultados_universo["u55_clmt"]["summary"][
+                "control_metrics"
+            ]["ending_capital"]
+        )
+    ),
+    "top_turn_capital_delta": (
+        float(
+            resultados_universo["u56_raw"]["summary"][
+                "top_turn_metrics"
+            ]["ending_capital"]
+        )
+        - float(
+            resultados_universo["u55_clmt"]["summary"][
+                "top_turn_metrics"
+            ]["ending_capital"]
+        )
+    ),
+    "control_path": _path_difference(
+        resultados_universo["u55_clmt"]["control_result"],
+        resultados_universo["u56_raw"]["control_result"],
+    ),
+    "top_turn_path": _path_difference(
+        resultados_universo["u55_clmt"]["top_result"],
+        resultados_universo["u56_raw"]["top_result"],
+    ),
+    "margins_u55": {str(k): v for k, v in margens_u55.items()},
+    "margins_u56": {str(k): v for k, v in margens_u56.items()},
+}
 
 print(
-    "[comparison-universe] "
-    f"U54_CONTROL={float(u54['control_metrics']['ending_capital']):,.2f} "
-    f"U54_TOP={float(u54['top_turn_metrics']['ending_capital']):,.2f} "
-    f"U55_CONTROL={float(u55['control_metrics']['ending_capital']):,.2f} "
-    f"U55_TOP={float(u55['top_turn_metrics']['ending_capital']):,.2f} "
-    f"U56_CONTROL={float(u56['control_metrics']['ending_capital']):,.2f} "
-    f"U56_TOP={float(u56['top_turn_metrics']['ending_capital']):,.2f}",
+    "[factorial-control] "
+    f"full={factorial_decomposition['control']['full_clmt_effect_pct']:+.4%} "
+    f"policy_only={factorial_decomposition['control']['policy_only_effect_pct']:+.4%} "
+    f"investability_only={factorial_decomposition['control']['investability_only_effect_pct']:+.4%} "
+    f"interaction_multiplier={factorial_decomposition['control']['interaction_multiplier_pct']:+.4%}",
+    flush=True,
+)
+print(
+    "[factorial-top-turn] "
+    f"full={factorial_decomposition['top_turn']['full_clmt_effect_pct']:+.4%} "
+    f"policy_only={factorial_decomposition['top_turn']['policy_only_effect_pct']:+.4%} "
+    f"investability_only={factorial_decomposition['top_turn']['investability_only_effect_pct']:+.4%} "
+    f"interaction_multiplier={factorial_decomposition['top_turn']['interaction_multiplier_pct']:+.4%}",
+    flush=True,
+)
+print(
+    "[policy-path] "
+    f"CONTROL_changed={policy_path_control['different_selected_asset_sessions']} "
+    f"TOP_changed={policy_path_top['different_selected_asset_sessions']}",
     flush=True,
 )
 
-print(
-    "[universe-deltas] "
-    f"CLMT_effect_control="
-    f"{float(u55['control_metrics']['ending_capital']) / float(u54['control_metrics']['ending_capital']) - 1.0:+.4%} "
-    f"CLMT_effect_top="
-    f"{float(u55['top_turn_metrics']['ending_capital']) / float(u54['top_turn_metrics']['ending_capital']) - 1.0:+.4%} "
-    f"DOC_increment_control="
-    f"{float(u56['control_metrics']['ending_capital']) / float(u55['control_metrics']['ending_capital']) - 1.0:+.4%} "
-    f"DOC_increment_top="
-    f"{float(u56['top_turn_metrics']['ending_capital']) / float(u55['top_turn_metrics']['ending_capital']) - 1.0:+.4%}",
-    flush=True,
-)
 
-
-# %% 4 - Exportacao
+# %% 6 - Exportacao
 DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
 for antigo in DIRETORIO_RESULTADOS.glob("*.csv"):
     antigo.unlink()
 for antigo in DIRETORIO_RESULTADOS.glob("*.json"):
     antigo.unlink()
+if DIRETORIO_GRAFICOS.exists():
+    for antigo in DIRETORIO_GRAFICOS.glob("*.png"):
+        antigo.unlink()
+
+todos_resultados = {
+    **resultados_universo,
+    **resultados_counterfactual,
+}
 
 comparison_rows = []
-for slug, item in resultados_universo.items():
+for slug, item in todos_resultados.items():
     summary = item["summary"]
     control_metrics_local = summary["control_metrics"]
     top_metrics_local = summary["top_turn_metrics"]
 
     comparison_rows.append(
         {
-            "universe": slug,
-            "scientific_role": summary["scientific_role"],
+            "scenario": slug,
+            "scientific_role": summary.get("scientific_role"),
             "eligible_assets": summary["eligible_assets"],
+            "policy_margin_source": summary.get("policy_margin_source"),
+            "counterfactual": bool(summary.get("counterfactual", False)),
             "control_ending_capital": control_metrics_local[
                 "ending_capital"
             ],
@@ -774,12 +1052,34 @@ for slug, item in resultados_universo.items():
 
 comparison_table = pd.DataFrame(comparison_rows)
 comparison_table.to_csv(
-    DIRETORIO_RESULTADOS / "comparison_universe_sensitivity.csv",
+    DIRETORIO_RESULTADOS / "rotation_contribution_factorial.csv",
+    index=False,
+)
+
+factorial_cell_rows = []
+for cell, item in factorial_cells.items():
+    summary = item["summary"]
+    factorial_cell_rows.append(
+        {
+            "cell": cell,
+            "scenario": summary["slug"],
+            "clmt_investable": cell.startswith("asset1"),
+            "u55_policy_margins": cell.endswith("policy1"),
+            "control_ending_capital": summary[
+                "control_metrics"
+            ]["ending_capital"],
+            "top_turn_ending_capital": summary[
+                "top_turn_metrics"
+            ]["ending_capital"],
+        }
+    )
+pd.DataFrame(factorial_cell_rows).to_csv(
+    DIRETORIO_RESULTADOS / "rotation_contribution_factorial_cells.csv",
     index=False,
 )
 
 with (
-    DIRETORIO_RESULTADOS / "comparison_universe_sensitivity.json"
+    DIRETORIO_RESULTADOS / "rotation_contribution_factorial.json"
 ).open("w", encoding="utf-8") as arquivo:
     json.dump(
         {
@@ -787,40 +1087,71 @@ with (
             "execution_schema": EXECUTION_SCHEMA,
             "snapshot_sha256": manifesto.get("snapshot_sha256"),
             "question": (
-                "How do Control and Top-Turn change across the current "
-                "54-asset universe, the historical 55-asset universe with "
-                "CLMT restored, and the raw 56-ticker diagnostic universe?"
+                "Does CLMT improve the portfolio mainly by being an "
+                "investable opportunity, by changing the calibrated rotation "
+                "policy for the rest of the universe, or through interaction "
+                "between both mechanisms?"
             ),
+            "primary_causal_target": "Control",
+            "secondary_robustness_target": "Top-Turn end-to-end",
             "protocol": {
-                "model_parameters_unchanged": True,
-                "top_turn_parameters_unchanged": True,
                 "snapshot_unchanged": True,
+                "lightgbm_parameters_unchanged": True,
+                "top_turn_parameters_unchanged": True,
                 "fold_method_unchanged": True,
-                "u54_current": {
-                    "allow_structural_assets": [],
-                    "role": "current baseline",
+                "switch_margin_candidate_set_unchanged": True,
+                "new_tuning_allowed": False,
+                "factor_asset": {
+                    "0": "U54; CLMT not investable",
+                    "1": "U55; CLMT investable",
                 },
-                "u55_clmt": {
-                    "allow_structural_assets": ["CLMT"],
-                    "role": (
-                        "historical reference candidate; CLMT continuity "
-                        "override only"
+                "factor_policy": {
+                    "0": "natural U54 fold margins",
+                    "1": "natural U55 fold margins",
+                },
+                "cells": {
+                    "asset0_policy0": "U54 natural baseline",
+                    "asset0_policy1": (
+                        "information-only counterfactual: U54 investable "
+                        "assets with U55 fold margins"
                     ),
-                },
-                "u56_raw": {
-                    "allow_structural_assets": ["CLMT", "DOC"],
-                    "role": (
-                        "diagnostic only; DOC crosses a documented merger/"
-                        "ticker-identity transition"
+                    "asset1_policy0": (
+                        "investability-only counterfactual: U55 investable "
+                        "assets with U54 fold margins"
                     ),
+                    "asset1_policy1": "U55 natural full effect",
                 },
+                "doc_negative_control": (
+                    "U56 keeps CLMT and adds raw DOC only as diagnostic; "
+                    "DOC is not eligible for promotion to baseline."
+                ),
             },
-            "reference_snapshot": {
-                "reference_eligible_assets": 55,
-                "reference_includes_clmt": True,
-                "reference_excludes_doc": True,
+            "natural_margins": {
+                "u54": {str(k): v for k, v in margens_u54.items()},
+                "u55": {str(k): v for k, v in margens_u55.items()},
+                "u56": {str(k): v for k, v in margens_u56.items()},
             },
-            "scenarios": summaries,
+            "factorial_decomposition": factorial_decomposition,
+            "policy_only_path_change": {
+                "control": policy_path_control,
+                "top_turn": policy_path_top,
+            },
+            "doc_negative_control": doc_negative_control,
+            "natural_universe_scenarios": {
+                slug: item["summary"]
+                for slug, item in resultados_universo.items()
+            },
+            "counterfactual_scenarios": {
+                slug: item["summary"]
+                for slug, item in resultados_counterfactual.items()
+            },
+            "interpretation_rule": (
+                "A positive policy-only effect with CLMT non-investable is "
+                "evidence of indirect rotation contribution. A positive "
+                "investability-only effect is direct opportunity value. The "
+                "interaction term quantifies the non-additive contribution. "
+                "No candidate asset search is performed in this campaign."
+            ),
         },
         arquivo,
         ensure_ascii=False,
@@ -831,11 +1162,11 @@ with (
 print(f"[output] diretorio={DIRETORIO_RESULTADOS}", flush=True)
 
 
-# %% 5 - PACOTE ZIP PARA ANALISE
+# %% 7 - PACOTE ZIP PARA ANALISE
 PACOTE_ANALISE = criar_pacote_analise(DIRETORIO_RESULTADOS)
 print(f"[package] pronto={PACOTE_ANALISE}", flush=True)
 
 
-# %% 6 - SINAL SONORO DE CONCLUSAO
+# %% 8 - SINAL SONORO DE CONCLUSAO
 sinal_sonoro_conclusao()
-print("[done] sensibilidade do universo concluida", flush=True)
+print("[done] contribuicao marginal de rotacao concluida", flush=True)

@@ -24,6 +24,7 @@ from engine.rotacao import (
     _executar_compra,
     _selecionar_ativo_fonte_calendario,
 )
+from engine.modelo_lightgbm import _selecionar_switch_margin_fold
 from engine.configuracao import (
     ANALYSIS_END_DATE,
     ASSETS,
@@ -191,6 +192,46 @@ def test_execution_helpers_use_portuguese_names() -> None:
     ):
         assert retired not in execution_source
         assert retired not in experiment_source
+
+
+def test_counterfactual_switch_margin_override_uses_frozen_candidate() -> None:
+    config = SimpleNamespace(
+        research_model_settings={
+            "counterfactual_switch_margin_by_fold": {"1": 0.0}
+        }
+    )
+    selection = _selecionar_switch_margin_fold(
+        config,
+        1,
+        [(0.0, 1.0), (0.01, 2.0)],
+    )
+
+    assert selection["auto_candidate_margin"] == 0.01
+    assert selection["selected_candidate_margin"] == 0.0
+    assert selection["selected_calibration_score"] == 1.0
+    assert selection["selection_source"] == "counterfactual_override"
+
+
+def test_counterfactual_switch_margin_refuses_new_tuning_value() -> None:
+    config = SimpleNamespace(
+        research_model_settings={
+            "counterfactual_switch_margin_by_fold": {"1": 0.0075}
+        }
+    )
+
+    try:
+        _selecionar_switch_margin_fold(
+            config,
+            1,
+            [(0.0, 1.0), (0.01, 2.0)],
+        )
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("non-frozen margin should have been refused")
+
+    assert "outside frozen candidates" in message
+
 
 def test_control_and_soft_share_same_lightgbm() -> None:
     control = construir_configuracao_controle(CONFIG)

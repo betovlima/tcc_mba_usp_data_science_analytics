@@ -998,3 +998,100 @@ Perguntas da campanha:
 Nenhum threshold, feature, target ou parametro sera alterado depois de observar
 os resultados desta campanha. O artefato principal sera
 `comparison_universe_sensitivity.json`.
+
+## Resultado U54/U55/U56 e campanha de contribuicao marginal — 1.11.0-dev.1
+
+### Resultado observado na sensibilidade de universo
+
+O replay 1.10.0-dev.1 confirmou:
+
+| Universo | Control | Top-Turn | Top-Turn vs Control |
+| --- | ---: | ---: | ---: |
+| U54 atual | US$ 5.092.399,32 | US$ 6.306.816,02 | +23,85% |
+| U55 + CLMT | US$ 10.082.425,91 | US$ 12.486.768,00 | +23,85% |
+| U56 + CLMT + DOC | US$ 10.082.425,91 | US$ 12.486.768,00 | +23,85% |
+
+DOC foi um controle negativo forte: U55 e U56 produziram o mesmo capital e o
+mesmo caminho de selecao. A inclusao de CLMT, ao contrario, alterou
+materialmente a trajetoria.
+
+A margem candidata calibrada por fold foi:
+
+- U54: 0,01 / 0,01 / 0,00;
+- U55: 0,00 / 0,01 / 0,00;
+- U56: 0,00 / 0,01 / 0,00.
+
+Como a margem-base do sistema e 0,0005, o primeiro fold opera efetivamente com
+0,01 no U54 e 0,0005 no U55/U56. A mudanca de politica aparece antes de CLMT
+ser necessariamente a posicao selecionada, portanto o ganho U54 -> U55 nao
+pode ser atribuido apenas ao lucro direto de operacoes em CLMT.
+
+### Hipotese de contribuicao marginal para a rotacao
+
+Hipotese predeclarada: um ativo pode contribuir para o universo de duas formas
+distintas:
+
+1. valor direto de investimento, quando o proprio ativo e selecionado e gera
+   retorno;
+2. valor indireto de informacao/calibracao, quando sua presenca altera a
+   politica de rotacao e melhora decisoes entre os demais ativos.
+
+A segunda componente e chamada provisoriamente de contribuicao marginal de
+rotacao. Nesta etapa nao se procura novos ativos e nao se cria um score por
+ajuste retrospectivo. Primeiro sera testado se o efeito indireto de CLMT existe
+de forma separavel.
+
+### Desenho fatorial 2x2 congelado
+
+Versao: 1.11.0-dev.1.
+Schema: rotation-contribution-factorial-v1.
+Branch unica mantida: research/reversal-bocpd-comparison.
+
+Fator A, disponibilidade de CLMT:
+- 0 = U54, CLMT nao investivel;
+- 1 = U55, CLMT investivel.
+
+Fator B, politica de rotacao:
+- 0 = margens naturais calibradas no U54;
+- 1 = margens naturais calibradas no U55.
+
+Celulas:
+
+1. A0/B0: U54 natural, baseline.
+2. A0/B1: U54 investivel + margens U55. Esta e a celula
+   information-only e testa se a politica aprendida com CLMT melhora o
+   universo mesmo quando CLMT nao pode ser comprado.
+3. A1/B0: U55 investivel + margens U54. Esta e a celula
+   investability-only e mede o valor de permitir CLMT mantendo a politica
+   do universo sem CLMT.
+4. A1/B1: U55 natural, efeito completo observado.
+
+O override contrafactual somente pode usar valores que ja pertencem ao conjunto
+congelado de candidatos de rotation_switch_margin_candidates. Qualquer valor
+novo e recusado pelo codigo. Portanto, este experimento nao introduz tuning.
+
+A decomposicao principal sera feita no Control, pois ele isola a politica de
+rotacao sem adicionar outro mecanismo. Top-Turn sera executado nas mesmas
+celulas como verificacao end-to-end; sua leitura e secundaria porque o universo
+tambem participa da calibracao do overlay.
+
+DOC permanece como controle negativo U55 -> U56 e nao e promovido ao universo
+cientifico por causa da quebra documentada de identidade/ticker.
+
+### Criterio de interpretacao predeclarado
+
+- se A0/B1 superar A0/B0, existe evidencia de valor indireto da politica
+  calibrada com CLMT, mesmo sem CLMT investivel;
+- se A1/B0 superar A0/B0, existe valor direto de investibilidade de CLMT sob a
+  politica U54;
+- a diferenca residual em escala logaritmica e tratada como interacao entre
+  disponibilidade e politica;
+- nenhuma busca por novos tickers sera feita antes da interpretacao deste
+  fatorial;
+- somente se a contribuicao indireta se confirmar sera aberta uma campanha
+  posterior para procurar a assinatura em outros ativos sem usar o mesmo OOS
+  como criterio de tuning.
+
+Artefato principal esperado:
+rotation_contribution_factorial.json.
+

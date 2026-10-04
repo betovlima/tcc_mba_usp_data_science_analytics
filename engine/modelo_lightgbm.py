@@ -47,6 +47,77 @@ def _configuracoes_lightgbm(config: Any) -> dict[str, Any]:
     return resolved
 
 
+def _selecionar_switch_margin_fold(
+    config: Any,
+    fold_id: int,
+    candidate_scores: list[tuple[float, float]],
+) -> dict[str, Any]:
+    """Seleciona a margem do fold e permite override contrafactual auditavel.
+
+    O override existe apenas para experimentos fatoriais predeclarados. O valor
+    forcado precisa pertencer ao conjunto de candidatos ja congelado, evitando
+    introduzir tuning novo durante a decomposicao causal.
+    """
+    if not candidate_scores:
+        raise ValueError("Switch-margin calibration produced no candidates.")
+
+    auto_candidate = float(candidate_scores[0][0])
+    auto_score = float(candidate_scores[0][1])
+    for candidate, score in candidate_scores[1:]:
+        candidate = float(candidate)
+        score = float(score)
+        if score > auto_score:
+            auto_candidate = candidate
+            auto_score = score
+
+    settings = _configuracoes_pesquisa(config)
+    raw_overrides = settings.get("counterfactual_switch_margin_by_fold") or {}
+    if not isinstance(raw_overrides, dict):
+        raise ValueError(
+            "counterfactual_switch_margin_by_fold must be a mapping."
+        )
+
+    raw_override = raw_overrides.get(str(int(fold_id)))
+    if raw_override is None:
+        raw_override = raw_overrides.get(int(fold_id))
+
+    selected_candidate = auto_candidate
+    selected_score = auto_score
+    selection_source = "calibration"
+
+    if raw_override is not None:
+        forced = float(raw_override)
+        if not np.isfinite(forced) or forced < 0.0:
+            raise ValueError(
+                f"Fold {fold_id}: forced switch margin must be finite and >= 0."
+            )
+
+        matched = None
+        for candidate, score in candidate_scores:
+            if abs(float(candidate) - forced) <= 1e-12:
+                matched = (float(candidate), float(score))
+                break
+        if matched is None:
+            allowed = ", ".join(
+                f"{float(candidate):.10g}"
+                for candidate, _ in candidate_scores
+            )
+            raise ValueError(
+                f"Fold {fold_id}: forced switch margin {forced:.10g} "
+                f"is outside frozen candidates [{allowed}]."
+            )
+        selected_candidate, selected_score = matched
+        selection_source = "counterfactual_override"
+
+    return {
+        "selected_candidate_margin": float(selected_candidate),
+        "selected_calibration_score": float(selected_score),
+        "auto_candidate_margin": float(auto_candidate),
+        "auto_calibration_score": float(auto_score),
+        "selection_source": selection_source,
+    }
+
+
 _LIGHTGBM_DEVICE_PROBE_CACHE: dict[tuple[str, str], tuple[bool, str | None]] = {}
 
 def _construir_contexto_execucao(
@@ -1150,8 +1221,7 @@ def executar_lightgbm(
                 float(value)
                 for value in rep_config.rotation_switch_margin_candidates
             )
-            best_candidate = candidate_margins[0]
-            best_score = float("-inf")
+            candidate_scores: list[tuple[float, float]] = []
             for candidate in candidate_margins:
                 calibration_policy = _politica_utilidade(
                     calibration_models,
@@ -1167,9 +1237,25 @@ def executar_lightgbm(
                     calibration_dates,
                     rep_config,
                 )
-                if score > best_score:
-                    best_score = score
-                    best_candidate = candidate
+                candidate_scores.append((float(candidate), float(score)))
+
+            margin_selection = _selecionar_switch_margin_fold(
+                rep_config,
+                fold_id,
+                candidate_scores,
+            )
+            best_candidate = float(
+                margin_selection["selected_candidate_margin"]
+            )
+            best_score = float(
+                margin_selection["selected_calibration_score"]
+            )
+            auto_best_candidate = float(
+                margin_selection["auto_candidate_margin"]
+            )
+            auto_best_score = float(
+                margin_selection["auto_calibration_score"]
+            )
 
             detail(
                 run_index=run_index,
@@ -1344,6 +1430,15 @@ def executar_lightgbm(
                     "calibrated_candidate_margin": float(best_candidate),
                     "effective_switch_margin": float(effective_margin),
                     "calibration_risk_adjusted_score": float(best_score),
+                    "auto_calibrated_candidate_margin": float(
+                        auto_best_candidate
+                    ),
+                    "auto_calibration_risk_adjusted_score": float(
+                        auto_best_score
+                    ),
+                    "margin_selection_source": str(
+                        margin_selection["selection_source"]
+                    ),
                 }
             )
             report(

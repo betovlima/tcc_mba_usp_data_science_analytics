@@ -21,6 +21,7 @@ from engine.modelo_lightgbm import (
     _ajustar_modelos_lightgbm,
     _configuracoes_lightgbm,
     _construir_contexto_execucao,
+    _selecionar_switch_margin_fold,
 )
 from engine.rotacao import (
     ROTATION_FEATURES,
@@ -32,9 +33,9 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.10.0-dev.1"
-EXPECTED_EXECUTION_SCHEMA = "universe-sensitivity-54-55-56-v1"
-EXPECTED_COMPARISON_FILE = "comparison_universe_sensitivity.json"
+RESEARCH_VERSION = "1.11.0-dev.1"
+EXPECTED_EXECUTION_SCHEMA = "rotation-contribution-factorial-v1"
+EXPECTED_COMPARISON_FILE = "rotation_contribution_factorial.json"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5
@@ -3349,8 +3350,7 @@ def executar_directional_change_lightgbm(
             float(value)
             for value in config.rotation_switch_margin_candidates
         )
-        best_candidate = candidate_margins[0]
-        best_score = float("-inf")
+        candidate_scores: list[tuple[float, float]] = []
         for candidate in candidate_margins:
             calibration_policy = _politica_utilidade(
                 calibration_utility_models,
@@ -3366,9 +3366,25 @@ def executar_directional_change_lightgbm(
                 calibration_dates,
                 config,
             )
-            if score > best_score:
-                best_score = score
-                best_candidate = candidate
+            candidate_scores.append((float(candidate), float(score)))
+
+        margin_selection = _selecionar_switch_margin_fold(
+            config,
+            fold_id,
+            candidate_scores,
+        )
+        best_candidate = float(
+            margin_selection["selected_candidate_margin"]
+        )
+        best_score = float(
+            margin_selection["selected_calibration_score"]
+        )
+        auto_best_candidate = float(
+            margin_selection["auto_candidate_margin"]
+        )
+        auto_best_score = float(
+            margin_selection["auto_calibration_score"]
+        )
 
         reversal_calibration_models, calibration_fit = (
             _ajustar_modelos_top_turn(
@@ -3459,6 +3475,15 @@ def executar_directional_change_lightgbm(
                 "calibrated_candidate_margin": float(best_candidate),
                 "effective_switch_margin": float(effective_margin),
                 "calibration_risk_adjusted_score": float(best_score),
+                "auto_calibrated_candidate_margin": float(
+                    auto_best_candidate
+                ),
+                "auto_calibration_risk_adjusted_score": float(
+                    auto_best_score
+                ),
+                "margin_selection_source": str(
+                    margin_selection["selection_source"]
+                ),
             }
         )
 
