@@ -1095,3 +1095,98 @@ cientifico por causa da quebra documentada de identidade/ticker.
 Artefato principal esperado:
 rotation_contribution_factorial.json.
 
+## Resultado fatorial de contribuicao CLMT — 1.11.0-dev.1
+
+Pacote validado com schema rotation-contribution-factorial-v1.
+
+### Decomposicao Control
+
+| Celula | Capital final |
+| --- | ---: |
+| U54 natural, A0/B0 | US$ 5.092.399,32 |
+| U54 + politica U55, A0/B1 | US$ 8.529.013,20 |
+| U55 + politica U54, A1/B0 | US$ 6.020.007,45 |
+| U55 natural, A1/B1 | US$ 10.082.425,91 |
+
+O efeito completo de CLMT foi +97,99%. A celula information-only, na qual
+CLMT nao pode ser comprado mas as margens por fold sao as aprendidas no U55,
+terminou em US$ 8.529.013,20, +67,49% sobre o U54 natural. A celula
+investability-only terminou em US$ 6.020.007,45, +18,22%.
+
+Em escala logaritmica, apropriada para decompor crescimento composto:
+- politica/calibracao: 75,50% do efeito total;
+- investibilidade direta: 24,50%;
+- interacao multiplicativa: aproximadamente zero (-0,0019%).
+
+Top-Turn reproduziu praticamente a mesma decomposicao:
+- U54 natural: US$ 6.306.816,02;
+- information-only: US$ 10.562.864,25;
+- investability-only: US$ 7.455.688,24;
+- U55 completo: US$ 12.486.768,00.
+
+### Localizacao temporal do efeito
+
+A mudanca de politica ocorre exclusivamente no fold 1:
+- U54: margem calibrada 0,01;
+- U55: margem calibrada 0,00;
+- 33 de 1.547 sessoes OOS mudam de ativo, todas no fold 1;
+- primeira divergencia: 2020-07-28;
+- capital ao fim do fold 1: U54 US$ 22.399,56 contra
+  information-only US$ 37.505,09;
+- retorno do fold 1: +124,00% contra +275,05%;
+- MaxDD do fold 1 melhora de -36,65% para -29,46%.
+
+Nos folds 2 e 3 as margens sao iguais entre U54 e U55, e o caminho
+information-only volta a selecionar os mesmos ativos do U54. A vantagem criada
+no fold 1 persiste por composicao do capital.
+
+A investibilidade direta de CLMT com politica U54 nao altera o fold 1. Ao fim
+do fold 2 seu efeito relativo ainda e negativo, aproximadamente -3,99%, e
+somente no fold 3 passa a ser positivo, encerrando em +18,22%.
+
+DOC permanece controle negativo: U55 e U56 tem capital, margens e caminho
+identicos.
+
+### Conclusao
+
+O fatorial confirma que a maior parte do salto U54 -> U55 nao vem de comprar
+CLMT. Ela vem da politica de rotacao induzida pela presenca de CLMT na
+calibracao. Isso e evidencia forte de contribuicao marginal de rotacao.
+
+Ainda nao se pode declarar uma assinatura generalizavel de novo ativo, porque
+o efeito de politica observado e concentrado em um unico fold. O proximo passo
+deve procurar outros ativos que produzam o mesmo tipo de influencia usando
+somente as janelas de treino/calibracao, sem escolher candidatos pelo capital
+OOS.
+
+## Campanha signature leave-one-out calibration-only — 1.12.0-dev.1
+
+Versao: 1.12.0-dev.1.
+Schema: rotation-contribution-signature-loo-v1.
+Branch unica: research/reversal-bocpd-comparison.
+
+Objetivo: descobrir quais ativos possuem contribuicao marginal para a
+calibracao da politica antes de qualquer nova selecao por resultado OOS.
+
+Protocolo congelado:
+1. usar U55 com CLMT restaurado apenas como universo diagnostico;
+2. em cada fold, treinar os modelos LightGBM uma unica vez na janela de treino;
+3. medir a superficie completa dos candidatos congelados de switch margin;
+4. remover um ativo por vez somente do conjunto de escolhas da calibracao;
+5. recalcular a margem otima e o objetivo de calibracao sem retreinar os
+   modelos dos demais ativos;
+6. registrar margin flip, contribuicao marginal ao objetivo, contribuicao com
+   margem fixa, forca do flip e estatisticas cross-sectional de score;
+7. nao criar score composto arbitrario nesta etapa;
+8. nao executar backtest OOS para selecionar ou ordenar candidatos;
+9. usar DOC/U56 somente como controle negativo estrutural;
+10. somente depois de interpretar esta campanha sera definido um teste OOS
+    confirmatorio para uma hipotese de assinatura predeclarada.
+
+Artefatos esperados:
+- rotation_contribution_signature_loo.json;
+- rotation_contribution_signature_loo.csv;
+- rotation_contribution_signature_aggregate.csv;
+- rotation_contribution_margin_surface.csv;
+- pacote_analise.zip.
+
