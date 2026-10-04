@@ -678,3 +678,118 @@ Tambem foram removidos os warnings de Pandas ao converter timestamps UTC em
 timezone e removido deliberadamente, pois um periodo mensal nao representa
 fuso horario. Isso afeta apenas a geracao dos calendarios mensais, nao os dados,
 folds, sinais ou resultados OOS.
+
+
+## Resultado Bottom-Turn v2 — OOS 1.8.0-dev.4
+
+Pacote validado com `research_version=1.8.0-dev.4`,
+`execution_schema=top-bottom-cycle-v2`, 1.547 sessoes OOS e protocolo
+`post_top_only=True, max_wait_sessions=5`.
+
+### Resultado agregado
+
+| Cenario | Capital final | vs Control | vs Top-Turn | CAGR | Sharpe | MaxDD | Worst fold |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Control | US$ 5.092.399,32 | - | - | 175,31% | 1,9287 | -36,65% | +124,00% |
+| Top-Turn | US$ 6.306.816,02 | +23,85% | - | 185,04% | 1,9844 | -36,65% | +124,72% |
+| Top+Bottom v2 | US$ 5.244.421,51 | +2,99% | -16,85% | 176,62% | 1,9453 | -36,65% | +132,55% |
+
+Bottom-Turn v2 resolveu o problema arquitetural de bloqueios indefinidos, mas
+nao melhorou o Top-Turn. O capital final ficou US$ 1.062.394,51 abaixo do
+Top-Turn.
+
+### Comportamento da janela de cinco sessoes
+
+No Top+Bottom v2 ocorreram:
+
+- 8 saidas Top-Turn;
+- 39 decisoes de entrada bloqueadas dentro das janelas;
+- 7 expiracoes da janela;
+- apenas 1 entrada confirmada pelo Bottom-Turn;
+- somente 4 observacoes OOS com probabilidade Bottom-Turn disponivel dentro
+  das janelas.
+
+A unica confirmacao Bottom-Turn ocorreu em LKFT, outubro/2020, na quinta
+sessao da janela. Portanto, o v2 se comportou majoritariamente como um cooldown
+fixo de cinco sessoes, e nao como um detector de fundos capaz de liberar
+reentradas de forma recorrente.
+
+### Entrada LKFT confirmada
+
+Top-Turn sozinho recomprou LKFT em 2020-10-14 a 145,59.
+Bottom-Turn confirmou reentrada em 2020-10-20 a 132,11, aproximadamente
+9,26% abaixo do preco da recompra Top-Turn. Esse episodio continua sendo uma
+evidencia positiva individual para o conceito de fundo.
+
+### Desempenho por fold versus Top-Turn
+
+- fold 1: Top+Bottom v2 aproximadamente +3,48% relativo ao Top-Turn;
+- fold 2: aproximadamente -18,02%;
+- fold 3: aproximadamente -1,98%.
+
+A principal deterioracao ocorreu no fold 2.
+
+### Caso TSLA junho/2023
+
+Top-Turn sozinho executou:
+
+- 2023-06-14: venda TSLA a 260,17;
+- 2023-06-15: recompra TSLA a 248,40;
+- 2023-06-21: nova saida Top-Turn a 275,13;
+- 2023-06-22: nova recompra a 250,77.
+
+O Top+Bottom v2 vendeu em 2023-06-14, permaneceu em CASH durante a janela e
+somente recomprou TSLA em 2023-06-23 a 259,29. Assim, perdeu a alta entre
+248,40 e 275,13 e deixou de estar posicionado para o segundo gatilho Top-Turn
+de 2023-06-21.
+
+A relacao de equity Top+Bottom v2 / Top-Turn estava aproximadamente +3,48% na
+saida de 2023-06-14 e caiu para cerca de -9,64% na reentrada de 2023-06-23.
+Esse episodio explica parcela importante da perda do fold 2 e mostra que uma
+janela de espera pode destruir uma sequencia lucrativa de saida-reentrada-
+nova-saida.
+
+Tambem desapareceram do caminho combinado dois gatilhos que existiam no
+Top-Turn isolado: NFLX 2021-09-10 e TSLA 2023-06-21. Isso e efeito de path
+dependence: ao alterar o momento de reentrada, a carteira pode nao estar mais
+posicionada quando um gatilho posterior surgiria.
+
+### Qualidade mediana das reentradas
+
+Top-Turn isolado:
+
+- distancia do fundo: 0,43%;
+- captura do fundo: 83,61%;
+- dias apos o fundo: 1;
+- retorno +5d: +0,25%;
+- retorno +10d: -0,96%;
+- retorno +20d: +4,45%;
+- drawdown +20d: -4,27%.
+
+Top+Bottom v2:
+
+- distancia do fundo: 2,72%;
+- captura do fundo: 76,59%;
+- dias apos o fundo: 2;
+- retorno +5d: +0,55%;
+- retorno +10d: +2,53%;
+- retorno +20d: +5,35%;
+- drawdown +20d: -3,14%.
+
+A espera v2 entrou mais longe do minimo observado, mas apresentou mediana de
+retorno posterior e drawdown um pouco melhores. Isso nao compensou o custo de
+oportunidade das altas perdidas nem a perda de gatilhos Top-Turn subsequentes.
+
+### Conclusao cientifica do v2
+
+1. O limite de cinco sessoes resolveu o erro arquitetural do v1.
+2. Bottom-Turn ainda nao esta validado como detector recorrente de fundos.
+3. A maior parte do comportamento v2 vem do cooldown temporal, nao do modelo:
+   1 confirmacao contra 7 expiracoes.
+4. Top-Turn permanece a referencia economica no universo corrigido:
+   US$ 6.306.816,02 e +23,85% sobre Control.
+5. O proximo teste deve incluir um baseline `Top-Turn + cooldown fixo de
+   5 sessoes sem ML` para separar o valor do simples atraso do valor real da
+   previsao Bottom-Turn.
+6. Nao ajustar thresholds/features do Bottom-Turn olhando este resultado antes
+   dessa ablacao.
