@@ -939,3 +939,62 @@ Nao retunar thresholds/features do Bottom-Turn sobre este mesmo OOS. Se a linha
 Bottom-Turn continuar, a proxima etapa deve ser uma reformulacao metodologica
 predeclarada e validada em novo protocolo, e nao ajuste de parametros para
 recuperar este resultado.
+
+
+## Sensibilidade do universo 54/55/56 — protocolo 1.10.0-dev.1
+
+A revisao da exclusao de CLMT mostrou que o snapshot oficial de referencia
+`10.8.74` possui 56 tickers configurados em `ASSETS`, mas registra
+**55 ativos elegiveis**. O diagnostico de referencia inclui CLMT e nao inclui
+DOC.
+
+Isso corrige uma interpretacao anterior: o checkpoint historico de
+Control ~US$ 10,08 milhoes e Top-Turn ~US$ 12,49 milhoes deve ser tratado,
+ate reproducao da campanha abaixo, como resultado do universo elegivel de
+55 ativos com CLMT presente e DOC excluido, e nao como um universo elegivel de
+56 ativos.
+
+### Distincao de identidade
+
+CLMT:
+- corporate action 2024-07-11 marcado como `name_change`;
+- ticker antigo = CLMT e ticker novo = CLMT;
+- CUSIP mudou de 131476103 para 131428104;
+- para esta campanha a exclusao e explicitamente sobrescrita, sem alterar
+  precos, retornos ou corporate actions do snapshot.
+
+DOC:
+- o DOC antigo possui CUSIP 71943U104;
+- em 2024-03-01 houve `stock_merger`: DOC -> PEAK, taxa do acquiree 1,0 e
+  taxa do acquirer 0,674;
+- depois PEAK passou a usar o ticker DOC/CUSIP 42250P103;
+- portanto a serie por ticker DOC atravessa identidades economicas distintas.
+  Sua inclusao no universo de 56 e apenas diagnostica e nao deve ser promovida
+  automaticamente a baseline cientifico.
+
+### Campanha congelada
+
+Versao: `1.10.0-dev.1`.
+Schema: `universe-sensitivity-54-55-56-v1`.
+
+Executar somente Control e Top-Turn, sem Bottom-Turn, BOCPD, HSMM ou Hazard,
+mantendo snapshot, parametros LightGBM, parametros Top-Turn, folds, custos e
+protocolo OOS inalterados.
+
+Cenarios:
+
+1. `u54_current`: exclusoes atuais de DOC e CLMT.
+2. `u55_clmt`: CLMT restaurado por override explicito; DOC continua excluido.
+3. `u56_raw`: CLMT e DOC incluidos por override; diagnostico de sensibilidade
+   por ticker, nao baseline cientifico.
+
+Perguntas da campanha:
+- o U55 reproduz o checkpoint historico de ~US$10,08M Control /
+  ~US$12,49M Top-Turn?
+- a vantagem relativa Top-Turn vs Control continua ~23,85%?
+- qual parcela da mudanca U54 -> U55 decorre de restaurar CLMT?
+- o que acontece ao forcar DOC no U56, sabendo que ha quebra de identidade?
+
+Nenhum threshold, feature, target ou parametro sera alterado depois de observar
+os resultados desta campanha. O artefato principal sera
+`comparison_universe_sensitivity.json`.
