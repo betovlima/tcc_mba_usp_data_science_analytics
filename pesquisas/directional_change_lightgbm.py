@@ -32,9 +32,9 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.8.0-dev.4"
-EXPECTED_EXECUTION_SCHEMA = "top-bottom-cycle-v2"
-EXPECTED_COMPARISON_FILE = "comparison_cycle_v2.json"
+RESEARCH_VERSION = "1.9.0-dev.1"
+EXPECTED_EXECUTION_SCHEMA = "top-bottom-cooldown-ablation-v1"
+EXPECTED_COMPARISON_FILE = "comparison_cycle_ablation.json"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5
@@ -56,6 +56,7 @@ BOTTOM_TURN_MIN_DOWN_REGIME_SHARE = 2.0 / 3.0
 BOTTOM_TURN_MAX_RETURN_20 = 0.0
 BOTTOM_TURN_CONFIRMATION_SESSIONS = 2
 BOTTOM_TURN_MAX_WAIT_SESSIONS = BOTTOM_TURN_HORIZON_SESSIONS
+FIXED_COOLDOWN_SESSIONS = BOTTOM_TURN_HORIZON_SESSIONS
 PROBABILITY_THRESHOLD_CANDIDATES = (
     0.55,
     0.60,
@@ -2492,6 +2493,136 @@ def _envolver_politica_bottom_turn(
     return policy
 
 
+
+def _envolver_politica_cooldown_pos_top_turn(
+    base_policy: Callable[[pd.Timestamp, int, int], tuple[int, float]],
+    *,
+    decision_diagnostics: dict[pd.Timestamp, dict[str, Any]],
+    cooldown_sessions: int = FIXED_COOLDOWN_SESSIONS,
+) -> Callable[[pd.Timestamp, int, int], tuple[int, float]]:
+    """Ablacao sem ML: espera fixa apos uma saida Top-Turn.
+
+    O cooldown e armado somente por uma saida Top-Turn real. As proximas
+    cooldown_sessions sessoes de decisao permanecem em CASH; na sessao
+    seguinte a politica Top-Turn volta a operar normalmente.
+    """
+    if int(cooldown_sessions) <= 0:
+        raise ValueError("cooldown_sessions must be positive.")
+
+    gate_armed = False
+    gate_wait_sessions = 0
+
+    def policy(
+        timestamp: pd.Timestamp,
+        current_position: int,
+        holding_days: int,
+    ) -> tuple[int, float]:
+        nonlocal gate_armed, gate_wait_sessions
+
+        base_target, base_score = base_policy(
+            timestamp,
+            current_position,
+            holding_days,
+        )
+        key = pd.Timestamp(timestamp)
+        diagnostic = decision_diagnostics.setdefault(key, {})
+        top_exit_triggered = bool(
+            diagnostic.get("directional_change_exit_triggered", False)
+        )
+
+        if (
+            current_position > 0
+            and int(base_target) <= 0
+            and top_exit_triggered
+        ):
+            gate_armed = True
+            gate_wait_sessions = 0
+            diagnostic.update(
+                {
+                    "cooldown_schema_version": 1,
+                    "cooldown_research_version": RESEARCH_VERSION,
+                    "cooldown_gate_armed_event": True,
+                    "cooldown_gate_active": True,
+                    "cooldown_wait_session": 0,
+                    "cooldown_max_wait_sessions": int(cooldown_sessions),
+                    "cooldown_gate_expired": False,
+                    "cooldown_entry_blocked": False,
+                }
+            )
+            return int(base_target), float(base_score)
+
+        if current_position > 0:
+            gate_armed = False
+            gate_wait_sessions = 0
+            diagnostic.update(
+                {
+                    "cooldown_gate_armed_event": False,
+                    "cooldown_gate_active": False,
+                    "cooldown_wait_session": 0,
+                    "cooldown_max_wait_sessions": int(cooldown_sessions),
+                    "cooldown_gate_expired": False,
+                    "cooldown_entry_blocked": False,
+                }
+            )
+            return int(base_target), float(base_score)
+
+        if not gate_armed:
+            diagnostic.update(
+                {
+                    "cooldown_gate_armed_event": False,
+                    "cooldown_gate_active": False,
+                    "cooldown_wait_session": 0,
+                    "cooldown_max_wait_sessions": int(cooldown_sessions),
+                    "cooldown_gate_expired": False,
+                    "cooldown_entry_blocked": False,
+                }
+            )
+            return int(base_target), float(base_score)
+
+        gate_wait_sessions += 1
+        wait_session = int(gate_wait_sessions)
+        expired = bool(wait_session >= int(cooldown_sessions))
+        blocked = bool(int(base_target) > 0)
+
+        diagnostic.update(
+            {
+                "cooldown_schema_version": 1,
+                "cooldown_research_version": RESEARCH_VERSION,
+                "cooldown_gate_armed_event": False,
+                "cooldown_gate_active": True,
+                "cooldown_wait_session": wait_session,
+                "cooldown_max_wait_sessions": int(cooldown_sessions),
+                "cooldown_gate_expired": expired,
+                "cooldown_entry_blocked": blocked,
+            }
+        )
+
+        if blocked:
+            diagnostic["cooldown_base_reason"] = diagnostic.get(
+                "decision_reason"
+            )
+            diagnostic.update(
+                {
+                    "decision_reason": "TOP_TURN_FIXED_COOLDOWN_WAIT",
+                    "final_action_asset": "CASH",
+                    "final_action_score": 0.0,
+                    "decision_is_rotation": False,
+                    "decision_is_entry": False,
+                    "decision_is_exit_to_cash": False,
+                }
+            )
+
+        if expired:
+            gate_armed = False
+            gate_wait_sessions = 0
+
+        if blocked:
+            return 0, 0.0
+        return int(base_target), float(base_score)
+
+    return policy
+
+
 def _envolver_politica_top_turn(
     base_policy: Callable[[pd.Timestamp, int, int], tuple[int, float]],
     *,
@@ -2681,11 +2812,16 @@ def executar_bottom_turn_lightgbm(
     include_top_turn_exit: bool = False,
     post_top_turn_only: bool = False,
     max_wait_sessions: int | None = None,
+    include_fixed_cooldown_ablation: bool = False,
     progress_callback: Callable[[float, str, int], None] | None = None,
 ) -> Any:
     """Executa Bottom-Turn puro ou ciclo combinado Top-Turn + Bottom-Turn."""
     if int(config.rotation_model_repetitions) != 1:
         raise ValueError("Bottom-Turn research requires one repetition.")
+    if include_fixed_cooldown_ablation and not include_top_turn_exit:
+        raise ValueError(
+            "Fixed cooldown ablation requires include_top_turn_exit=True."
+        )
 
     (
         frames,
@@ -2701,6 +2837,8 @@ def executar_bottom_turn_lightgbm(
 
     policies: dict[int, Callable] = {}
     diagnostics: dict[pd.Timestamp, dict[str, Any]] = {}
+    cooldown_policies: dict[int, Callable] = {}
+    cooldown_diagnostics: dict[pd.Timestamp, dict[str, Any]] = {}
     bottom_calibration_rows: list[dict[str, Any]] = []
     bottom_fit_rows: list[dict[str, Any]] = []
     top_calibration_rows: list[dict[str, Any]] = []
@@ -2888,6 +3026,37 @@ def executar_bottom_turn_lightgbm(
             activate_only_after_top_turn=bool(post_top_turn_only),
             max_wait_sessions=max_wait_sessions,
         )
+
+        if include_fixed_cooldown_ablation:
+            if top_calibration is None:
+                raise RuntimeError("Top-Turn calibration missing for cooldown.")
+            cooldown_base_policy = _politica_utilidade(
+                final_utility_models,
+                frames,
+                symbols,
+                config,
+                effective_margin,
+                decision_diagnostics=cooldown_diagnostics,
+                fold_id=fold_id,
+                calibrated_switch_margin=float(best_candidate),
+                utility_cache=utility_cache,
+            )
+            cooldown_top_policy = _envolver_politica_top_turn(
+                cooldown_base_policy,
+                probabilities=top_probability_cache,
+                frames=frames,
+                symbols=symbols,
+                probability_threshold=float(top_calibration.threshold),
+                config=config,
+                decision_diagnostics=cooldown_diagnostics,
+            )
+            cooldown_policies[fold_id] = (
+                _envolver_politica_cooldown_pos_top_turn(
+                    cooldown_top_policy,
+                    decision_diagnostics=cooldown_diagnostics,
+                    cooldown_sessions=int(FIXED_COOLDOWN_SESSIONS),
+                )
+            )
         margin_rows.append(
             {
                 "fold_id": fold_id,
@@ -3030,16 +3199,94 @@ def executar_bottom_turn_lightgbm(
     for row in result.metrics["walk_forward_folds"]:
         row.update(margin_by_fold.get(int(row["fold_id"]), {}))
 
+    cooldown_result = None
+    if include_fixed_cooldown_ablation:
+        cooldown_result = _simular_exato(
+            "top_turn_fixed_cooldown_5",
+            _politica_agendada(cooldown_policies, decision_to_fold),
+            frames,
+            symbols,
+            all_decision_dates,
+            config,
+            fee_calculator,
+            slippage,
+            decision_metadata=decision_metadata,
+            policy_decision_diagnostics=cooldown_diagnostics,
+            model_label="Top-Turn + Fixed Cooldown 5",
+            method_line=(
+                "- Ablation baseline: after each real Top-Turn exit, remain "
+                "in CASH for exactly five decision sessions. No Bottom-Turn "
+                "probability, threshold or confirmation is consulted."
+            ),
+        )
+        cooldown_result.backend = "top_turn_fixed_cooldown_5"
+        cooldown_blocks = cooldown_result.predictions.get(
+            "cooldown_entry_blocked",
+            pd.Series(
+                False,
+                index=cooldown_result.predictions.index,
+                dtype=bool,
+            ),
+        ).fillna(False).astype(bool)
+        cooldown_arms = cooldown_result.predictions.get(
+            "cooldown_gate_armed_event",
+            pd.Series(
+                False,
+                index=cooldown_result.predictions.index,
+                dtype=bool,
+            ),
+        ).fillna(False).astype(bool)
+        cooldown_expirations = cooldown_result.predictions.get(
+            "cooldown_gate_expired",
+            pd.Series(
+                False,
+                index=cooldown_result.predictions.index,
+                dtype=bool,
+            ),
+        ).fillna(False).astype(bool)
+        cooldown_result.metrics.update(
+            {
+                "backend": "top_turn_fixed_cooldown_5",
+                "model_family": "top_turn_fixed_cooldown_ablation",
+                "strategy_label": "Top-Turn + Fixed Cooldown 5",
+                "cooldown_research_version": RESEARCH_VERSION,
+                "cooldown_sessions": int(FIXED_COOLDOWN_SESSIONS),
+                "cooldown_uses_bottom_turn_ml": False,
+                "cooldown_gate_armed_events": int(cooldown_arms.sum()),
+                "cooldown_entry_blocks": int(cooldown_blocks.sum()),
+                "cooldown_gate_expirations": int(
+                    cooldown_expirations.sum()
+                ),
+                "walk_forward_fold_count": len(folds),
+                "walk_forward_folds": _desempenho_folds(
+                    cooldown_result.predictions,
+                    folds,
+                    float(config.initial_capital),
+                ),
+                "calendar_source_asset": calendar_source_asset,
+                "requested_compute_device": "cpu",
+                "effective_compute_device": "cpu",
+            }
+        )
+        for row in cooldown_result.metrics["walk_forward_folds"]:
+            row.update(margin_by_fold.get(int(row["fold_id"]), {}))
+
     if progress_callback is not None:
         progress_callback(
             100.0,
             (
-                "Top+Bottom completed"
-                if include_top_turn_exit
-                else "Bottom-Turn completed"
+                "Top+Bottom + cooldown ablation completed"
+                if include_fixed_cooldown_ablation
+                else (
+                    "Top+Bottom completed"
+                    if include_top_turn_exit
+                    else "Bottom-Turn completed"
+                )
             ),
             total_folds,
         )
+    if include_fixed_cooldown_ablation:
+        return result, cooldown_result
     return result
 
 
