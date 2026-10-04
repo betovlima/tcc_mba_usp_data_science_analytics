@@ -981,11 +981,11 @@ def test_trigger_peak_metrics_match_same_execution_timestamp() -> None:
 def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
     output = tmp_path / "directional_change"
     output.mkdir()
-    (output / "comparison_cycle_ablation.json").write_text(
-        '{"research_version":"test","execution_schema":"top-bottom-cooldown-ablation-v1"}',
+    (output / "comparison_universe_sensitivity.json").write_text(
+        '{"research_version":"test","execution_schema":"universe-sensitivity-54-55-56-v1"}',
         encoding="utf-8",
     )
-    (output / "top_bottom_v2_trades.csv").write_text(
+    (output / "u55_clmt_top_turn_trades.csv").write_text(
         "a,b\n1,2\n",
         encoding="utf-8",
     )
@@ -996,8 +996,8 @@ def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
     with zipfile.ZipFile(archive) as zipped:
         names = sorted(zipped.namelist())
     assert names == [
-        "comparison_cycle_ablation.json",
-        "top_bottom_v2_trades.csv",
+        "comparison_universe_sensitivity.json",
+        "u55_clmt_top_turn_trades.csv",
     ]
 
 
@@ -1016,5 +1016,5 @@ def test_analysis_package_refuses_stale_v1_schema(tmp_path: Path) -> None:
     else:
         raise AssertionError("stale v1 package should have been refused")
 
-    assert "comparison_cycle_ablation.json" in message
+    assert "comparison_universe_sensitivity.json" in message
     assert "copia antiga" in message
