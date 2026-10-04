@@ -793,3 +793,50 @@ oportunidade das altas perdidas nem a perda de gatilhos Top-Turn subsequentes.
    previsao Bottom-Turn.
 6. Nao ajustar thresholds/features do Bottom-Turn olhando este resultado antes
    dessa ablacao.
+
+
+## Ablacao Top-Turn + Cooldown5 — protocolo congelado 1.9.0-dev.1
+
+Objetivo: separar o efeito economico de simplesmente esperar cinco sessoes
+apos uma saida Top-Turn do valor incremental do modelo Bottom-Turn.
+
+A campanha usa a mesma branch, os mesmos arquivos e o mesmo snapshot congelado.
+Nao ha ajuste de thresholds, features, target, calibracao ou horizonte a partir
+do resultado Bottom-Turn v2.
+
+Cenarios executados:
+
+1. Control;
+2. Top-Turn;
+3. Top-Turn + Cooldown5, sem Bottom-Turn/ML;
+4. Top-Turn + Bottom-Turn v2.
+
+Regras do baseline Cooldown5:
+
+- somente uma saida Top-Turn real arma o cooldown;
+- as cinco sessoes seguintes permanecem em CASH;
+- nenhuma probabilidade Bottom-Turn e consultada;
+- na sexta sessao a politica Top-Turn volta a operar normalmente;
+- entrada inicial nao e bloqueada;
+- rotacoes ativo-para-ativo fora dessa janela nao sao alteradas;
+- o valor 5 nao foi otimizado: corresponde ao horizonte predeclarado do
+  experimento Bottom-Turn.
+
+Implementacao: Cooldown5 reutiliza no mesmo treinamento/replay os mesmos
+modelos de utilidade, modelos Top-Turn, caches e thresholds usados no fluxo
+Top+Bottom v2. Assim, a diferenca Cooldown5 vs Bottom-Turn v2 isola a regra de
+reentrada, sem introduzir uma nova rodada de treinamento.
+
+Interpretacao predeclarada:
+
+- se Bottom-Turn v2 for aproximadamente igual ao Cooldown5, nao ha evidencia
+  de valor incremental relevante do ML de fundo;
+- se Bottom-Turn v2 superar Cooldown5 de forma material e consistente por
+  folds, ha evidencia de valor incremental do sinal Bottom-Turn;
+- se ambos perderem para Top-Turn, o custo de esperar domina o beneficio de
+  tentar confirmar o fundo;
+- nenhum threshold sera retunado olhando esta mesma janela OOS antes dessa
+  ablacao ser interpretada.
+
+Artefato principal esperado:
+`comparison_cycle_ablation.json`.
