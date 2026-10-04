@@ -30,6 +30,7 @@ from engine.configuracao import CONFIG
 from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 from engine.rotacao import preparar_painel_rotacao
 from pesquisas.directional_change_lightgbm import (
+    EXPECTED_EXECUTION_SCHEMA,
     RESEARCH_VERSION,
     calcular_bottom_entry,
     calcular_peak_exit,
@@ -90,7 +91,19 @@ def _salvar_e_publicar_grafico(fig, destino: Path) -> None:
 
 
 def _month_key(index: pd.Index) -> pd.PeriodIndex:
-    return pd.to_datetime(index, utc=True).to_period("M")
+    # Primeiro normaliza em UTC; depois remove o timezone deliberadamente,
+    # pois Period[M] representa apenas ano/mes e nao carrega fuso horario.
+    normalized = pd.to_datetime(index, utc=True).tz_localize(None)
+    return normalized.to_period("M")
+
+
+def _month_period(value) -> pd.Period:
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.tz_localize("UTC")
+    else:
+        timestamp = timestamp.tz_convert("UTC")
+    return timestamp.tz_localize(None).to_period("M")
 
 
 def _story_strategy_monthly(predictions: pd.DataFrame) -> pd.DataFrame:
@@ -265,7 +278,7 @@ def _trigger_counts_monthly(
             )
             if not asset or asset in {"nan", "CASH"}:
                 continue
-            period = pd.Timestamp(row["timestamp"]).to_period("M")
+            period = _month_period(row["timestamp"])
             records.append(
                 {
                     "asset": asset,
@@ -338,12 +351,12 @@ def _gerar_graficos_comparacao(
             gerados.append(destino)
 
     asset_monthly = _asset_monthly_returns(frames_alinhados)
-    oos_start = pd.Timestamp(
+    oos_start = _month_period(
         control_result.predictions.index.min()
-    ).to_period("M")
-    oos_end = pd.Timestamp(
+    )
+    oos_end = _month_period(
         control_result.predictions.index.max()
-    ).to_period("M")
+    )
     asset_monthly = asset_monthly.loc[
         (asset_monthly["period"] >= oos_start)
         & (asset_monthly["period"] <= oos_end)
@@ -455,6 +468,15 @@ def _gerar_graficos_comparacao(
             gerados.append(destino)
 
     return gerados
+
+
+if EXECUTION_SCHEMA != EXPECTED_EXECUTION_SCHEMA:
+    raise RuntimeError(
+        "Script e modulo de pesquisa incompatíveis antes do replay: "
+        f"script={EXECUTION_SCHEMA!r} "
+        f"modulo={EXPECTED_EXECUTION_SCHEMA!r}. "
+        "Atualize a branch e reinicie o kernel do Spyder."
+    )
 
 
 print("=" * 78, flush=True)
