@@ -660,3 +660,21 @@ ZIP da campanha v2 se nao existir `comparison_cycle_v2.json` ou se o
 
 Essa e uma correcao de rastreabilidade/empacotamento. Nao altera modelos,
 features, thresholds, folds, sinais ou resultados OOS.
+
+
+### Guard de schema antes do replay e Period mensal sem warning — v1.8.0-dev.4
+
+Uma execucao longa chegou ao final com o modulo em campanha v2, mas o runner
+Spyder ainda estava em fluxo incompatível; o fail-fast do empacotamento
+impediu a criacao de um ZIP incorreto apenas no fim.
+
+A partir de v1.8.0-dev.4 o runner importa `EXPECTED_EXECUTION_SCHEMA` do
+modulo e compara com seu `EXECUTION_SCHEMA` antes da validacao do snapshot e
+antes de qualquer treinamento/replay. Se houver mistura de arquivos de versoes
+diferentes, a execucao para imediatamente.
+
+Tambem foram removidos os warnings de Pandas ao converter timestamps UTC em
+`Period[M]`: os timestamps sao primeiro normalizados para UTC e depois o
+timezone e removido deliberadamente, pois um periodo mensal nao representa
+fuso horario. Isso afeta apenas a geracao dos calendarios mensais, nao os dados,
+folds, sinais ou resultados OOS.
