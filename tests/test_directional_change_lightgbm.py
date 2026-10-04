@@ -981,11 +981,11 @@ def test_trigger_peak_metrics_match_same_execution_timestamp() -> None:
 def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
     output = tmp_path / "directional_change"
     output.mkdir()
-    (output / "rotation_contribution_signature_loo.json").write_text(
-        '{"research_version":"test","execution_schema":"rotation-contribution-signature-loo-v1"}',
+    (output / "object_universe_76.json").write_text(
+        '{"research_version":"test","execution_schema":"object-universe-expansion-76-v1"}',
         encoding="utf-8",
     )
-    (output / "rotation_contribution_signature_loo.csv").write_text(
+    (output / "asset_objects_76.csv").write_text(
         "a,b\n1,2\n",
         encoding="utf-8",
     )
@@ -995,10 +995,12 @@ def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
     assert archive == output / "pacote_analise.zip"
     with zipfile.ZipFile(archive) as zipped:
         names = sorted(zipped.namelist())
-    assert names == [
-        "rotation_contribution_signature_loo.json",
-        "rotation_contribution_signature_loo.csv",
-    ]
+    assert names == sorted(
+        [
+            "object_universe_76.json",
+            "asset_objects_76.csv",
+        ]
+    )
 
 
 def test_analysis_package_refuses_stale_v1_schema(tmp_path: Path) -> None:
@@ -1016,5 +1018,5 @@ def test_analysis_package_refuses_stale_v1_schema(tmp_path: Path) -> None:
     else:
         raise AssertionError("stale v1 package should have been refused")
 
-    assert "rotation_contribution_signature_loo.json" in message
+    assert "object_universe_76.json" in message
     assert "copia antiga" in message

@@ -61,6 +61,14 @@ artifacts/
 !dados/pesquisa/raw_bars/*.csv
 !dados/pesquisa/corporate_actions/*.csv
 
+# Extensao congelada da campanha U76: 20 ativos adicionais.
+!dados/pesquisa_expansao_76/
+!dados/pesquisa_expansao_76/raw_bars/
+!dados/pesquisa_expansao_76/corporate_actions/
+!dados/pesquisa_expansao_76/manifest.json
+!dados/pesquisa_expansao_76/raw_bars/*.csv
+!dados/pesquisa_expansao_76/corporate_actions/*.csv
+
 # Sistema operacional
 .DS_Store
 Thumbs.db

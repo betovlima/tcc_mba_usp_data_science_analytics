@@ -1190,3 +1190,107 @@ Artefatos esperados:
 - rotation_contribution_margin_surface.csv;
 - pacote_analise.zip.
 
+## Mudanca de direcao: expansao aleatoria U56 -> U76 — 1.13.0-dev.1
+
+A campanha 1.12.0-dev.1 de assinatura leave-one-out calibration-only foi
+preparada, mas foi substituida antes de uma execucao cientifica pelo desenho
+abaixo. Ela nao deve ser interpretada como resultado.
+
+### Pergunta da nova pesquisa
+
+Em vez de procurar imediatamente uma assinatura derivada de CLMT, a nova
+campanha expande o universo diagnostico de 56 para 76 tickers com 20 ativos
+adicionais escolhidos aleatoriamente de forma reprodutivel. Cada ativo e
+tratado como um objeto com propriedades de mercado, modelo, ranking,
+calibracao, selecao e contribuicao marginal ao lucro.
+
+Versao: 1.13.0-dev.1.
+Schema: object-universe-expansion-76-v1.
+Branch unica: research/reversal-bocpd-comparison.
+
+### Amostragem dos 20 ativos
+
+Seed congelado: 20261004.
+
+Catalogo de origem: Alpaca em 2026-10-04. A amostragem parte de ativos US
+equity ativos, negociaveis e marginaveis das bolsas NYSE, NASDAQ, AMEX, ARCA e
+BATS, com ticker simples e fora dos 56 tickers originais. Depois da ordem
+pseudoaleatoria deterministica, o candidato precisa possuir serie diaria SIP
+RAW praticamente continua desde janeiro/2016 ate setembro/2026, pelo menos
+2.600 barras e nenhuma lacuna superior a 10 dias.
+
+Os 20 objetos congelados sao:
+
+FAF, IJR, GAB, ELS, AEIS, VWOB, BDJ, DGX, ESP, BWZ, PSF, DBA, HEEM, NPKI,
+MHK, BLKB, ARCO, AGM, NWFL e SKOR.
+
+A verificacao previa mostrou serie continua para os 20. Candidatos como EGLE
+e RWL foram rejeitados automaticamente pelo criterio de continuidade historica.
+
+### Dados
+
+O snapshot original dados/pesquisa permanece intocado. Os 20 novos ativos sao
+baixados uma unica vez para dados/pesquisa_expansao_76, com SIP, 1Day, RAW,
+mesma data inicial e mesmo corte temporal do snapshot oficial. Corporate
+Actions tambem sao congeladas e o manifesto da extensao registra como pai o
+SHA-256 do snapshot original.
+
+O diretorio da extensao passa a ser permitido pelo .gitignore para que, depois
+da primeira aquisicao local, seus CSVs e manifesto possam ser versionados.
+
+### Objeto ativo
+
+Cada um dos 76 ativos recebe uma linha em asset_objects_76.csv com propriedades
+como:
+
+- coorte original_56 ou random_20;
+- comprimento e cobertura historica;
+- retorno bruto do preco, CAGR, volatilidade e drawdown;
+- mediana de dollar volume;
+- correlacao e beta em relacao ao SPY;
+- media/desvio dos scores LightGBM;
+- frequencia top-1, top-3 e percentil medio de ranking;
+- participacao nas sessoes selecionadas e numero de linhas de trade;
+- numero de folds em que sua retirada muda a margem calibrada;
+- contribuicao media ao objetivo de calibracao;
+- capital U76 sem o objeto;
+- contribuicao marginal absoluta e percentual ao capital final;
+- contribuicoes marginais de Sharpe e MaxDD.
+
+### Desenho de computacao
+
+Os modelos LightGBM dos 76 ativos sao treinados apenas uma vez por fold, tanto
+na fase de calibracao como no fit final. Isso e valido porque os modelos sao
+independentes por ativo.
+
+Depois sao executados:
+1. U56 original, com os mesmos folds congelados do U76;
+2. U76 completo;
+3. 76 replays leave-one-out, removendo um objeto por vez.
+
+Cada leave-one-out recalibra o switch margin usando somente o subconjunto de
+75 ativos, mas nao retreina os modelos dos outros 75. Assim isolamos a
+contribuicao do objeto para a competicao e para a politica de rotacao sem pagar
+o custo de 76 treinamentos completos.
+
+A contribuicao marginal e local e path-dependent. Ela nao e aditiva: os 76
+valores leave-one-out nao devem ser somados como se fossem efeitos
+independentes.
+
+### Saidas esperadas
+
+- object_universe_76.json;
+- asset_objects_76.csv;
+- random_20_objects.csv;
+- asset_leave_one_out_76.csv;
+- object_property_profit_correlations.csv;
+- u76_full_predictions.csv;
+- u76_full_trades.csv;
+- pacote_analise.zip.
+
+O primeiro resultado a interpretar sera o efeito agregado U56 -> U76. Depois
+sera analisado quais propriedades distinguem objetos que aumentam o capital de
+objetos que o reduzem. Correlacoes propriedade-lucro nesta campanha sao
+exploratorias e nao podem, sozinhas, ser usadas como regra final de selecao sem
+uma validacao posterior.
+
