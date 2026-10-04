@@ -31,7 +31,7 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.8.0-dev.3"
+RESEARCH_VERSION = "1.8.0-dev.4"
 EXPECTED_EXECUTION_SCHEMA = "top-bottom-cycle-v2"
 EXPECTED_COMPARISON_FILE = "comparison_cycle_v2.json"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
