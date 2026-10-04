@@ -1,9 +1,9 @@
-"""Pesquisa Directional Change + LightGBM no TCC.
+"""Sensibilidade de universo do Top-Turn no TCC.
 
-Execute no Spyder por celulas (# %%). Esta pesquisa:
+Execute no Spyder por celulas (# %%). Esta campanha:
 - usa somente o snapshot congelado versionado em dados/pesquisa;
-- nao altera o Control oficial;
-- compara Control vs Top-Turn vs BOCPD vs HSMM vs Hazard/Survival;
+- mantem modelos, folds e parametros congelados;
+- compara Control e Top-Turn nos universos U54, U55 e U56;
 - gera ZIP compacto para analise;
 - emite aviso sonoro quando todo o processamento termina.
 """
@@ -32,11 +32,8 @@ from engine.rotacao import preparar_painel_rotacao
 from pesquisas.directional_change_lightgbm import (
     EXPECTED_EXECUTION_SCHEMA,
     RESEARCH_VERSION,
-    calcular_bottom_entry,
     calcular_peak_exit,
-    comparar_control_directional_change,
     criar_pacote_analise,
-    executar_bottom_turn_lightgbm,
     executar_directional_change_lightgbm,
     sinal_sonoro_conclusao,
 )
@@ -48,7 +45,6 @@ from reproducao.experimento import (
     summarize_metrics,
 )
 from reproducao.preparacao import (
-    KNOWN_STRUCTURAL_EXCLUSIONS,
     prepare_model_frames,
 )
 
