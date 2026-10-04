@@ -17,6 +17,7 @@ from pesquisas.directional_change_lightgbm import (
     _directional_change_state,
     _envolver_politica_bocpd,
     _envolver_politica_bottom_turn,
+    _envolver_politica_cooldown_pos_top_turn,
     _envolver_politica_hazard,
     _envolver_politica_hsmm,
     _filter_hsmm_asset,
@@ -164,6 +165,74 @@ def test_bottom_turn_gates_cash_entry_until_two_confirmations() -> None:
     assert second_target == 1
     assert diagnostics[dates[0]]["bottom_turn_entry_blocked"] is True
     assert diagnostics[dates[1]]["bottom_turn_entry_triggered"] is True
+
+
+def test_fixed_cooldown_blocks_exactly_five_sessions_after_top_exit() -> None:
+    dates = pd.date_range(
+        "2026-01-05",
+        periods=7,
+        freq="B",
+        tz="UTC",
+    )
+    diagnostics: dict[pd.Timestamp, dict] = {}
+
+    def base_policy(timestamp, current_position, _holding_days):
+        key = pd.Timestamp(timestamp)
+        if current_position > 0:
+            diagnostics[key] = {
+                "decision_reason": "DIRECTIONAL_CHANGE_TOP_TURN_EXIT",
+                "directional_change_exit_triggered": True,
+                "final_action_asset": "CASH",
+            }
+            return 0, 0.0
+        diagnostics[key] = {
+            "decision_reason": "ENTER_BEST_ASSET",
+            "directional_change_exit_triggered": False,
+            "final_action_asset": "AAA",
+        }
+        return 1, 0.40
+
+    policy = _envolver_politica_cooldown_pos_top_turn(
+        base_policy,
+        decision_diagnostics=diagnostics,
+        cooldown_sessions=5,
+    )
+
+    assert policy(dates[0], 1, 10)[0] == 0
+    blocked = [policy(date, 0, 0)[0] for date in dates[1:6]]
+    released = policy(dates[6], 0, 0)[0]
+
+    assert blocked == [0, 0, 0, 0, 0]
+    assert diagnostics[dates[5]]["cooldown_gate_expired"] is True
+    assert diagnostics[dates[5]]["cooldown_entry_blocked"] is True
+    assert released == 1
+    assert diagnostics[dates[6]]["cooldown_gate_active"] is False
+
+
+def test_fixed_cooldown_does_not_block_initial_cash_entry() -> None:
+    date = pd.Timestamp("2026-01-05T00:00:00Z")
+    diagnostics: dict[pd.Timestamp, dict] = {}
+
+    def base_policy(timestamp, _current_position, _holding_days):
+        diagnostics[pd.Timestamp(timestamp)] = {
+            "decision_reason": "ENTER_BEST_ASSET",
+            "directional_change_exit_triggered": False,
+            "final_action_asset": "AAA",
+        }
+        return 1, 0.40
+
+    policy = _envolver_politica_cooldown_pos_top_turn(
+        base_policy,
+        decision_diagnostics=diagnostics,
+        cooldown_sessions=5,
+    )
+
+    target, score = policy(date, 0, 0)
+
+    assert target == 1
+    assert score == 0.40
+    assert diagnostics[date]["cooldown_gate_active"] is False
+    assert diagnostics[date]["cooldown_entry_blocked"] is False
 
 
 def test_bottom_turn_v2_does_not_block_initial_cash_entry() -> None:
@@ -912,8 +981,8 @@ def test_trigger_peak_metrics_match_same_execution_timestamp() -> None:
 def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
     output = tmp_path / "directional_change"
     output.mkdir()
-    (output / "comparison_cycle_v2.json").write_text(
-        '{"research_version":"test","execution_schema":"top-bottom-cycle-v2"}',
+    (output / "comparison_cycle_ablation.json").write_text(
+        '{"research_version":"test","execution_schema":"top-bottom-cooldown-ablation-v1"}',
         encoding="utf-8",
     )
     (output / "top_bottom_v2_trades.csv").write_text(
@@ -927,7 +996,7 @@ def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
     with zipfile.ZipFile(archive) as zipped:
         names = sorted(zipped.namelist())
     assert names == [
-        "comparison_cycle_v2.json",
+        "comparison_cycle_ablation.json",
         "top_bottom_v2_trades.csv",
     ]
 
@@ -947,5 +1016,5 @@ def test_analysis_package_refuses_stale_v1_schema(tmp_path: Path) -> None:
     else:
         raise AssertionError("stale v1 package should have been refused")
 
-    assert "comparison_cycle_v2.json" in message
+    assert "comparison_cycle_ablation.json" in message
     assert "copia antiga" in message
