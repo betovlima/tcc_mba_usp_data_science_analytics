@@ -982,7 +982,7 @@ def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
     output = tmp_path / "directional_change"
     output.mkdir()
     (output / "object_universe_76.json").write_text(
-        '{"research_version":"test","execution_schema":"object-universe-expansion-76-v1"}',
+        '{"research_version":"test","execution_schema":"object-universe-expansion-76-v2"}',
         encoding="utf-8",
     )
     (output / "asset_objects_76.csv").write_text(

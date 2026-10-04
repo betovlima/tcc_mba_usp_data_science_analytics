@@ -1326,3 +1326,21 @@ Correcao congelada:
 Assim, diferencas U56 -> U76 e U76 -> U76-sem-objeto ficam atribuiveis a
 disponibilidade/calibracao/rotacao dos objetos sob a mesma linha temporal e
 o mesmo benchmark.
+
+## Guard contra runner local obsoleto — 1.13.2-dev.1
+
+A segunda tentativa local mostrou engine/rotacao.py novo, com suporte a
+benchmark_override, mas pesquisar_directional_change_spyder.py ainda estava
+na chamada antiga de _simular_exato, sem benchmark_override. O schema da
+1.13.1 permaneceu v1 e por isso o guard anterior nao detectou essa mistura.
+
+Correcao:
+- versao 1.13.2-dev.1;
+- schema object-universe-expansion-76-v2;
+- runner possui SCRIPT_RESEARCH_VERSION literal e compara com RESEARCH_VERSION;
+- qualquer combinacao de runner antigo + modulo novo aborta antes do snapshot
+  e, principalmente, antes de treinar os 456 modelos.
+
+A pesquisa cientifica nao mudou em relacao a 1.13.1: calendario e benchmark
+continuam congelados no U56 original. Esta versao apenas torna impossivel
+repetir silenciosamente a mistura de arquivos locais observada no Spyder.

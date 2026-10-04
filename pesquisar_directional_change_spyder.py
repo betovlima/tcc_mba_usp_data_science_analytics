@@ -64,7 +64,8 @@ SNAPSHOT_EXTENSAO = SnapshotPaths.from_root(
     RAIZ_PROJETO / "dados" / "pesquisa_expansao_76"
 )
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "directional_change"
-EXECUTION_SCHEMA = "object-universe-expansion-76-v1"
+SCRIPT_RESEARCH_VERSION = "1.13.2-dev.1"
+EXECUTION_SCHEMA = "object-universe-expansion-76-v2"
 
 RANDOM_SELECTION_SEED = 20261004
 RANDOM_SELECTION_CATALOG_DATE = "2026-10-04"
@@ -113,12 +114,22 @@ if EXECUTION_SCHEMA != EXPECTED_EXECUTION_SCHEMA:
         "Atualize a branch e reinicie o kernel do Spyder."
     )
 
+if SCRIPT_RESEARCH_VERSION != RESEARCH_VERSION:
+    raise RuntimeError(
+        "Versao do runner e modulo de pesquisa incompatíveis antes do replay: "
+        f"runner={SCRIPT_RESEARCH_VERSION!r} "
+        f"modulo={RESEARCH_VERSION!r}. "
+        "Restaure pesquisar_directional_change_spyder.py da branch remota "
+        "e reinicie o kernel do Spyder."
+    )
+
 if len(RANDOM_ASSETS) != 20 or len(set(RANDOM_ASSETS)) != 20:
     raise RuntimeError("A expansao precisa conter exatamente 20 ativos unicos.")
 
 print("=" * 78, flush=True)
 print("TCC - Object Universe Expansion U56 -> U76", flush=True)
 print(f"versao_pesquisa={RESEARCH_VERSION}", flush=True)
+print(f"versao_runner={SCRIPT_RESEARCH_VERSION}", flush=True)
 print(f"execution_schema={EXECUTION_SCHEMA}", flush=True)
 print(f"script_path={Path(__file__).resolve()}", flush=True)
 print(f"random_seed={RANDOM_SELECTION_SEED}", flush=True)
