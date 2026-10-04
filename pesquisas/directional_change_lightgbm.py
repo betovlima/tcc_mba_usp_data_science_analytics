@@ -33,7 +33,7 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.13.0-dev.1"
+RESEARCH_VERSION = "1.13.1-dev.1"
 EXPECTED_EXECUTION_SCHEMA = "object-universe-expansion-76-v1"
 EXPECTED_COMPARISON_FILE = "object_universe_76.json"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)

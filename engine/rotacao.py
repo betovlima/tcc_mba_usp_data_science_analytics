@@ -229,6 +229,9 @@ def _selecionar_ativo_fonte_calendario(
 def preparar_painel_rotacao(
     bars_by_symbol: dict[str, pd.DataFrame],
     config: Any,
+    *,
+    calendar_override: pd.DatetimeIndex | None = None,
+    calendar_source_label: str | None = None,
 ) -> tuple[dict[str, pd.DataFrame], pd.DatetimeIndex, str]:
     frames = {
         symbol: construir_quadro_rotacao(frame, config)
@@ -240,8 +243,16 @@ def preparar_painel_rotacao(
             "Compound rotation needs at least two assets with valid data."
         )
 
-    calendar_symbol = _selecionar_ativo_fonte_calendario(frames)
-    calendar = pd.DatetimeIndex(frames[calendar_symbol].index).sort_values()
+    if calendar_override is None:
+        calendar_symbol = _selecionar_ativo_fonte_calendario(frames)
+        calendar = pd.DatetimeIndex(frames[calendar_symbol].index).sort_values()
+    else:
+        calendar = pd.DatetimeIndex(calendar_override).sort_values().unique()
+        if calendar.empty:
+            raise ValueError("The fixed market calendar is empty.")
+        calendar_symbol = str(
+            calendar_source_label or "FIXED_REFERENCE_CALENDAR"
+        )
     minimum_calendar_rows = max(
         700,
         int(getattr(config, "rotation_minimum_training_rows", 700)),
@@ -871,7 +882,7 @@ def _precalcular_diagnosticos_regime_mercado(
         }
     return output
 
-def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tuple[int, float]], frames: dict[str, pd.DataFrame], symbols: list[str], decision_dates: pd.DatetimeIndex, config: Any, fee_calculator: Callable, slippage: Callable, decision_metadata: dict[pd.Timestamp, dict[str, Any]] | None=None, policy_decision_diagnostics: dict[pd.Timestamp, dict[str, Any]] | None=None, trade_callback: Callable[[dict[str, Any]], None] | None=None, *, model_label: str='LightGBM Utility', method_line: str | None=None, simulation_progress_callback: Callable[[float, str], None] | None = None) -> RotationRunResult:
+def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tuple[int, float]], frames: dict[str, pd.DataFrame], symbols: list[str], decision_dates: pd.DatetimeIndex, config: Any, fee_calculator: Callable, slippage: Callable, decision_metadata: dict[pd.Timestamp, dict[str, Any]] | None=None, policy_decision_diagnostics: dict[pd.Timestamp, dict[str, Any]] | None=None, trade_callback: Callable[[dict[str, Any]], None] | None=None, *, model_label: str='LightGBM Utility', method_line: str | None=None, simulation_progress_callback: Callable[[float, str], None] | None = None, benchmark_override: pd.Series | None = None, benchmark_override_name: str | None = None) -> RotationRunResult:
     if len(decision_dates) < 2:
         raise ValueError('The final-test interval is too short.')
 
@@ -889,7 +900,37 @@ def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tupl
     execution_dates = decision_dates[1:]
     simulation_progress(0.01, "OOS benchmark")
     phase_started = time.perf_counter()
-    benchmark = _benchmark_pesos_iguais(frames, symbols, execution_dates, float(config.initial_capital), config, fee_calculator, slippage)
+    if benchmark_override is None:
+        benchmark = _benchmark_pesos_iguais(
+            frames,
+            symbols,
+            execution_dates,
+            float(config.initial_capital),
+            config,
+            fee_calculator,
+            slippage,
+        )
+        benchmark_name = (
+            "Equal-weight buy-and-hold across continuously available assets"
+        )
+    else:
+        benchmark = pd.Series(
+            benchmark_override,
+            dtype=float,
+        ).reindex(execution_dates)
+        if (
+            benchmark.isna().any()
+            or not np.isfinite(benchmark.to_numpy(dtype=float)).all()
+            or (benchmark <= 0.0).any()
+        ):
+            raise ValueError(
+                "Fixed benchmark override does not cover the complete "
+                "execution window with positive finite values."
+            )
+        benchmark_name = str(
+            benchmark_override_name
+            or "Fixed external buy-and-hold benchmark"
+        )
     simulation_timing["benchmark_seconds"] = time.perf_counter() - phase_started
 
     simulation_progress(0.08, "OOS market-regime diagnostics")
@@ -1217,9 +1258,7 @@ def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tupl
         "timeframe": "1Day",
         "decision_horizons": list(config.rotation_target_horizons),
         "overnight_positions_allowed": True,
-        "benchmark_name": (
-            "Equal-weight buy-and-hold across continuously available assets"
-        ),
+        "benchmark_name": benchmark_name,
         "walk_forward_enabled": True,
         "walk_forward_purge_days": int(config.rotation_purge_days),
         "walk_forward_calibration_days": int(
@@ -1281,7 +1320,7 @@ def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tupl
     metrics["simulation_profile"] = dict(simulation_timing)
     simulation_progress(1.0, f"OOS portfolio replay {total_sessions}/{total_sessions} completed")
 
-    summary = '\n'.join(['COMPOUND CAPITAL ROTATION — SWING', '', f"Model: {metrics['strategy_label']}", f"Assets: {', '.join(symbols)}", 'Decision data: daily candles', f"Utility horizons: {', '.join(str(item) for item in config.rotation_target_horizons)} trading sessions", 'Capital pool: one shared account, reinvested after every exit/rotation', 'Decision objective: maximize smoother net compounded wealth, not predict exact tops.', f'Risk penalties: downside={config.rotation_downside_penalty:.3f}, drawdown={config.rotation_drawdown_penalty:.3f}', f'Validation: expanding walk-forward, purge={config.rotation_purge_days} sessions, fold test={config.rotation_walk_forward_test_days} sessions', '', 'OUT-OF-SAMPLE WALK-FORWARD', f'Initial capital: ${initial:,.2f}', f'Ending capital: ${ending:,.2f}', f"Total return: {metrics['strategy_return']:.2%}", f"CAGR: {metrics['strategy_cagr']:.2%}", f"Compound log growth: {metrics['compound_log_growth']:.6f}", f"Maximum drawdown: {metrics['strategy_maximum_drawdown']:.2%}", f"Sharpe estimate: {metrics['strategy_sharpe']:.3f}", f'Capital rotations: {rotation_count}', f'Buys: {buys}', f'Sells including final liquidation: {sells}', f"Cycles/year: {metrics['cycles_per_year']:.2f}", f'Average holding days: {avg_holding:.2f}', f'Time in market: {exposure:.2%}', f'Transaction fees: ${total_fees:,.2f}', '', 'BENCHMARK', 'Equal-weight buy-and-hold across assets with complete prices for the execution window.', f'Benchmark ending capital: ${benchmark_ending:,.2f}', f"Benchmark return: {metrics['buy_hold_return']:.2%}", f"Benchmark CAGR: {metrics['buy_hold_cagr']:.2%}", '', 'METHOD', '- Signals use information available at the current daily close.', '- Position changes execute at the next daily open.', (method_line or f"- LightGBM Utility predicts a weighted multi-horizon risk-adjusted utility across {config.rotation_target_horizons}."), '- Every fold is trained only on information available before that fold.', f'- A {config.rotation_purge_days}-session purge prevents forward labels from touching the next validation/test segment.', '- FINAL_LIQUIDATION is bookkeeping only and is not a model decision.'])
+    summary = '\n'.join(['COMPOUND CAPITAL ROTATION — SWING', '', f"Model: {metrics['strategy_label']}", f"Assets: {', '.join(symbols)}", 'Decision data: daily candles', f"Utility horizons: {', '.join(str(item) for item in config.rotation_target_horizons)} trading sessions", 'Capital pool: one shared account, reinvested after every exit/rotation', 'Decision objective: maximize smoother net compounded wealth, not predict exact tops.', f'Risk penalties: downside={config.rotation_downside_penalty:.3f}, drawdown={config.rotation_drawdown_penalty:.3f}', f'Validation: expanding walk-forward, purge={config.rotation_purge_days} sessions, fold test={config.rotation_walk_forward_test_days} sessions', '', 'OUT-OF-SAMPLE WALK-FORWARD', f'Initial capital: ${initial:,.2f}', f'Ending capital: ${ending:,.2f}', f"Total return: {metrics['strategy_return']:.2%}", f"CAGR: {metrics['strategy_cagr']:.2%}", f"Compound log growth: {metrics['compound_log_growth']:.6f}", f"Maximum drawdown: {metrics['strategy_maximum_drawdown']:.2%}", f"Sharpe estimate: {metrics['strategy_sharpe']:.3f}", f'Capital rotations: {rotation_count}', f'Buys: {buys}', f'Sells including final liquidation: {sells}', f"Cycles/year: {metrics['cycles_per_year']:.2f}", f'Average holding days: {avg_holding:.2f}', f'Time in market: {exposure:.2%}', f'Transaction fees: ${total_fees:,.2f}', '', 'BENCHMARK', benchmark_name + '.', f'Benchmark ending capital: ${benchmark_ending:,.2f}', f"Benchmark return: {metrics['buy_hold_return']:.2%}", f"Benchmark CAGR: {metrics['buy_hold_cagr']:.2%}", '', 'METHOD', '- Signals use information available at the current daily close.', '- Position changes execute at the next daily open.', (method_line or f"- LightGBM Utility predicts a weighted multi-horizon risk-adjusted utility across {config.rotation_target_horizons}."), '- Every fold is trained only on information available before that fold.', f'- A {config.rotation_purge_days}-session purge prevents forward labels from touching the next validation/test segment.', '- FINAL_LIQUIDATION is bookkeeping only and is not a model decision.'])
     return RotationRunResult(backend=backend, predictions=predictions, trades=trades, summary=summary, metrics=metrics)
 
 def _construir_folds_walk_forward(common_dates: pd.DatetimeIndex, config: Any) -> list[dict[str, Any]]:

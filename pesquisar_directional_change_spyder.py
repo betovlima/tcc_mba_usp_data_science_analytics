@@ -32,11 +32,13 @@ from engine.modelo_lightgbm import (
     _selecionar_switch_margin_fold,
 )
 from engine.rotacao import (
+    _benchmark_pesos_iguais,
     _crescimento_politica_simples,
     _politica_agendada,
     _politica_utilidade,
     _precalcular_utilidades_modelo,
     _simular_exato,
+    preparar_painel_rotacao,
 )
 from pesquisas.directional_change_lightgbm import (
     EXPECTED_EXECUTION_SCHEMA,
@@ -242,6 +244,12 @@ frames_u76_raw = {
 if len(frames_u76_raw) != 76:
     raise RuntimeError(f"U76 deveria ter 76 ativos; obtidos {len(frames_u76_raw)}.")
 
+config_u56, _ = build_variant_configs(frames_u56_raw, CONFIG)
+_, reference_calendar, reference_calendar_source = preparar_painel_rotacao(
+    frames_u56_raw,
+    config_u56,
+)
+
 config_u76, _ = build_variant_configs(frames_u76_raw, CONFIG)
 (
     frames_u76,
@@ -255,6 +263,10 @@ config_u76, _ = build_variant_configs(frames_u76_raw, CONFIG)
 ) = _construir_contexto_execucao(
     frames_u76_raw,
     config_u76,
+    calendar_override=reference_calendar,
+    calendar_source_label=(
+        f"U56_FIXED:{reference_calendar_source}"
+    ),
 )
 symbols_u56 = sorted(frames_u56_raw)
 candidate_margins = tuple(
@@ -266,6 +278,27 @@ print(
     f"[universe] U56={len(symbols_u56)} U76={len(symbols_u76)} "
     f"calendar={calendar_source_asset} common_dates={len(common_dates)} "
     f"folds={len(folds)}",
+    flush=True,
+)
+
+benchmark_frames_u56 = {
+    symbol: frames_u76[symbol]
+    for symbol in symbols_u56
+}
+shared_benchmark = _benchmark_pesos_iguais(
+    benchmark_frames_u56,
+    symbols_u56,
+    all_decision_dates[1:],
+    float(config_u76.initial_capital),
+    config_u76,
+    calcular_taxas_referencia,
+    aplicar_deslizamento,
+)
+SHARED_BENCHMARK_NAME = (
+    "Fixed U56 equal-weight buy-and-hold on the original reference calendar"
+)
+print(
+    f"[benchmark] fixed=U56 ending={float(shared_benchmark.iloc[-1]):,.2f}",
     flush=True,
 )
 
@@ -554,8 +587,12 @@ def _run_subset(label, subset_symbols, *, keep_result=False):
         method_line=(
             "- Control LightGBM models are trained once per fold for U76. "
             "Object-level leave-one-out removes one asset from calibration "
-            "and OOS competition without retraining independent models."
+            "and OOS competition without retraining independent models. "
+            "All scenarios share the fixed original-U56 market calendar and "
+            "the same fixed U56 equal-weight benchmark."
         ),
+        benchmark_override=shared_benchmark,
+        benchmark_override_name=SHARED_BENCHMARK_NAME,
     )
     metrics = summarize_metrics(
         result,
@@ -992,6 +1029,10 @@ payload = {
         "loo_retrains_other_asset_models": False,
         "loo_recalibrates_rotation_policy": True,
         "loo_uses_same_u76_folds": True,
+        "calendar_is_fixed_to_original_u56": True,
+        "reference_calendar_source": reference_calendar_source,
+        "benchmark_is_fixed_across_all_replays": True,
+        "benchmark_name": SHARED_BENCHMARK_NAME,
         "marginal_contributions_are_not_additive": True,
         "structural_overrides_in_original_56": ["CLMT", "DOC"],
     },

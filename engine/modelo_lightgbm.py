@@ -123,6 +123,9 @@ _LIGHTGBM_DEVICE_PROBE_CACHE: dict[tuple[str, str], tuple[bool, str | None]] = {
 def _construir_contexto_execucao(
     bars_by_symbol: dict[str, pd.DataFrame],
     config: Any,
+    *,
+    calendar_override: pd.DatetimeIndex | None = None,
+    calendar_source_label: str | None = None,
 ) -> tuple[
     dict[str, pd.DataFrame],
     pd.DatetimeIndex,
@@ -138,6 +141,8 @@ def _construir_contexto_execucao(
     frames, common_dates, calendar_source_asset = preparar_painel_rotacao(
         bars_by_symbol,
         config,
+        calendar_override=calendar_override,
+        calendar_source_label=calendar_source_label,
     )
     symbols = sorted(frames)
     folds = _construir_folds_walk_forward(common_dates, config)

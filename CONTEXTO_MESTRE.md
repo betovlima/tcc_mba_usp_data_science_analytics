@@ -1294,3 +1294,35 @@ objetos que o reduzem. Correlacoes propriedade-lucro nesta campanha sao
 exploratorias e nao podem, sozinhas, ser usadas como regra final de selecao sem
 uma validacao posterior.
 
+
+## Correcao U76 benchmark/calendar — 1.13.1-dev.1
+
+A primeira execucao da campanha 1.13.0-dev.1 concluiu o treinamento dos 76
+modelos no fold 3, mas abortou antes do primeiro replay U56 com:
+
+ValueError: No asset has complete prices for the benchmark execution window.
+
+Causa: a campanha U76 permitia que o conjunto expandido escolhesse a fonte do
+calendario de mercado. Os frames U56 eram entao reindexados no calendario
+escolhido pelo U76. Pequenas diferencas de sessoes podiam deixar todos os 56
+objetos com ao menos uma lacuna na janela, enquanto o benchmark equal-weight
+exige pelo menos um ativo com preco completo em toda a janela.
+
+Alem do erro tecnico, permitir que os 20 objetos aleatorios alterassem o
+calendario seria um confundidor cientifico. A expansao deve alterar apenas a
+competicao entre objetos e a calibracao da rotacao, nao a definicao das
+sessoes do experimento.
+
+Correcao congelada:
+- versao 1.13.1-dev.1;
+- schema permanece object-universe-expansion-76-v1;
+- calendario escolhido apenas pelo U56 original e fixo em U56, U76 e LOO;
+- benchmark calculado uma unica vez sobre o U56 original e reutilizado em
+  todos os 78 replays;
+- _simular_exato ganhou benchmark_override opcional, sem mudar o padrao;
+- preparar_painel_rotacao e _construir_contexto_execucao ganharam override
+  opcional de calendario, sem alterar campanhas anteriores por padrao.
+
+Assim, diferencas U56 -> U76 e U76 -> U76-sem-objeto ficam atribuiveis a
+disponibilidade/calibracao/rotacao dos objetos sob a mesma linha temporal e
+o mesmo benchmark.
