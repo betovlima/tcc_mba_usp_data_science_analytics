@@ -840,3 +840,102 @@ Interpretacao predeclarada:
 
 Artefato principal esperado:
 `comparison_cycle_ablation.json`.
+
+
+## Resultado da ablacao Top-Turn + Cooldown5 — OOS 1.9.0-dev.1
+
+Pacote validado com:
+
+- `research_version=1.9.0-dev.1`;
+- `execution_schema=top-bottom-cooldown-ablation-v1`;
+- snapshot SHA-256 `4e2fd225cc0ea05da56dad8f0628ca989ad332812a5fa3a7dc796b2b8a6d5128`;
+- 1.547 sessoes OOS;
+- exclusoes estruturais DOC e CLMT mantidas.
+
+### Resultado agregado
+
+| Cenario | Capital final | vs Control | vs Top-Turn | CAGR | Sharpe | MaxDD | Worst fold |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Control | US$ 5.092.399,32 | - | - | 175,31% | 1,9287 | -36,65% | +124,00% |
+| Top-Turn | US$ 6.306.816,02 | +23,85% | - | 185,04% | 1,9844 | -36,65% | +124,72% |
+| Top-Turn + Cooldown5 | US$ 5.617.130,69 | +10,30% | -10,94% | 179,73% | 1,9650 | -36,65% | +149,06% |
+| Top+Bottom v2 | US$ 5.244.421,51 | +2,99% | -16,85% | 176,62% | 1,9453 | -36,65% | +132,55% |
+
+O Cooldown5, mesmo sem ML de fundo, superou o Top+Bottom v2 em
+US$ 372.709,18 (+7,11% em capital do Cooldown sobre o v2, ou -6,64% do v2
+em relacao ao Cooldown). Ainda assim, ambos perderam para o Top-Turn puro.
+
+### Resultado decisivo da ablacao
+
+A diferenca Bottom-Turn v2 vs Cooldown5 nasceu praticamente toda de um unico
+evento no fold 1.
+
+- Cooldown5: reentrada LKFT em 2020-10-21 a 123,35.
+- Bottom-Turn v2: confirmacao ML antecipou a reentrada para 2020-10-20 a
+  132,11.
+- O Bottom-Turn comprou aproximadamente 7,10% mais caro do que o Cooldown5.
+- Depois de 2020-10-21, as duas estrategias selecionaram o mesmo ativo em
+  todas as sessoes restantes da amostra; a diferenca de patrimonio permaneceu
+  praticamente multiplicativa.
+- Razao final Top+Bottom v2 / Cooldown5 = 0,933648, isto e, -6,635%.
+
+Portanto, a unica intervencao efetiva do ML de fundo nesta campanha foi
+economicamente negativa contra o baseline sem ML.
+
+### Comparacao por fold
+
+Cooldown5 vs Top-Turn:
+
+- fold 1: +10,83%;
+- fold 2: -18,01%;
+- fold 3: -1,98%.
+
+Bottom-Turn v2 vs Cooldown5:
+
+- fold 1: -6,63%;
+- fold 2: aproximadamente -0,003%;
+- fold 3: aproximadamente -0,001%.
+
+Bottom-Turn v2 vs Top-Turn:
+
+- fold 1: +3,48%;
+- fold 2: -18,02%;
+- fold 3: -1,98%.
+
+Isso confirma duas conclusoes diferentes:
+
+1. esperar cinco sessoes pode ajudar em episodios especificos, sobretudo no
+   fold 1, mas nao generalizou para os folds seguintes;
+2. o Bottom-Turn ML nao mostrou valor incremental sobre essa espera fixa.
+
+### Cobertura do Bottom-Turn v2
+
+No replay combinado foram observados:
+
+- 8 saidas Top-Turn;
+- 39 bloqueios de entrada;
+- 7 expiracoes;
+- 1 unica entrada confirmada pelo Bottom-Turn;
+- apenas 4 observacoes de probabilidade Bottom-Turn disponiveis dentro das
+  janelas de decisao.
+
+O Cooldown5 teve 8 janelas armadas, 40 bloqueios e 8 expiracoes. A unica
+diferenca operacional relevante entre os dois caminhos foi a liberacao
+antecipada de LKFT pelo Bottom-Turn em outubro/2020.
+
+### Conclusao cientifica
+
+A ablacao responde negativamente a pergunta predeclarada: nesta especificacao,
+nao ha evidencia de que o LightGBM Bottom-Turn agregue valor economico alem de
+uma espera temporal simples apos uma saida Top-Turn.
+
+Mais forte ainda: nesta amostra, a unica decisao realmente tomada pelo modelo
+Bottom-Turn piorou o resultado frente ao Cooldown5.
+
+O Top-Turn puro permanece a referencia economica atual no universo corrigido,
+com US$ 6.306.816,02, +23,85% sobre Control.
+
+Nao retunar thresholds/features do Bottom-Turn sobre este mesmo OOS. Se a linha
+Bottom-Turn continuar, a proxima etapa deve ser uma reformulacao metodologica
+predeclarada e validada em novo protocolo, e nao ajuste de parametros para
+recuperar este resultado.
