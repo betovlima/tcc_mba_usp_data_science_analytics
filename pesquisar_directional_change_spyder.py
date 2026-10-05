@@ -400,7 +400,8 @@ def smart_snapshot_reusable() -> bool:
     return (
         meta.get("research_version") == RESEARCH_VERSION
         and meta.get("execution_schema") == EXECUTION_SCHEMA
-        and len(pool) == MODEL_POOL_SIZE
+        and int(meta.get("model_pool_size") or 0) == len(pool)
+        and SELECTED_COUNT <= len(pool) <= MODEL_POOL_SIZE
         and tuple(manifest.get("assets") or ()) == pool
     )
 
@@ -457,12 +458,13 @@ else:
         ["raw_winner_probability","symbol"],
         ascending=[False,True],
     ).reset_index(drop=True)
-    if len(stage1) < MODEL_POOL_SIZE:
+    if len(stage1) < SELECTED_COUNT:
         raise RuntimeError(
             f"Somente {len(stage1)} candidatos passaram o stage1."
         )
     stage1["stage1_rank"] = np.arange(1, len(stage1)+1)
-    pool = tuple(stage1.head(MODEL_POOL_SIZE)["symbol"].astype(str))
+    resolved_pool_size = min(MODEL_POOL_SIZE, len(stage1))
+    pool = tuple(stage1.head(resolved_pool_size)["symbol"].astype(str))
 
     SMART.clear_generated()
     raw_files = download_raw_bars(
@@ -488,7 +490,7 @@ else:
         bar_snapshot_as_of_end=BAR_SNAPSHOT_AS_OF_END,
         analysis_end_date=ANALYSIS_END_DATE,
         assets=pool,
-        snapshot_name="tcc-intelligent-candidate-pool-v1",
+        snapshot_name="tcc-intelligent-candidate-pool-u62-v1",
         parent_snapshot_sha256=str(base_manifest.get("snapshot_sha256") or ""),
     )
     stage1.to_csv(STAGE1_CSV, index=False)
@@ -498,6 +500,8 @@ else:
             "execution_schema": EXECUTION_SCHEMA,
             "random_sampling": False,
             "selected_model_pool": list(pool),
+            "model_pool_size": len(pool),
+            "model_pool_target": MODEL_POOL_SIZE,
             "catalog_eligible_assets": len(catalog),
             "stage1_history_eligible_assets": len(stage1),
             "selection_uses_new_candidate_capital": False,
@@ -775,7 +779,7 @@ pd.DataFrame(quality).to_csv(
     OUT / "intelligent_model_pool_quality.csv", index=False
 )
 ranked.to_csv(OUT / "intelligent_candidates_ranked.csv", index=False)
-selected.to_csv(OUT / "intelligent_selected_20.csv", index=False)
+selected.to_csv(OUT / "intelligent_selected_candidates.csv", index=False)
 
 payload = {
     "research_version":RESEARCH_VERSION,
@@ -786,7 +790,8 @@ payload = {
         "random_sampling":False,
         "candidate_strategy_replays":0,
         "selection_uses_new_candidate_capital":False,
-        "stage1_model_pool_size":MODEL_POOL_SIZE,
+        "stage1_model_pool_target":MODEL_POOL_SIZE,
+        "stage1_model_pool_actual":len(pool),
         "stage2_score_reference":"U62_CANDIDATE",
         "target_selected_count":SELECTED_COUNT,
         "actual_selected_count":len(selected_symbols),
@@ -798,7 +803,7 @@ payload = {
         "beats_max":BEATS_MAX,
         "score_std_max":SCORE_STD_MAX,
         "score_mean_max":SCORE_MEAN_MAX,
-        "abs_corr_u56_best_max":ABS_CORR_BEST_MAX,
+        "abs_corr_u62_best_max":ABS_CORR_BEST_MAX,
         "minimum_score_session_share":MIN_SESSION_SHARE,
         "expected_score_sessions":expected_sessions,
         "minimum_score_sessions":min_sessions,
