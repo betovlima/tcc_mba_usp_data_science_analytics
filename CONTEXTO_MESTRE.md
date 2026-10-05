@@ -1473,3 +1473,45 @@ e ECON (historico inferior a 2.600 barras).
 A assinatura sera considerada apenas parcialmente suportada se a direcao
 predita distinguir candidatos positivos dos nao positivos no terceiro lote.
 Se falhar, os limites nao serao reajustados retroativamente nesta mesma amostra.
+
+
+## Checkpoint positivo apos validacao do lote 3 — 1.15.0
+
+Execucao validada pelo pacote `pacote_analise(6).zip`, schema
+`signature-validation-batch3-u59-v1`.
+
+Resultados principais:
+- U56: capital final US$ 10.082.425,91; Sharpe 2,1011; MaxDD -31,22%;
+- U59 = U56 + COLB + AMS + FOXF: US$ 30.080.091,01; Sharpe 2,3375;
+  MaxDD -31,22%; ganho de +198,34% sobre U56;
+- U79 = U59 + 20 candidatos do lote 3: US$ 5.673.953,48; a inclusao
+  indiscriminada do lote reduziu o capital em -81,14% contra U59 e elevou o
+  MaxDD para -68,69%.
+
+No teste marginal contra U59, somente tres ativos do lote 3 aumentaram o
+capital:
+- REXR: +10,49%;
+- MG: +9,69%;
+- CALM: +2,15%.
+
+VSTM foi positivo contra U56, mas negativo (-9,42%) contra U59, confirmando que
+a contribuicao depende do universo de competicao. Os dez objetos classificados
+como `dormant` foram neutros. Todos os seis `invasive_or_unstable` ficaram
+negativos contra U59. A regra `selective-specialist-v0.1` acertou 17/20 contra
+U56, mas com recall baixo; por isso permanece como primeira assinatura
+confirmatoria, nao como regra final.
+
+Conjunto de adicionais positivos conhecido neste checkpoint:
+- lote 2: COLB, AMS, FOXF;
+- lote 3 contra U59: MG, REXR, CALM.
+
+O conjunto positivo de seis ativos fica congelado como referencia de descoberta:
+`COLB, AMS, FOXF, MG, REXR, CALM`. ARCO permanece fora deste checkpoint por
+ter sido medido em protocolo anterior e nao diretamente comparavel.
+
+A proxima campanha nao escolhera outro lote aleatorio e nao usara insercao
+individual com replay da estrategia para procurar candidatos. A descoberta
+passa a ser feita por pre-selecao inteligente em duas etapas: propriedades de
+mercado/historico e comportamento de score LightGBM relativo ao universo de
+referencia. O capital OOS dos novos candidatos so podera ser consultado depois
+de a lista ter sido congelada.
