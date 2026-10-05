@@ -33,9 +33,9 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.13.2-dev.1"
-EXPECTED_EXECUTION_SCHEMA = "object-universe-expansion-76-v2"
-EXPECTED_COMPARISON_FILE = "object_universe_76.json"
+RESEARCH_VERSION = "1.14.0-dev.1"
+EXPECTED_EXECUTION_SCHEMA = "random-batch2-u56-correlation-v1"
+EXPECTED_COMPARISON_FILE = "random_batch2_u56_correlation.json"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5

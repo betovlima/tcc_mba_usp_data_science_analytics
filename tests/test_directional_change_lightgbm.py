@@ -981,11 +981,11 @@ def test_trigger_peak_metrics_match_same_execution_timestamp() -> None:
 def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
     output = tmp_path / "directional_change"
     output.mkdir()
-    (output / "object_universe_76.json").write_text(
-        '{"research_version":"test","execution_schema":"object-universe-expansion-76-v2"}',
+    (output / "random_batch2_u56_correlation.json").write_text(
+        '{"research_version":"test","execution_schema":"random-batch2-u56-correlation-v1"}',
         encoding="utf-8",
     )
-    (output / "asset_objects_76.csv").write_text(
+    (output / "random_batch2_candidates.csv").write_text(
         "a,b\n1,2\n",
         encoding="utf-8",
     )
@@ -997,8 +997,8 @@ def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
         names = sorted(zipped.namelist())
     assert names == sorted(
         [
-            "object_universe_76.json",
-            "asset_objects_76.csv",
+            "random_batch2_u56_correlation.json",
+            "random_batch2_candidates.csv",
         ]
     )
 
@@ -1018,5 +1018,5 @@ def test_analysis_package_refuses_stale_v1_schema(tmp_path: Path) -> None:
     else:
         raise AssertionError("stale v1 package should have been refused")
 
-    assert "object_universe_76.json" in message
+    assert "random_batch2_u56_correlation.json" in message
     assert "copia antiga" in message

@@ -1344,3 +1344,58 @@ Correcao:
 A pesquisa cientifica nao mudou em relacao a 1.13.1: calendario e benchmark
 continuam congelados no U56 original. Esta versao apenas torna impossivel
 repetir silenciosamente a mistura de arquivos locais observada no Spyder.
+
+## Segundo lote aleatorio vs U56 vencedor — 1.14.0-dev.1
+
+Objetivo solicitado: repetir a expansao com outros 20 ativos aleatorios, sem
+reutilizar o primeiro lote, procurar novos objetos que melhorem o U56 e medir
+a correlacao desses objetos com o universo vencedor de 56 ativos.
+
+Para evitar cherry-picking, os 20 nomes nao sao escolhidos por lucro ou por
+resultado de backtest. O lote e congelado antes da execucao usando seed
+2026100402, o mesmo catalogo Alpaca e os mesmos filtros de elegibilidade de
+historico. Os 20 nomes do primeiro lote sao excluidos da amostragem.
+
+Segundo lote congelado:
+VIOV, MBSD, MVIS, EWD, OPHC, CASY, COLB, EES, GNK, VUZI, FOXF, AMS, IQLT,
+ISCF, FUTY, KB, PRN, CE, XTNT e UEC.
+
+ONTO apareceu antes de alguns desses nomes na ordem pseudoaleatoria, mas foi
+rejeitado por transicao estrutural NANO -> ONTO observada em Corporate
+Actions. A exclusao segue a regra do TCC de nao fazer bridge de identidade.
+
+Desenho principal:
+- U56 vencedor e reproduzido com calendario e benchmark congelados;
+- U76_B2 adiciona os 20 candidatos simultaneamente para medir efeito de grupo;
+- cada candidato e testado isoladamente como U56 + 1 objeto;
+- modelos dos 76 ativos sao treinados uma unica vez por fold, pois sao
+  independentes por ativo;
+- cada insercao recalibra somente a competicao e o switch margin usando o
+  conjunto congelado de candidatos;
+- o efeito individual U56 + candidato e a medida principal de contribuicao;
+- o efeito conjunto dos 20 e secundario, porque interacoes nao sao aditivas.
+
+Correlacoes registradas para cada candidato:
+- retorno diario vs retorno equal-weight do U56;
+- retorno diario vs retorno da estrategia U56;
+- media/mediana/absoluta das correlacoes com os 56 objetos originais;
+- objeto U56 mais e menos correlacionado;
+- correlacao do score LightGBM do candidato com score medio e melhor score
+  cross-sectional do U56;
+- correlacao do score do candidato com o decision_score da estrategia U56;
+- frequencia em que o candidato supera o melhor score do U56;
+- sessoes em que sua insercao muda a selecao da carteira;
+- folds em que sua insercao muda o switch margin;
+- P&L e taxa de acerto das operacoes do proprio candidato.
+
+Saidas:
+- random_batch2_u56_correlation.json;
+- random_batch2_candidates.csv;
+- random_batch2_property_correlations.csv;
+- u56_winner_predictions.csv / trades.csv;
+- u76_batch2_predictions.csv / trades.csv;
+- pacote_analise.zip.
+
+As correlacoes desta campanha sao exploratorias. Elas servem para formular a
+proxima hipotese de assinatura, nao para selecionar retrospectivamente ativos
+sem uma terceira amostra intocada.

@@ -69,6 +69,14 @@ artifacts/
 !dados/pesquisa_expansao_76/raw_bars/*.csv
 !dados/pesquisa_expansao_76/corporate_actions/*.csv
 
+# Segundo lote aleatorio congelado da pesquisa U56 + 20.
+!dados/pesquisa_expansao_76_b2/
+!dados/pesquisa_expansao_76_b2/raw_bars/
+!dados/pesquisa_expansao_76_b2/corporate_actions/
+!dados/pesquisa_expansao_76_b2/manifest.json
+!dados/pesquisa_expansao_76_b2/raw_bars/*.csv
+!dados/pesquisa_expansao_76_b2/corporate_actions/*.csv
+
 # Sistema operacional
 .DS_Store
 Thumbs.db
