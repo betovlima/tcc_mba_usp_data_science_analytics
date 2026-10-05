@@ -2550,3 +2550,41 @@ simplesmente de possuir oito ativos que tiveram buy-and-hold extraordinario.
 THO e MUX, por exemplo, terminaram a serie abaixo do preco inicial, embora THO
 tenha sido um importante contribuinte nas rotacoes. Isso reforca a natureza
 temporal/contextual da assinatura e o valor do timing de entrada/saida.
+
+
+## Benchmark buy-and-hold do universo completo do cenario de US$ 58,56M
+
+Correcao de escopo: o cenario exploratorio que atingiu aproximadamente
+US$ 58,56 milhoes nao possui 58 ativos. Ele e o U67:
+- U56 congelado;
+- + COLB, AMS e FOXF = U59;
+- + THO, WDAY, EXR, XEL, SBFG, PAYX, MUX e SXC = U67.
+
+Foi criado o runner:
+calcular_buy_hold_universo_58m_spyder.py
+
+Versao: 1.17.4-dev.1.
+Schema: buy-hold-u67-58m-v1.
+
+Objetivo:
+calcular US$10.000 de buy-and-hold para cada um dos 67 ativos e somar todos
+os montantes finais, usando os mesmos snapshots congelados e a mesma
+normalizacao de splits do pipeline, sem executar novo backtest ou treinar
+modelo.
+
+O runner produz dois benchmarks:
+1. own_history: cada ativo inicia no primeiro fechamento disponivel da propria
+   serie;
+2. common_window: todos os 67 usam a mesma janela temporal comum.
+
+Capital inicial em ambos: 67 x US$10.000 = US$670.000.
+
+Arquivos:
+- buy_hold_u67_own_history.csv;
+- buy_hold_u67_common_window.csv;
+- buy_hold_u67_summary.json;
+- pacote_buy_hold_universo_58m_u67.zip.
+
+A execucao local e necessaria porque COLB, AMS e FOXF pertencem ao snapshot
+local pesquisa_expansao_76_b2 e o pacote standalone dos oito ativos nao
+contem o OHLC completo dos 59 ativos do baseline.
