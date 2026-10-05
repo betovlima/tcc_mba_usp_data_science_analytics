@@ -240,6 +240,20 @@ if AVALIAR_LISTA_CONGELADA:
             )
         else:
             smart_manifest = validate_snapshot(SMART)
+            observed_snapshot = str(
+                smart_manifest.get("snapshot_sha256") or ""
+            )
+            frozen_hashes = set(
+                selected_table["smart_snapshot_sha256"]
+                .astype(str)
+                .str.strip()
+            )
+            if frozen_hashes != {observed_snapshot}:
+                raise RuntimeError(
+                    "A lista congelada nao corresponde ao snapshot SMART atual. "
+                    "Rode buscar_ativos_spyder.py novamente antes da avaliacao."
+                )
+
             smart_assets = set(smart_manifest.get("assets") or [])
             missing = sorted(set(selected_symbols).difference(smart_assets))
             if missing:
