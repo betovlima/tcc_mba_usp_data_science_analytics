@@ -2182,3 +2182,60 @@ Branch: research/intelligent-asset-signature-v1.
 
 Esta mudanca e de visualizacao/auditoria. Nao altera modelos, thresholds,
 ativos, folds, capital ou a interpretacao cientifica dos resultados existentes.
+
+
+## Verificacao dos graficos da pesquisa — 1.17.2-dev.1
+
+Pacote verificado:
+pacote_avaliacao_financeira_positivos8_graficos.zip.
+
+A integracao dos graficos funcionou. O pacote contem 31 arquivos, incluindo
+7 conjuntos de visualizacao com CSV + PNG + SVG:
+- assinatura_beats_vs_correlacao;
+- assinatura_distribuicao_classes;
+- capital_por_fold;
+- curvas_capital_cenarios_log;
+- efeito_individual_candidatos;
+- evolucao_capital_pesquisa;
+- uso_ativos_adicionados;
+- vantagem_relativa_vs_u59.
+(Os dois primeiros sao diagnosticos da busca; os demais acompanham a campanha
+financeira. O JSON lista 25 artefatos de graficos incluindo diretorio e formatos.)
+
+A versao executada esta correta:
+- research_version=1.17.2-dev.1;
+- shared_module_version=1.17.0-dev.1;
+- source_search_version=1.17.0-dev.1;
+- schema=financial-evaluation-u59-positive8-v2.
+
+Os graficos reproduzem os resultados esperados:
+- U56: US$ 10.082.425,91;
+- U59: US$ 30.080.091,01;
+- U59 + 20: US$ 2.017.935,51;
+- U59 + 8: US$ 58.557.157,67.
+
+A curva de vantagem relativa U59+8 vs U59 mostra:
+- primeira diferenca em 2022-05-19, inicialmente -1,12%;
+- minimo de -5,53% em 2024-02-12;
+- depois de 2024-02-12 nao volta a ficar negativa;
+- cruza +10% em 2024-02-21;
+- cruza +20% em 2024-03-14;
+- cruza +50% em 2025-11-12;
+- termina em +94,67% em 2026-09-17.
+
+Esse comportamento mostra que a contribuicao dos novos ativos e temporal/regime
+dependente, reforcando que a assinatura matematica precisa incluir contexto
+temporal e nao apenas caracteristicas estaticas do ticker.
+
+No replay conjunto, os novos ativos foram selecionados em:
+WDAY 41 sessoes, THO 18, XEL 7, PAYX 4, EXR 2, SBFG 2, MUX 2 e SXC 0.
+Entre vendas dos novos ativos, WDAY teve PnL realizado aproximado de
+US$ 9,83 milhoes. Isso nao deve ser interpretado como efeito causal isolado,
+pois a presenca dos demais ativos altera ranking, scores e caminho do capital.
+
+Nova conclusao visual importante:
+o grafico atual de assinatura separa selective_specialist de nao selecionados,
+mas ainda nao mostra diretamente vencedor financeiro vs falso positivo.
+Para a fase de generalizacao, os proximos graficos devem vincular as features
+pre-replay aos rotulos financeiros dos 20 congelados, sem usar esses rotulos
+como validacao da mesma regra.
