@@ -1,44 +1,44 @@
-"""Terceiro lote aleatorio para validacao da assinatura de objeto.
+"""Selecao inteligente de novos ativos sem replay de capital por candidato.
 
-Objetivo:
-- manter o U56 cientifico como controle intacto;
-- manter apenas COLB, AMS e FOXF do lote 2 no universo enriquecido U59;
-- adicionar 20 objetos aleatorios totalmente novos, formando U79;
-- congelar antes dos replays a assinatura selective-specialist-v0.1;
-- testar cada candidato contra U56 para validacao comparavel ao lote 2;
-- testar cada candidato contra U59 para medir valor incremental no universo
-  enriquecido solicitado pelo usuario;
-- medir o efeito conjunto U59 + 20 sem reutilizar neutros ou negativos.
-
-O calendario, folds e benchmark continuam fixos no U56 original.
+Fluxo:
+1. aprender uma triagem barata com os 40 candidatos ja testados;
+2. varrer o catalogo Alpaca sem sorteio e congelar os 100 mais promissores;
+3. treinar LightGBM para esse pool, sem executar a carteira;
+4. medir a assinatura de score contra U56;
+5. congelar 20 candidatos antes de qualquer teste de capital.
 """
+from __future__ import annotations
 
-# %% 0 - Imports e configuracao
 from pathlib import Path
 import json
+import math
+import re
 import time
 
 import numpy as np
 import pandas as pd
+import requests
+from alpaca.data.enums import Adjustment, DataFeed
+from alpaca.data.historical.stock import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 from engine.configuracao import (
     ANALYSIS_END_DATE,
     BAR_SNAPSHOT_AS_OF_END,
     CONFIG,
+    START_DATE,
 )
-from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 from engine.modelo_lightgbm import (
     _ajustar_modelos_lightgbm,
     _construir_contexto_execucao,
-    _selecionar_switch_margin_fold,
 )
 from engine.rotacao import (
-    _benchmark_pesos_iguais,
-    _crescimento_politica_simples,
-    _politica_agendada,
-    _politica_utilidade,
     _precalcular_utilidades_modelo,
-    _simular_exato,
     preparar_painel_rotacao,
 )
 from pesquisas.directional_change_lightgbm import (
@@ -49,1339 +49,755 @@ from pesquisas.directional_change_lightgbm import (
 )
 from reproducao.dados import (
     SnapshotPaths,
+    _normalize_alpaca_frame,
     build_snapshot_manifest,
     download_corporate_actions,
     download_raw_bars,
     load_alpaca_credentials,
     validate_snapshot,
 )
-from reproducao.experimento import build_variant_configs, summarize_metrics
+from reproducao.experimento import build_variant_configs
 from reproducao.preparacao import prepare_model_frames
 
 
-RAIZ_PROJETO = Path(__file__).resolve().parent
-SNAPSHOT_BASE = SnapshotPaths.research(RAIZ_PROJETO)
-SNAPSHOT_BATCH2 = SnapshotPaths.from_root(
-    RAIZ_PROJETO / "dados" / "pesquisa_expansao_76_b2"
-)
-SNAPSHOT_BATCH3 = SnapshotPaths.from_root(
-    RAIZ_PROJETO / "dados" / "pesquisa_expansao_76_b3"
-)
-DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "directional_change"
+ROOT = Path(__file__).resolve().parent
+BASE = SnapshotPaths.research(ROOT)
+B2 = SnapshotPaths.from_root(ROOT / "dados" / "pesquisa_expansao_76_b2")
+B3 = SnapshotPaths.from_root(ROOT / "dados" / "pesquisa_expansao_76_b3")
+SMART = SnapshotPaths.from_root(ROOT / "dados" / "pesquisa_smart_candidates")
+OUT = ROOT / "output" / "directional_change"
 
-SCRIPT_RESEARCH_VERSION = "1.15.0-dev.1"
-EXECUTION_SCHEMA = "signature-validation-batch3-u59-v1"
+SCRIPT_RESEARCH_VERSION = "1.16.0-dev.1"
+EXECUTION_SCHEMA = "intelligent-candidate-screen-v1"
+CHECKPOINT_SHA = "4b6b71414ce6f7047dc465679e57629ba8a4c453"
 
-RANDOM_SELECTION_SEED = 2026100503
-RANDOM_SELECTION_CATALOG_DATE = "2026-10-05"
-RANDOM_SELECTION_RULE = (
-    "Alpaca active/tradable/marginable US equities; exchanges NYSE/NASDAQ/"
-    "AMEX/ARCA/BATS; simple ticker; excludes original 56 and random batches "
-    "1/2; deterministic xorshift32 seed=2026100503; requires daily SIP RAW "
-    "history covering 2016-01 through 2026-09 with >=2600 rows and max gap "
-    "<=10 days; structural identity/ticker transitions are rejected before "
-    "freezing."
+B2_ASSETS = (
+    "VIOV","MBSD","MVIS","EWD","OPHC","CASY","COLB","EES","GNK","VUZI",
+    "FOXF","AMS","IQLT","ISCF","FUTY","KB","PRN","CE","XTNT","UEC",
 )
-
-BATCH1_ASSETS = (
-    "FAF", "IJR", "GAB", "ELS", "AEIS", "VWOB", "BDJ", "DGX", "ESP", "BWZ",
-    "PSF", "DBA", "HEEM", "NPKI", "MHK", "BLKB", "ARCO", "AGM", "NWFL", "SKOR",
+B3_ASSETS = (
+    "MG","VSTM","HEWJ","GBAB","CRESY","BGT","DBJP","UBND","PPLT","RXL",
+    "JPIN","REXR","QVAL","REM","CEVA","TRC","SCHA","CALM","DRN","EVH",
 )
-BATCH2_ASSETS = (
-    "VIOV", "MBSD", "MVIS", "EWD", "OPHC", "CASY", "COLB", "EES", "GNK", "VUZI",
-    "FOXF", "AMS", "IQLT", "ISCF", "FUTY", "KB", "PRN", "CE", "XTNT", "UEC",
+B1_ASSETS = (
+    "FAF","IJR","GAB","ELS","AEIS","VWOB","BDJ","DGX","ESP","BWZ",
+    "PSF","DBA","HEEM","NPKI","MHK","BLKB","ARCO","AGM","NWFL","SKOR",
 )
-ENRICHED_POSITIVES = ("COLB", "AMS", "FOXF")
-
-SIGNATURE_NAME = "selective-specialist-v0.1"
-SIGNATURE_THRESHOLDS = {
-    "beats_best_share_min_exclusive": 0.0,
-    "beats_best_share_max_inclusive": 0.05,
-    "score_std_max_inclusive": 0.15,
-    "score_mean_max_inclusive": 0.11,
-    "abs_score_corr_u56_mean_max_inclusive": 0.25,
-}
-
-RANDOM_ASSET_OBJECTS = (
-    {"symbol": "MG", "name": "Mistras Group Inc.", "exchange": "NYSE"},
-    {"symbol": "VSTM", "name": "Verastem, Inc.", "exchange": "NASDAQ"},
-    {"symbol": "HEWJ", "name": "iShares Currency Hedged MSCI Japan ETF", "exchange": "ARCA"},
-    {"symbol": "GBAB", "name": "Guggenheim Taxable Municipal Bond & Investment Grade Debt Trust", "exchange": "NYSE"},
-    {"symbol": "CRESY", "name": "Cresud S.A.C.I.F. y A.", "exchange": "NASDAQ"},
-    {"symbol": "BGT", "name": "BlackRock Floating Rate Income Trust", "exchange": "NYSE"},
-    {"symbol": "DBJP", "name": "Xtrackers MSCI Japan Hedged Equity ETF", "exchange": "ARCA"},
-    {"symbol": "UBND", "name": "VictoryShares Core Plus Bond ETF", "exchange": "NASDAQ"},
-    {"symbol": "PPLT", "name": "abrdn Physical Platinum Shares ETF", "exchange": "ARCA"},
-    {"symbol": "RXL", "name": "ProShares Ultra Health Care", "exchange": "ARCA"},
-    {"symbol": "JPIN", "name": "JPMorgan Diversified Return International Equity ETF", "exchange": "ARCA"},
-    {"symbol": "REXR", "name": "Rexford Industrial Realty, Inc.", "exchange": "NYSE"},
-    {"symbol": "QVAL", "name": "Alpha Architect U.S. Quantitative Value ETF", "exchange": "NASDAQ"},
-    {"symbol": "REM", "name": "iShares Mortgage Real Estate ETF", "exchange": "BATS"},
-    {"symbol": "CEVA", "name": "CEVA, Inc.", "exchange": "NASDAQ"},
-    {"symbol": "TRC", "name": "Tejon Ranch Co.", "exchange": "NYSE"},
-    {"symbol": "SCHA", "name": "Schwab U.S. Small-Cap ETF", "exchange": "ARCA"},
-    {"symbol": "CALM", "name": "Cal-Maine Foods, Inc.", "exchange": "NASDAQ"},
-    {"symbol": "DRN", "name": "Direxion Daily Real Estate Bull 3X ETF", "exchange": "ARCA"},
-    {"symbol": "EVH", "name": "Evolent Health, Inc.", "exchange": "NYSE"},
-)
-RANDOM_ASSETS = tuple(item["symbol"] for item in RANDOM_ASSET_OBJECTS)
-RANDOM_METADATA = {
-    item["symbol"]: dict(item)
-    for item in RANDOM_ASSET_OBJECTS
-}
-
-REJECTED_RANDOM_CANDIDATES = (
-    {"symbol": "FLG", "reason": "structural_ticker_identity_transition", "detail": "NYCB -> FLG"},
-    {"symbol": "LBTYA", "reason": "structural_identity_change", "detail": "CUSIP transition under same ticker"},
-    {"symbol": "DCOY", "reason": "structural_ticker_identity_transition", "detail": "SLRX -> DCOY"},
-    {"symbol": "BLOX", "reason": "history_discontinuity", "detail": "large multi-year gap"},
-    {"symbol": "VISN", "reason": "structural_ticker_identity_transition", "detail": "COMM -> VISN"},
-    {"symbol": "COR", "reason": "structural_ticker_identity_transition", "detail": "ABC -> COR"},
-    {"symbol": "ECON", "reason": "insufficient_history", "detail": "fewer than 2600 daily rows"},
+B2_POS = frozenset({"COLB","AMS","FOXF"})
+B3_POS = frozenset({"MG","REXR","CALM"})
+KNOWN_POS = tuple(sorted(B2_POS | B3_POS))
+EXCLUDED = (
+    set(CONFIG.assets)
+    | set(B1_ASSETS)
+    | set(B2_ASSETS)
+    | set(B3_ASSETS)
+    | {"ONTO","FLG","LBTYA","DCOY","BLOX","VISN","COR","ECON"}
 )
 
+ALLOWED_EXCHANGES = {"NYSE","NASDAQ","AMEX","ARCA","BATS"}
+SYMBOL_RE = re.compile(r"^[A-Z]{1,5}$")
+SCOUT_START = "2023-01-01"
+SCOUT_MIN_ROWS = 700
+SCOUT_MAX_GAP = 10.0
+SCOUT_CHUNK = 50
+MODEL_POOL_SIZE = 100
+SELECTED_COUNT = 20
 
-# %% 1 - Guards e snapshot base
+RAW_FEATURES = (
+    "cagr",
+    "annual_volatility",
+    "maximum_drawdown",
+    "median_dollar_volume_log10",
+    "positive_day_share",
+    "momentum_252_median",
+    "volatility_20_median",
+    "trend_efficiency_20_median",
+    "corr_spy",
+    "beta_spy",
+)
+
+SIGNATURE_NAME = "selective-specialist-v0.2"
+BEATS_MAX = 0.05
+SCORE_STD_MAX = 0.15
+SCORE_MEAN_MAX = 0.16
+ABS_CORR_BEST_MAX = 0.10
+MIN_SESSION_SHARE = 0.85
+BEATS_TARGET = float(np.median([0.0045248869,0.0193923723,0.0129282482]))
+
+STAGE1_CSV = SMART.root / "stage1_ranked.csv"
+STAGE1_JSON = SMART.root / "stage1_selection.json"
+CATALOG_JSON = SMART.root / "alpaca_asset_catalog.json"
+
+
 if EXECUTION_SCHEMA != EXPECTED_EXECUTION_SCHEMA:
     raise RuntimeError(
-        "Script e modulo de pesquisa incompatíveis antes do replay: "
-        f"script={EXECUTION_SCHEMA!r} modulo={EXPECTED_EXECUTION_SCHEMA!r}. "
-        "Atualize a branch e reinicie o kernel do Spyder."
+        f"Schema incompatível: script={EXECUTION_SCHEMA} "
+        f"modulo={EXPECTED_EXECUTION_SCHEMA}."
     )
 if SCRIPT_RESEARCH_VERSION != RESEARCH_VERSION:
     raise RuntimeError(
-        "Versao do runner e modulo incompatíveis antes do replay: "
-        f"runner={SCRIPT_RESEARCH_VERSION!r} modulo={RESEARCH_VERSION!r}."
+        f"Versao incompatível: script={SCRIPT_RESEARCH_VERSION} "
+        f"modulo={RESEARCH_VERSION}."
     )
-if len(RANDOM_ASSETS) != 20 or len(set(RANDOM_ASSETS)) != 20:
-    raise RuntimeError("O terceiro lote precisa conter exatamente 20 ativos unicos.")
-if set(RANDOM_ASSETS).intersection(BATCH1_ASSETS):
-    raise RuntimeError("O terceiro lote nao pode reutilizar ativos do primeiro lote.")
-if set(RANDOM_ASSETS).intersection(BATCH2_ASSETS):
-    raise RuntimeError("O terceiro lote nao pode reutilizar ativos do segundo lote.")
 
 print("=" * 78, flush=True)
-print("TCC - Batch 3 Signature Validation: U56 / U59 / U79", flush=True)
-print(f"versao_pesquisa={RESEARCH_VERSION}", flush=True)
-print(f"versao_runner={SCRIPT_RESEARCH_VERSION}", flush=True)
-print(f"execution_schema={EXECUTION_SCHEMA}", flush=True)
-print(f"random_seed={RANDOM_SELECTION_SEED}", flush=True)
-print("random_assets=" + ",".join(RANDOM_ASSETS), flush=True)
+print("TCC - Intelligent Candidate Screen", flush=True)
+print(f"version={RESEARCH_VERSION}", flush=True)
+print("random_sampling=False", flush=True)
+print("candidate_strategy_replays=0", flush=True)
+print("known_positive=" + ",".join(KNOWN_POS), flush=True)
 print("=" * 78, flush=True)
 
-manifesto_base = validate_snapshot(SNAPSHOT_BASE)
+t0 = time.perf_counter()
+base_manifest = validate_snapshot(BASE)
+validate_snapshot(B2)
+validate_snapshot(B3)
 
 
-# %% 2 - Snapshot congelado do terceiro lote de 20
+def read_raw(paths: SnapshotPaths, symbol: str) -> pd.DataFrame:
+    path = paths.raw_bars / f"{symbol}.csv"
+    frame = pd.read_csv(path)
+    frame.columns = [str(c).lower() for c in frame.columns]
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+    frame = frame.sort_values("timestamp").drop_duplicates("timestamp", keep="last")
+    for col in ("open","high","low","close","volume"):
+        frame[col] = pd.to_numeric(frame[col], errors="coerce")
+    return frame.dropna(subset=["timestamp","close","volume"]).copy()
 
-manifesto_batch2 = validate_snapshot(SNAPSHOT_BATCH2)
-if not set(ENRICHED_POSITIVES).issubset(
-    set(manifesto_batch2.get("assets") or [])
+
+def scout_window(frame: pd.DataFrame) -> pd.DataFrame:
+    start = pd.Timestamp(SCOUT_START, tz="UTC")
+    end = pd.Timestamp(BAR_SNAPSHOT_AS_OF_END, tz="UTC") + pd.Timedelta(days=1)
+    return frame.loc[
+        (frame["timestamp"] >= start) & (frame["timestamp"] < end)
+    ].copy()
+
+
+def max_gap_days(frame: pd.DataFrame) -> float:
+    d = pd.DatetimeIndex(frame["timestamp"]).to_series().diff()
+    if d.dropna().empty:
+        return float("inf")
+    return float(d.dt.total_seconds().div(86400.0).dropna().max())
+
+
+def corr(left: pd.Series, right: pd.Series, minimum: int = 20):
+    pair = pd.concat(
+        [pd.Series(left, dtype=float), pd.Series(right, dtype=float)],
+        axis=1,
+    ).replace([np.inf,-np.inf], np.nan).dropna()
+    if len(pair) < minimum or pair.iloc[:,0].nunique() < 2 or pair.iloc[:,1].nunique() < 2:
+        return None
+    return float(pair.iloc[:,0].corr(pair.iloc[:,1]))
+
+
+def raw_features(frame: pd.DataFrame, spy_returns: pd.Series) -> dict:
+    w = scout_window(frame)
+    close = pd.to_numeric(w["close"], errors="coerce")
+    volume = pd.to_numeric(w["volume"], errors="coerce")
+    valid = close.notna() & volume.notna() & (close > 0) & (volume >= 0)
+    w = w.loc[valid].copy()
+    close = close.loc[valid]
+    volume = volume.loc[valid]
+    if len(w) < 2:
+        return {"rows": int(len(w)), "max_gap_days": float("inf")}
+
+    r = close.pct_change(fill_method=None).replace([np.inf,-np.inf], np.nan)
+    years = max((w["timestamp"].iloc[-1] - w["timestamp"].iloc[0]).days / 365.25, 1/365.25)
+    ratio = float(close.iloc[-1] / close.iloc[0])
+    cagr = float(ratio ** (1/years) - 1) if ratio > 0 else None
+    dd = close / close.cummax() - 1
+    m252 = close / close.shift(252) - 1
+    vol20 = r.rolling(20).std(ddof=0) * math.sqrt(252)
+    eff = (close - close.shift(20)).abs() / close.diff().abs().rolling(20).sum()
+    candidate_returns = pd.Series(
+        r.to_numpy(), index=pd.DatetimeIndex(w["timestamp"]), dtype=float
+    )
+    aligned = pd.concat(
+        [candidate_returns.rename("c"), spy_returns.rename("s")], axis=1
+    ).dropna()
+    if len(aligned) >= 20 and aligned["s"].var() > 0:
+        corr_spy = float(aligned["c"].corr(aligned["s"]))
+        beta_spy = float(aligned["c"].cov(aligned["s"]) / aligned["s"].var())
+    else:
+        corr_spy = None
+        beta_spy = None
+
+    dollar = float((close * volume).median())
+    return {
+        "rows": int(len(w)),
+        "first_timestamp": str(w["timestamp"].iloc[0]),
+        "last_timestamp": str(w["timestamp"].iloc[-1]),
+        "max_gap_days": max_gap_days(w),
+        "cagr": cagr,
+        "annual_volatility": float(r.std(ddof=0) * math.sqrt(252)),
+        "maximum_drawdown": float(dd.min()),
+        "median_dollar_volume_log10": (
+            float(math.log10(dollar)) if dollar > 0 else None
+        ),
+        "positive_day_share": float((r > 0).mean()),
+        "momentum_252_median": (
+            float(m252.dropna().median()) if not m252.dropna().empty else None
+        ),
+        "volatility_20_median": (
+            float(vol20.dropna().median()) if not vol20.dropna().empty else None
+        ),
+        "trend_efficiency_20_median": (
+            float(eff.replace([np.inf,-np.inf],np.nan).dropna().median())
+            if not eff.replace([np.inf,-np.inf],np.nan).dropna().empty
+            else None
+        ),
+        "corr_spy": corr_spy,
+        "beta_spy": beta_spy,
+    }
+
+
+spy = scout_window(read_raw(BASE, "SPY"))
+spy_returns = pd.Series(
+    pd.to_numeric(spy["close"], errors="coerce").pct_change(fill_method=None).to_numpy(),
+    index=pd.DatetimeIndex(spy["timestamp"]),
+    dtype=float,
+)
+
+label_rows = []
+for cohort, paths, assets, positives in (
+    ("batch2", B2, B2_ASSETS, B2_POS),
+    ("batch3", B3, B3_ASSETS, B3_POS),
 ):
-    raise RuntimeError(
-        "Snapshot do lote 2 nao contem COLB, AMS e FOXF. "
-        "Restaure dados/pesquisa_expansao_76_b2 antes de executar."
-    )
+    for symbol in assets:
+        label_rows.append({
+            "asset": symbol,
+            "cohort": cohort,
+            "positive": int(symbol in positives),
+            **raw_features(read_raw(paths, symbol), spy_returns),
+        })
+labels = pd.DataFrame(label_rows)
+selector = Pipeline([
+    ("impute", SimpleImputer(strategy="median")),
+    ("scale", StandardScaler()),
+    ("model", LogisticRegression(
+        class_weight="balanced",
+        C=0.5,
+        max_iter=3000,
+        solver="lbfgs",
+        random_state=20261005,
+    )),
+])
+selector.fit(labels.loc[:, RAW_FEATURES], labels["positive"])
 
 
-def _batch3_manifest_is_usable() -> bool:
-    if not SNAPSHOT_BATCH3.manifest.exists():
+def load_catalog(credentials) -> list[dict]:
+    errors = []
+    for endpoint in (
+        "https://paper-api.alpaca.markets/v2/assets",
+        "https://api.alpaca.markets/v2/assets",
+    ):
+        try:
+            response = requests.get(
+                endpoint,
+                headers=credentials.headers,
+                params={"status":"active","asset_class":"us_equity"},
+                timeout=60,
+            )
+        except Exception as exc:
+            errors.append(str(exc))
+            continue
+        if response.status_code != 200:
+            errors.append(f"{response.status_code}:{response.text[:120]}")
+            continue
+        payload = response.json()
+        if isinstance(payload, list):
+            return [x for x in payload if isinstance(x, dict)]
+    raise RuntimeError("Falha no catalogo Alpaca: " + " | ".join(errors))
+
+
+def eligible_catalog(catalog: list[dict]) -> list[dict]:
+    rows = []
+    seen = set()
+    for item in catalog:
+        symbol = str(item.get("symbol") or "").strip().upper()
+        exchange = str(item.get("exchange") or "").strip().upper()
+        status = str(item.get("status") or "").strip().lower()
+        if (
+            not symbol
+            or symbol in seen
+            or symbol in EXCLUDED
+            or SYMBOL_RE.fullmatch(symbol) is None
+            or exchange not in ALLOWED_EXCHANGES
+            or (status and status != "active")
+            or not bool(item.get("tradable", False))
+            or not bool(item.get("marginable", False))
+        ):
+            continue
+        seen.add(symbol)
+        rows.append({
+            "symbol": symbol,
+            "name": str(item.get("name") or ""),
+            "exchange": exchange,
+            "shortable": bool(item.get("shortable", False)),
+            "easy_to_borrow": bool(item.get("easy_to_borrow", False)),
+            "fractionable": bool(item.get("fractionable", False)),
+        })
+    return sorted(rows, key=lambda x: x["symbol"])
+
+
+def get_scout_bars(client, symbols: list[str]) -> dict[str, pd.DataFrame]:
+    start = pd.Timestamp(SCOUT_START, tz="UTC").to_pydatetime()
+    end = (
+        pd.Timestamp(BAR_SNAPSHOT_AS_OF_END, tz="UTC") + pd.Timedelta(days=1)
+    ).to_pydatetime()
+    for attempt in range(4):
+        try:
+            req = StockBarsRequest(
+                symbol_or_symbols=symbols,
+                timeframe=TimeFrame.Day,
+                start=start,
+                end=end,
+                adjustment=Adjustment.RAW,
+                feed=DataFeed.SIP,
+                limit=10_000,
+            )
+            raw = client.get_stock_bars(req).df
+            out = {}
+            for symbol in symbols:
+                try:
+                    f = _normalize_alpaca_frame(raw, symbol)
+                except Exception:
+                    f = pd.DataFrame()
+                if not f.empty:
+                    out[symbol] = f
+            return out
+        except Exception as exc:
+            if attempt == 3:
+                print(f"[scout] chunk failed size={len(symbols)} error={exc}", flush=True)
+                break
+            wait = 2 ** attempt
+            print(f"[scout] retry wait={wait}s error={exc}", flush=True)
+            time.sleep(wait)
+    if len(symbols) == 1:
+        return {}
+    out = {}
+    for symbol in symbols:
+        out.update(get_scout_bars(client, [symbol]))
+    return out
+
+
+def smart_snapshot_reusable() -> bool:
+    if not (
+        SMART.manifest.exists()
+        and STAGE1_CSV.exists()
+        and STAGE1_JSON.exists()
+        and CATALOG_JSON.exists()
+    ):
         return False
     try:
-        payload = validate_snapshot(SNAPSHOT_BATCH3)
+        manifest = validate_snapshot(SMART)
+        meta = json.loads(STAGE1_JSON.read_text(encoding="utf-8"))
     except Exception:
         return False
+    pool = tuple(meta.get("selected_model_pool") or ())
     return (
-        tuple(payload.get("assets") or ()) == RANDOM_ASSETS
-        and str(payload.get("parent_snapshot_sha256") or "")
-        == str(manifesto_base.get("snapshot_sha256") or "")
-        and str((payload.get("bars") or {}).get("bar_snapshot_as_of_end") or "")
-        == str(BAR_SNAPSHOT_AS_OF_END)
+        meta.get("research_version") == RESEARCH_VERSION
+        and meta.get("execution_schema") == EXECUTION_SCHEMA
+        and len(pool) == MODEL_POOL_SIZE
+        and tuple(manifest.get("assets") or ()) == pool
     )
 
 
-if not _batch3_manifest_is_usable():
-    print(
-        "[batch3] snapshot ausente/incompativel; baixando os 20 novos ativos",
-        flush=True,
+credentials = load_alpaca_credentials(ROOT)
+if smart_snapshot_reusable():
+    stage1 = pd.read_csv(STAGE1_CSV)
+    stage1_meta = json.loads(STAGE1_JSON.read_text(encoding="utf-8"))
+    pool = tuple(stage1_meta["selected_model_pool"])
+    smart_manifest = validate_snapshot(SMART)
+    print(f"[stage1] reusing frozen pool={len(pool)}", flush=True)
+else:
+    catalog = eligible_catalog(load_catalog(credentials))
+    SMART.root.mkdir(parents=True, exist_ok=True)
+    CATALOG_JSON.write_text(
+        json.dumps(catalog, indent=2, sort_keys=True),
+        encoding="utf-8",
     )
-    SNAPSHOT_BATCH3.clear_generated()
-    credenciais = load_alpaca_credentials(RAIZ_PROJETO)
-    arquivos_barras = download_raw_bars(
-        credenciais,
-        SNAPSHOT_BATCH3,
-        assets=RANDOM_ASSETS,
+
+    client = StockHistoricalDataClient(
+        api_key=credentials.api_key,
+        secret_key=credentials.secret_key,
+    )
+    rows = []
+    for offset in range(0, len(catalog), SCOUT_CHUNK):
+        chunk = catalog[offset:offset + SCOUT_CHUNK]
+        symbols = [x["symbol"] for x in chunk]
+        frames = get_scout_bars(client, symbols)
+        metadata = {x["symbol"]: x for x in chunk}
+        for symbol in symbols:
+            frame = frames.get(symbol)
+            if frame is None or frame.empty:
+                continue
+            feats = raw_features(frame, spy_returns)
+            if (
+                int(feats.get("rows") or 0) < SCOUT_MIN_ROWS
+                or float(feats.get("max_gap_days") or float("inf")) > SCOUT_MAX_GAP
+            ):
+                continue
+            x = pd.DataFrame([{k: feats.get(k) for k in RAW_FEATURES}])
+            probability = float(selector.predict_proba(x)[0,1])
+            rows.append({
+                **metadata[symbol],
+                **feats,
+                "raw_winner_probability": probability,
+            })
+        print(
+            f"[stage1] scanned={min(offset+len(chunk),len(catalog))}/{len(catalog)} "
+            f"history_ok={len(rows)}",
+            flush=True,
+        )
+
+    stage1 = pd.DataFrame(rows).sort_values(
+        ["raw_winner_probability","symbol"],
+        ascending=[False,True],
+    ).reset_index(drop=True)
+    if len(stage1) < MODEL_POOL_SIZE:
+        raise RuntimeError(
+            f"Somente {len(stage1)} candidatos passaram o stage1."
+        )
+    stage1["stage1_rank"] = np.arange(1, len(stage1)+1)
+    pool = tuple(stage1.head(MODEL_POOL_SIZE)["symbol"].astype(str))
+
+    SMART.clear_generated()
+    raw_files = download_raw_bars(
+        credentials,
+        SMART,
+        assets=pool,
         replace=True,
         bar_snapshot_as_of_end=BAR_SNAPSHOT_AS_OF_END,
         analysis_end_date=ANALYSIS_END_DATE,
     )
-    arquivos_eventos = download_corporate_actions(
-        credenciais,
-        SNAPSHOT_BATCH3,
-        assets=RANDOM_ASSETS,
+    action_files = download_corporate_actions(
+        credentials,
+        SMART,
+        assets=pool,
         replace=True,
         query_end=ANALYSIS_END_DATE,
     )
-    build_snapshot_manifest(
-        SNAPSHOT_BATCH3,
-        arquivos_barras,
-        arquivos_eventos,
-        credentials=credenciais,
+    smart_manifest = build_snapshot_manifest(
+        SMART,
+        raw_files,
+        action_files,
+        credentials=credentials,
         bar_snapshot_as_of_end=BAR_SNAPSHOT_AS_OF_END,
         analysis_end_date=ANALYSIS_END_DATE,
-        assets=RANDOM_ASSETS,
-        snapshot_name="tcc-random-extension-batch3-20-v1",
-        parent_snapshot_sha256=str(
-            manifesto_base.get("snapshot_sha256") or ""
-        ),
+        assets=pool,
+        snapshot_name="tcc-intelligent-candidate-pool-v1",
+        parent_snapshot_sha256=str(base_manifest.get("snapshot_sha256") or ""),
+    )
+    stage1.to_csv(STAGE1_CSV, index=False)
+    STAGE1_JSON.write_text(
+        json.dumps({
+            "research_version": RESEARCH_VERSION,
+            "execution_schema": EXECUTION_SCHEMA,
+            "random_sampling": False,
+            "selected_model_pool": list(pool),
+            "catalog_eligible_assets": len(catalog),
+            "stage1_history_eligible_assets": len(stage1),
+            "selection_uses_new_candidate_capital": False,
+        }, indent=2, sort_keys=True),
+        encoding="utf-8",
     )
 
-manifesto_batch3 = validate_snapshot(SNAPSHOT_BATCH3)
 
+quality = []
+full_ok = []
+for symbol in pool:
+    f = read_raw(SMART, symbol)
+    first = pd.Timestamp(f["timestamp"].min())
+    last = pd.Timestamp(f["timestamp"].max())
+    ok = (
+        len(f) >= 2600
+        and max_gap_days(f) <= 10.0
+        and first <= pd.Timestamp(START_DATE, tz="UTC") + pd.Timedelta(days=45)
+        and last >= pd.Timestamp(BAR_SNAPSHOT_AS_OF_END, tz="UTC") - pd.Timedelta(days=10)
+    )
+    quality.append({
+        "asset": symbol,
+        "rows": len(f),
+        "first": str(first),
+        "last": str(last),
+        "max_gap_days": max_gap_days(f),
+        "full_history_eligible": bool(ok),
+    })
+    if ok:
+        full_ok.append(symbol)
 
-# %% 3 - U56 + positivos confirmados do lote 2 + terceiro lote
-frames_u56_raw, exclusoes_u56, diagnosticos_u56, auditoria_u56 = (
+frames_candidates, structural_exclusions, candidate_diagnostics, candidate_audit = (
     prepare_model_frames(
-        SNAPSHOT_BASE,
-        assets=CONFIG.assets,
-        comparar_snapshot_referencia=False,
-        allow_structural_assets=frozenset({"CLMT", "DOC"}),
-    )
-)
-if len(frames_u56_raw) != 56:
-    raise RuntimeError(f"U56 deveria ter 56 ativos; obtidos {len(frames_u56_raw)}.")
-
-frames_positive, exclusoes_positive, diagnosticos_positive, auditoria_positive = (
-    prepare_model_frames(
-        SNAPSHOT_BATCH2,
-        assets=ENRICHED_POSITIVES,
+        SMART,
+        assets=tuple(full_ok),
         comparar_snapshot_referencia=False,
     )
 )
-if exclusoes_positive or len(frames_positive) != len(ENRICHED_POSITIVES):
+candidates = sorted(frames_candidates)
+if len(candidates) < SELECTED_COUNT:
     raise RuntimeError(
-        "COLB, AMS e FOXF precisam estar integralmente disponiveis no snapshot "
-        "do lote 2."
+        f"Apenas {len(candidates)} candidatos sobraram apos filtros."
     )
 
-frames_batch3, exclusoes_batch3, diagnosticos_batch3, auditoria_batch3 = (
-    prepare_model_frames(
-        SNAPSHOT_BATCH3,
-        assets=RANDOM_ASSETS,
-        comparar_snapshot_referencia=False,
-    )
+frames_u56, u56_exclusions, u56_diagnostics, u56_audit = prepare_model_frames(
+    BASE,
+    assets=CONFIG.assets,
+    comparar_snapshot_referencia=False,
+    allow_structural_assets=frozenset({"CLMT","DOC"}),
 )
-if exclusoes_batch3:
-    raise RuntimeError(
-        "Ativo do lote 3 apresentou problema estrutural: "
-        + ",".join(str(row.get("symbol")) for row in exclusoes_batch3)
-    )
-if len(frames_batch3) != 20:
-    raise RuntimeError(
-        f"Lote 3 deveria manter 20 ativos; obtidos {len(frames_batch3)}."
-    )
+if len(frames_u56) != 56:
+    raise RuntimeError(f"U56 deveria ter 56 ativos; obtidos {len(frames_u56)}.")
 
-for symbol, frame in frames_batch3.items():
-    dates = pd.DatetimeIndex(frame.index)
-    if len(frame) < 2600:
-        raise RuntimeError(f"{symbol}: historico insuficiente ({len(frame)} < 2600).")
-    gaps = dates.to_series().diff().dt.total_seconds().div(86400.0)
-    max_gap = float(gaps.dropna().max()) if gaps.notna().any() else 0.0
-    if max_gap > 10.0:
-        raise RuntimeError(f"{symbol}: quebra temporal de {max_gap:.1f} dias.")
-
-frames_u79_raw = {
-    **frames_u56_raw,
-    **frames_positive,
-    **frames_batch3,
-}
-if len(frames_u79_raw) != 79:
-    raise RuntimeError(f"U79 deveria ter 79 ativos; obtidos {len(frames_u79_raw)}.")
-
-config_u56, _ = build_variant_configs(frames_u56_raw, CONFIG)
-_, reference_calendar, reference_calendar_source = preparar_painel_rotacao(
-    frames_u56_raw,
-    config_u56,
+frames_raw = {**frames_u56, **frames_candidates}
+config_u56, _ = build_variant_configs(frames_u56, CONFIG)
+_, reference_calendar, reference_source = preparar_painel_rotacao(
+    frames_u56, config_u56
 )
-
-config_u79, _ = build_variant_configs(frames_u79_raw, CONFIG)
+config_all, _ = build_variant_configs(frames_raw, CONFIG)
 (
-    frames_u79,
+    frames_all,
     common_dates,
-    calendar_source_asset,
-    symbols_u79,
+    calendar_source,
+    symbols_all,
     folds,
     all_decision_dates,
     decision_to_fold,
     decision_metadata,
 ) = _construir_contexto_execucao(
-    frames_u79_raw,
-    config_u79,
+    frames_raw,
+    config_all,
     calendar_override=reference_calendar,
-    calendar_source_label=f"U56_FIXED:{reference_calendar_source}",
+    calendar_source_label=f"U56_FIXED:{reference_source}",
 )
 
-symbols_u56 = sorted(frames_u56_raw)
-symbols_u59 = sorted([*symbols_u56, *ENRICHED_POSITIVES])
-candidate_margins = tuple(
-    float(value)
-    for value in config_u79.rotation_switch_margin_candidates
-)
-full_position = {
-    symbol: index + 1
-    for index, symbol in enumerate(symbols_u79)
-}
+position = {symbol:i+1 for i,symbol in enumerate(symbols_all)}
+u56_symbols = sorted(frames_u56)
+u56_idx = [position[s] for s in u56_symbols]
+artifacts = {}
 
-benchmark_frames_u56 = {
-    symbol: frames_u79[symbol]
-    for symbol in symbols_u56
-}
-shared_benchmark = _benchmark_pesos_iguais(
-    benchmark_frames_u56,
-    symbols_u56,
-    all_decision_dates[1:],
-    float(config_u79.initial_capital),
-    config_u79,
-    calcular_taxas_referencia,
-    aplicar_deslizamento,
-)
-SHARED_BENCHMARK_NAME = (
-    "Fixed U56 equal-weight buy-and-hold on the original reference calendar"
-)
-
-print(
-    f"[universe] U56=56 U59=59 U79_B3=79 calendar={calendar_source_asset} "
-    f"common_dates={len(common_dates)} folds={len(folds)}",
-    flush=True,
-)
-print(
-    "[u59] retained_positive_objects=" + ",".join(ENRICHED_POSITIVES),
-    flush=True,
-)
-print(
-    f"[benchmark] fixed=U56 ending={float(shared_benchmark.iloc[-1]):,.2f}",
-    flush=True,
-)
-
-
-# %% 4 - Treino dos 79 modelos uma vez por fold
-fold_artifacts = {}
-training_started = time.perf_counter()
-
-for fold_position, fold in enumerate(folds, start=1):
+for i, fold in enumerate(folds, start=1):
     fold_id = int(fold["fold_id"])
-    train_dates = common_dates[: int(fold["train_end_index"])]
-    calibration_dates = common_dates[
-        int(fold["calibration_start_index"]):
-        int(fold["calibration_end_index"])
-    ]
-    final_fit_dates = common_dates[: int(fold["final_fit_end_index"])]
+    fit_dates = common_dates[:int(fold["final_fit_end_index"])]
     decision_dates = pd.DatetimeIndex(fold["decision_dates"])
-
     print(
-        f"[train] fold={fold_id} {fold_position}/{len(folds)} "
-        f"calibration_models={len(symbols_u79)}",
+        f"[stage2-train] fold={fold_id} {i}/{len(folds)} "
+        f"models={len(symbols_all)}",
         flush=True,
     )
-    calibration_models = _ajustar_modelos_lightgbm(
-        frames_u79,
-        symbols_u79,
-        train_dates,
-        config_u79,
-        phase=f"batch3_fold_{fold_id}_calibration",
-        technical_log_callback=lambda message: print(
-            f"[technical] {message}",
-            flush=True,
-        ),
+    models = _ajustar_modelos_lightgbm(
+        frames_all,
+        symbols_all,
+        fit_dates,
+        config_all,
+        phase=f"smart_screen_fold_{fold_id}_final",
+        technical_log_callback=lambda m: print(f"[technical] {m}", flush=True),
     )
-    calibration_cache, _ = _precalcular_utilidades_modelo(
-        calibration_models,
-        frames_u79,
-        symbols_u79,
-        calibration_dates,
-        config_u79,
+    cache, _ = _precalcular_utilidades_modelo(
+        models, frames_all, symbols_all, decision_dates, config_all
     )
-    calibration_missing = sorted(
-        set(symbols_u79).difference(calibration_models)
-    )
-    if calibration_missing:
-        print(
-            f"[train-diagnostic] fold={fold_id} "
-            "calibration_missing=" + ",".join(calibration_missing),
-            flush=True,
-        )
+    artifacts[fold_id] = {"dates":decision_dates, "cache":cache}
 
-    print(
-        f"[train] fold={fold_id} final_models={len(symbols_u79)}",
-        flush=True,
-    )
-    final_models = _ajustar_modelos_lightgbm(
-        frames_u79,
-        symbols_u79,
-        final_fit_dates,
-        config_u79,
-        phase=f"batch3_fold_{fold_id}_final",
-        technical_log_callback=lambda message: print(
-            f"[technical] {message}",
-            flush=True,
-        ),
-    )
-    decision_cache, _ = _precalcular_utilidades_modelo(
-        final_models,
-        frames_u79,
-        symbols_u79,
-        decision_dates,
-        config_u79,
-    )
-    final_missing = sorted(
-        set(symbols_u79).difference(final_models)
-    )
-    if final_missing:
-        print(
-            f"[train-diagnostic] fold={fold_id} "
-            "final_missing=" + ",".join(final_missing),
-            flush=True,
-        )
-
-    fold_artifacts[fold_id] = {
-        "fold": fold,
-        "calibration_dates": calibration_dates,
-        "decision_dates": decision_dates,
-        "calibration_models": calibration_models,
-        "calibration_cache": calibration_cache,
-        "final_models": final_models,
-        "decision_cache": decision_cache,
-    }
+expected_sessions = sum(max(0, len(x["dates"])-1) for x in artifacts.values())
+min_sessions = math.ceil(expected_sessions * MIN_SESSION_SHARE)
 
 
-# %% 5 - Replay de subconjuntos
-
-def _slice_cache(cache, subset_symbols):
-    indices = [0] + [full_position[symbol] for symbol in subset_symbols]
-    return {
-        timestamp: np.asarray(values, dtype=np.float64)[indices].copy()
-        for timestamp, values in cache.items()
-    }
-
-
-def _run_subset(label, subset_symbols, *, keep_result=False):
-    subset_symbols = sorted(subset_symbols)
-    subset_frames = {
-        symbol: frames_u79[symbol]
-        for symbol in subset_symbols
-    }
-    subset_config = config_u79.copiar_modelo(
-        update={"assets": tuple(subset_symbols)}
-    )
-    policies = {}
-    margins = []
-
-    for fold_id in sorted(fold_artifacts):
-        artifact = fold_artifacts[fold_id]
-        calibration_models = {
-            symbol: artifact["calibration_models"][symbol]
-            for symbol in subset_symbols
-            if symbol in artifact["calibration_models"]
-        }
-        final_models = {
-            symbol: artifact["final_models"][symbol]
-            for symbol in subset_symbols
-            if symbol in artifact["final_models"]
-        }
-        calibration_cache = _slice_cache(
-            artifact["calibration_cache"],
-            subset_symbols,
-        )
-        decision_cache = _slice_cache(
-            artifact["decision_cache"],
-            subset_symbols,
-        )
-
-        candidate_scores = []
-        for margin in candidate_margins:
-            calibration_policy = _politica_utilidade(
-                calibration_models,
-                subset_frames,
-                subset_symbols,
-                subset_config,
-                float(margin),
-                utility_cache=calibration_cache,
-            )
-            score = _crescimento_politica_simples(
-                calibration_policy,
-                subset_frames,
-                subset_symbols,
-                artifact["calibration_dates"],
-                subset_config,
-            )
-            candidate_scores.append((float(margin), float(score)))
-
-        selection = _selecionar_switch_margin_fold(
-            subset_config,
-            fold_id,
-            candidate_scores,
-        )
-        selected_margin = float(selection["selected_candidate_margin"])
-        effective_margin = max(
-            float(subset_config.rotation_switch_margin),
-            selected_margin,
-        )
-        policies[fold_id] = _politica_utilidade(
-            final_models,
-            subset_frames,
-            subset_symbols,
-            subset_config,
-            effective_margin,
-            fold_id=fold_id,
-            calibrated_switch_margin=selected_margin,
-            utility_cache=decision_cache,
-        )
-        margins.append(
-            {
-                "fold_id": int(fold_id),
-                "selected_margin": selected_margin,
-                "effective_margin": effective_margin,
-                "calibration_score": float(
-                    selection["selected_calibration_score"]
-                ),
-            }
-        )
-
-    scheduled = _politica_agendada(policies, decision_to_fold)
-    result = _simular_exato(
-        "random_batch2_u56",
-        scheduled,
-        subset_frames,
-        subset_symbols,
-        all_decision_dates,
-        subset_config,
-        calcular_taxas_referencia,
-        aplicar_deslizamento,
-        decision_metadata=decision_metadata,
-        model_label=f"Control Batch 3 Signature Validation - {label}",
-        method_line=(
-            "- Models are trained once per fold for the frozen U76 batch-2 "
-            "panel. Each insertion replay changes only the available object "
-            "set and recalibrates the frozen switch-margin candidates. "
-            "Calendar and benchmark remain fixed to the winning U56."
-        ),
-        benchmark_override=shared_benchmark,
-        benchmark_override_name=SHARED_BENCHMARK_NAME,
-    )
-    metrics = summarize_metrics(
-        result,
-        folds,
-        float(subset_config.initial_capital),
-    )
-    print(
-        f"[replay] {label} assets={len(subset_symbols)} "
-        f"capital={metrics['ending_capital']:,.2f} "
-        f"sharpe={metrics['sharpe']:.4f} "
-        f"maxdd={metrics['maximum_drawdown']:.4%}",
-        flush=True,
-    )
-    return {
-        "label": label,
-        "symbols": subset_symbols,
-        "metrics": metrics,
-        "margins": margins,
-        "result": result if keep_result else None,
-    }
-
-
-# %% 6 - Baselines U56, U59 e grupo U79
-baseline_u56 = _run_subset(
-    "U56_WINNER",
-    symbols_u56,
-    keep_result=True,
-)
-baseline_result = baseline_u56["result"]
-baseline_capital = float(baseline_u56["metrics"]["ending_capital"])
-
-baseline_u59 = _run_subset(
-    "U59_ENRICHED",
-    symbols_u59,
-    keep_result=True,
-)
-baseline_u59_result = baseline_u59["result"]
-baseline_u59_capital = float(baseline_u59["metrics"]["ending_capital"])
-
-full_u79 = _run_subset(
-    "U79_BATCH3_FULL",
-    symbols_u79,
-    keep_result=True,
-)
-full_u79_result = full_u79["result"]
-full_u79_capital = float(full_u79["metrics"]["ending_capital"])
-
-baseline_margin_by_fold = {
-    int(row["fold_id"]): float(row["selected_margin"])
-    for row in baseline_u56["margins"]
-}
-baseline_u59_margin_by_fold = {
-    int(row["fold_id"]): float(row["selected_margin"])
-    for row in baseline_u59["margins"]
-}
-
-
-# %% 7 - Correlacoes de cada candidato com o U56 vencedor
-close_returns = {}
-for symbol in symbols_u79:
-    close = pd.to_numeric(
-        frames_u79[symbol]["close"],
-        errors="coerce",
-    )
-    close_returns[symbol] = close.pct_change(
-        fill_method=None
-    ).replace([np.inf, -np.inf], np.nan)
-
-u56_return_frame = pd.DataFrame(
-    {symbol: close_returns[symbol] for symbol in symbols_u56}
-)
-u56_equal_weight_return = u56_return_frame.mean(
-    axis=1,
-    skipna=True,
-)
-
-baseline_predictions = baseline_result.predictions.reset_index().copy()
-baseline_predictions["strategy_return"] = pd.to_numeric(
-    baseline_predictions["strategy_equity"],
-    errors="coerce",
-).pct_change(fill_method=None)
-baseline_strategy_returns = (
-    baseline_predictions.set_index("timestamp")["strategy_return"]
-)
-baseline_decision_score = pd.Series(
-    pd.to_numeric(
-        baseline_predictions["decision_score"],
-        errors="coerce",
-    ).to_numpy(),
-    index=pd.to_datetime(
-        baseline_predictions["decision_date"],
-        utc=True,
-    ),
-)
-
-
-def _corr_pair(left, right):
-    pair = pd.concat(
-        [
-            pd.Series(left, dtype=float).rename("x"),
-            pd.Series(right, dtype=float).rename("y"),
-        ],
-        axis=1,
-    ).replace([np.inf, -np.inf], np.nan).dropna()
-    if len(pair) < 5 or pair["x"].nunique() < 2 or pair["y"].nunique() < 2:
-        return {"n": int(len(pair)), "pearson": None, "spearman": None}
-    return {
-        "n": int(len(pair)),
-        "pearson": float(pair["x"].corr(pair["y"])),
-        "spearman": float(
-            pair["x"].rank(method="average").corr(
-                pair["y"].rank(method="average")
-            )
-        ),
-    }
-
-
-def _candidate_score_profile(candidate):
-    candidate_index = full_position[candidate]
-    original_indices = [
-        full_position[symbol]
-        for symbol in symbols_u56
-    ]
+def score_profile(symbol: str) -> dict:
+    idx = position[symbol]
     rows = []
-
-    for artifact in fold_artifacts.values():
-        for timestamp in artifact["decision_dates"][:-1]:
-            utilities = artifact["decision_cache"].get(
-                pd.Timestamp(timestamp)
-            )
-            if utilities is None:
+    for artifact in artifacts.values():
+        for ts in artifact["dates"][:-1]:
+            u = artifact["cache"].get(pd.Timestamp(ts))
+            if u is None:
                 continue
-            utilities = np.asarray(utilities, dtype=float)
-            candidate_score = float(utilities[candidate_index])
-            original_scores = utilities[original_indices]
-            finite = original_scores[np.isfinite(original_scores)]
-            if not np.isfinite(candidate_score) or len(finite) == 0:
+            u = np.asarray(u, dtype=float)
+            if idx >= len(u):
                 continue
-            rows.append(
-                {
-                    "timestamp": pd.Timestamp(timestamp),
-                    "candidate_score": candidate_score,
-                    "u56_score_mean": float(np.mean(finite)),
-                    "u56_score_best": float(np.max(finite)),
-                    "candidate_beats_u56_best": bool(
-                        candidate_score > float(np.max(finite))
-                    ),
-                }
-            )
-
-    frame = pd.DataFrame(rows)
-    if frame.empty:
+            score = float(u[idx])
+            ref = u[u56_idx]
+            finite = ref[np.isfinite(ref)]
+            if not np.isfinite(score) or len(finite) == 0:
+                continue
+            best = float(np.max(finite))
+            rows.append((score, float(np.mean(finite)), best, score > best))
+    if not rows:
         return {
-            "model_score_corr_u56_mean": None,
-            "model_score_corr_u56_best": None,
-            "model_score_corr_u56_decision_score": None,
-            "candidate_beats_u56_best_share": None,
-            "candidate_score_mean": None,
-            "candidate_score_std": None,
-            "candidate_positive_score_share": None,
-            "model_score_sessions": 0,
+            "model_score_corr_u56_mean":None,
+            "model_score_corr_u56_best":None,
+            "candidate_beats_u56_best_share":None,
+            "candidate_score_mean":None,
+            "candidate_score_std":None,
+            "candidate_positive_score_share":None,
+            "model_score_sessions":0,
         }
-
-    frame = frame.set_index("timestamp").sort_index()
-    corr_mean = _corr_pair(
-        frame["candidate_score"],
-        frame["u56_score_mean"],
-    )
-    corr_best = _corr_pair(
-        frame["candidate_score"],
-        frame["u56_score_best"],
-    )
-    corr_decision = _corr_pair(
-        frame["candidate_score"],
-        baseline_decision_score,
-    )
-    scores = frame["candidate_score"]
+    f = pd.DataFrame(rows, columns=["score","mean","best","beats"])
     return {
-        "model_score_corr_u56_mean": corr_mean["pearson"],
-        "model_score_spearman_u56_mean": corr_mean["spearman"],
-        "model_score_corr_u56_best": corr_best["pearson"],
-        "model_score_spearman_u56_best": corr_best["spearman"],
-        "model_score_corr_u56_decision_score": corr_decision["pearson"],
-        "candidate_beats_u56_best_share": float(
-            frame["candidate_beats_u56_best"].mean()
-        ),
-        "candidate_score_mean": float(scores.mean()),
-        "candidate_score_std": float(scores.std(ddof=0)),
-        "candidate_positive_score_share": float((scores > 0.0).mean()),
-        "model_score_sessions": int(len(frame)),
+        "model_score_corr_u56_mean":corr(f["score"],f["mean"],5),
+        "model_score_corr_u56_best":corr(f["score"],f["best"],5),
+        "candidate_beats_u56_best_share":float(f["beats"].mean()),
+        "candidate_score_mean":float(f["score"].mean()),
+        "candidate_score_std":float(f["score"].std(ddof=0)),
+        "candidate_positive_score_share":float((f["score"]>0).mean()),
+        "model_score_sessions":int(len(f)),
     }
 
 
-def _candidate_return_profile(candidate):
-    candidate_returns = close_returns[candidate]
-    pairwise = []
-    for symbol in symbols_u56:
-        corr = _corr_pair(
-            candidate_returns,
-            close_returns[symbol],
-        )["pearson"]
-        if corr is not None:
-            pairwise.append((symbol, float(corr)))
-
-    corr_equal = _corr_pair(
-        candidate_returns,
-        u56_equal_weight_return,
-    )
-    corr_strategy = _corr_pair(
-        candidate_returns,
-        baseline_strategy_returns,
-    )
-
-    pairwise_values = np.asarray(
-        [value for _, value in pairwise],
-        dtype=float,
-    )
-    most_correlated = (
-        max(pairwise, key=lambda item: item[1])
-        if pairwise
-        else (None, None)
-    )
-    least_correlated = (
-        min(pairwise, key=lambda item: item[1])
-        if pairwise
-        else (None, None)
-    )
-    return {
-        "return_corr_u56_equal_weight": corr_equal["pearson"],
-        "return_spearman_u56_equal_weight": corr_equal["spearman"],
-        "return_corr_u56_strategy": corr_strategy["pearson"],
-        "mean_return_corr_u56_assets": (
-            float(pairwise_values.mean())
-            if len(pairwise_values)
-            else None
-        ),
-        "median_return_corr_u56_assets": (
-            float(np.median(pairwise_values))
-            if len(pairwise_values)
-            else None
-        ),
-        "mean_abs_return_corr_u56_assets": (
-            float(np.abs(pairwise_values).mean())
-            if len(pairwise_values)
-            else None
-        ),
-        "most_correlated_u56_asset": most_correlated[0],
-        "most_correlated_u56_asset_corr": most_correlated[1],
-        "least_correlated_u56_asset": least_correlated[0],
-        "least_correlated_u56_asset_corr": least_correlated[1],
-        "pairwise_u56_correlation_count": int(len(pairwise)),
-    }
-
-
-# %% 8 - Assinatura congelada antes dos replays individuais
-
-def _classificar_assinatura(score_profile):
-    beats = score_profile.get("candidate_beats_u56_best_share")
-    score_std = score_profile.get("candidate_score_std")
-    score_mean = score_profile.get("candidate_score_mean")
-    corr_mean = score_profile.get("model_score_corr_u56_mean")
-
-    if beats is None or score_std is None or score_mean is None or corr_mean is None:
-        return {
-            "signature_name": SIGNATURE_NAME,
-            "signature_predicted_positive": False,
-            "signature_class": "insufficient_score_data",
-        }
-
-    if float(beats) <= 0.0:
-        signature_class = "dormant"
-        predicted = False
-    elif (
-        float(beats)
-        <= SIGNATURE_THRESHOLDS["beats_best_share_max_inclusive"]
-        and float(score_std)
-        <= SIGNATURE_THRESHOLDS["score_std_max_inclusive"]
-        and float(score_mean)
-        <= SIGNATURE_THRESHOLDS["score_mean_max_inclusive"]
-        and abs(float(corr_mean))
-        <= SIGNATURE_THRESHOLDS["abs_score_corr_u56_mean_max_inclusive"]
+def classify(p: dict) -> tuple[str,bool]:
+    beats = p["candidate_beats_u56_best_share"]
+    std = p["candidate_score_std"]
+    mean = p["candidate_score_mean"]
+    corr_best = p["model_score_corr_u56_best"]
+    sessions = p["model_score_sessions"]
+    if (
+        beats is None or std is None or mean is None or corr_best is None
+        or sessions < min_sessions
     ):
-        signature_class = "selective_specialist"
-        predicted = True
-    elif (
-        float(beats)
-        > SIGNATURE_THRESHOLDS["beats_best_share_max_inclusive"]
-        or float(score_std)
-        > SIGNATURE_THRESHOLDS["score_std_max_inclusive"]
-    ):
-        signature_class = "invasive_or_unstable"
-        predicted = False
-    else:
-        signature_class = "uncertain"
-        predicted = False
-
-    return {
-        "signature_name": SIGNATURE_NAME,
-        "signature_predicted_positive": bool(predicted),
-        "signature_class": signature_class,
-    }
+        return "insufficient_score_data", False
+    if beats <= 0:
+        return "dormant", False
+    if beats > BEATS_MAX or std > SCORE_STD_MAX:
+        return "invasive_or_unstable", False
+    if mean <= SCORE_MEAN_MAX and abs(corr_best) <= ABS_CORR_BEST_MAX:
+        return "selective_specialist", True
+    return "uncertain", False
 
 
-signature_profiles = {}
-for candidate in RANDOM_ASSETS:
-    score_profile = _candidate_score_profile(candidate)
-    signature_profiles[candidate] = {
-        **score_profile,
-        **_classificar_assinatura(score_profile),
-    }
+stage1_map = stage1.set_index("symbol")
+rank_rows = []
+for i, symbol in enumerate(candidates, start=1):
+    print(f"[stage2-score] {i}/{len(candidates)} {symbol}", flush=True)
+    p = score_profile(symbol)
+    cls, predicted = classify(p)
+    meta = stage1_map.loc[symbol].to_dict() if symbol in stage1_map.index else {}
+    cb = p["model_score_corr_u56_best"]
+    beats = p["candidate_beats_u56_best_share"]
+    rank_rows.append({
+        "asset":symbol,
+        "name":meta.get("name"),
+        "exchange":meta.get("exchange"),
+        "stage1_rank":meta.get("stage1_rank"),
+        "raw_winner_probability":meta.get("raw_winner_probability"),
+        **p,
+        "signature_name":SIGNATURE_NAME,
+        "signature_class":cls,
+        "signature_predicted_positive":bool(predicted),
+        "abs_score_corr_u56_best":abs(float(cb)) if cb is not None else None,
+        "beats_target_distance":abs(float(beats)-BEATS_TARGET) if beats is not None else None,
+    })
 
-signature_pre_replay = pd.DataFrame(
-    [
-        {
-            "asset": candidate,
-            **signature_profiles[candidate],
-        }
-        for candidate in RANDOM_ASSETS
-    ]
-)
-
-print("[signature-pre-replay] predictions frozen before candidate capital replays", flush=True)
-print(
-    signature_pre_replay[
-        [
-            "asset",
-            "signature_class",
-            "signature_predicted_positive",
-            "candidate_beats_u56_best_share",
-            "candidate_score_std",
-            "candidate_score_mean",
-            "model_score_corr_u56_mean",
-        ]
-    ].to_string(index=False),
-    flush=True,
-)
-
-
-# %% 9 - Insercao individual contra U56 e contra U59
-
-candidate_rows = []
-candidate_fold_effects = {}
-
-baseline_selected = (
-    baseline_result.predictions["selected_asset"]
-    .fillna("CASH")
-    .astype(str)
-)
-
-baseline_u59_selected = (
-    baseline_u59_result.predictions["selected_asset"]
-    .fillna("CASH")
-    .astype(str)
-)
-
-for position, candidate in enumerate(RANDOM_ASSETS, start=1):
-    print(
-        f"[candidate] {position}/20 U56_PLUS_{candidate} / U59_PLUS_{candidate}",
-        flush=True,
-    )
-    scenario = _run_subset(
-        f"U56_PLUS_{candidate}",
-        [*symbols_u56, candidate],
-        keep_result=True,
-    )
-    result = scenario["result"]
-    metrics = scenario["metrics"]
-    ending = float(metrics["ending_capital"])
-
-    enriched_scenario = _run_subset(
-        f"U59_PLUS_{candidate}",
-        [*symbols_u59, candidate],
-        keep_result=True,
-    )
-    enriched_result = enriched_scenario["result"]
-    enriched_metrics = enriched_scenario["metrics"]
-    enriched_ending = float(enriched_metrics["ending_capital"])
-
-    candidate_selected = (
-        result.predictions["selected_asset"]
-        .fillna("CASH")
-        .astype(str)
-    )
-    aligned = pd.concat(
-        [
-            baseline_selected.rename("baseline"),
-            candidate_selected.rename("candidate"),
-        ],
-        axis=1,
-        join="inner",
-    )
-    changed = aligned["baseline"] != aligned["candidate"]
-
-    enriched_selected = (
-        enriched_result.predictions["selected_asset"]
-        .fillna("CASH")
-        .astype(str)
-    )
-    enriched_aligned = pd.concat(
-        [
-            baseline_u59_selected.rename("baseline"),
-            enriched_selected.rename("candidate"),
-        ],
-        axis=1,
-        join="inner",
-    )
-    enriched_changed = (
-        enriched_aligned["baseline"] != enriched_aligned["candidate"]
-    )
-
-    scenario_margin_by_fold = {
-        int(row["fold_id"]): float(row["selected_margin"])
-        for row in scenario["margins"]
-    }
-    fold_effects = []
-    margin_flip_count = 0
-    for fold_id in sorted(baseline_margin_by_fold):
-        before = baseline_margin_by_fold[fold_id]
-        after = scenario_margin_by_fold[fold_id]
-        changed_margin = abs(before - after) > 1e-12
-        margin_flip_count += int(changed_margin)
-        fold_effects.append(
-            {
-                "fold_id": int(fold_id),
-                "u56_margin": float(before),
-                "u56_plus_candidate_margin": float(after),
-                "margin_changed": bool(changed_margin),
-            }
-        )
-    candidate_fold_effects[candidate] = fold_effects
-
-    trades = result.trades
-    candidate_sells = trades.loc[
-        (trades.get("asset", pd.Series(dtype=str)).astype(str) == candidate)
-        & trades.get("action", pd.Series(dtype=str)).isin(
-            ["SELL", "FINAL_SELL"]
-        )
-    ].copy()
-    realized_pnl = (
-        float(pd.to_numeric(
-            candidate_sells.get("realized_pnl", pd.Series(dtype=float)),
-            errors="coerce",
-        ).fillna(0.0).sum())
-        if not candidate_sells.empty
-        else 0.0
-    )
-    position_returns = pd.to_numeric(
-        candidate_sells.get("position_return", pd.Series(dtype=float)),
-        errors="coerce",
-    ).dropna()
-
-    market_profile = _candidate_return_profile(candidate)
-    score_profile = signature_profiles[candidate]
-    metadata = RANDOM_METADATA[candidate]
-    signature_actual_positive = bool(
-        ending > baseline_capital
-    )
-
-    row = {
-        "asset": candidate,
-        "name": metadata["name"],
-        "exchange": metadata["exchange"],
-        "u56_ending_capital": baseline_capital,
-        "u56_plus_candidate_ending_capital": ending,
-        "insertion_capital_delta": ending - baseline_capital,
-        "insertion_capital_pct": (
-            ending / baseline_capital - 1.0
-            if baseline_capital > 0.0
-            else None
-        ),
-        "u59_ending_capital": baseline_u59_capital,
-        "u59_plus_candidate_ending_capital": enriched_ending,
-        "u59_insertion_capital_delta": (
-            enriched_ending - baseline_u59_capital
-        ),
-        "u59_insertion_capital_pct": (
-            enriched_ending / baseline_u59_capital - 1.0
-            if baseline_u59_capital > 0.0
-            else None
-        ),
-        "sharpe_delta": (
-            float(metrics["sharpe"])
-            - float(baseline_u56["metrics"]["sharpe"])
-        ),
-        "maxdd_delta": (
-            float(metrics["maximum_drawdown"])
-            - float(baseline_u56["metrics"]["maximum_drawdown"])
-        ),
-        "worst_fold_delta": (
-            float(metrics["worst_fold_return"])
-            - float(baseline_u56["metrics"]["worst_fold_return"])
-        ),
-        "changed_selected_asset_sessions": int(changed.sum()),
-        "changed_selected_asset_share": float(changed.mean()),
-        "first_path_divergence": (
-            str(aligned.index[changed][0])
-            if bool(changed.any())
-            else None
-        ),
-        "candidate_selected_sessions": int(
-            (candidate_selected == candidate).sum()
-        ),
-        "u59_changed_selected_asset_sessions": int(
-            enriched_changed.sum()
-        ),
-        "u59_changed_selected_asset_share": float(
-            enriched_changed.mean()
-        ),
-        "u59_candidate_selected_sessions": int(
-            (enriched_selected == candidate).sum()
-        ),
-        "candidate_sell_count": int(len(candidate_sells)),
-        "candidate_realized_pnl_sum": realized_pnl,
-        "candidate_mean_position_return": (
-            float(position_returns.mean())
-            if len(position_returns)
-            else None
-        ),
-        "candidate_win_rate": (
-            float((position_returns > 0.0).mean())
-            if len(position_returns)
-            else None
-        ),
-        "margin_flip_count": int(margin_flip_count),
-        "signature_actual_positive_u56": signature_actual_positive,
-        "signature_prediction_correct_u56": bool(
-            score_profile["signature_predicted_positive"]
-            == signature_actual_positive
-        ),
-        **market_profile,
-        **score_profile,
-    }
-    candidate_rows.append(row)
-
-candidates = pd.DataFrame(candidate_rows).sort_values(
-    "insertion_capital_pct",
-    ascending=False,
+ranked = pd.DataFrame(rank_rows)
+priority = {
+    "selective_specialist":0,
+    "uncertain":1,
+    "invasive_or_unstable":2,
+    "dormant":3,
+    "insufficient_score_data":4,
+}
+ranked["_priority"] = ranked["signature_class"].map(priority).fillna(9)
+ranked["_corr"] = pd.to_numeric(
+    ranked["abs_score_corr_u56_best"], errors="coerce"
+).fillna(999.0)
+ranked["_beats"] = pd.to_numeric(
+    ranked["beats_target_distance"], errors="coerce"
+).fillna(999.0)
+ranked["_prob"] = pd.to_numeric(
+    ranked["raw_winner_probability"], errors="coerce"
+).fillna(-1.0)
+ranked = ranked.sort_values(
+    ["_priority","_corr","_beats","_prob","asset"],
+    ascending=[True,True,True,False,True],
 ).reset_index(drop=True)
-
-
-# %% 10 - Relacao propriedade -> contribuicao
-correlation_properties = (
-    "return_corr_u56_equal_weight",
-    "return_corr_u56_strategy",
-    "mean_return_corr_u56_assets",
-    "mean_abs_return_corr_u56_assets",
-    "model_score_corr_u56_mean",
-    "model_score_corr_u56_best",
-    "model_score_corr_u56_decision_score",
-    "candidate_beats_u56_best_share",
-    "candidate_score_mean",
-    "candidate_score_std",
-    "candidate_positive_score_share",
-    "changed_selected_asset_share",
-    "candidate_selected_sessions",
-    "candidate_sell_count",
-    "candidate_realized_pnl_sum",
-    "margin_flip_count",
+ranked["selection_rank"] = np.arange(1, len(ranked)+1)
+ranked["selection_tier"] = np.where(
+    ranked["signature_predicted_positive"].astype(bool),
+    "strong_signature_match",
+    "best_remaining_without_capital_replay",
 )
-
-correlation_rows = []
-target = pd.to_numeric(
-    candidates["insertion_capital_pct"],
-    errors="coerce",
-)
-for property_name in correlation_properties:
-    values = pd.to_numeric(
-        candidates[property_name],
-        errors="coerce",
-    )
-    pair = pd.concat(
-        [values.rename("x"), target.rename("y")],
-        axis=1,
-    ).dropna()
-    if len(pair) < 5 or pair["x"].nunique() < 2:
-        continue
-    correlation_rows.append(
-        {
-            "property": property_name,
-            "n": int(len(pair)),
-            "pearson": float(pair["x"].corr(pair["y"])),
-            "spearman": float(
-                pair["x"].rank(method="average").corr(
-                    pair["y"].rank(method="average")
-                )
-            ),
-        }
-    )
-
-property_correlations = pd.DataFrame(correlation_rows)
-if not property_correlations.empty:
-    property_correlations["max_abs_correlation"] = property_correlations[
-        ["pearson", "spearman"]
-    ].abs().max(axis=1)
-    property_correlations = property_correlations.sort_values(
-        "max_abs_correlation",
-        ascending=False,
-    ).reset_index(drop=True)
-
-positive_count = int((candidates["insertion_capital_pct"] > 0.0).sum())
-negative_count = int((candidates["insertion_capital_pct"] < 0.0).sum())
-zero_count = int(len(candidates) - positive_count - negative_count)
+ranked = ranked.drop(columns=["_priority","_corr","_beats","_prob"])
+selected = ranked.head(SELECTED_COUNT).copy()
+selected_symbols = tuple(selected["asset"].astype(str))
+strong = int(selected["signature_predicted_positive"].astype(bool).sum())
 
 print(
-    "[batch3-group] "
-    f"U56={baseline_capital:,.2f} "
-    f"U59={baseline_u59_capital:,.2f} "
-    f"U79_B3={full_u79_capital:,.2f} "
-    f"U79_vs_U59={full_u79_capital / baseline_u59_capital - 1.0:+.4%}",
+    f"[selection] selected={len(selected_symbols)} strong={strong} "
+    "capital_replays=0",
     flush=True,
 )
 print(
-    f"[batch3-candidates-vs-u56] positive={positive_count} "
-    f"negative={negative_count} zero={zero_count}",
-    flush=True,
-)
-print("[batch3-candidates] ranking", flush=True)
-print(
-    candidates[
+    selected[
         [
-            "asset",
-            "insertion_capital_pct",
-            "changed_selected_asset_sessions",
-            "margin_flip_count",
-            "return_corr_u56_equal_weight",
-            "model_score_corr_u56_mean",
-            "candidate_beats_u56_best_share",
+            "selection_rank","asset","selection_tier","raw_winner_probability",
+            "signature_class","candidate_beats_u56_best_share",
+            "candidate_score_std","candidate_score_mean",
+            "model_score_corr_u56_best",
         ]
     ].to_string(index=False),
     flush=True,
 )
 
+OUT.mkdir(parents=True, exist_ok=True)
+for old in OUT.rglob("*"):
+    if old.is_file():
+        old.unlink()
 
-
-signature_accuracy = float(
-    candidates["signature_prediction_correct_u56"].mean()
+labels.to_csv(OUT / "intelligent_known_training.csv", index=False)
+stage1.to_csv(OUT / "intelligent_stage1_ranked.csv", index=False)
+pd.DataFrame(quality).to_csv(
+    OUT / "intelligent_model_pool_quality.csv", index=False
 )
-signature_predicted_positive_count = int(
-    candidates["signature_predicted_positive"].sum()
-)
-signature_true_positive_count = int(
-    candidates["signature_actual_positive_u56"].sum()
-)
-print(
-    f"[signature-validation] name={SIGNATURE_NAME} "
-    f"accuracy={signature_accuracy:.2%} "
-    f"predicted_positive={signature_predicted_positive_count} "
-    f"actual_positive={signature_true_positive_count}",
-    flush=True,
-)
-
-
-# %% 11 - Exportacao
-DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
-for antigo in DIRETORIO_RESULTADOS.glob("*.csv"):
-    antigo.unlink()
-for antigo in DIRETORIO_RESULTADOS.glob("*.json"):
-    antigo.unlink()
-graficos = DIRETORIO_RESULTADOS / "graficos"
-if graficos.exists():
-    for antigo in graficos.glob("*.png"):
-        antigo.unlink()
-
-signature_pre_replay.to_csv(
-    DIRETORIO_RESULTADOS / "signature_batch3_pre_replay.csv",
-    index=False,
-)
-candidates.to_csv(
-    DIRETORIO_RESULTADOS / "signature_batch3_candidates.csv",
-    index=False,
-)
-property_correlations.to_csv(
-    DIRETORIO_RESULTADOS / "signature_batch3_property_correlations.csv",
-    index=False,
-)
-baseline_result.predictions.reset_index().to_csv(
-    DIRETORIO_RESULTADOS / "u56_winner_predictions.csv",
-    index=False,
-)
-baseline_result.trades.to_csv(
-    DIRETORIO_RESULTADOS / "u56_winner_trades.csv",
-    index=False,
-)
-baseline_u59_result.predictions.reset_index().to_csv(
-    DIRETORIO_RESULTADOS / "u59_enriched_predictions.csv",
-    index=False,
-)
-baseline_u59_result.trades.to_csv(
-    DIRETORIO_RESULTADOS / "u59_enriched_trades.csv",
-    index=False,
-)
-full_u79_result.predictions.reset_index().to_csv(
-    DIRETORIO_RESULTADOS / "u79_batch3_predictions.csv",
-    index=False,
-)
-full_u79_result.trades.to_csv(
-    DIRETORIO_RESULTADOS / "u79_batch3_trades.csv",
-    index=False,
-)
+ranked.to_csv(OUT / "intelligent_candidates_ranked.csv", index=False)
+selected.to_csv(OUT / "intelligent_selected_20.csv", index=False)
 
 payload = {
-    "research_version": RESEARCH_VERSION,
-    "execution_schema": EXECUTION_SCHEMA,
-    "base_snapshot_sha256": manifesto_base.get("snapshot_sha256"),
-    "batch3_snapshot_sha256": manifesto_batch3.get("snapshot_sha256"),
-    "question": (
-        "Validate the predeclared selective-specialist signature on a third untouched "
-        "20-asset random batch, while measuring both U56-control insertion and "
-        "incremental insertion into U59 enriched by COLB, AMS and FOXF."
-    ),
-    "protocol": {
-        "winner_universe_size": 56,
-        "batch3_size": 20,
-        "enriched_base_size": 59,
-        "expanded_universe_size": 79,
-        "random_selection_seed": RANDOM_SELECTION_SEED,
-        "random_selection_catalog_date": RANDOM_SELECTION_CATALOG_DATE,
-        "random_selection_rule": RANDOM_SELECTION_RULE,
-        "batch1_assets_excluded": list(BATCH1_ASSETS),
-        "batch2_assets_excluded_from_random_draw": list(BATCH2_ASSETS),
-        "retained_positive_batch2_assets": list(ENRICHED_POSITIVES),
-        "batch3_assets": list(RANDOM_ASSETS),
-        "signature_name": SIGNATURE_NAME,
-        "signature_thresholds": dict(SIGNATURE_THRESHOLDS),
-        "rejected_random_candidates": list(REJECTED_RANDOM_CANDIDATES),
-        "selection_uses_backtest_performance": False,
-        "base_calendar_fixed_to_u56": True,
-        "benchmark_fixed_to_u56": True,
-        "lightgbm_parameters_unchanged": True,
-        "fold_method_unchanged": True,
-        "switch_margin_candidates": list(candidate_margins),
-        "models_trained_once_per_fold": True,
-        "individual_test_control": "U56 plus exactly one batch-3 candidate",
-        "individual_test_enriched": "U59 plus exactly one batch-3 candidate",
-        "group_test": "U59 plus all 20 batch-3 candidates",
-        "interpretation": (
-            "Individual insertion effects are the primary candidate-level "
-            "measure. The 20-object group effect is secondary because object "
-            "interactions can be non-additive."
-        ),
+    "research_version":RESEARCH_VERSION,
+    "execution_schema":EXECUTION_SCHEMA,
+    "checkpoint_positive_only_sha":CHECKPOINT_SHA,
+    "known_positive_additions":list(KNOWN_POS),
+    "protocol":{
+        "random_sampling":False,
+        "candidate_strategy_replays":0,
+        "selection_uses_new_candidate_capital":False,
+        "stage1_model_pool_size":MODEL_POOL_SIZE,
+        "stage2_score_reference":"U56",
+        "selected_count":SELECTED_COUNT,
+        "fallback_if_strong_under_20":"frozen rank without capital",
     },
-    "u56_winner": {
-        "metrics": baseline_u56["metrics"],
-        "margins": baseline_u56["margins"],
-        "calendar_source": reference_calendar_source,
+    "signature":{
+        "name":SIGNATURE_NAME,
+        "beats_max":BEATS_MAX,
+        "score_std_max":SCORE_STD_MAX,
+        "score_mean_max":SCORE_MEAN_MAX,
+        "abs_corr_u56_best_max":ABS_CORR_BEST_MAX,
+        "minimum_score_session_share":MIN_SESSION_SHARE,
+        "expected_score_sessions":expected_sessions,
+        "minimum_score_sessions":min_sessions,
     },
-    "u59_enriched": {
-        "retained_assets": list(ENRICHED_POSITIVES),
-        "metrics": baseline_u59["metrics"],
-        "margins": baseline_u59["margins"],
-        "capital_delta_vs_u56": baseline_u59_capital - baseline_capital,
-        "capital_pct_vs_u56": (
-            baseline_u59_capital / baseline_capital - 1.0
-            if baseline_capital > 0.0
-            else None
-        ),
+    "stage1":{
+        "snapshot_sha256":smart_manifest.get("snapshot_sha256"),
+        "pool":list(pool),
+        "history_eligible_count":len(stage1),
     },
-    "signature_validation": {
-        "name": SIGNATURE_NAME,
-        "thresholds": dict(SIGNATURE_THRESHOLDS),
-        "accuracy_u56": signature_accuracy,
-        "predicted_positive_count": signature_predicted_positive_count,
-        "actual_positive_count": signature_true_positive_count,
-        "pre_replay_rows": signature_pre_replay.to_dict(orient="records"),
+    "stage2":{
+        "model_eligible_count":len(candidates),
+        "strong_signature_in_selected_20":strong,
+        "selected_20":list(selected_symbols),
+        "structural_exclusions":structural_exclusions,
     },
-    "u79_batch3_group": {
-        "metrics": full_u79["metrics"],
-        "margins": full_u79["margins"],
-        "capital_delta_vs_u59": full_u79_capital - baseline_u59_capital,
-        "capital_pct_vs_u59": (
-            full_u79_capital / baseline_u59_capital - 1.0
-            if baseline_u59_capital > 0.0
-            else None
-        ),
-    },
-    "candidate_counts": {
-        "positive": positive_count,
-        "negative": negative_count,
-        "zero": zero_count,
-    },
-    "candidate_rows": candidates.to_dict(orient="records"),
-    "candidate_fold_margin_effects": candidate_fold_effects,
-    "property_profit_correlations": property_correlations.to_dict(
-        orient="records"
-    ),
-    "batch3_diagnostics": diagnosticos_batch3,
-    "batch3_audit": auditoria_batch3,
-    "u56_diagnostics": diagnosticos_u56,
-    "u56_audit": auditoria_u56,
-    "runtime_seconds": float(time.perf_counter() - training_started),
-    "interpretation_rule": (
-        "The selective-specialist signature was frozen before candidate capital "
-        "replays. Its first confirmatory target is the sign of U56+candidate "
-        "capital contribution. U59+candidate is a separate enriched-universe "
-        "incremental test. Market-return correlation remains descriptive and "
-        "is not itself part of the signature."
+    "runtime_seconds":float(time.perf_counter()-t0),
+    "interpretation_rule":(
+        "Selected assets are hypotheses only. Their capital was not observed "
+        "during selection. The next capital replay must use this frozen list."
     ),
 }
+with (OUT / "intelligent_candidate_screen.json").open(
+    "w", encoding="utf-8"
+) as f:
+    json.dump(payload, f, indent=2, sort_keys=True, default=str)
 
-with (
-    DIRETORIO_RESULTADOS / "signature_batch3_validation.json"
-).open("w", encoding="utf-8") as arquivo:
-    json.dump(
-        payload,
-        arquivo,
-        ensure_ascii=False,
-        indent=2,
-        default=str,
-    )
-
-PACOTE_ANALISE = criar_pacote_analise(DIRETORIO_RESULTADOS)
-print(f"[package] pronto={PACOTE_ANALISE}", flush=True)
+package = criar_pacote_analise(OUT)
+print(f"[package] pronto={package}", flush=True)
 sinal_sonoro_conclusao()
 print(
-    "[done] batch3 signature validation concluido "
-    f"seconds={time.perf_counter() - training_started:.3f}",
+    f"[done] intelligent screen seconds={time.perf_counter()-t0:.3f}",
     flush=True,
 )
