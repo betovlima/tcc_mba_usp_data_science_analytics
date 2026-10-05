@@ -1681,3 +1681,46 @@ Decisoes para a proxima versao:
    ate existir validacao cruzada aceitavel;
 5. congelar novos candidatos somente depois de uma assinatura calculada no
    contexto U62 e sem consultar capital dos candidatos novos.
+
+
+## Correcao U62 da selecao inteligente — 1.16.1-dev.1
+
+A versao 1.16.0-dev.1 foi mantida apenas como diagnostico porque calculava a
+assinatura dos novos candidatos contra U56. O caso VSTM ja havia demonstrado
+que a contribuicao pode mudar de sinal quando o universo vencedor muda.
+
+A versao 1.16.1-dev.1 corrige o contexto cientifico:
+- U62 candidato = U56 + COLB + AMS + FOXF + MG + REXR + CALM;
+- os seis ativos conhecidos positivos permanecem no contexto de score;
+- o calendario continua congelado no U56 original para nao introduzir outro
+  confundidor;
+- os novos candidatos sao medidos contra o melhor e a media de score do U62
+  candidato, nao contra U56;
+- nenhum replay da estrategia por candidato e executado durante a descoberta.
+
+O Stage 1 tambem foi endurecido:
+- a janela barata de 2023 foi removida;
+- a triagem exige o proprio inicio congelado da pesquisa e pelo menos 2.600
+  barras antes de um ativo entrar no pool;
+- o pool-alvo subiu de 100 para 500 para reduzir o risco de perder candidatos
+  devido ao classificador bruto, cuja generalizacao entre lotes foi fraca;
+- se houver menos de 500 ativos elegiveis, usa todos os elegiveis disponiveis.
+
+Selecao final:
+- assinatura: selective-specialist-u62-v0.1;
+- nao existe preenchimento forcado;
+- somente candidatos que passam integralmente a assinatura sao congelados;
+- no maximo 20 sao selecionados;
+- se apenas 7 passarem, ficam 7; nao entram dormant, invasive_or_unstable ou
+  insufficient_score_data apenas para completar vinte.
+
+Artefato final da lista:
+`intelligent_selected_candidates.csv`.
+
+Schema: `intelligent-candidate-screen-u62-v1`.
+Versao: `1.16.1-dev.1`.
+Branch ativa: `research/intelligent-asset-signature-v1`.
+
+Esta versao ainda nao possui resultado de execucao. A lista produzida por ela
+sera a primeira lista nova que podera ser congelada para teste confirmatorio de
+capital contra o U62 candidato.
