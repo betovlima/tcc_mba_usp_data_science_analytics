@@ -1619,3 +1619,65 @@ para cada nova versao, acrescentar ao final deste arquivo, sem apagar o historic
 
 Esse registro e obrigatorio para permitir retomada fiel da pesquisa em novas
 conversas sem depender do historico do chat.
+
+
+## Execucao diagnostica 1.16.0-dev.1 — nao promover
+
+Pacote analisado: `pacote_analise(7).zip`.
+Schema observado: `intelligent-candidate-screen-v1`.
+Versao observada: `1.16.0-dev.1`.
+Runtime: 334,3155 s.
+
+Esta execucao e diagnostica e nao deve ser promovida como campanha cientifica
+confirmatoria porque o Stage 2 ainda usa `stage2_score_reference=U56`. A decisao
+metodologica vigente exige que os novos candidatos sejam avaliados no contexto
+do `U62 candidato = U56 + COLB + AMS + FOXF + MG + REXR + CALM`.
+
+O pacote confirmou que nenhum replay de capital foi usado para selecionar os
+novos candidatos:
+- random_sampling=false;
+- candidate_strategy_replays=0;
+- selection_uses_new_candidate_capital=false.
+
+Stage 1:
+- 2.271 ativos passaram a janela curta de historico;
+- 100 foram levados ao pool integral;
+- somente 44 desses 100 possuíam a cobertura integral exigida;
+- 43 ficaram elegiveis para modelagem apos filtros estruturais;
+- GOGL foi excluido por stock_merger GOGL -> CMBT em 2025-08-20.
+
+A lista de 20 produzida por esta versao NAO deve ser congelada como lista de
+validacao porque foi ordenada contra U56. Ela foi:
+CNC, EQNR, GERN, BCRX, PLUG, MOH, CSIQ, WST, EDU, JD, IRD, MTEX, AMC, WTI,
+ILMN, CYTK, UCO, IOVA, CYRX e FLOT.
+
+Somente CNC e EQNR passaram integralmente pela assinatura v0.2. Os outros 18
+entraram pelo mecanismo de preenchimento. Entre os 43 modelaveis havia:
+- 2 selective_specialist;
+- 17 invasive_or_unstable;
+- 17 dormant;
+- 7 insufficient_score_data.
+
+Auditoria adicional feita apos a execucao, usando somente os 40 candidatos ja
+rotulados dos lotes 2 e 3, mostrou que o classificador logistico do Stage 1 nao
+generaliza entre os dois lotes: AUC aproximadamente 0,353 ao treinar no lote 3
+e testar no lote 2, e 0,451 no sentido inverso. Portanto a probabilidade
+`raw_winner_probability` nao deve ser tratada como uma assinatura preditiva nem
+como filtro principal da proxima versao.
+
+Outra descoberta de engenharia: a janela curta favoreceu muitos instrumentos
+sem historia integral. Dos top 100, 56 falharam o requisito de cobertura de
+10 anos. A proxima versao deve separar melhor triagem barata de elegibilidade
+historica e nao desperdiçar a maior parte do pool com ativos que depois sao
+removidos.
+
+Decisoes para a proxima versao:
+1. usar U62 candidato como contexto de score, mantendo o calendario cientifico
+   fixo no U56;
+2. nao promover os 20 nomes desta execucao;
+3. remover o preenchimento forcado com classes invasive/dormant apenas para
+   chegar a 20 nomes;
+4. tratar Stage 1 como recuperacao/coarse screening, nao como prova de vencedor,
+   ate existir validacao cruzada aceitavel;
+5. congelar novos candidatos somente depois de uma assinatura calculada no
+   contexto U62 e sem consultar capital dos candidatos novos.
