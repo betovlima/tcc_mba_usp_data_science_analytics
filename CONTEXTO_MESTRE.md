@@ -1425,3 +1425,51 @@ Correcao:
 Esse comportamento espelha a semantica do engine LightGBM: um ativo sem
 amostra minima em uma fase nao deve abortar todo o universo nem receber modelo
 artificial; ele simplesmente nao compete naquela fase.
+
+
+## Assinatura provisoria e validacao no terceiro lote — 1.15.0-dev.1
+
+Ate este ponto existe uma assinatura provisoria, nao uma assinatura validada.
+
+Evidencia replicada entre os lotes 1 e 2:
+- objetos que invadem muitas decisoes tendem a degradar o capital;
+- alta frequencia de vencer o melhor objeto U56 tende a ser negativa;
+- alta variabilidade do score LightGBM tende a ser negativa;
+- baixa correlacao de retorno com o U56, isoladamente, nao identifica utilidade;
+- os melhores objetos do lote 2 atuaram de forma seletiva: COLB, AMS e FOXF;
+- COLB mostrou efeito de caminho, AMS alpha direto e FOXF efeito positivo menor.
+
+Assinatura congelada selective-specialist-v0.1:
+- candidate_beats_u56_best_share > 0 e <= 5%;
+- candidate_score_std <= 0.15;
+- candidate_score_mean <= 0.11;
+- abs(model_score_corr_u56_mean) <= 0.25.
+
+Esses limites foram derivados exploratoriamente do lote 2 e por isso nao
+constituem validacao. O terceiro lote e o primeiro teste confirmatorio dessa
+regra sem reajustar os limites depois de ver seu capital.
+
+Novo desenho:
+- U56 permanece controle cientifico intacto;
+- U59 = U56 + COLB + AMS + FOXF, removendo neutros e negativos do lote 2;
+- ARCO nao entra no U59 porque veio do primeiro protocolo e seu efeito positivo
+  foi residual; permanece apenas como evidencia historica separada;
+- 20 ativos totalmente novos sao sorteados excluindo lotes 1 e 2;
+- cada candidato e classificado pela assinatura antes do replay de capital;
+- cada candidato e testado em U56+1 para validacao comparavel ao lote 2;
+- cada candidato e testado em U59+1 para valor incremental no universo
+  enriquecido;
+- U79 mede o efeito conjunto U59 + 20 novos.
+
+Terceiro lote congelado com seed 2026100503:
+MG, VSTM, HEWJ, GBAB, CRESY, BGT, DBJP, UBND, PPLT, RXL, JPIN, REXR, QVAL,
+REM, CEVA, TRC, SCHA, CALM, DRN e EVH.
+
+Rejeitados antes do congelamento:
+FLG (NYCB -> FLG), LBTYA (transicao de identidade/CUSIP), DCOY (SLRX -> DCOY),
+BLOX (grande descontinuidade historica), VISN (COMM -> VISN), COR (ABC -> COR)
+e ECON (historico inferior a 2.600 barras).
+
+A assinatura sera considerada apenas parcialmente suportada se a direcao
+predita distinguir candidatos positivos dos nao positivos no terceiro lote.
+Se falhar, os limites nao serao reajustados retroativamente nesta mesma amostra.

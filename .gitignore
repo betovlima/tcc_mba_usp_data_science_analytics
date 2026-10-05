@@ -77,6 +77,14 @@ artifacts/
 !dados/pesquisa_expansao_76_b2/raw_bars/*.csv
 !dados/pesquisa_expansao_76_b2/corporate_actions/*.csv
 
+# Terceiro lote aleatorio para validacao da assinatura.
+!dados/pesquisa_expansao_76_b3/
+!dados/pesquisa_expansao_76_b3/raw_bars/
+!dados/pesquisa_expansao_76_b3/corporate_actions/
+!dados/pesquisa_expansao_76_b3/manifest.json
+!dados/pesquisa_expansao_76_b3/raw_bars/*.csv
+!dados/pesquisa_expansao_76_b3/corporate_actions/*.csv
+
 # Sistema operacional
 .DS_Store
 Thumbs.db

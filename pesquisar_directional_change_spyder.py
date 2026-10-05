@@ -1,15 +1,16 @@
-"""Segundo lote aleatorio: 20 novos objetos contra o universo vencedor U56.
+"""Terceiro lote aleatorio para validacao da assinatura de objeto.
 
 Objetivo:
-- sortear outro lote reprodutivel de 20 ativos, sem reutilizar o lote anterior;
-- medir cada ativo por insercao individual U56 + candidato;
-- medir o efeito conjunto U56 + 20;
-- correlacionar propriedades de mercado e de score de cada candidato com o
-  comportamento do U56 vencedor;
-- identificar quais candidatos aumentam ou diminuem capital sem usar retorno
-  passado para escolher previamente os 20 nomes.
+- manter o U56 cientifico como controle intacto;
+- manter apenas COLB, AMS e FOXF do lote 2 no universo enriquecido U59;
+- adicionar 20 objetos aleatorios totalmente novos, formando U79;
+- congelar antes dos replays a assinatura selective-specialist-v0.1;
+- testar cada candidato contra U56 para validacao comparavel ao lote 2;
+- testar cada candidato contra U59 para medir valor incremental no universo
+  enriquecido solicitado pelo usuario;
+- medir o efeito conjunto U59 + 20 sem reutilizar neutros ou negativos.
 
-O calendario, folds, benchmark e modelos dos 56 ativos-base permanecem fixos.
+O calendario, folds e benchmark continuam fixos no U56 original.
 """
 
 # %% 0 - Imports e configuracao
@@ -63,47 +64,65 @@ SNAPSHOT_BASE = SnapshotPaths.research(RAIZ_PROJETO)
 SNAPSHOT_BATCH2 = SnapshotPaths.from_root(
     RAIZ_PROJETO / "dados" / "pesquisa_expansao_76_b2"
 )
+SNAPSHOT_BATCH3 = SnapshotPaths.from_root(
+    RAIZ_PROJETO / "dados" / "pesquisa_expansao_76_b3"
+)
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "directional_change"
 
-SCRIPT_RESEARCH_VERSION = "1.14.1-dev.1"
-EXECUTION_SCHEMA = "random-batch2-u56-correlation-v1"
+SCRIPT_RESEARCH_VERSION = "1.15.0-dev.1"
+EXECUTION_SCHEMA = "signature-validation-batch3-u59-v1"
 
-RANDOM_SELECTION_SEED = 2026100402
-RANDOM_SELECTION_CATALOG_DATE = "2026-10-04"
+RANDOM_SELECTION_SEED = 2026100503
+RANDOM_SELECTION_CATALOG_DATE = "2026-10-05"
 RANDOM_SELECTION_RULE = (
     "Alpaca active/tradable/marginable US equities; exchanges NYSE/NASDAQ/"
-    "AMEX/ARCA/BATS; simple ticker; excludes original 56 and random batch 1; "
-    "deterministic xorshift32 seed=2026100402; requires daily SIP RAW history "
-    "covering 2016-01 through 2026-09 with >=2600 rows and max gap <=10 days; "
-    "structural identity/ticker transitions are rejected before freezing."
+    "AMEX/ARCA/BATS; simple ticker; excludes original 56 and random batches "
+    "1/2; deterministic xorshift32 seed=2026100503; requires daily SIP RAW "
+    "history covering 2016-01 through 2026-09 with >=2600 rows and max gap "
+    "<=10 days; structural identity/ticker transitions are rejected before "
+    "freezing."
 )
 
 BATCH1_ASSETS = (
     "FAF", "IJR", "GAB", "ELS", "AEIS", "VWOB", "BDJ", "DGX", "ESP", "BWZ",
     "PSF", "DBA", "HEEM", "NPKI", "MHK", "BLKB", "ARCO", "AGM", "NWFL", "SKOR",
 )
+BATCH2_ASSETS = (
+    "VIOV", "MBSD", "MVIS", "EWD", "OPHC", "CASY", "COLB", "EES", "GNK", "VUZI",
+    "FOXF", "AMS", "IQLT", "ISCF", "FUTY", "KB", "PRN", "CE", "XTNT", "UEC",
+)
+ENRICHED_POSITIVES = ("COLB", "AMS", "FOXF")
+
+SIGNATURE_NAME = "selective-specialist-v0.1"
+SIGNATURE_THRESHOLDS = {
+    "beats_best_share_min_exclusive": 0.0,
+    "beats_best_share_max_inclusive": 0.05,
+    "score_std_max_inclusive": 0.15,
+    "score_mean_max_inclusive": 0.11,
+    "abs_score_corr_u56_mean_max_inclusive": 0.25,
+}
 
 RANDOM_ASSET_OBJECTS = (
-    {"symbol": "VIOV", "name": "Vanguard S&P Small-Cap 600 Value ETF", "exchange": "ARCA"},
-    {"symbol": "MBSD", "name": "Northern Trust Disciplined Duration MBS ETF", "exchange": "ARCA"},
-    {"symbol": "MVIS", "name": "MicroVision, Inc.", "exchange": "NASDAQ"},
-    {"symbol": "EWD", "name": "iShares MSCI Sweden ETF", "exchange": "ARCA"},
-    {"symbol": "OPHC", "name": "OptimumBank Holdings, Inc.", "exchange": "AMEX"},
-    {"symbol": "CASY", "name": "Casey's General Stores, Inc.", "exchange": "NASDAQ"},
-    {"symbol": "COLB", "name": "Columbia Banking System, Inc.", "exchange": "NASDAQ"},
-    {"symbol": "EES", "name": "WisdomTree U.S. SmallCap Fund", "exchange": "ARCA"},
-    {"symbol": "GNK", "name": "Genco Shipping & Trading Ltd", "exchange": "NYSE"},
-    {"symbol": "VUZI", "name": "Vuzix Corporation", "exchange": "NASDAQ"},
-    {"symbol": "FOXF", "name": "Fox Factory Holding Corp.", "exchange": "NASDAQ"},
-    {"symbol": "AMS", "name": "American Shared Hospital Services", "exchange": "AMEX"},
-    {"symbol": "IQLT", "name": "iShares MSCI Intl Quality Factor ETF", "exchange": "ARCA"},
-    {"symbol": "ISCF", "name": "iShares International Small Cap Equity Factor ETF", "exchange": "ARCA"},
-    {"symbol": "FUTY", "name": "Fidelity MSCI Utilities Index ETF", "exchange": "ARCA"},
-    {"symbol": "KB", "name": "KB Financial Group Inc", "exchange": "NYSE"},
-    {"symbol": "PRN", "name": "Invesco Dorsey Wright Industrials Momentum ETF", "exchange": "NASDAQ"},
-    {"symbol": "CE", "name": "Celanese Corporation", "exchange": "NYSE"},
-    {"symbol": "XTNT", "name": "Xtant Medical Holdings, Inc.", "exchange": "AMEX"},
-    {"symbol": "UEC", "name": "Uranium Energy Corp.", "exchange": "AMEX"},
+    {"symbol": "MG", "name": "Mistras Group Inc.", "exchange": "NYSE"},
+    {"symbol": "VSTM", "name": "Verastem, Inc.", "exchange": "NASDAQ"},
+    {"symbol": "HEWJ", "name": "iShares Currency Hedged MSCI Japan ETF", "exchange": "ARCA"},
+    {"symbol": "GBAB", "name": "Guggenheim Taxable Municipal Bond & Investment Grade Debt Trust", "exchange": "NYSE"},
+    {"symbol": "CRESY", "name": "Cresud S.A.C.I.F. y A.", "exchange": "NASDAQ"},
+    {"symbol": "BGT", "name": "BlackRock Floating Rate Income Trust", "exchange": "NYSE"},
+    {"symbol": "DBJP", "name": "Xtrackers MSCI Japan Hedged Equity ETF", "exchange": "ARCA"},
+    {"symbol": "UBND", "name": "VictoryShares Core Plus Bond ETF", "exchange": "NASDAQ"},
+    {"symbol": "PPLT", "name": "abrdn Physical Platinum Shares ETF", "exchange": "ARCA"},
+    {"symbol": "RXL", "name": "ProShares Ultra Health Care", "exchange": "ARCA"},
+    {"symbol": "JPIN", "name": "JPMorgan Diversified Return International Equity ETF", "exchange": "ARCA"},
+    {"symbol": "REXR", "name": "Rexford Industrial Realty, Inc.", "exchange": "NYSE"},
+    {"symbol": "QVAL", "name": "Alpha Architect U.S. Quantitative Value ETF", "exchange": "NASDAQ"},
+    {"symbol": "REM", "name": "iShares Mortgage Real Estate ETF", "exchange": "BATS"},
+    {"symbol": "CEVA", "name": "CEVA, Inc.", "exchange": "NASDAQ"},
+    {"symbol": "TRC", "name": "Tejon Ranch Co.", "exchange": "NYSE"},
+    {"symbol": "SCHA", "name": "Schwab U.S. Small-Cap ETF", "exchange": "ARCA"},
+    {"symbol": "CALM", "name": "Cal-Maine Foods, Inc.", "exchange": "NASDAQ"},
+    {"symbol": "DRN", "name": "Direxion Daily Real Estate Bull 3X ETF", "exchange": "ARCA"},
+    {"symbol": "EVH", "name": "Evolent Health, Inc.", "exchange": "NYSE"},
 )
 RANDOM_ASSETS = tuple(item["symbol"] for item in RANDOM_ASSET_OBJECTS)
 RANDOM_METADATA = {
@@ -112,11 +131,13 @@ RANDOM_METADATA = {
 }
 
 REJECTED_RANDOM_CANDIDATES = (
-    {
-        "symbol": "ONTO",
-        "reason": "structural_ticker_identity_transition",
-        "detail": "NANO -> ONTO name/ticker transition observed in Corporate Actions",
-    },
+    {"symbol": "FLG", "reason": "structural_ticker_identity_transition", "detail": "NYCB -> FLG"},
+    {"symbol": "LBTYA", "reason": "structural_identity_change", "detail": "CUSIP transition under same ticker"},
+    {"symbol": "DCOY", "reason": "structural_ticker_identity_transition", "detail": "SLRX -> DCOY"},
+    {"symbol": "BLOX", "reason": "history_discontinuity", "detail": "large multi-year gap"},
+    {"symbol": "VISN", "reason": "structural_ticker_identity_transition", "detail": "COMM -> VISN"},
+    {"symbol": "COR", "reason": "structural_ticker_identity_transition", "detail": "ABC -> COR"},
+    {"symbol": "ECON", "reason": "insufficient_history", "detail": "fewer than 2600 daily rows"},
 )
 
 
@@ -133,12 +154,14 @@ if SCRIPT_RESEARCH_VERSION != RESEARCH_VERSION:
         f"runner={SCRIPT_RESEARCH_VERSION!r} modulo={RESEARCH_VERSION!r}."
     )
 if len(RANDOM_ASSETS) != 20 or len(set(RANDOM_ASSETS)) != 20:
-    raise RuntimeError("O segundo lote precisa conter exatamente 20 ativos unicos.")
+    raise RuntimeError("O terceiro lote precisa conter exatamente 20 ativos unicos.")
 if set(RANDOM_ASSETS).intersection(BATCH1_ASSETS):
-    raise RuntimeError("O segundo lote nao pode reutilizar ativos do primeiro lote.")
+    raise RuntimeError("O terceiro lote nao pode reutilizar ativos do primeiro lote.")
+if set(RANDOM_ASSETS).intersection(BATCH2_ASSETS):
+    raise RuntimeError("O terceiro lote nao pode reutilizar ativos do segundo lote.")
 
 print("=" * 78, flush=True)
-print("TCC - Random Batch 2 vs Winning U56", flush=True)
+print("TCC - Batch 3 Signature Validation: U56 / U59 / U79", flush=True)
 print(f"versao_pesquisa={RESEARCH_VERSION}", flush=True)
 print(f"versao_runner={SCRIPT_RESEARCH_VERSION}", flush=True)
 print(f"execution_schema={EXECUTION_SCHEMA}", flush=True)
@@ -149,13 +172,23 @@ print("=" * 78, flush=True)
 manifesto_base = validate_snapshot(SNAPSHOT_BASE)
 
 
-# %% 2 - Snapshot congelado do segundo lote de 20
+# %% 2 - Snapshot congelado do terceiro lote de 20
 
-def _batch2_manifest_is_usable() -> bool:
-    if not SNAPSHOT_BATCH2.manifest.exists():
+manifesto_batch2 = validate_snapshot(SNAPSHOT_BATCH2)
+if not set(ENRICHED_POSITIVES).issubset(
+    set(manifesto_batch2.get("assets") or [])
+):
+    raise RuntimeError(
+        "Snapshot do lote 2 nao contem COLB, AMS e FOXF. "
+        "Restaure dados/pesquisa_expansao_76_b2 antes de executar."
+    )
+
+
+def _batch3_manifest_is_usable() -> bool:
+    if not SNAPSHOT_BATCH3.manifest.exists():
         return False
     try:
-        payload = validate_snapshot(SNAPSHOT_BATCH2)
+        payload = validate_snapshot(SNAPSHOT_BATCH3)
     except Exception:
         return False
     return (
@@ -167,16 +200,16 @@ def _batch2_manifest_is_usable() -> bool:
     )
 
 
-if not _batch2_manifest_is_usable():
+if not _batch3_manifest_is_usable():
     print(
-        "[batch2] snapshot ausente/incompativel; baixando os 20 novos ativos",
+        "[batch3] snapshot ausente/incompativel; baixando os 20 novos ativos",
         flush=True,
     )
-    SNAPSHOT_BATCH2.clear_generated()
+    SNAPSHOT_BATCH3.clear_generated()
     credenciais = load_alpaca_credentials(RAIZ_PROJETO)
     arquivos_barras = download_raw_bars(
         credenciais,
-        SNAPSHOT_BATCH2,
+        SNAPSHOT_BATCH3,
         assets=RANDOM_ASSETS,
         replace=True,
         bar_snapshot_as_of_end=BAR_SNAPSHOT_AS_OF_END,
@@ -184,29 +217,29 @@ if not _batch2_manifest_is_usable():
     )
     arquivos_eventos = download_corporate_actions(
         credenciais,
-        SNAPSHOT_BATCH2,
+        SNAPSHOT_BATCH3,
         assets=RANDOM_ASSETS,
         replace=True,
         query_end=ANALYSIS_END_DATE,
     )
     build_snapshot_manifest(
-        SNAPSHOT_BATCH2,
+        SNAPSHOT_BATCH3,
         arquivos_barras,
         arquivos_eventos,
         credentials=credenciais,
         bar_snapshot_as_of_end=BAR_SNAPSHOT_AS_OF_END,
         analysis_end_date=ANALYSIS_END_DATE,
         assets=RANDOM_ASSETS,
-        snapshot_name="tcc-random-extension-batch2-20-v1",
+        snapshot_name="tcc-random-extension-batch3-20-v1",
         parent_snapshot_sha256=str(
             manifesto_base.get("snapshot_sha256") or ""
         ),
     )
 
-manifesto_batch2 = validate_snapshot(SNAPSHOT_BATCH2)
+manifesto_batch3 = validate_snapshot(SNAPSHOT_BATCH3)
 
 
-# %% 3 - U56 vencedor + segundo lote
+# %% 3 - U56 + positivos confirmados do lote 2 + terceiro lote
 frames_u56_raw, exclusoes_u56, diagnosticos_u56, auditoria_u56 = (
     prepare_model_frames(
         SNAPSHOT_BASE,
@@ -218,24 +251,37 @@ frames_u56_raw, exclusoes_u56, diagnosticos_u56, auditoria_u56 = (
 if len(frames_u56_raw) != 56:
     raise RuntimeError(f"U56 deveria ter 56 ativos; obtidos {len(frames_u56_raw)}.")
 
-frames_batch2, exclusoes_batch2, diagnosticos_batch2, auditoria_batch2 = (
+frames_positive, exclusoes_positive, diagnosticos_positive, auditoria_positive = (
     prepare_model_frames(
         SNAPSHOT_BATCH2,
+        assets=ENRICHED_POSITIVES,
+        comparar_snapshot_referencia=False,
+    )
+)
+if exclusoes_positive or len(frames_positive) != len(ENRICHED_POSITIVES):
+    raise RuntimeError(
+        "COLB, AMS e FOXF precisam estar integralmente disponiveis no snapshot "
+        "do lote 2."
+    )
+
+frames_batch3, exclusoes_batch3, diagnosticos_batch3, auditoria_batch3 = (
+    prepare_model_frames(
+        SNAPSHOT_BATCH3,
         assets=RANDOM_ASSETS,
         comparar_snapshot_referencia=False,
     )
 )
-if exclusoes_batch2:
+if exclusoes_batch3:
     raise RuntimeError(
-        "Ativo do lote 2 apresentou problema estrutural: "
-        + ",".join(str(row.get("symbol")) for row in exclusoes_batch2)
+        "Ativo do lote 3 apresentou problema estrutural: "
+        + ",".join(str(row.get("symbol")) for row in exclusoes_batch3)
     )
-if len(frames_batch2) != 20:
+if len(frames_batch3) != 20:
     raise RuntimeError(
-        f"Lote 2 deveria manter 20 ativos; obtidos {len(frames_batch2)}."
+        f"Lote 3 deveria manter 20 ativos; obtidos {len(frames_batch3)}."
     )
 
-for symbol, frame in frames_batch2.items():
+for symbol, frame in frames_batch3.items():
     dates = pd.DatetimeIndex(frame.index)
     if len(frame) < 2600:
         raise RuntimeError(f"{symbol}: historico insuficiente ({len(frame)} < 2600).")
@@ -244,9 +290,13 @@ for symbol, frame in frames_batch2.items():
     if max_gap > 10.0:
         raise RuntimeError(f"{symbol}: quebra temporal de {max_gap:.1f} dias.")
 
-frames_u76_raw = {**frames_u56_raw, **frames_batch2}
-if len(frames_u76_raw) != 76:
-    raise RuntimeError(f"U76 batch2 deveria ter 76 ativos; obtidos {len(frames_u76_raw)}.")
+frames_u79_raw = {
+    **frames_u56_raw,
+    **frames_positive,
+    **frames_batch3,
+}
+if len(frames_u79_raw) != 79:
+    raise RuntimeError(f"U79 deveria ter 79 ativos; obtidos {len(frames_u79_raw)}.")
 
 config_u56, _ = build_variant_configs(frames_u56_raw, CONFIG)
 _, reference_calendar, reference_calendar_source = preparar_painel_rotacao(
@@ -254,43 +304,44 @@ _, reference_calendar, reference_calendar_source = preparar_painel_rotacao(
     config_u56,
 )
 
-config_u76, _ = build_variant_configs(frames_u76_raw, CONFIG)
+config_u79, _ = build_variant_configs(frames_u79_raw, CONFIG)
 (
-    frames_u76,
+    frames_u79,
     common_dates,
     calendar_source_asset,
-    symbols_u76,
+    symbols_u79,
     folds,
     all_decision_dates,
     decision_to_fold,
     decision_metadata,
 ) = _construir_contexto_execucao(
-    frames_u76_raw,
-    config_u76,
+    frames_u79_raw,
+    config_u79,
     calendar_override=reference_calendar,
     calendar_source_label=f"U56_FIXED:{reference_calendar_source}",
 )
 
 symbols_u56 = sorted(frames_u56_raw)
+symbols_u59 = sorted([*symbols_u56, *ENRICHED_POSITIVES])
 candidate_margins = tuple(
     float(value)
-    for value in config_u76.rotation_switch_margin_candidates
+    for value in config_u79.rotation_switch_margin_candidates
 )
 full_position = {
     symbol: index + 1
-    for index, symbol in enumerate(symbols_u76)
+    for index, symbol in enumerate(symbols_u79)
 }
 
 benchmark_frames_u56 = {
-    symbol: frames_u76[symbol]
+    symbol: frames_u79[symbol]
     for symbol in symbols_u56
 }
 shared_benchmark = _benchmark_pesos_iguais(
     benchmark_frames_u56,
     symbols_u56,
     all_decision_dates[1:],
-    float(config_u76.initial_capital),
-    config_u76,
+    float(config_u79.initial_capital),
+    config_u79,
     calcular_taxas_referencia,
     aplicar_deslizamento,
 )
@@ -299,8 +350,12 @@ SHARED_BENCHMARK_NAME = (
 )
 
 print(
-    f"[universe] U56=56 U76_B2=76 calendar={calendar_source_asset} "
+    f"[universe] U56=56 U59=59 U79_B3=79 calendar={calendar_source_asset} "
     f"common_dates={len(common_dates)} folds={len(folds)}",
+    flush=True,
+)
+print(
+    "[u59] retained_positive_objects=" + ",".join(ENRICHED_POSITIVES),
     flush=True,
 )
 print(
@@ -309,7 +364,7 @@ print(
 )
 
 
-# %% 4 - Treino dos 76 modelos uma vez por fold
+# %% 4 - Treino dos 79 modelos uma vez por fold
 fold_artifacts = {}
 training_started = time.perf_counter()
 
@@ -325,15 +380,15 @@ for fold_position, fold in enumerate(folds, start=1):
 
     print(
         f"[train] fold={fold_id} {fold_position}/{len(folds)} "
-        f"calibration_models={len(symbols_u76)}",
+        f"calibration_models={len(symbols_u79)}",
         flush=True,
     )
     calibration_models = _ajustar_modelos_lightgbm(
-        frames_u76,
-        symbols_u76,
+        frames_u79,
+        symbols_u79,
         train_dates,
-        config_u76,
-        phase=f"batch2_fold_{fold_id}_calibration",
+        config_u79,
+        phase=f"batch3_fold_{fold_id}_calibration",
         technical_log_callback=lambda message: print(
             f"[technical] {message}",
             flush=True,
@@ -341,13 +396,13 @@ for fold_position, fold in enumerate(folds, start=1):
     )
     calibration_cache, _ = _precalcular_utilidades_modelo(
         calibration_models,
-        frames_u76,
-        symbols_u76,
+        frames_u79,
+        symbols_u79,
         calibration_dates,
-        config_u76,
+        config_u79,
     )
     calibration_missing = sorted(
-        set(symbols_u76).difference(calibration_models)
+        set(symbols_u79).difference(calibration_models)
     )
     if calibration_missing:
         print(
@@ -357,15 +412,15 @@ for fold_position, fold in enumerate(folds, start=1):
         )
 
     print(
-        f"[train] fold={fold_id} final_models={len(symbols_u76)}",
+        f"[train] fold={fold_id} final_models={len(symbols_u79)}",
         flush=True,
     )
     final_models = _ajustar_modelos_lightgbm(
-        frames_u76,
-        symbols_u76,
+        frames_u79,
+        symbols_u79,
         final_fit_dates,
-        config_u76,
-        phase=f"batch2_fold_{fold_id}_final",
+        config_u79,
+        phase=f"batch3_fold_{fold_id}_final",
         technical_log_callback=lambda message: print(
             f"[technical] {message}",
             flush=True,
@@ -373,13 +428,13 @@ for fold_position, fold in enumerate(folds, start=1):
     )
     decision_cache, _ = _precalcular_utilidades_modelo(
         final_models,
-        frames_u76,
-        symbols_u76,
+        frames_u79,
+        symbols_u79,
         decision_dates,
-        config_u76,
+        config_u79,
     )
     final_missing = sorted(
-        set(symbols_u76).difference(final_models)
+        set(symbols_u79).difference(final_models)
     )
     if final_missing:
         print(
@@ -412,10 +467,10 @@ def _slice_cache(cache, subset_symbols):
 def _run_subset(label, subset_symbols, *, keep_result=False):
     subset_symbols = sorted(subset_symbols)
     subset_frames = {
-        symbol: frames_u76[symbol]
+        symbol: frames_u79[symbol]
         for symbol in subset_symbols
     }
-    subset_config = config_u76.copiar_modelo(
+    subset_config = config_u79.copiar_modelo(
         update={"assets": tuple(subset_symbols)}
     )
     policies = {}
@@ -503,7 +558,7 @@ def _run_subset(label, subset_symbols, *, keep_result=False):
         calcular_taxas_referencia,
         aplicar_deslizamento,
         decision_metadata=decision_metadata,
-        model_label=f"Control Random Batch 2 - {label}",
+        model_label=f"Control Batch 3 Signature Validation - {label}",
         method_line=(
             "- Models are trained once per fold for the frozen U76 batch-2 "
             "panel. Each insertion replay changes only the available object "
@@ -534,7 +589,7 @@ def _run_subset(label, subset_symbols, *, keep_result=False):
     }
 
 
-# %% 6 - Baseline U56 e lote completo
+# %% 6 - Baselines U56, U59 e grupo U79
 baseline_u56 = _run_subset(
     "U56_WINNER",
     symbols_u56,
@@ -543,25 +598,37 @@ baseline_u56 = _run_subset(
 baseline_result = baseline_u56["result"]
 baseline_capital = float(baseline_u56["metrics"]["ending_capital"])
 
-full_u76 = _run_subset(
-    "U76_BATCH2_FULL",
-    symbols_u76,
+baseline_u59 = _run_subset(
+    "U59_ENRICHED",
+    symbols_u59,
     keep_result=True,
 )
-full_u76_result = full_u76["result"]
-full_u76_capital = float(full_u76["metrics"]["ending_capital"])
+baseline_u59_result = baseline_u59["result"]
+baseline_u59_capital = float(baseline_u59["metrics"]["ending_capital"])
+
+full_u79 = _run_subset(
+    "U79_BATCH3_FULL",
+    symbols_u79,
+    keep_result=True,
+)
+full_u79_result = full_u79["result"]
+full_u79_capital = float(full_u79["metrics"]["ending_capital"])
 
 baseline_margin_by_fold = {
     int(row["fold_id"]): float(row["selected_margin"])
     for row in baseline_u56["margins"]
 }
+baseline_u59_margin_by_fold = {
+    int(row["fold_id"]): float(row["selected_margin"])
+    for row in baseline_u59["margins"]
+}
 
 
 # %% 7 - Correlacoes de cada candidato com o U56 vencedor
 close_returns = {}
-for symbol in symbols_u76:
+for symbol in symbols_u79:
     close = pd.to_numeric(
-        frames_u76[symbol]["close"],
+        frames_u79[symbol]["close"],
         errors="coerce",
     )
     close_returns[symbol] = close.pct_change(
@@ -754,7 +821,92 @@ def _candidate_return_profile(candidate):
     }
 
 
-# %% 8 - Insercao individual U56 + candidato
+# %% 8 - Assinatura congelada antes dos replays individuais
+
+def _classificar_assinatura(score_profile):
+    beats = score_profile.get("candidate_beats_u56_best_share")
+    score_std = score_profile.get("candidate_score_std")
+    score_mean = score_profile.get("candidate_score_mean")
+    corr_mean = score_profile.get("model_score_corr_u56_mean")
+
+    if beats is None or score_std is None or score_mean is None or corr_mean is None:
+        return {
+            "signature_name": SIGNATURE_NAME,
+            "signature_predicted_positive": False,
+            "signature_class": "insufficient_score_data",
+        }
+
+    if float(beats) <= 0.0:
+        signature_class = "dormant"
+        predicted = False
+    elif (
+        float(beats)
+        <= SIGNATURE_THRESHOLDS["beats_best_share_max_inclusive"]
+        and float(score_std)
+        <= SIGNATURE_THRESHOLDS["score_std_max_inclusive"]
+        and float(score_mean)
+        <= SIGNATURE_THRESHOLDS["score_mean_max_inclusive"]
+        and abs(float(corr_mean))
+        <= SIGNATURE_THRESHOLDS["abs_score_corr_u56_mean_max_inclusive"]
+    ):
+        signature_class = "selective_specialist"
+        predicted = True
+    elif (
+        float(beats)
+        > SIGNATURE_THRESHOLDS["beats_best_share_max_inclusive"]
+        or float(score_std)
+        > SIGNATURE_THRESHOLDS["score_std_max_inclusive"]
+    ):
+        signature_class = "invasive_or_unstable"
+        predicted = False
+    else:
+        signature_class = "uncertain"
+        predicted = False
+
+    return {
+        "signature_name": SIGNATURE_NAME,
+        "signature_predicted_positive": bool(predicted),
+        "signature_class": signature_class,
+    }
+
+
+signature_profiles = {}
+for candidate in RANDOM_ASSETS:
+    score_profile = _candidate_score_profile(candidate)
+    signature_profiles[candidate] = {
+        **score_profile,
+        **_classificar_assinatura(score_profile),
+    }
+
+signature_pre_replay = pd.DataFrame(
+    [
+        {
+            "asset": candidate,
+            **signature_profiles[candidate],
+        }
+        for candidate in RANDOM_ASSETS
+    ]
+)
+
+print("[signature-pre-replay] predictions frozen before candidate capital replays", flush=True)
+print(
+    signature_pre_replay[
+        [
+            "asset",
+            "signature_class",
+            "signature_predicted_positive",
+            "candidate_beats_u56_best_share",
+            "candidate_score_std",
+            "candidate_score_mean",
+            "model_score_corr_u56_mean",
+        ]
+    ].to_string(index=False),
+    flush=True,
+)
+
+
+# %% 9 - Insercao individual contra U56 e contra U59
+
 candidate_rows = []
 candidate_fold_effects = {}
 
@@ -764,9 +916,15 @@ baseline_selected = (
     .astype(str)
 )
 
+baseline_u59_selected = (
+    baseline_u59_result.predictions["selected_asset"]
+    .fillna("CASH")
+    .astype(str)
+)
+
 for position, candidate in enumerate(RANDOM_ASSETS, start=1):
     print(
-        f"[candidate] {position}/20 U56_PLUS_{candidate}",
+        f"[candidate] {position}/20 U56_PLUS_{candidate} / U59_PLUS_{candidate}",
         flush=True,
     )
     scenario = _run_subset(
@@ -777,6 +935,15 @@ for position, candidate in enumerate(RANDOM_ASSETS, start=1):
     result = scenario["result"]
     metrics = scenario["metrics"]
     ending = float(metrics["ending_capital"])
+
+    enriched_scenario = _run_subset(
+        f"U59_PLUS_{candidate}",
+        [*symbols_u59, candidate],
+        keep_result=True,
+    )
+    enriched_result = enriched_scenario["result"]
+    enriched_metrics = enriched_scenario["metrics"]
+    enriched_ending = float(enriched_metrics["ending_capital"])
 
     candidate_selected = (
         result.predictions["selected_asset"]
@@ -792,6 +959,23 @@ for position, candidate in enumerate(RANDOM_ASSETS, start=1):
         join="inner",
     )
     changed = aligned["baseline"] != aligned["candidate"]
+
+    enriched_selected = (
+        enriched_result.predictions["selected_asset"]
+        .fillna("CASH")
+        .astype(str)
+    )
+    enriched_aligned = pd.concat(
+        [
+            baseline_u59_selected.rename("baseline"),
+            enriched_selected.rename("candidate"),
+        ],
+        axis=1,
+        join="inner",
+    )
+    enriched_changed = (
+        enriched_aligned["baseline"] != enriched_aligned["candidate"]
+    )
 
     scenario_margin_by_fold = {
         int(row["fold_id"]): float(row["selected_margin"])
@@ -835,8 +1019,11 @@ for position, candidate in enumerate(RANDOM_ASSETS, start=1):
     ).dropna()
 
     market_profile = _candidate_return_profile(candidate)
-    score_profile = _candidate_score_profile(candidate)
+    score_profile = signature_profiles[candidate]
     metadata = RANDOM_METADATA[candidate]
+    signature_actual_positive = bool(
+        ending > baseline_capital
+    )
 
     row = {
         "asset": candidate,
@@ -848,6 +1035,16 @@ for position, candidate in enumerate(RANDOM_ASSETS, start=1):
         "insertion_capital_pct": (
             ending / baseline_capital - 1.0
             if baseline_capital > 0.0
+            else None
+        ),
+        "u59_ending_capital": baseline_u59_capital,
+        "u59_plus_candidate_ending_capital": enriched_ending,
+        "u59_insertion_capital_delta": (
+            enriched_ending - baseline_u59_capital
+        ),
+        "u59_insertion_capital_pct": (
+            enriched_ending / baseline_u59_capital - 1.0
+            if baseline_u59_capital > 0.0
             else None
         ),
         "sharpe_delta": (
@@ -872,6 +1069,15 @@ for position, candidate in enumerate(RANDOM_ASSETS, start=1):
         "candidate_selected_sessions": int(
             (candidate_selected == candidate).sum()
         ),
+        "u59_changed_selected_asset_sessions": int(
+            enriched_changed.sum()
+        ),
+        "u59_changed_selected_asset_share": float(
+            enriched_changed.mean()
+        ),
+        "u59_candidate_selected_sessions": int(
+            (enriched_selected == candidate).sum()
+        ),
         "candidate_sell_count": int(len(candidate_sells)),
         "candidate_realized_pnl_sum": realized_pnl,
         "candidate_mean_position_return": (
@@ -885,6 +1091,11 @@ for position, candidate in enumerate(RANDOM_ASSETS, start=1):
             else None
         ),
         "margin_flip_count": int(margin_flip_count),
+        "signature_actual_positive_u56": signature_actual_positive,
+        "signature_prediction_correct_u56": bool(
+            score_profile["signature_predicted_positive"]
+            == signature_actual_positive
+        ),
         **market_profile,
         **score_profile,
     }
@@ -896,7 +1107,7 @@ candidates = pd.DataFrame(candidate_rows).sort_values(
 ).reset_index(drop=True)
 
 
-# %% 9 - Relacao propriedade -> contribuicao
+# %% 10 - Relacao propriedade -> contribuicao
 correlation_properties = (
     "return_corr_u56_equal_weight",
     "return_corr_u56_strategy",
@@ -960,19 +1171,19 @@ negative_count = int((candidates["insertion_capital_pct"] < 0.0).sum())
 zero_count = int(len(candidates) - positive_count - negative_count)
 
 print(
-    "[batch2-group] "
+    "[batch3-group] "
     f"U56={baseline_capital:,.2f} "
-    f"U76_B2={full_u76_capital:,.2f} "
-    f"delta={full_u76_capital - baseline_capital:+,.2f} "
-    f"ratio={full_u76_capital / baseline_capital - 1.0:+.4%}",
+    f"U59={baseline_u59_capital:,.2f} "
+    f"U79_B3={full_u79_capital:,.2f} "
+    f"U79_vs_U59={full_u79_capital / baseline_u59_capital - 1.0:+.4%}",
     flush=True,
 )
 print(
-    f"[batch2-candidates] positive={positive_count} "
+    f"[batch3-candidates-vs-u56] positive={positive_count} "
     f"negative={negative_count} zero={zero_count}",
     flush=True,
 )
-print("[batch2-candidates] ranking", flush=True)
+print("[batch3-candidates] ranking", flush=True)
 print(
     candidates[
         [
@@ -989,7 +1200,26 @@ print(
 )
 
 
-# %% 10 - Exportacao
+
+signature_accuracy = float(
+    candidates["signature_prediction_correct_u56"].mean()
+)
+signature_predicted_positive_count = int(
+    candidates["signature_predicted_positive"].sum()
+)
+signature_true_positive_count = int(
+    candidates["signature_actual_positive_u56"].sum()
+)
+print(
+    f"[signature-validation] name={SIGNATURE_NAME} "
+    f"accuracy={signature_accuracy:.2%} "
+    f"predicted_positive={signature_predicted_positive_count} "
+    f"actual_positive={signature_true_positive_count}",
+    flush=True,
+)
+
+
+# %% 11 - Exportacao
 DIRETORIO_RESULTADOS.mkdir(parents=True, exist_ok=True)
 for antigo in DIRETORIO_RESULTADOS.glob("*.csv"):
     antigo.unlink()
@@ -1000,12 +1230,16 @@ if graficos.exists():
     for antigo in graficos.glob("*.png"):
         antigo.unlink()
 
+signature_pre_replay.to_csv(
+    DIRETORIO_RESULTADOS / "signature_batch3_pre_replay.csv",
+    index=False,
+)
 candidates.to_csv(
-    DIRETORIO_RESULTADOS / "random_batch2_candidates.csv",
+    DIRETORIO_RESULTADOS / "signature_batch3_candidates.csv",
     index=False,
 )
 property_correlations.to_csv(
-    DIRETORIO_RESULTADOS / "random_batch2_property_correlations.csv",
+    DIRETORIO_RESULTADOS / "signature_batch3_property_correlations.csv",
     index=False,
 )
 baseline_result.predictions.reset_index().to_csv(
@@ -1016,12 +1250,20 @@ baseline_result.trades.to_csv(
     DIRETORIO_RESULTADOS / "u56_winner_trades.csv",
     index=False,
 )
-full_u76_result.predictions.reset_index().to_csv(
-    DIRETORIO_RESULTADOS / "u76_batch2_predictions.csv",
+baseline_u59_result.predictions.reset_index().to_csv(
+    DIRETORIO_RESULTADOS / "u59_enriched_predictions.csv",
     index=False,
 )
-full_u76_result.trades.to_csv(
-    DIRETORIO_RESULTADOS / "u76_batch2_trades.csv",
+baseline_u59_result.trades.to_csv(
+    DIRETORIO_RESULTADOS / "u59_enriched_trades.csv",
+    index=False,
+)
+full_u79_result.predictions.reset_index().to_csv(
+    DIRETORIO_RESULTADOS / "u79_batch3_predictions.csv",
+    index=False,
+)
+full_u79_result.trades.to_csv(
+    DIRETORIO_RESULTADOS / "u79_batch3_trades.csv",
     index=False,
 )
 
@@ -1029,22 +1271,26 @@ payload = {
     "research_version": RESEARCH_VERSION,
     "execution_schema": EXECUTION_SCHEMA,
     "base_snapshot_sha256": manifesto_base.get("snapshot_sha256"),
-    "batch2_snapshot_sha256": manifesto_batch2.get("snapshot_sha256"),
+    "batch3_snapshot_sha256": manifesto_batch3.get("snapshot_sha256"),
     "question": (
-        "Do a second 20-asset random replication, measure each object by "
-        "one-at-a-time insertion into the winning U56, and determine which "
-        "return/score relationships with U56 are associated with positive or "
-        "negative contribution."
+        "Validate the predeclared selective-specialist signature on a third untouched "
+        "20-asset random batch, while measuring both U56-control insertion and "
+        "incremental insertion into U59 enriched by COLB, AMS and FOXF."
     ),
     "protocol": {
         "winner_universe_size": 56,
-        "batch2_size": 20,
-        "expanded_universe_size": 76,
+        "batch3_size": 20,
+        "enriched_base_size": 59,
+        "expanded_universe_size": 79,
         "random_selection_seed": RANDOM_SELECTION_SEED,
         "random_selection_catalog_date": RANDOM_SELECTION_CATALOG_DATE,
         "random_selection_rule": RANDOM_SELECTION_RULE,
         "batch1_assets_excluded": list(BATCH1_ASSETS),
-        "batch2_assets": list(RANDOM_ASSETS),
+        "batch2_assets_excluded_from_random_draw": list(BATCH2_ASSETS),
+        "retained_positive_batch2_assets": list(ENRICHED_POSITIVES),
+        "batch3_assets": list(RANDOM_ASSETS),
+        "signature_name": SIGNATURE_NAME,
+        "signature_thresholds": dict(SIGNATURE_THRESHOLDS),
         "rejected_random_candidates": list(REJECTED_RANDOM_CANDIDATES),
         "selection_uses_backtest_performance": False,
         "base_calendar_fixed_to_u56": True,
@@ -1053,8 +1299,9 @@ payload = {
         "fold_method_unchanged": True,
         "switch_margin_candidates": list(candidate_margins),
         "models_trained_once_per_fold": True,
-        "individual_test": "U56 plus exactly one batch-2 candidate",
-        "group_test": "U56 plus all 20 batch-2 candidates",
+        "individual_test_control": "U56 plus exactly one batch-3 candidate",
+        "individual_test_enriched": "U59 plus exactly one batch-3 candidate",
+        "group_test": "U59 plus all 20 batch-3 candidates",
         "interpretation": (
             "Individual insertion effects are the primary candidate-level "
             "measure. The 20-object group effect is secondary because object "
@@ -1066,13 +1313,32 @@ payload = {
         "margins": baseline_u56["margins"],
         "calendar_source": reference_calendar_source,
     },
-    "u76_batch2_group": {
-        "metrics": full_u76["metrics"],
-        "margins": full_u76["margins"],
-        "capital_delta": full_u76_capital - baseline_capital,
-        "capital_pct": (
-            full_u76_capital / baseline_capital - 1.0
+    "u59_enriched": {
+        "retained_assets": list(ENRICHED_POSITIVES),
+        "metrics": baseline_u59["metrics"],
+        "margins": baseline_u59["margins"],
+        "capital_delta_vs_u56": baseline_u59_capital - baseline_capital,
+        "capital_pct_vs_u56": (
+            baseline_u59_capital / baseline_capital - 1.0
             if baseline_capital > 0.0
+            else None
+        ),
+    },
+    "signature_validation": {
+        "name": SIGNATURE_NAME,
+        "thresholds": dict(SIGNATURE_THRESHOLDS),
+        "accuracy_u56": signature_accuracy,
+        "predicted_positive_count": signature_predicted_positive_count,
+        "actual_positive_count": signature_true_positive_count,
+        "pre_replay_rows": signature_pre_replay.to_dict(orient="records"),
+    },
+    "u79_batch3_group": {
+        "metrics": full_u79["metrics"],
+        "margins": full_u79["margins"],
+        "capital_delta_vs_u59": full_u79_capital - baseline_u59_capital,
+        "capital_pct_vs_u59": (
+            full_u79_capital / baseline_u59_capital - 1.0
+            if baseline_u59_capital > 0.0
             else None
         ),
     },
@@ -1086,21 +1352,22 @@ payload = {
     "property_profit_correlations": property_correlations.to_dict(
         orient="records"
     ),
-    "batch2_diagnostics": diagnosticos_batch2,
-    "batch2_audit": auditoria_batch2,
+    "batch3_diagnostics": diagnosticos_batch3,
+    "batch3_audit": auditoria_batch3,
     "u56_diagnostics": diagnosticos_u56,
     "u56_audit": auditoria_u56,
     "runtime_seconds": float(time.perf_counter() - training_started),
     "interpretation_rule": (
-        "A candidate improves U56 when its one-at-a-time insertion capital "
-        "effect is positive. Correlations with U56 returns and model scores "
-        "are descriptive/exploratory and must not be treated as causal or as "
-        "a final asset-selection rule without another untouched replication."
+        "The selective-specialist signature was frozen before candidate capital "
+        "replays. Its first confirmatory target is the sign of U56+candidate "
+        "capital contribution. U59+candidate is a separate enriched-universe "
+        "incremental test. Market-return correlation remains descriptive and "
+        "is not itself part of the signature."
     ),
 }
 
 with (
-    DIRETORIO_RESULTADOS / "random_batch2_u56_correlation.json"
+    DIRETORIO_RESULTADOS / "signature_batch3_validation.json"
 ).open("w", encoding="utf-8") as arquivo:
     json.dump(
         payload,
@@ -1114,7 +1381,7 @@ PACOTE_ANALISE = criar_pacote_analise(DIRETORIO_RESULTADOS)
 print(f"[package] pronto={PACOTE_ANALISE}", flush=True)
 sinal_sonoro_conclusao()
 print(
-    "[done] random batch2 U56 correlation concluido "
+    "[done] batch3 signature validation concluido "
     f"seconds={time.perf_counter() - training_started:.3f}",
     flush=True,
 )
