@@ -2368,3 +2368,45 @@ uma regra melhor. A proxima etapa e analise/modelagem offline dos dados ja
 existentes, com leave-one-cohort-out, bootstrap e regularizacao. Uma futura
 amostra intocada sera necessaria apenas para comprovar generalizacao externa,
 nao para continuar descobrindo a estrutura nos dados atuais.
+
+
+## Analise standalone dos oito ativos do cenario de US$ 58,56M
+
+Foi criado, na mesma branch research/intelligent-asset-signature-v1, o runner:
+analisar_topos_fundos_ativos_58m_spyder.py
+
+Versao: 1.17.3-dev.1.
+Schema: standalone-top-bottom-eight-assets-v1.
+
+Objetivo:
+estudar THO, WDAY, EXR, XEL, SBFG, PAYX, MUX e SXC individualmente, sem
+reinseri-los no universo completo e sem executar novo backtest financeiro.
+
+O runner:
+- le o OHLCV congelado do snapshot dados/pesquisa_smart_candidates;
+- reutiliza somente as entradas/saidas ja observadas no replay U59+8 de
+  US$ 58,56M;
+- detecta topos e fundos Directional Change em 2%, 4% e 8%;
+- separa data do extremo (ex-post descritiva) da data de confirmacao (causal);
+- calcula features locais/causais na entrada e na saida;
+- mede MFE, MAE, pico durante a posicao, devolucao do pico ate a saida,
+  captura do movimento e distancia temporal/preco a fundos/topos;
+- gera um grafico por ativo com fechamento, topos/fundos DC 4% e as entradas/
+  saidas reais do U59+8;
+- exporta tabelas de eventos, swings, operacoes e resumo por ativo.
+
+Arquivos principais esperados:
+- standalone_asset_summary.csv;
+- standalone_trade_details.csv;
+- standalone_directional_change_events.csv;
+- standalone_directional_swings.csv;
+- standalone_turn_geometry.csv;
+- standalone_asset_analysis.json;
+- graficos/<ATIVO>_topos_fundos_entradas_saidas.png/svg;
+- pacote_analise_ativos_58m_standalone.zip.
+
+Este experimento nao procura novos ativos, nao recalibra a assinatura, nao
+treina LightGBM e nao altera o capital. E um diagnostico morfologico/temporal
+dos vencedores ja encontrados, destinado a investigar se compartilham
+caracteristicas de entrada apos fundos, persistencia ate topos e padroes de
+saida/devolucao do pico.
