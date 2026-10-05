@@ -33,8 +33,8 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.16.0-dev.1"
-EXPECTED_EXECUTION_SCHEMA = "intelligent-candidate-screen-v1"
+RESEARCH_VERSION = "1.16.1-dev.1"
+EXPECTED_EXECUTION_SCHEMA = "intelligent-candidate-screen-u62-v1"
 EXPECTED_COMPARISON_FILE = "intelligent_candidate_screen.json"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
