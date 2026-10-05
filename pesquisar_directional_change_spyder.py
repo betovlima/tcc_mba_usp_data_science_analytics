@@ -15,7 +15,6 @@ O calendario, folds, benchmark e modelos dos 56 ativos-base permanecem fixos.
 # %% 0 - Imports e configuracao
 from pathlib import Path
 import json
-import math
 import time
 
 import numpy as np
