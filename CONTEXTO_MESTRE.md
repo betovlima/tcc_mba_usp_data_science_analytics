@@ -2588,3 +2588,58 @@ Arquivos:
 A execucao local e necessaria porque COLB, AMS e FOXF pertencem ao snapshot
 local pesquisa_expansao_76_b2 e o pacote standalone dos oito ativos nao
 contem o OHLC completo dos 59 ativos do baseline.
+
+
+## Resultado buy-and-hold do universo completo U67
+
+Pacote:
+pacote_buy_hold_universo_58m_u67.zip
+
+Versao:
+1.17.4-dev.1
+
+Schema:
+buy-hold-u67-58m-v1
+
+Universo:
+U67 = U59 + THO, WDAY, EXR, XEL, SBFG, PAYX, MUX, SXC.
+
+Todos os 67 ativos possuem inicio em 2016-01-04 e fim em 2026-09-17 no
+benchmark produzido, portanto own_history e common_window coincidiram.
+
+Hipotese:
+- US$ 10.000 por ativo;
+- capital inicial total US$ 670.000;
+- fracoes de acoes permitidas;
+- sem dividendos reinvestidos, taxas ou impostos;
+- precos normalizados por splits pelo pipeline existente.
+
+Resultado:
+- capital final: US$ 7.848.543,23;
+- lucro: US$ 7.178.543,23;
+- retorno agregado: +1.071,42%;
+- CAGR aproximado do portfolio equal-dollar: 25,86% a.a.
+
+Concentracao:
+- 56 ativos positivos e 11 negativos;
+- mediana de retorno individual: +164,48%;
+- NVDA: US$ 10 mil -> US$ 2.710.410,87 (+27.004,11%);
+- AMD: US$ 10 mil -> US$ 1.967.833,94 (+19.578,34%);
+- os cinco maiores contribuidores (NVDA, AMD, CORT, TSLA, AVGO) responderam
+  por aproximadamente 74,7% do lucro agregado.
+
+Comparacao com a estrategia U59+8:
+- estrategia: US$ 10.000 -> US$ 58.557.157,67;
+- buy-and-hold U67 com US$ 670.000 iniciais -> US$ 7.848.543,23;
+- mesmo sem normalizar capital inicial, a estrategia termina 7,46x acima;
+- normalizando o buy-and-hold para US$ 10.000 de capital total, o final seria
+  US$ 117.142,44;
+- nessa base comum, a estrategia termina aproximadamente 499,88x acima do
+  buy-and-hold equal-dollar.
+
+Correcao do benchmark anterior dos oito ativos:
+o calculo anterior dos oito usou a serie ja truncada pela construcao de
+features, iniciando em 2016-10-17. O benchmark U67 usa corretamente o OHLC
+congelado desde 2016-01-04. Portanto, para comparacoes de buy-and-hold, usar
+este benchmark U67 como referencia oficial e nao o calculo parcial anterior
+dos oito.
