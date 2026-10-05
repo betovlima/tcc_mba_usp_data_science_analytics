@@ -2410,3 +2410,102 @@ treina LightGBM e nao altera o capital. E um diagnostico morfologico/temporal
 dos vencedores ja encontrados, destinado a investigar se compartilham
 caracteristicas de entrada apos fundos, persistencia ate topos e padroes de
 saida/devolucao do pico.
+
+
+## Resultado da analise standalone de topos/fundos dos oito ativos — 1.17.3-dev.1
+
+Pacote analisado:
+pacote_analise_ativos_58m_standalone.zip
+
+Versao:
+1.17.3-dev.1
+
+Schema:
+standalone-top-bottom-eight-assets-v1
+
+A analise nao executou novo backtest nem treinou modelo. Ela usou o OHLCV
+congelado dos oito ativos do cenario de US$ 58,56M e as entradas/saidas ja
+observadas no replay U59+8.
+
+Amostra de execucao:
+- 22 operacoes fechadas;
+- 7 dos 8 ativos foram efetivamente negociados;
+- SXC nao foi selecionado em nenhuma operacao no U59+8;
+- WDAY teve 10 trades, THO 5, XEL 2, PAYX 2, EXR 1, SBFG 1 e MUX 1.
+
+Padrao dominante de entrada:
+- 16/22 entradas (72,7%) ocorreram com retorno de 20 sessoes negativo;
+- 17/22 (77,3%) com RSI14 abaixo de 0,50;
+- 18/22 (81,8%) abaixo da EMA20;
+- 17/22 (77,3%) na metade inferior do canal de 20 sessoes;
+- 15/22 (68,2%) a no maximo 10% do minimo de 20 sessoes;
+- 14/22 (63,6%) estavam pelo menos 10% abaixo da maxima de 20 sessoes.
+
+Medianas pooled na entrada:
+- return20 = -6,45%;
+- RSI14 = 0,409;
+- distancia da EMA20 = -3,76%;
+- distancia da maxima de 20 = -13,76%;
+- distancia da minima de 20 = +7,42%;
+- posicao no canal de 20 = 0,268.
+
+Directional Change mostra que o timing esta mais ligado a fundos curtos do que
+a grandes fundos:
+- DC 2%: mediana 2,5 sessoes apos fundo confirmado; 72,7% das entradas em ate
+  5 sessoes; preco mediano +1,93% acima do extremo do fundo;
+- DC 4%: mediana 6 sessoes; 40,9% em ate 5 sessoes; +2,62% acima do fundo;
+- DC 8%: mediana 16,5 sessoes; 27,3% em ate 5 sessoes; +4,27% acima do fundo.
+
+Padrao de saida:
+- mediana da posicao = 2 sessoes;
+- mediana do MFE = +4,96%;
+- mediana do MAE = -1,65%;
+- mediana da devolucao do pico da posicao ate a saida = -2,20%;
+- 12/22 saidas ocorreram na mesma sessao do pico da posicao;
+- 17/22 em ate 1 sessao apos o pico;
+- 21/22 em ate 2 sessoes;
+- todas as 22 em ate 4 sessoes.
+
+A passagem entrada -> saida deslocou a posicao, em mediana, para cima:
+- RSI14: 0,409 -> 0,436;
+- distancia EMA20: -3,76% -> -1,51%;
+- distancia da maxima de 20: -13,76% -> -9,90%;
+- posicao no canal de 20: 0,268 -> 0,415.
+Em teste de Wilcoxon pareado, a reducao do ATR percentual e a aproximacao da
+maxima de 20 sessoes permaneceram significativas apos correcao Holm entre as
+features testadas. Os demais sinais sao descritivos devido a n pequeno e
+dependencia entre trades do mesmo ativo.
+
+Morfologia por ativo:
+- WDAY e o caso mais robusto na execucao conjunta: 10 trades, 90% vencedores,
+  retorno mediano +3,81%, MFE mediano +6,59%, MAE mediano -1,40%;
+- THO: 5 trades, 60% vencedores, retorno mediano +1,88%, entrada tipicamente
+  apos pullback forte e grande espaco ex-post ate o proximo topo DC4;
+- XEL: 2 trades, comportamento de recuperacao semelhante ao padrao pooled;
+- PAYX, MUX e EXR tiveram pouca amostra e nao sustentam inferencia individual;
+- SBFG foi uma excecao morfologica de momentum: unica entrada ocorreu com
+  RSI alto, retorno20 positivo, acima da EMA20 e no topo do canal;
+- SXC nao possui entradas/saidas para caracterizacao operacional no grupo.
+
+A geometria standalone dos ativos em DC4 mostrou amplitudes de swing medianas
+relativamente semelhantes, mas frequencias muito diferentes:
+- eventos/ano aproximados: MUX 46,6; SXC 33,8; THO 31,1; WDAY 28,3;
+  SBFG 19,7; EXR 16,5; PAYX 16,3; XEL 12,0.
+A razao mediana de swing de alta / magnitude do swing de baixa em DC4 foi
+maior que 1 em todos exceto MUX; XEL foi o mais assimetrico (~1,41).
+
+Conclusao:
+o padrao comum nao e "comprar no fundo absoluto" nem "comprar perto do topo".
+A maior parte das entradas do U59+8 ocorre durante pullbacks, perto de fundos
+locais de pequena escala (2%), com momentum ainda fraco/negativo e preco abaixo
+da EMA20. A estrategia captura uma recuperacao curta, normalmente sai muito
+proxima do pico da propria posicao e raramente permanece tempo suficiente para
+capturar o topo estrutural seguinte de 4% ou 8%.
+
+Isso sugere uma assinatura temporal em dois niveis:
+(1) ativacao de reversao curta apos micro-fundo;
+(2) saida rapida apos expansao positiva, antes de um topo estrutural maior.
+
+A analise e descritiva e usa entradas/saidas do replay conjunto U59+8. Ela nao
+prova que os mesmos pontos seriam gerados por uma estrategia independente de
+um unico ativo.
