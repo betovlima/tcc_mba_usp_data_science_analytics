@@ -134,6 +134,7 @@ BEATS_TARGET = float(np.median([0.0045248869,0.0193923723,0.0129282482]))
 STAGE1_CSV = SMART.root / "stage1_ranked.csv"
 STAGE1_JSON = SMART.root / "stage1_selection.json"
 CATALOG_JSON = SMART.root / "alpaca_asset_catalog.json"
+FROZEN_SELECTION_FILE = SMART.root / "selected_candidates.csv"
 
 
 # %% 1 - Guards, snapshots e identificacao da execucao
@@ -262,6 +263,9 @@ def raw_features(frame: pd.DataFrame, spy_returns: pd.Series) -> dict:
 
 
 # %% 3 - Base de aprendizado ja conhecida
+# O classificador bruto deste Stage 1 e apenas um mecanismo de recuperacao
+# para limitar o custo computacional. Sua probabilidade NAO e tratada como
+# evidencia de vencedor. A decisao de congelamento ocorre somente no Stage 2.
 spy = scout_window(read_raw(BASE, "SPY"))
 spy_returns = pd.Series(
     pd.to_numeric(spy["close"], errors="coerce").pct_change(fill_method=None).to_numpy(),
@@ -849,7 +853,7 @@ with (OUT / "asset_search.json").open(
     json.dump(payload, f, indent=2, sort_keys=True, default=str)
 
 # A mesma lista e salva junto ao snapshot para o runner financeiro.
-selected.to_csv(SMART.root / "selected_candidates.csv", index=False)
+selected.to_csv(FROZEN_SELECTION_FILE, index=False)
 
 package = criar_pacote_analise(
     OUT,
