@@ -952,6 +952,10 @@ payload = {
         "research_graphs_generated": True,
         "research_graphs_directory": str(OUT / "graficos_pesquisa"),
     },
+    "research_graph_files": {
+        key: str(value)
+        for key, value in research_graphs.items()
+    },
     "snapshots": {
         "base_snapshot_sha256": manifest_base.get("snapshot_sha256"),
         "batch2_snapshot_sha256": manifest_b2.get("snapshot_sha256"),
