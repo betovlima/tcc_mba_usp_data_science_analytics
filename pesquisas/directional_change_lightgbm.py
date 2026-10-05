@@ -33,9 +33,9 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.15.0-dev.1"
-EXPECTED_EXECUTION_SCHEMA = "signature-validation-batch3-u59-v1"
-EXPECTED_COMPARISON_FILE = "signature_batch3_validation.json"
+RESEARCH_VERSION = "1.16.0-dev.1"
+EXPECTED_EXECUTION_SCHEMA = "intelligent-candidate-screen-v1"
+EXPECTED_COMPARISON_FILE = "intelligent_candidate_screen.json"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
 TOP_TURN_HORIZON_SESSIONS = 5
 TOP_TURN_ATR_MULTIPLIER = 1.5
