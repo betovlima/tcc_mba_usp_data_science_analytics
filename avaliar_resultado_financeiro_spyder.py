@@ -69,38 +69,61 @@ SMART = SnapshotPaths.from_root(
 OUT = ROOT / "output" / "avaliacao_financeira"
 SELECTION_FILE = SMART.root / "selected_candidates.csv"
 
-SCRIPT_RESEARCH_VERSION = "1.17.0-dev.1"
-EXECUTION_SCHEMA = "financial-evaluation-u59-v1"
+SCRIPT_RESEARCH_VERSION = "1.17.1-dev.1"
+EXPECTED_SHARED_MODULE_VERSION = "1.17.0-dev.1"
+SOURCE_SEARCH_VERSION = "1.17.0-dev.1"
+EXECUTION_SCHEMA = "financial-evaluation-u59-positive8-v1"
 
 # U59: conjunto financeiro que produziu aproximadamente US$ 30,08 milhoes.
 U59_ADDITIONS = ("COLB", "AMS", "FOXF")
 HISTORICAL_U59_ENDING_CAPITAL = 30_080_091.008142874
 
+# Oito positivos observados SOMENTE depois do congelamento e do replay
+# individual da lista 1.17.0. Este grupo e exploratorio, nao confirmatorio.
+DIAGNOSTIC_POSITIVE_ASSETS = (
+    "THO", "WDAY", "EXR", "XEL",
+    "SBFG", "PAYX", "MUX", "SXC",
+)
+
 # Controles de execucao para o Spyder.
 EXECUTAR_BASELINE_U59 = True
+
+# Precisa permanecer True para carregar e validar a lista congelada original.
 AVALIAR_LISTA_CONGELADA = True
 
-# Deixe False na execucao normal. Quando True, faz replay financeiro
-# U59 + 1 para cada candidato ja congelado. Isso serve para diagnostico
-# posterior e nunca deve ser usado como mecanismo de busca.
+# O grupo completo dos 20 ja foi testado e falhou. Deixe False para nao
+# repetir esse replay nesta rodada.
+AVALIAR_GRUPO_CONGELADO = False
+
+# Experimento atual: U59 + os oito positivos individuais, todos juntos.
+# Resultado deve ser interpretado como exploratorio, pois os oito foram
+# escolhidos depois de observar seus resultados financeiros individuais.
+AVALIAR_GRUPO_POSITIVOS_DIAGNOSTICOS = True
+
+# Diagnostico individual ja concluido na versao anterior. Nao repetir.
 AVALIAR_CANDIDATOS_INDIVIDUALMENTE = False
 
 
 # %% 1 - Guards e snapshots congelados
-if SCRIPT_RESEARCH_VERSION != RESEARCH_VERSION:
+if RESEARCH_VERSION != EXPECTED_SHARED_MODULE_VERSION:
     raise RuntimeError(
-        "Versao do runner financeiro e modulo incompatíveis: "
-        f"runner={SCRIPT_RESEARCH_VERSION!r} modulo={RESEARCH_VERSION!r}. "
+        "Modulo compartilhado inesperado para esta campanha financeira: "
+        f"esperado={EXPECTED_SHARED_MODULE_VERSION!r} "
+        f"observado={RESEARCH_VERSION!r}. "
         "Atualize a branch e reinicie o kernel do Spyder."
     )
 
 print("=" * 78, flush=True)
 print("TCC - Avaliacao Financeira U59", flush=True)
-print(f"research_version={RESEARCH_VERSION}", flush=True)
+print(f"financial_version={SCRIPT_RESEARCH_VERSION}", flush=True)
+print(f"shared_module_version={RESEARCH_VERSION}", flush=True)
+print(f"source_search_version={SOURCE_SEARCH_VERSION}", flush=True)
 print(f"execution_schema={EXECUTION_SCHEMA}", flush=True)
 print("baseline=U59=U56+COLB+AMS+FOXF", flush=True)
 print(
     f"avaliar_lista_congelada={AVALIAR_LISTA_CONGELADA} "
+    f"avaliar_grupo20={AVALIAR_GRUPO_CONGELADO} "
+    f"avaliar_grupo8={AVALIAR_GRUPO_POSITIVOS_DIAGNOSTICOS} "
     f"avaliar_individuais={AVALIAR_CANDIDATOS_INDIVIDUALMENTE}",
     flush=True,
 )
@@ -190,7 +213,7 @@ if AVALIAR_LISTA_CONGELADA:
             )
         if not (
             selected_table["research_version"].astype(str)
-            == RESEARCH_VERSION
+            == SOURCE_SEARCH_VERSION
         ).all():
             raise RuntimeError(
                 "Lista congelada foi produzida por outra versao da pesquisa."
@@ -600,10 +623,27 @@ if EXECUTAR_BASELINE_U59:
     )
 
 group_result = None
-if selected_symbols:
+if selected_symbols and AVALIAR_GRUPO_CONGELADO:
     group_result = _run_subset(
         "U59_PLUS_FROZEN_SELECTION",
         [*symbols_u59, *selected_symbols],
+        keep_result=True,
+    )
+
+diagnostic_positive_group_result = None
+if AVALIAR_GRUPO_POSITIVOS_DIAGNOSTICOS:
+    missing_positive = sorted(
+        set(DIAGNOSTIC_POSITIVE_ASSETS).difference(selected_symbols)
+    )
+    if missing_positive:
+        raise RuntimeError(
+            "O grupo exploratorio de oito positivos nao e subconjunto da "
+            "lista congelada original. Ausentes: "
+            + ",".join(missing_positive)
+        )
+    diagnostic_positive_group_result = _run_subset(
+        "U59_PLUS_DIAGNOSTIC_POSITIVE8",
+        [*symbols_u59, *DIAGNOSTIC_POSITIVE_ASSETS],
         keep_result=True,
     )
 
@@ -691,6 +731,27 @@ if group_result is not None:
         }
     )
 
+if diagnostic_positive_group_result is not None:
+    positive8_capital = float(
+        diagnostic_positive_group_result["metrics"]["ending_capital"]
+    )
+    if baseline_u59_capital is None:
+        positive8_delta = None
+        positive8_pct = None
+    else:
+        positive8_delta = positive8_capital - baseline_u59_capital
+        positive8_pct = positive8_capital / baseline_u59_capital - 1.0
+
+    summary_rows.append(
+        {
+            "scenario": "U59_PLUS_DIAGNOSTIC_POSITIVE8",
+            "asset_count": 59 + len(DIAGNOSTIC_POSITIVE_ASSETS),
+            **diagnostic_positive_group_result["metrics"],
+            "capital_delta_vs_u59": positive8_delta,
+            "capital_pct_vs_u59": positive8_pct,
+        }
+    )
+
 summary = pd.DataFrame(summary_rows)
 
 if not summary.empty:
@@ -759,8 +820,20 @@ if group_result is not None:
         index=False,
     )
 
+if diagnostic_positive_group_result is not None:
+    diagnostic_positive_group_result["result"].predictions.reset_index().to_csv(
+        OUT / "u59_plus_positive8_predictions.csv",
+        index=False,
+    )
+    diagnostic_positive_group_result["result"].trades.to_csv(
+        OUT / "u59_plus_positive8_trades.csv",
+        index=False,
+    )
+
 payload = {
-    "research_version": RESEARCH_VERSION,
+    "research_version": SCRIPT_RESEARCH_VERSION,
+    "shared_module_version": RESEARCH_VERSION,
+    "source_search_version": SOURCE_SEARCH_VERSION,
     "execution_schema": EXECUTION_SCHEMA,
     "question": (
         "Measure financial performance separately from asset discovery, "
@@ -777,7 +850,14 @@ payload = {
         "financial_runner": "avaliar_resultado_financeiro_spyder.py",
         "selection_file": str(SELECTION_FILE),
         "selected_assets": selected_symbols,
-        "evaluate_group": bool(selected_symbols),
+        "evaluate_frozen_group": bool(
+            selected_symbols and AVALIAR_GRUPO_CONGELADO
+        ),
+        "evaluate_diagnostic_positive8": bool(
+            AVALIAR_GRUPO_POSITIVOS_DIAGNOSTICOS
+        ),
+        "diagnostic_positive_assets": list(DIAGNOSTIC_POSITIVE_ASSETS),
+        "diagnostic_positive8_is_confirmatory": False,
         "evaluate_individual_candidates": bool(
             AVALIAR_CANDIDATOS_INDIVIDUALMENTE
         ),
@@ -822,6 +902,33 @@ payload = {
         if group_result is not None
         else None
     ),
+    "u59_plus_diagnostic_positive8": (
+        {
+            "assets": list(DIAGNOSTIC_POSITIVE_ASSETS),
+            "metrics": diagnostic_positive_group_result["metrics"],
+            "margins": diagnostic_positive_group_result["margins"],
+            "capital_delta_vs_u59": (
+                float(
+                    diagnostic_positive_group_result["metrics"]["ending_capital"]
+                ) - baseline_u59_capital
+                if baseline_u59_capital is not None
+                else None
+            ),
+            "capital_pct_vs_u59": (
+                float(
+                    diagnostic_positive_group_result["metrics"]["ending_capital"]
+                ) / baseline_u59_capital - 1.0
+                if baseline_u59_capital
+                else None
+            ),
+            "interpretation": (
+                "Exploratory only: these eight assets were chosen after "
+                "observing their individual financial effects."
+            ),
+        }
+        if diagnostic_positive_group_result is not None
+        else None
+    ),
     "individual_candidates": individual_rows,
     "runtime_seconds": float(
         time.perf_counter() - started
@@ -843,7 +950,7 @@ package = criar_pacote_analise(
     OUT,
     comparison_file="financial_evaluation.json",
     execution_schema=EXECUTION_SCHEMA,
-    archive_name="pacote_avaliacao_financeira.zip",
+    archive_name="pacote_avaliacao_financeira_positivos8.zip",
 )
 print(f"[package] pronto={package}", flush=True)
 sinal_sonoro_conclusao()
