@@ -982,10 +982,10 @@ def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
     output = tmp_path / "directional_change"
     output.mkdir()
     (output / "intelligent_candidate_screen.json").write_text(
-        '{"research_version":"test","execution_schema":"intelligent-candidate-screen-v1"}',
+        '{"research_version":"test","execution_schema":"intelligent-candidate-screen-u62-v1"}',
         encoding="utf-8",
     )
-    (output / "intelligent_selected_20.csv").write_text(
+    (output / "intelligent_selected_candidates.csv").write_text(
         "a,b\n1,2\n",
         encoding="utf-8",
     )
@@ -998,7 +998,7 @@ def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
     assert names == sorted(
         [
             "intelligent_candidate_screen.json",
-            "intelligent_selected_20.csv",
+            "intelligent_selected_candidates.csv",
         ]
     )
 
