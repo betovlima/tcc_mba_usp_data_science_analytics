@@ -1555,3 +1555,67 @@ capital. O artefato de congelamento e intelligent_selected_20.csv.
 Schema: intelligent-candidate-screen-v1.
 Versao: 1.16.0-dev.1.
 Branch unica mantida: research/reversal-bocpd-comparison.
+
+
+## Branch permanente da pesquisa de assinatura inteligente
+
+Data de abertura: 2026-10-05.
+
+Branch ativa unica desta linha a partir deste ponto:
+`research/intelligent-asset-signature-v1`.
+
+A branch anterior `research/reversal-bocpd-comparison` fica congelada no commit
+`91f33998d37d7b085e0d6403d0cc0b641caa01cf`. A `main` permanece intocada.
+Todas as proximas versoes, correcoes, testes e descobertas desta pesquisa devem
+ser mantidas nesta nova branch, sem abrir branches paralelas enquanto esta
+linha estiver ativa.
+
+Checkpoint cientifico que antecede a nova linha:
+- commit: `4b6b71414ce6f7047dc465679e57629ba8a4c453`;
+- tag planejada: `research-positive-assets-v1.15.0`;
+- U56 permanece a referencia historica de 56 ativos;
+- lote 2 adicionou COLB, AMS e FOXF, formando U59;
+- contra U59, o lote 3 encontrou MG, REXR e CALM como contribuicoes positivas;
+- VSTM foi positivo contra U56, mas negativo contra U59 e nao entra no conjunto;
+- ARCO permanece fora deste checkpoint por ter sido medido em protocolo anterior.
+
+Conjunto positivo conhecido para a nova pesquisa:
+`COLB, AMS, FOXF, MG, REXR, CALM`.
+
+Esse conjunto define o `U62 candidato = U56 + 6 positivos`. Ele ainda nao e um
+baseline cientifico validado em conjunto, porque MG, REXR e CALM foram medidos
+individualmente contra U59. A expressao U62 candidato deve ser mantida ate o
+replay conjunto confirmar o comportamento dos seis simultaneamente.
+
+Correcao metodologica obrigatoria para a selecao inteligente:
+- novos candidatos devem ser avaliados como possiveis acrescimos ao U62 candidato;
+- nao usar apenas U56 como contexto de score, porque o caso VSTM demonstrou que
+  a contribuicao pode mudar de sinal quando o universo vencedor muda;
+- os 100 novos ativos sao apenas pool de pesquisa e nao sao adicionados todos ao
+  universo operacional/cientifico;
+- a descoberta nao pode usar backtest individual de capital como filtro;
+- primeiro usar propriedades historicas e comportamento de score/modelo para
+  ordenar candidatos;
+- congelar a lista dos 20 selecionados antes de consultar seu resultado de capital;
+- somente depois executar um teste confirmatorio contra o U62 candidato.
+
+Estado da versao 1.16.0-dev.1:
+- implementou o primeiro rascunho da selecao sem forca bruta;
+- ainda usa U56 como referencia de score no Stage 2;
+- portanto nao deve ser executada como campanha cientifica final;
+- a proxima versao deve corrigir o contexto para U62 candidato antes da execucao.
+
+Regra de continuidade documental nesta branch:
+para cada nova versao, acrescentar ao final deste arquivo, sem apagar o historico:
+1. versao e commit;
+2. pergunta/hipotese testada;
+3. universo e ativos incluidos/excluidos;
+4. snapshot/dados e regras de congelamento;
+5. metodo de selecao e parametros congelados;
+6. artefatos gerados;
+7. resultado observado, quando existir;
+8. interpretacao e limites do resultado;
+9. decisao tomada e proximo passo.
+
+Esse registro e obrigatorio para permitir retomada fiel da pesquisa em novas
+conversas sem depender do historico do chat.
