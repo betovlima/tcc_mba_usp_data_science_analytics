@@ -1724,3 +1724,105 @@ Branch ativa: `research/intelligent-asset-signature-v1`.
 Esta versao ainda nao possui resultado de execucao. A lista produzida por ela
 sera a primeira lista nova que podera ser congelada para teste confirmatorio de
 capital contra o U62 candidato.
+
+
+## Separacao definitiva entre busca e avaliacao financeira — 1.17.0-dev.1
+
+Decisao do usuario em 2026-10-05: busca de ativos e avaliacao financeira deixam
+de compartilhar o mesmo runner. A partir desta versao existem exatamente dois
+arquivos ativos para esta linha de pesquisa, ambos preparados com celulas "# %%"
+e comentarios para execucao no Spyder.
+
+### 1. buscar_ativos_spyder.py
+
+Responsabilidade exclusiva: procurar e classificar novos ativos.
+
+Regras:
+- nao executa a estrategia para medir capital dos novos candidatos;
+- random_sampling=false;
+- candidate_strategy_replays=0;
+- selection_uses_new_candidate_capital=false;
+- baseline/contexto de score = U59 vencedor;
+- U59 = U56 + COLB + AMS + FOXF;
+- o calendario continua fixo no U56 original;
+- o catalogo Alpaca e filtrado por elegibilidade, continuidade e historico
+  integral desde o inicio congelado da pesquisa;
+- o pool-alvo para avaliacao por score e de ate 500 ativos;
+- o Stage 1 e apenas recuperacao/coarse screening. A probabilidade bruta nao
+  deve ser interpretada como prova de vencedor porque sua generalizacao entre
+  lotes anteriores foi fraca;
+- o Stage 2 treina LightGBM e compara o comportamento de score dos candidatos
+  contra o U59, sem replay financeiro;
+- assinatura exploratoria: selective-specialist-u59-v0.1;
+- nao existe preenchimento forcado para chegar a 20;
+- sao congelados no maximo 20 ativos aprovados;
+- se menos de 20 passarem, a lista fica menor;
+- a lista congelada e gravada em
+  dados/pesquisa_smart_candidates/selected_candidates.csv e tambem no pacote da
+  busca, com research_version, execution_schema, search_reference e hash do
+  snapshot para impedir que o runner financeiro leia uma lista antiga.
+
+Saidas principais:
+- output/busca_ativos/asset_search.json;
+- output/busca_ativos/intelligent_stage1_ranked.csv;
+- output/busca_ativos/intelligent_candidates_ranked.csv;
+- output/busca_ativos/intelligent_selected_candidates.csv;
+- output/busca_ativos/pacote_busca_ativos.zip.
+
+### 2. avaliar_resultado_financeiro_spyder.py
+
+Responsabilidade exclusiva: executar a estrategia e medir resultado financeiro.
+
+Baseline congelado:
+- U59 = U56 + COLB + AMS + FOXF;
+- capital historicamente reproduzido na execucao validada anterior:
+  US$ 30.080.091,01;
+- o runner deve reproduzir esse baseline antes de promover qualquer extensao.
+
+Regras:
+- nao procura novos ativos;
+- por padrao, le somente a lista congelada por buscar_ativos_spyder.py;
+- rejeita lista sem identidade da versao/schema atuais;
+- avalia U59 como baseline;
+- se existir lista congelada valida, avalia U59 + lista congelada como grupo;
+- o replay individual U59 + 1 candidato existe apenas como diagnostico
+  financeiro posterior e permanece desligado por padrao
+  (AVALIAR_CANDIDATOS_INDIVIDUALMENTE=False);
+- replay individual nunca deve voltar a ser usado como mecanismo de descoberta;
+- calendario e benchmark permanecem fixos no U56.
+
+Saidas principais:
+- output/avaliacao_financeira/financial_evaluation.json;
+- output/avaliacao_financeira/financial_summary.csv;
+- predictions/trades do U59 e do grupo quando aplicavel;
+- output/avaliacao_financeira/pacote_avaliacao_financeira.zip.
+
+### Ordem recomendada no Spyder
+
+Para reproduzir apenas o baseline financeiro:
+1. executar avaliar_resultado_financeiro_spyder.py.
+
+Para descobrir e depois confirmar novos ativos:
+1. executar buscar_ativos_spyder.py;
+2. revisar/congelar o pacote de busca;
+3. executar avaliar_resultado_financeiro_spyder.py;
+4. comparar o grupo selecionado contra U59.
+
+O antigo arquivo monolitico pesquisar_directional_change_spyder.py foi removido
+da branch ativa para evitar execucao acidental de um protocolo obsoleto. Seu
+historico continua preservado no Git.
+
+### Correcao conceitual em relacao a 1.16.1
+
+A proposta U62 candidato foi abandonada como referencia imediata da busca.
+MG, REXR e CALM continuam sendo evidencia historica positiva individual contra
+U59, mas ainda nao foram validados simultaneamente como conjunto. Por decisao do
+usuario, o ponto financeiro consolidado permanece U59, o conjunto que atingiu
+aproximadamente US$ 30 milhoes. A busca de ate 500 novos candidatos parte desse
+U59.
+
+Versao: 1.17.0-dev.1.
+Schemas:
+- intelligent-asset-search-u59-v1;
+- financial-evaluation-u59-v1.
+Branch ativa: research/intelligent-asset-signature-v1.
