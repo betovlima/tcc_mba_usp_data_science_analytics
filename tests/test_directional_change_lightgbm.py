@@ -981,11 +981,11 @@ def test_trigger_peak_metrics_match_same_execution_timestamp() -> None:
 def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
     output = tmp_path / "directional_change"
     output.mkdir()
-    (output / "signature_batch3_validation.json").write_text(
-        '{"research_version":"test","execution_schema":"signature-validation-batch3-u59-v1"}',
+    (output / "intelligent_candidate_screen.json").write_text(
+        '{"research_version":"test","execution_schema":"intelligent-candidate-screen-v1"}',
         encoding="utf-8",
     )
-    (output / "signature_batch3_candidates.csv").write_text(
+    (output / "intelligent_selected_20.csv").write_text(
         "a,b\n1,2\n",
         encoding="utf-8",
     )
@@ -997,8 +997,8 @@ def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
         names = sorted(zipped.namelist())
     assert names == sorted(
         [
-            "signature_batch3_validation.json",
-            "signature_batch3_candidates.csv",
+            "intelligent_candidate_screen.json",
+            "intelligent_selected_20.csv",
         ]
     )
 
@@ -1018,5 +1018,5 @@ def test_analysis_package_refuses_stale_v1_schema(tmp_path: Path) -> None:
     else:
         raise AssertionError("stale v1 package should have been refused")
 
-    assert "signature_batch3_validation.json" in message
+    assert "intelligent_candidate_screen.json" in message
     assert "copia antiga" in message
