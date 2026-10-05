@@ -1891,3 +1891,55 @@ SGA, THO, XNTK, CIVB, WDAY, EXR, PAYX, FMBH, SBFG, ALNY, SXC, ICCC, XEL, EBMT, V
 
 Proximo passo obrigatorio:
 reexecutar avaliar_resultado_financeiro_spyder.py com AVALIAR_LISTA_CONGELADA=True e AVALIAR_CANDIDATOS_INDIVIDUALMENTE=False. O teste primario e U59 + os 20 congelados contra o baseline de US$ 30.080.091,01. Nao alterar lista nem thresholds antes desse replay.
+
+
+## Resultado financeiro da lista congelada 1.17.0-dev.1
+
+Pacote analisado: pacote_avaliacao_financeira(1).zip.
+Schema: financial-evaluation-u59-v1.
+Versao: 1.17.0-dev.1.
+
+Teste primario, sem alterar a lista congelada:
+U59 versus U59 + SGA, THO, XNTK, CIVB, WDAY, EXR, PAYX, FMBH, SBFG,
+ALNY, SXC, ICCC, XEL, EBMT, VLRS, PDFS, SITC, FDX, FNWB e MUX.
+
+Resultados:
+- U59: US$ 30.080.091,008142874;
+- U59 + lista congelada: US$ 2.017.935,5138941268;
+- delta: -US$ 28.062.155,494248748;
+- diferenca percentual: -93,2915% contra U59;
+- CAGR: U59 267,4033% versus grupo 136,8624%;
+- Sharpe: U59 2,33755 versus grupo 1,74288;
+- MaxDD: U59 -31,2189% versus grupo -33,6579%;
+- worst fold: U59 +275,0509% versus grupo +290,6203%.
+
+O grupo nao perdeu dinheiro em termos absolutos; o problema foi grande perda de
+captura de oportunidade. O dano se concentrou nos folds 2 e 3:
+- fold 1: grupo terminou 4,15% acima do U59;
+- fold 2: grupo terminou com apenas 15,96% do capital acumulado do U59;
+- fold 3: grupo terminou com 6,71% do capital final do U59.
+
+Os novos ativos ocuparam aproximadamente:
+- 5,75% das sessoes no fold 1;
+- 36,11% no fold 2;
+- 25,60% no fold 3.
+
+Entre as posicoes fechadas dos novos ativos, 81 vendas somaram PnL realizado
+aproximado de -US$ 926.785, contra +US$ 2,866 milhoes nas demais posicoes do
+grupo. Quatro ativos congelados nao chegaram a ser selecionados em nenhuma
+sessao: CIVB, EXR, SXC e XNTK.
+
+Os maiores diagnosticos negativos entre os selecionados foram PDFS, ICCC,
+VLRS, FDX e SITC. Isto e apenas diagnostico da execucao do grupo, nao validacao
+individual de efeito marginal.
+
+Interpretacao cientifica:
+a assinatura selective-specialist-u59-v0.1 NAO foi validada economicamente
+como regra suficiente para expandir o U59. Ela selecionou candidatos com
+comportamento de score aparentemente complementar, mas o conjunto alterou a
+rotacao e reduziu fortemente a captura das oportunidades que geravam o
+crescimento extraordinario do U59, principalmente no fold 2.
+
+Nao retunar thresholds usando este resultado e reapresentar o mesmo lote como
+confirmatorio. Qualquer nova regra derivada deste fracasso passa a ser
+exploratoria e precisa de nova validacao congelada.
