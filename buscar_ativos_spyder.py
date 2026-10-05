@@ -755,6 +755,10 @@ ranked = ranked.drop(columns=["_priority","_corr","_beats","_prob"])
 selected = ranked.loc[
     ranked["signature_predicted_positive"].astype(bool)
 ].head(SELECTED_COUNT).copy()
+selected["research_version"] = RESEARCH_VERSION
+selected["execution_schema"] = EXECUTION_SCHEMA
+selected["search_reference"] = "U59_WINNER"
+selected["smart_snapshot_sha256"] = smart_manifest.get("snapshot_sha256")
 selected_symbols = tuple(selected["asset"].astype(str))
 strong = int(len(selected))
 
