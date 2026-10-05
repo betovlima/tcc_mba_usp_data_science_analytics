@@ -2061,3 +2061,29 @@ Saidas adicionais:
 - u59_plus_positive8_predictions.csv;
 - u59_plus_positive8_trades.csv;
 - pacote_avaliacao_financeira_positivos8.zip.
+
+
+## Pacote financeiro rejeitado por versao antiga
+
+O arquivo pacote_avaliacao_financeira(3).zip, gerado em 2026-10-05, nao
+corresponde ao experimento exploratorio dos oito positivos.
+
+O pacote reporta:
+- research_version=1.17.0-dev.1;
+- execution_schema=financial-evaluation-u59-v1;
+- evaluate_group=true;
+- evaluate_individual_candidates=true;
+- u59_plus_diagnostic_positive8 ausente/null.
+
+Ele repetiu a campanha anterior com o grupo congelado de 20 e os replays
+individuais. Portanto, nenhum resultado deste pacote deve ser interpretado como
+resultado de U59 + THO, WDAY, EXR, XEL, SBFG, PAYX, MUX e SXC.
+
+A branch correta possui avaliar_resultado_financeiro_spyder.py em
+1.17.1-dev.1, schema financial-evaluation-u59-positive8-v1, com:
+AVALIAR_GRUPO_CONGELADO=False,
+AVALIAR_GRUPO_POSITIVOS_DIAGNOSTICOS=True e
+AVALIAR_CANDIDATOS_INDIVIDUALMENTE=False.
+
+Necessario atualizar a branch local, reiniciar o kernel do Spyder e executar
+novamente apenas o runner financeiro.
