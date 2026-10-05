@@ -1943,3 +1943,76 @@ crescimento extraordinario do U59, principalmente no fold 2.
 Nao retunar thresholds usando este resultado e reapresentar o mesmo lote como
 confirmatorio. Qualquer nova regra derivada deste fracasso passa a ser
 exploratoria e precisa de nova validacao congelada.
+
+
+## Diagnostico individual dos 20 congelados — 1.17.0-dev.1
+
+Pacote analisado: pacote_avaliacao_financeira(2).zip.
+Schema: financial-evaluation-u59-v1.
+Versao: 1.17.0-dev.1.
+Runtime: 153,217 s.
+
+O baseline U59 foi novamente reproduzido em US$ 30.080.091,008142874.
+O teste do grupo dos 20 permaneceu em US$ 2.017.935,5138941268
+(-93,2915% vs U59).
+
+O replay individual U59 + 1 ativo, feito apenas depois do congelamento da lista,
+produziu 8 positivos, 1 neutro e 11 negativos. Portanto, entre os 20 ativos
+previamente classificados como selective_specialist, a precisao economica
+observada para sinal positivo foi 40%.
+
+Positivos individuais:
+- THO: US$ 39.061.905,24; +29,8597% vs U59;
+- WDAY: US$ 34.926.832,65; +16,1128%;
+- EXR: US$ 34.599.017,24; +15,0230%;
+- XEL: US$ 33.355.376,81; +10,8886%;
+- SBFG: US$ 31.758.236,39; +5,5789%;
+- PAYX: US$ 30.923.853,30; +2,8051%;
+- MUX: US$ 30.714.006,84; +2,1074%;
+- SXC: US$ 30.614.920,79; +1,7780%.
+
+Neutro:
+- CIVB: US$ 30.080.091,01; 0,0000%.
+
+Negativos:
+- XNTK: -0,6064%;
+- SGA: -12,1390%;
+- ICCC: -16,8931%;
+- PDFS: -17,8729%;
+- FDX: -19,9311%;
+- FNWB: -20,3256%;
+- FMBH: -24,4327%;
+- ALNY: -25,8435%;
+- EBMT: -27,4971%;
+- SITC: -39,3984%;
+- VLRS: -62,1047%.
+
+Media dos oito efeitos positivos: +10,5192%.
+Mediana dos oito positivos: +8,2337%.
+Media dos onze efeitos negativos: -24,2768%.
+Mediana dos onze negativos: -20,3256%.
+
+Descoberta diagnostica, NAO regra validada:
+dentro destes 20, candidate_beats_u59_best_share apresentou associacao inversa
+com o efeito financeiro (Pearson aproximadamente -0,683; Spearman -0,598).
+Os positivos tiveram media dessa medida de aproximadamente 0,6303%, enquanto
+os nao positivos ficaram em aproximadamente 2,0470%. O limiar <=5% usado pela
+assinatura parece largo demais neste lote. Tambem houve associacao moderada
+entre menor abs_score_corr_u59_best e melhor resultado financeiro.
+
+Essa observacao e post-hoc. Nao pode ser transformada em nova regra e validada
+sobre estes mesmos 20. Qualquer threshold novo deve ser tratado como
+exploratorio e testado em nova lista congelada.
+
+Outro resultado importante: ativos que sao positivos isoladamente podem
+interagir mal quando adicionados simultaneamente. O fracasso do grupo dos 20
+nao implica que todos sejam ruins; o replay individual encontrou oito
+contribuicoes positivas reais contra U59.
+
+Proximo experimento exploratorio recomendado:
+avaliar U59 + os oito positivos individuais juntos
+(THO, WDAY, EXR, XEL, SBFG, PAYX, MUX, SXC) para medir interacao e
+nao-aditividade. Esse teste nao e confirmatorio, pois os oito foram escolhidos
+apos observar os resultados financeiros individuais. Depois, usar os rotulos
+dos 20 somente para desenvolver uma nova assinatura e valida-la em candidatos
+novos e previamente congelados.
