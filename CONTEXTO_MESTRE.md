@@ -2145,3 +2145,40 @@ Interpretacao:
   inferida apenas pelo fato de cada ativo ser selective_specialist;
 - o proximo desenvolvimento deve usar os 20 rotulados para melhorar a assinatura
   e depois validar a nova regra em candidatos completamente novos e congelados.
+
+
+## Correcao da visualizacao da pesquisa — 1.17.2-dev.1
+
+Foi identificado que os novos runners buscar_ativos_spyder.py e
+avaliar_resultado_financeiro_spyder.py nao chamavam o modulo de graficos.
+Os graficos existentes eram atualizados apenas por reproduzir_experimento_spyder.py
+e continuavam representando a comparacao antiga Control/Soft. Portanto as
+descobertas U59, lista congelada de 20, diagnostico individual e U59 + 8 nao
+estavam sendo refletidas visualmente.
+
+A versao financeira 1.17.2-dev.1 corrige isso sem criar nova branch.
+
+Foi adicionada em reproducao/graficos.py a funcao
+gerar_graficos_pesquisa_financeira, chamada automaticamente pelo runner
+financeiro. Cada nova execucao passa a recriar output/avaliacao_financeira/
+graficos_pesquisa com CSV, PNG e SVG auditaveis.
+
+Graficos previstos:
+- evolucao_capital_pesquisa: U56, U59, U59 + 20 e U59 + 8;
+- curvas_capital_cenarios_log: curvas de capital da rodada atual;
+- vantagem_relativa_vs_u59: vantagem acumulada sessao a sessao;
+- capital_por_fold: comparacao do capital acumulado ao fim de cada fold;
+- efeito_individual_candidatos: os 20 efeitos marginais contra U59;
+- uso_ativos_adicionados: numero de sessoes em que cada novo ativo foi escolhido;
+- assinatura_distribuicao_classes, quando o CSV da busca estiver presente;
+- assinatura_beats_vs_correlacao, quando o CSV da busca estiver presente.
+
+Os dados que alimentam cada grafico tambem sao gravados em CSV na mesma pasta.
+O pacote financeiro passa a incluir recursivamente esses artefatos.
+
+Versao financeira: 1.17.2-dev.1.
+Schema: financial-evaluation-u59-positive8-v2.
+Branch: research/intelligent-asset-signature-v1.
+
+Esta mudanca e de visualizacao/auditoria. Nao altera modelos, thresholds,
+ativos, folds, capital ou a interpretacao cientifica dos resultados existentes.
