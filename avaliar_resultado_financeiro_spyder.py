@@ -172,6 +172,43 @@ if AVALIAR_LISTA_CONGELADA:
                 "selected_candidates.csv nao possui a coluna asset."
             )
 
+        required_identity = {
+            "research_version",
+            "execution_schema",
+            "search_reference",
+            "smart_snapshot_sha256",
+        }
+        missing_identity = sorted(
+            required_identity.difference(selected_table.columns)
+        )
+        if missing_identity:
+            raise RuntimeError(
+                "Lista congelada pertence a protocolo antigo ou incompleto. "
+                "Rode buscar_ativos_spyder.py novamente. Colunas ausentes: "
+                + ",".join(missing_identity)
+            )
+        if not (
+            selected_table["research_version"].astype(str)
+            == RESEARCH_VERSION
+        ).all():
+            raise RuntimeError(
+                "Lista congelada foi produzida por outra versao da pesquisa."
+            )
+        if not (
+            selected_table["execution_schema"].astype(str)
+            == "intelligent-asset-search-u59-v1"
+        ).all():
+            raise RuntimeError(
+                "Lista congelada nao veio do runner de busca U59 atual."
+            )
+        if not (
+            selected_table["search_reference"].astype(str)
+            == "U59_WINNER"
+        ).all():
+            raise RuntimeError(
+                "Lista congelada nao foi selecionada contra o U59 vencedor."
+            )
+
         if "signature_predicted_positive" in selected_table.columns:
             flags = (
                 selected_table["signature_predicted_positive"]
