@@ -1515,3 +1515,43 @@ passa a ser feita por pre-selecao inteligente em duas etapas: propriedades de
 mercado/historico e comportamento de score LightGBM relativo ao universo de
 referencia. O capital OOS dos novos candidatos so podera ser consultado depois
 de a lista ter sido congelada.
+
+
+## Selecao inteligente sem replay por candidato — 1.16.0-dev.1
+
+A partir do checkpoint positivo do lote 3, a pesquisa deixa de sortear novos
+lotes aleatorios e deixa de usar insercao individual com replay da estrategia
+como mecanismo de descoberta.
+
+Objetivo:
+- procurar candidatos no catalogo Alpaca de forma deterministica;
+- usar como exemplos positivos conhecidos COLB, AMS, FOXF, MG, REXR e CALM;
+- excluir candidatos ja testados e rejeicoes estruturais conhecidas;
+- nao consultar capital OOS de nenhum novo candidato durante a selecao.
+
+Stage 1 usa uma janela barata de scouting desde 2023-01-01 e propriedades de
+preco, volatilidade, drawdown, liquidez, momentum, eficiencia de tendencia,
+correlacao e beta vs SPY. Uma regressao logistica balanceada, treinada apenas
+nos 40 candidatos ja rotulados dos lotes 2 e 3, ordena o catalogo elegivel.
+Os top 100 vao para um snapshot integral congelado.
+
+Stage 2 baixa/congela historia integral e Corporate Actions dos top 100,
+remove problemas estruturais sem bridge, treina LightGBM por fold e mede apenas
+o comportamento dos scores contra a referencia fixa U56. Nenhum replay da
+carteira e executado por candidato.
+
+Assinatura exploratory selective-specialist-v0.2:
+- 0 < beats_u56_best_share <= 5%;
+- score_std <= 0,15;
+- score_mean <= 0,16;
+- abs(corr_score_com_melhor_U56) <= 0,10;
+- pelo menos 85% das sessoes de score esperadas.
+
+A v0.2 foi formulada depois de observar o lote 3 e nao e tratada como validada
+naquele lote. A lista final contem 20 ativos. Se menos de 20 passarem o filtro
+forte, as vagas restantes sao preenchidas pelo ranking congelado, sem olhar
+capital. O artefato de congelamento e intelligent_selected_20.csv.
+
+Schema: intelligent-candidate-screen-v1.
+Versao: 1.16.0-dev.1.
+Branch unica mantida: research/reversal-bocpd-comparison.
