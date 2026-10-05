@@ -1859,3 +1859,35 @@ e imprime a diferenca entre a reproducao corrente e esse valor.
 Nao havia status de CI ou workflow automatico associado ao commit de
 implementacao. A validacao efetiva desta versao deve ser feita pela execucao
 local no Spyder e pelo pacote produzido por cada runner.
+
+
+## Resultados executados 1.17.0-dev.1
+
+Pacotes analisados em 2026-10-05: pacote_avaliacao_financeira.zip e pacote_busca_ativos.zip.
+
+Avaliacao financeira:
+- schema financial-evaluation-u59-v1;
+- U59 reproduzido exatamente em US$ 30.080.091,008142874;
+- CAGR 267,4033%;
+- Sharpe 2,33754894;
+- MaxDD -31,2189%;
+- worst fold +275,0509%;
+- buy-and-hold US$ 38.978,53;
+- selected_assets vazio, portanto este pacote validou somente o baseline U59.
+
+Busca inteligente:
+- schema intelligent-asset-search-u59-v1;
+- random_sampling=false;
+- candidate_strategy_replays=0;
+- selection_uses_new_candidate_capital=false;
+- referencia de score U59_WINNER;
+- pool alvo 500; pool efetivo 453; modelaveis 446;
+- classes: dormant 188, invasive_or_unstable 111, selective_specialist 72, uncertain 63, insufficient_score_data 12;
+- exclusoes estruturais: AMTD e GOGL;
+- sem preenchimento forcado.
+
+Lista congelada dos 20 selective_specialist:
+SGA, THO, XNTK, CIVB, WDAY, EXR, PAYX, FMBH, SBFG, ALNY, SXC, ICCC, XEL, EBMT, VLRS, PDFS, SITC, FDX, FNWB, MUX.
+
+Proximo passo obrigatorio:
+reexecutar avaliar_resultado_financeiro_spyder.py com AVALIAR_LISTA_CONGELADA=True e AVALIAR_CANDIDATOS_INDIVIDUALMENTE=False. O teste primario e U59 + os 20 congelados contra o baseline de US$ 30.080.091,01. Nao alterar lista nem thresholds antes desse replay.
