@@ -53,6 +53,7 @@ from pesquisas.directional_change_lightgbm import (
 )
 from reproducao.dados import SnapshotPaths, validate_snapshot
 from reproducao.experimento import build_variant_configs, summarize_metrics
+from reproducao.graficos import gerar_graficos_pesquisa_financeira
 from reproducao.preparacao import prepare_model_frames
 
 
@@ -69,14 +70,69 @@ SMART = SnapshotPaths.from_root(
 OUT = ROOT / "output" / "avaliacao_financeira"
 SELECTION_FILE = SMART.root / "selected_candidates.csv"
 
-SCRIPT_RESEARCH_VERSION = "1.17.1-dev.1"
+SCRIPT_RESEARCH_VERSION = "1.17.2-dev.1"
 EXPECTED_SHARED_MODULE_VERSION = "1.17.0-dev.1"
 SOURCE_SEARCH_VERSION = "1.17.0-dev.1"
-EXECUTION_SCHEMA = "financial-evaluation-u59-positive8-v1"
+EXECUTION_SCHEMA = "financial-evaluation-u59-positive8-v2"
 
 # U59: conjunto financeiro que produziu aproximadamente US$ 30,08 milhoes.
 U59_ADDITIONS = ("COLB", "AMS", "FOXF")
 HISTORICAL_U59_ENDING_CAPITAL = 30_080_091.008142874
+
+# Checkpoints financeiros ja observados nesta linha de pesquisa.
+# Servem apenas para visualizacao cumulativa e auditoria; nao entram no modelo.
+HISTORICAL_RESEARCH_CHECKPOINTS = (
+    {
+        "label": "U56",
+        "ending_capital": 10_082_425.910911141,
+        "status": "historical_baseline",
+    },
+    {
+        "label": "U59",
+        "ending_capital": 30_080_091.008142874,
+        "status": "validated_baseline",
+    },
+    {
+        "label": "U59 + 20",
+        "ending_capital": 2_017_935.5138941268,
+        "status": "failed_frozen_validation",
+    },
+    {
+        "label": "U59 + 8",
+        "ending_capital": 58_557_157.67496595,
+        "status": "exploratory_positive_subset",
+    },
+)
+
+# Diagnostico individual da lista congelada 1.17.0. Mantido aqui para que os
+# graficos da pesquisa continuem mostrando o que foi aprendido, mesmo depois
+# que a pasta de output da rodada anterior for limpa.
+HISTORICAL_INDIVIDUAL_EFFECTS = (
+    {"asset": "SGA", "capital_pct_vs_u59": -0.1213898031782675},
+    {"asset": "THO", "capital_pct_vs_u59": 0.2985966485004629},
+    {"asset": "XNTK", "capital_pct_vs_u59": -0.0060642003161124},
+    {"asset": "CIVB", "capital_pct_vs_u59": 0.0},
+    {"asset": "WDAY", "capital_pct_vs_u59": 0.1611279104700289},
+    {"asset": "EXR", "capital_pct_vs_u59": 0.1502297859145460},
+    {"asset": "PAYX", "capital_pct_vs_u59": 0.0280505245194395},
+    {"asset": "FMBH", "capital_pct_vs_u59": -0.2443273602314529},
+    {"asset": "SBFG", "capital_pct_vs_u59": 0.0557892408537519},
+    {"asset": "ALNY", "capital_pct_vs_u59": -0.2584354333761023},
+    {"asset": "SXC", "capital_pct_vs_u59": 0.0177801914510296},
+    {"asset": "ICCC", "capital_pct_vs_u59": -0.1689313194878604},
+    {"asset": "XEL", "capital_pct_vs_u59": 0.1088855014744620},
+    {"asset": "EBMT", "capital_pct_vs_u59": -0.2749713629367226},
+    {"asset": "VLRS", "capital_pct_vs_u59": -0.6210466934933634},
+    {"asset": "PDFS", "capital_pct_vs_u59": -0.1787288258097510},
+    {"asset": "SITC", "capital_pct_vs_u59": -0.3939835532403795},
+    {"asset": "FDX", "capital_pct_vs_u59": -0.1993113709999824},
+    {"asset": "FNWB", "capital_pct_vs_u59": -0.2032560878178345},
+    {"asset": "MUX", "capital_pct_vs_u59": 0.0210742632222769},
+)
+
+SEARCH_CANDIDATES_CSV = (
+    ROOT / "output" / "busca_ativos" / "intelligent_candidates_ranked.csv"
+)
 
 # Oito positivos observados SOMENTE depois do congelamento e do replay
 # individual da lista 1.17.0. Este grupo e exploratorio, nao confirmatorio.
@@ -777,7 +833,7 @@ if not summary.empty:
     )
 
 
-# %% 9 - Exportacao do pacote financeiro
+# %% 9 - Exportacao dos dados financeiros
 OUT.mkdir(parents=True, exist_ok=True)
 for old in OUT.rglob("*"):
     if old.is_file():
@@ -830,6 +886,37 @@ if diagnostic_positive_group_result is not None:
         index=False,
     )
 
+# %% 10 - Graficos cumulativos da pesquisa
+scenario_results_for_graphs = {}
+if baseline_u59 is not None:
+    scenario_results_for_graphs["U59_WINNER"] = baseline_u59["result"]
+if group_result is not None:
+    scenario_results_for_graphs["U59_PLUS_FROZEN_SELECTION"] = group_result["result"]
+if diagnostic_positive_group_result is not None:
+    scenario_results_for_graphs[
+        "U59_PLUS_DIAGNOSTIC_POSITIVE8"
+    ] = diagnostic_positive_group_result["result"]
+
+added_assets_for_graphs = {}
+if group_result is not None:
+    added_assets_for_graphs["U59_PLUS_FROZEN_SELECTION"] = selected_symbols
+if diagnostic_positive_group_result is not None:
+    added_assets_for_graphs[
+        "U59_PLUS_DIAGNOSTIC_POSITIVE8"
+    ] = DIAGNOSTIC_POSITIVE_ASSETS
+
+research_graphs = gerar_graficos_pesquisa_financeira(
+    OUT,
+    summary=summary,
+    scenario_results=scenario_results_for_graphs,
+    historical_checkpoints=HISTORICAL_RESEARCH_CHECKPOINTS,
+    individual_effects=HISTORICAL_INDIVIDUAL_EFFECTS,
+    added_assets_by_scenario=added_assets_for_graphs,
+    search_candidates_path=SEARCH_CANDIDATES_CSV,
+)
+
+
+# %% 11 - Metadados e pacote final
 payload = {
     "research_version": SCRIPT_RESEARCH_VERSION,
     "shared_module_version": RESEARCH_VERSION,
@@ -862,6 +949,8 @@ payload = {
             AVALIAR_CANDIDATOS_INDIVIDUALMENTE
         ),
         "individual_replays_are_not_used_for_discovery": True,
+        "research_graphs_generated": True,
+        "research_graphs_directory": str(OUT / "graficos_pesquisa"),
     },
     "snapshots": {
         "base_snapshot_sha256": manifest_base.get("snapshot_sha256"),
@@ -950,7 +1039,7 @@ package = criar_pacote_analise(
     OUT,
     comparison_file="financial_evaluation.json",
     execution_schema=EXECUTION_SCHEMA,
-    archive_name="pacote_avaliacao_financeira_positivos8.zip",
+    archive_name="pacote_avaliacao_financeira_positivos8_graficos.zip",
 )
 print(f"[package] pronto={package}", flush=True)
 sinal_sonoro_conclusao()
