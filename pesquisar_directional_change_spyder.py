@@ -65,7 +65,7 @@ SNAPSHOT_BATCH2 = SnapshotPaths.from_root(
 )
 DIRETORIO_RESULTADOS = RAIZ_PROJETO / "output" / "directional_change"
 
-SCRIPT_RESEARCH_VERSION = "1.14.0-dev.1"
+SCRIPT_RESEARCH_VERSION = "1.14.1-dev.1"
 EXECUTION_SCHEMA = "random-batch2-u56-correlation-v1"
 
 RANDOM_SELECTION_SEED = 2026100402
@@ -346,6 +346,15 @@ for fold_position, fold in enumerate(folds, start=1):
         calibration_dates,
         config_u76,
     )
+    calibration_missing = sorted(
+        set(symbols_u76).difference(calibration_models)
+    )
+    if calibration_missing:
+        print(
+            f"[train-diagnostic] fold={fold_id} "
+            "calibration_missing=" + ",".join(calibration_missing),
+            flush=True,
+        )
 
     print(
         f"[train] fold={fold_id} final_models={len(symbols_u76)}",
@@ -369,6 +378,15 @@ for fold_position, fold in enumerate(folds, start=1):
         decision_dates,
         config_u76,
     )
+    final_missing = sorted(
+        set(symbols_u76).difference(final_models)
+    )
+    if final_missing:
+        print(
+            f"[train-diagnostic] fold={fold_id} "
+            "final_missing=" + ",".join(final_missing),
+            flush=True,
+        )
 
     fold_artifacts[fold_id] = {
         "fold": fold,
@@ -408,10 +426,12 @@ def _run_subset(label, subset_symbols, *, keep_result=False):
         calibration_models = {
             symbol: artifact["calibration_models"][symbol]
             for symbol in subset_symbols
+            if symbol in artifact["calibration_models"]
         }
         final_models = {
             symbol: artifact["final_models"][symbol]
             for symbol in subset_symbols
+            if symbol in artifact["final_models"]
         }
         calibration_cache = _slice_cache(
             artifact["calibration_cache"],

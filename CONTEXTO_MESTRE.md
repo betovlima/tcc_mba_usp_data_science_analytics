@@ -1399,3 +1399,29 @@ Saidas:
 As correlacoes desta campanha sao exploratorias. Elas servem para formular a
 proxima hipotese de assinatura, nao para selecionar retrospectivamente ativos
 sem uma terceira amostra intocada.
+
+## Correcao batch2 para modelo ausente em calibracao — 1.14.1-dev.1
+
+A primeira execucao do segundo lote treinou normalmente os 76 modelos finais,
+mas no fold 1 a fase de calibracao produziu 75 modelos. Um objeto nao atingiu
+o minimo de linhas validas depois do drop de features/target na janela de
+treino inicial. Isso e um estado permitido pelo engine: o objeto fica
+indisponivel nessa calibracao e sua utilidade permanece -inf ate haver modelo.
+
+O runner 1.14.0 assumia incorretamente que todo simbolo existiria no dicionario
+de modelos de calibracao e indexava diretamente o dict, causando KeyError ao
+montar o replay U76_B2.
+
+Correcao:
+- versao 1.14.1-dev.1;
+- _run_subset agora inclui apenas modelos realmente ajustados, preservando os
+  simbolos no cache e na competicao com -inf quando o modelo nao existe;
+- o mesmo tratamento defensivo foi aplicado aos modelos finais;
+- cada fold imprime calibration_missing/final_missing uma unica vez, tornando
+  explicito qual objeto ainda nao era elegivel para modelagem naquela janela;
+- o desenho cientifico, seed, 20 candidatos, calendario, benchmark e folds
+  permanecem inalterados.
+
+Esse comportamento espelha a semantica do engine LightGBM: um ativo sem
+amostra minima em uma fase nao deve abortar todo o universo nem receber modelo
+artificial; ele simplesmente nao compete naquela fase.

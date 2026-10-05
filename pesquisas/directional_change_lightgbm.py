@@ -33,7 +33,7 @@ from engine.rotacao import (
     _simular_exato,
 )
 
-RESEARCH_VERSION = "1.14.0-dev.1"
+RESEARCH_VERSION = "1.14.1-dev.1"
 EXPECTED_EXECUTION_SCHEMA = "random-batch2-u56-correlation-v1"
 EXPECTED_COMPARISON_FILE = "random_batch2_u56_correlation.json"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
