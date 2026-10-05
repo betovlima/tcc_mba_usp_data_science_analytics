@@ -979,10 +979,10 @@ def test_trigger_peak_metrics_match_same_execution_timestamp() -> None:
 
 
 def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
-    output = tmp_path / "directional_change"
+    output = tmp_path / "busca_ativos"
     output.mkdir()
-    (output / "intelligent_candidate_screen.json").write_text(
-        '{"research_version":"test","execution_schema":"intelligent-candidate-screen-u62-v1"}',
+    (output / "asset_search.json").write_text(
+        '{"research_version":"test","execution_schema":"intelligent-asset-search-u59-v1"}',
         encoding="utf-8",
     )
     (output / "intelligent_selected_candidates.csv").write_text(
@@ -997,17 +997,49 @@ def test_analysis_package_uses_one_stable_zip(tmp_path: Path) -> None:
         names = sorted(zipped.namelist())
     assert names == sorted(
         [
-            "intelligent_candidate_screen.json",
+            "asset_search.json",
             "intelligent_selected_candidates.csv",
         ]
     )
 
 
-def test_analysis_package_refuses_stale_v1_schema(tmp_path: Path) -> None:
-    output = tmp_path / "directional_change"
+def test_analysis_package_accepts_financial_runner_contract(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "avaliacao_financeira"
     output.mkdir()
-    (output / "comparison_cycle.json").write_text(
-        '{"research_version":"1.8.0-dev.1","execution_schema":"top-bottom-cycle-v1"}',
+    (output / "financial_evaluation.json").write_text(
+        '{"research_version":"test","execution_schema":"financial-evaluation-u59-v1"}',
+        encoding="utf-8",
+    )
+    (output / "financial_summary.csv").write_text(
+        "scenario,ending_capital\nU59,1\n",
+        encoding="utf-8",
+    )
+
+    archive = criar_pacote_analise(
+        output,
+        comparison_file="financial_evaluation.json",
+        execution_schema="financial-evaluation-u59-v1",
+        archive_name="pacote_avaliacao_financeira.zip",
+    )
+
+    assert archive == output / "pacote_avaliacao_financeira.zip"
+    with zipfile.ZipFile(archive) as zipped:
+        names = sorted(zipped.namelist())
+    assert names == sorted(
+        [
+            "financial_evaluation.json",
+            "financial_summary.csv",
+        ]
+    )
+
+
+def test_analysis_package_refuses_wrong_schema(tmp_path: Path) -> None:
+    output = tmp_path / "busca_ativos"
+    output.mkdir()
+    (output / "asset_search.json").write_text(
+        '{"research_version":"test","execution_schema":"wrong-schema"}',
         encoding="utf-8",
     )
 
@@ -1016,7 +1048,7 @@ def test_analysis_package_refuses_stale_v1_schema(tmp_path: Path) -> None:
     except RuntimeError as exc:
         message = str(exc)
     else:
-        raise AssertionError("stale v1 package should have been refused")
+        raise AssertionError("wrong schema should have been refused")
 
-    assert "intelligent_candidate_screen.json" in message
-    assert "copia antiga" in message
+    assert "intelligent-asset-search-u59-v1" in message
+    assert "wrong-schema" in message
