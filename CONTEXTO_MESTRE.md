@@ -1826,3 +1826,36 @@ Schemas:
 - intelligent-asset-search-u59-v1;
 - financial-evaluation-u59-v1.
 Branch ativa: research/intelligent-asset-signature-v1.
+
+
+### Implementacao consolidada da 1.17.0-dev.1
+
+Implementacao tecnica concluida ate o commit:
+\`7686d6b9d29a9f171f5ebf220c205bbf04222f52\`.
+
+Arquivos ativos desta campanha:
+- \`buscar_ativos_spyder.py\`;
+- \`avaliar_resultado_financeiro_spyder.py\`.
+
+O antigo runner monolitico \`pesquisar_directional_change_spyder.py\` foi
+removido da branch ativa.
+
+O arquivo de busca invalida qualquer lista congelada anterior no inicio de uma
+nova execucao. Uma nova lista somente volta a existir se a busca terminar e
+gravar \`selected_candidates.csv\` com:
+- research_version;
+- execution_schema;
+- search_reference=U59_WINNER;
+- smart_snapshot_sha256.
+
+O arquivo financeiro confere esses quatro campos e tambem exige que o hash da
+lista seja exatamente o hash do snapshot SMART atual. Assim, uma busca
+interrompida ou um arquivo antigo nao pode ser usado silenciosamente.
+
+O runner financeiro registra ainda como referencia historica:
+\`HISTORICAL_U59_ENDING_CAPITAL = 30080091.008142874\`
+e imprime a diferenca entre a reproducao corrente e esse valor.
+
+Nao havia status de CI ou workflow automatico associado ao commit de
+implementacao. A validacao efetiva desta versao deve ser feita pela execucao
+local no Spyder e pelo pacote produzido por cada runner.
