@@ -74,6 +74,7 @@ EXECUTION_SCHEMA = "financial-evaluation-u59-v1"
 
 # U59: conjunto financeiro que produziu aproximadamente US$ 30,08 milhoes.
 U59_ADDITIONS = ("COLB", "AMS", "FOXF")
+HISTORICAL_U59_ENDING_CAPITAL = 30_080_091.008142874
 
 # Controles de execucao para o Spyder.
 EXECUTAR_BASELINE_U59 = True
@@ -569,6 +570,20 @@ if EXECUTAR_BASELINE_U59:
     baseline_u59_capital = float(
         baseline_u59["metrics"]["ending_capital"]
     )
+    reference_delta = (
+        baseline_u59_capital - HISTORICAL_U59_ENDING_CAPITAL
+    )
+    reference_pct = (
+        baseline_u59_capital / HISTORICAL_U59_ENDING_CAPITAL - 1.0
+    )
+    print(
+        "[u59-reference] "
+        f"historical={HISTORICAL_U59_ENDING_CAPITAL:,.2f} "
+        f"current={baseline_u59_capital:,.2f} "
+        f"delta={reference_delta:+,.2f} "
+        f"pct={reference_pct:+.6%}",
+        flush=True,
+    )
 
 group_result = None
 if selected_symbols:
@@ -741,6 +756,7 @@ payload = {
         "financial_baseline": "U59",
         "u59_additions": list(U59_ADDITIONS),
         "u59_asset_count": 59,
+        "historical_u59_ending_capital": HISTORICAL_U59_ENDING_CAPITAL,
         "base_calendar_fixed_to_u56": True,
         "benchmark_fixed_to_u56": True,
         "search_runner": "buscar_ativos_spyder.py",
