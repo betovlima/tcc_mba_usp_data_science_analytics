@@ -2509,3 +2509,44 @@ Isso sugere uma assinatura temporal em dois niveis:
 A analise e descritiva e usa entradas/saidas do replay conjunto U59+8. Ela nao
 prova que os mesmos pontos seriam gerados por uma estrategia independente de
 um unico ativo.
+
+
+## Buy-and-hold dos oito ativos do cenario de US$ 58,56M
+
+Foi calculado um benchmark simples de comprar e manter usando a mesma serie
+standalone plotada para THO, WDAY, EXR, XEL, SBFG, PAYX, MUX e SXC.
+
+Janela comum da serie analisada:
+2016-10-17 a 2026-09-17.
+
+Hipoteses do calculo:
+- US$ 10.000 investidos em cada ativo no primeiro fechamento da serie;
+- fracoes de acoes permitidas;
+- manutencao ate o ultimo fechamento da serie;
+- precos ajustados apenas por splits, coerentes com o pipeline;
+- sem reinvestimento de dividendos, taxas ou impostos.
+
+Resultados:
+- THO: 82,27 -> 68,84; retorno -16,32%; US$ 8.367,57;
+- WDAY: 86,08 -> 199,28; retorno +131,51%; US$ 23.150,56;
+- EXR: 76,29 -> 139,03; retorno +82,24%; US$ 18.223,88;
+- XEL: 40,34 -> 73,63; retorno +82,52%; US$ 18.252,35;
+- SBFG: 12,69 -> 29,41; retorno +131,76%; US$ 23.175,73;
+- PAYX: 55,74 -> 116,51; retorno +109,02%; US$ 20.902,40;
+- MUX: 33,50 -> 18,59; retorno -44,51%; US$ 5.549,25;
+- SXC: 7,45 -> 9,66; retorno +29,66%; US$ 12.966,44.
+
+Capital inicial total: US$ 80.000,00.
+Capital final total: US$ 130.588,19.
+Lucro: US$ 50.588,19.
+Retorno agregado do portfolio equal-dollar: +63,24%.
+
+Normalizado para US$ 10.000 de capital total, divididos igualmente entre os
+oito ativos, o valor final seria aproximadamente US$ 16.323,52.
+
+Interpretacao:
+o benchmark evidencia que o resultado de US$ 58,56M da estrategia nao decorre
+simplesmente de possuir oito ativos que tiveram buy-and-hold extraordinario.
+THO e MUX, por exemplo, terminaram a serie abaixo do preco inicial, embora THO
+tenha sido um importante contribuinte nas rotacoes. Isso reforca a natureza
+temporal/contextual da assinatura e o valor do timing de entrada/saida.
