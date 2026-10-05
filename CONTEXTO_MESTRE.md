@@ -2239,3 +2239,132 @@ mas ainda nao mostra diretamente vencedor financeiro vs falso positivo.
 Para a fase de generalizacao, os proximos graficos devem vincular as features
 pre-replay aos rotulos financeiros dos 20 congelados, sem usar esses rotulos
 como validacao da mesma regra.
+
+
+## Analise estatistica consolidada da assinatura — sem novos replays
+
+Decisao metodologica: interromper o ciclo de novos replays sobre os mesmos
+dados. O conjunto existente ja e suficiente para caracterizar matematicamente
+a assinatura em desenvolvimento. Novos replays sobre os mesmos candidatos
+aumentariam principalmente o risco de overfitting/post-hoc, nao a informacao.
+
+Base analisada:
+- 40 candidatos historicos rotulados para Stage1: batch2=20 e batch3=20;
+  em cada batch, 3 positivos e 17 nao positivos (prevalencia historica 15%);
+- 446 candidatos modelaveis na busca 1.17.0, 72 classificados como
+  selective_specialist e 20 congelados para replay financeiro;
+- entre os 20 congelados: 8 positivos, 1 neutro, 11 negativos;
+- trajetorias por sessao de U59, U59+20 e U59+8, incluindo trades e
+  diagnosticos de regime.
+
+1. Enriquecimento da selecao nova.
+A taxa de positivos nos 20 congelados foi 40%, contra 15% nos dois lotes
+historicos. Isso corresponde a enriquecimento de 2,67x. Usando 15% apenas como
+referencia historica de prevalencia, P(X>=8 | n=20,p=0,15)=0,0059 em teste
+binomial unilateral. IC Wilson 95% para 8/20: aproximadamente 21,9%-61,3%.
+Esse teste sustenta que a busca nova enriqueceu candidatos, mas nao estima a
+prevalencia real dos 446 porque somente 20 receberam replay financeiro.
+
+2. Features estaticas nao generalizam.
+Regressao logistica usando apenas CAGR, volatilidade, drawdown, liquidez,
+positive-day-share, momentum, trend efficiency, corr SPY e beta ficou perto
+do acaso em validacao cruzada entre os lotes historicos:
+- batch2 -> batch3: AUC aproximadamente 0,48;
+- batch3 -> batch2: AUC aproximadamente 0,51.
+Conclusao: a assinatura nao esta em atributos estaticos do ticker.
+
+3. Features contextuais mostram sinal consistente.
+Nos 20 novos congelados, candidate_beats_u59_best_share foi a variavel mais
+informativa:
+- Pearson com delta de capital: aproximadamente -0,683;
+- Spearman: aproximadamente -0,598;
+- AUC para menor-is-better: aproximadamente 0,802;
+- mediana nos vencedores: 0,226% das sessoes;
+- mediana nos nao vencedores: 1,907%.
+Estimador robusto Theil-Sen: cada +1 ponto percentual em beats-share ficou
+associado a cerca de -12,6 pontos percentuais no efeito de capital, IC 95%
+aproximado [-16,4; -4,8], dentro desta amostra selecionada.
+
+Entre candidatos ativos do batch3, as direcoes foram coerentes:
+- menor beats-share: AUC 0,738;
+- menor abs(corr score vs melhor baseline): AUC 0,857;
+- menor score_std: AUC 1,000;
+- maior positive_score_share: AUC 0,619.
+Nos 20 novos, as mesmas orientacoes produziram AUCs aproximadas de 0,802,
+0,615, 0,635 e 0,583 respectivamente.
+Portanto a geometria da assinatura e mais estavel do que um threshold isolado:
+baixa frequencia de dominancia, baixa interferencia/correlacao, score mais
+estavel e predominantemente positivo.
+
+4. Mecanismo de rotacao e esparso.
+Comparando U59+8 contra U59 nas 1547 sessoes:
+- apenas 93 sessoes (6,01%) mudaram o ativo selecionado;
+- apenas 76 sessoes (4,91%) selecionaram diretamente um dos oito novos;
+- essas 76 sessoes responderam por cerca de 86,0% da vantagem relativa em
+  log-capital;
+- 17 sessoes em que a inclusao dos novos ativos alterou a escolha para outro
+  ativo legado responderam por mais 17,4%;
+- sessoes em que ambos os universos escolheram o mesmo ativo responderam por
+  aproximadamente -3,5% da diferenca em log-capital.
+Isso confirma uma assinatura de especialista raro, nao de ativo
+persistentemente dominante.
+
+5. Dependencia temporal/regime.
+Contribuicao por fold do U59+8:
+- fold1: 13 sessoes com novos ativos, vantagem acumulada final +2,01%;
+- fold2: 34 sessoes, vantagem acumulada +14,22%;
+- fold3: 29 sessoes, vantagem acumulada +94,67%.
+O fold3 sozinho respondeu por aproximadamente 80% do log-excesso total.
+
+Nas sessoes com novos ativos, a mediana de breadth-20 foi aproximadamente
+49,3%, contra 58,2% nas sessoes em que U59 e U59+8 escolheram o mesmo ativo.
+Mann-Whitney bilateral p aproximado 0,016 antes de correcao por multiplos
+testes. O sinal e sugestivo, nao confirmatorio. No fold3, breadth-20 mediano
+foi 44,8% nas sessoes dos novos ativos contra 58,2% nas sessoes iguais, e o
+SPY return-20 mediano foi cerca de -1,06% contra +1,65%.
+Conclusao: a assinatura possui componente de ativacao por regime, sobretudo
+em mercados de menor breadth.
+
+6. Interacao entre os oito positivos.
+Soma dos deltas isolados dos oito: aproximadamente +US$ 25,31M, equivalente
+a +84,15 pontos percentuais sobre o U59.
+Delta observado dos oito juntos: +US$ 28,48M, +94,67%.
+Residual descritivo de interacao: aproximadamente +US$ 3,16M, ou +10,52
+pontos percentuais. Nao e Shapley nem efeito causal, mas mostra ausencia de
+interacao destrutiva liquida no conjunto dos oito.
+
+7. THO e WDAY cumprem papeis diferentes.
+WDAY foi selecionado em 41 sessoes e somou cerca de US$ 9,83M de PnL realizado
+nas vendas do replay conjunto. THO foi selecionado em 18 sessoes. Em
+decomposicao de log-excesso por ativo selecionado, THO respondeu por cerca de
+0,370 de log-excesso e WDAY por 0,147. Portanto WDAY domina PnL nominal devido
+tambem ao tamanho do capital/timing, enquanto THO possui maior contribuicao
+relativa percentual no caminho. Nao atribuir causalidade isolada a nenhum
+deles.
+
+8. Forma matematica recomendada.
+A assinatura deve ser modelada como processo em dois niveis:
+(a) ativacao/especializacao rara; e
+(b) qualidade condicional quando ativa, com interacao de regime.
+Uma forma de desenvolvimento e:
+
+P(deltaC>0 | X,R) = sigmoid(
+  beta0
+  - beta1*rank(beats_share)
+  - beta2*rank(abs(corr_best))
+  - beta3*rank(score_std)
+  + beta4*rank(positive_score_share)
+  + gamma' * regime
+  + interacoes
+)
+
+Os ranks devem ser relativos ao conjunto candidato/contexto, nao ao ticker.
+Os coeficientes numericos ainda sao de desenvolvimento; a conclusao robusta e
+a orientacao/sinal das dimensoes, nao um threshold final.
+
+Conclusao metodologica:
+nao realizar nova rodada financeira sobre os mesmos candidatos para procurar
+uma regra melhor. A proxima etapa e analise/modelagem offline dos dados ja
+existentes, com leave-one-cohort-out, bootstrap e regularizacao. Uma futura
+amostra intocada sera necessaria apenas para comprovar generalizacao externa,
+nao para continuar descobrindo a estrutura nos dados atuais.
