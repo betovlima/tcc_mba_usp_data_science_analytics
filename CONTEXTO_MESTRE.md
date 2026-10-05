@@ -2016,3 +2016,48 @@ nao-aditividade. Esse teste nao e confirmatorio, pois os oito foram escolhidos
 apos observar os resultados financeiros individuais. Depois, usar os rotulos
 dos 20 somente para desenvolver uma nova assinatura e valida-la em candidatos
 novos e previamente congelados.
+
+
+## Experimento exploratorio dos oito positivos — 1.17.1-dev.1
+
+Apos o replay individual da lista congelada 1.17.0-dev.1, oito ativos foram
+positivos contra o U59:
+THO, WDAY, EXR, XEL, SBFG, PAYX, MUX e SXC.
+
+Novo experimento financeiro, explicitamente exploratorio:
+U59 + os oito positivos individuais, todos simultaneamente.
+
+Arquivo:
+avaliar_resultado_financeiro_spyder.py
+
+Versao financeira:
+1.17.1-dev.1
+
+Schema:
+financial-evaluation-u59-positive8-v1
+
+Configuracao congelada desta rodada:
+- EXECUTAR_BASELINE_U59=True;
+- AVALIAR_LISTA_CONGELADA=True;
+- AVALIAR_GRUPO_CONGELADO=False;
+- AVALIAR_GRUPO_POSITIVOS_DIAGNOSTICOS=True;
+- AVALIAR_CANDIDATOS_INDIVIDUALMENTE=False.
+
+A lista original continua sendo a lista congelada da busca 1.17.0-dev.1.
+O runner financeiro exige SOURCE_SEARCH_VERSION=1.17.0-dev.1 e verifica o hash
+do snapshot SMART. Nao e necessario nem permitido refazer a busca para esta
+rodada.
+
+Objetivo:
+medir se oito ativos que foram positivos individualmente conseguem coexistir
+no mesmo universo sem destruir a vantagem do U59.
+
+Interpretacao:
+este teste NAO e confirmatorio, porque os oito foram escolhidos apos observar
+seus resultados financeiros individuais. Serve apenas para estudar interacao
+e nao-aditividade entre vencedores.
+
+Saidas adicionais:
+- u59_plus_positive8_predictions.csv;
+- u59_plus_positive8_trades.csv;
+- pacote_avaliacao_financeira_positivos8.zip.
