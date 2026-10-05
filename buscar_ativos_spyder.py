@@ -66,7 +66,8 @@ from reproducao.experimento import build_variant_configs
 from reproducao.preparacao import prepare_model_frames
 
 
-# %% 0 - Configuracao da busca\nROOT = Path(__file__).resolve().parent
+# %% 0 - Configuracao da busca
+ROOT = Path(__file__).resolve().parent
 BASE = SnapshotPaths.research(ROOT)
 B2 = SnapshotPaths.from_root(ROOT / "dados" / "pesquisa_expansao_76_b2")
 B3 = SnapshotPaths.from_root(ROOT / "dados" / "pesquisa_expansao_76_b3")
@@ -135,7 +136,8 @@ STAGE1_JSON = SMART.root / "stage1_selection.json"
 CATALOG_JSON = SMART.root / "alpaca_asset_catalog.json"
 
 
-# %% 1 - Guards, snapshots e identificacao da execucao\nif EXECUTION_SCHEMA != EXPECTED_EXECUTION_SCHEMA:
+# %% 1 - Guards, snapshots e identificacao da execucao
+if EXECUTION_SCHEMA != EXPECTED_EXECUTION_SCHEMA:
     raise RuntimeError(
         f"Schema incompatível: script={EXECUTION_SCHEMA} "
         f"modulo={EXPECTED_EXECUTION_SCHEMA}."
@@ -161,7 +163,8 @@ validate_snapshot(B2)
 validate_snapshot(B3)
 
 
-# %% 2 - Funcoes utilitarias de dados e propriedades\ndef read_raw(paths: SnapshotPaths, symbol: str) -> pd.DataFrame:
+# %% 2 - Funcoes utilitarias de dados e propriedades
+def read_raw(paths: SnapshotPaths, symbol: str) -> pd.DataFrame:
     path = paths.raw_bars / f"{symbol}.csv"
     frame = pd.read_csv(path)
     frame.columns = [str(c).lower() for c in frame.columns]
@@ -258,7 +261,8 @@ def raw_features(frame: pd.DataFrame, spy_returns: pd.Series) -> dict:
     }
 
 
-# %% 3 - Base de aprendizado ja conhecida\nspy = scout_window(read_raw(BASE, "SPY"))
+# %% 3 - Base de aprendizado ja conhecida
+spy = scout_window(read_raw(BASE, "SPY"))
 spy_returns = pd.Series(
     pd.to_numeric(spy["close"], errors="coerce").pct_change(fill_method=None).to_numpy(),
     index=pd.DatetimeIndex(spy["timestamp"]),
@@ -411,7 +415,8 @@ def smart_snapshot_reusable() -> bool:
     )
 
 
-# %% 4 - Busca no catalogo Alpaca e congelamento do pool de ate 500\ncredentials = load_alpaca_credentials(ROOT)
+# %% 4 - Busca no catalogo Alpaca e congelamento do pool de ate 500
+credentials = load_alpaca_credentials(ROOT)
 if smart_snapshot_reusable():
     stage1 = pd.read_csv(STAGE1_CSV)
     stage1_meta = json.loads(STAGE1_JSON.read_text(encoding="utf-8"))
@@ -515,7 +520,8 @@ else:
     )
 
 
-# %% 5 - Qualidade integral e exclusoes estruturais\nquality = []
+# %% 5 - Qualidade integral e exclusoes estruturais
+quality = []
 full_ok = []
 for symbol in pool:
     f = read_raw(SMART, symbol)
@@ -551,7 +557,8 @@ if len(candidates) < SELECTED_COUNT:
         f"Apenas {len(candidates)} candidatos sobraram apos filtros."
     )
 
-# %% 6 - Contexto U59 vencedor e treinamento LightGBM sem backtest\nframes_u56, u56_exclusions, u56_diagnostics, u56_audit = prepare_model_frames(
+# %% 6 - Contexto U59 vencedor e treinamento LightGBM sem backtest
+frames_u56, u56_exclusions, u56_diagnostics, u56_audit = prepare_model_frames(
     BASE,
     assets=CONFIG.assets,
     comparar_snapshot_referencia=False,
@@ -631,7 +638,8 @@ expected_sessions = sum(max(0, len(x["dates"])-1) for x in artifacts.values())
 min_sessions = math.ceil(expected_sessions * MIN_SESSION_SHARE)
 
 
-# %% 7 - Perfil de score de cada candidato contra U59\ndef score_profile(symbol: str) -> dict:
+# %% 7 - Perfil de score de cada candidato contra U59
+def score_profile(symbol: str) -> dict:
     idx = position[symbol]
     rows = []
     for artifact in artifacts.values():
@@ -691,7 +699,8 @@ def classify(p: dict) -> tuple[str,bool]:
     return "uncertain", False
 
 
-# %% 8 - Ranking e congelamento dos candidatos aprovados\nstage1_map = stage1.set_index("symbol")
+# %% 8 - Ranking e congelamento dos candidatos aprovados
+stage1_map = stage1.set_index("symbol")
 rank_rows = []
 for i, symbol in enumerate(candidates, start=1):
     print(f"[stage2-score] {i}/{len(candidates)} {symbol}", flush=True)
@@ -766,7 +775,8 @@ print(
     flush=True,
 )
 
-# %% 9 - Exportacao da busca; ainda sem resultado financeiro\nOUT.mkdir(parents=True, exist_ok=True)
+# %% 9 - Exportacao da busca; ainda sem resultado financeiro
+OUT.mkdir(parents=True, exist_ok=True)
 for old in OUT.rglob("*"):
     if old.is_file():
         old.unlink()
