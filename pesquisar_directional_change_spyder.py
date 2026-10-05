@@ -2,10 +2,11 @@
 
 Fluxo:
 1. aprender uma triagem barata com os 40 candidatos ja testados;
-2. varrer o catalogo Alpaca sem sorteio e congelar os 100 mais promissores;
-3. treinar LightGBM para esse pool, sem executar a carteira;
-4. medir a assinatura de score contra U56;
-5. congelar 20 candidatos antes de qualquer teste de capital.
+2. varrer o catalogo Alpaca sem sorteio e priorizar candidatos com historico integral;
+3. treinar LightGBM para um pool amplo, sem executar a carteira;
+4. medir a assinatura de score contra o U62 candidato;
+5. congelar somente os candidatos que passam a assinatura, ate o maximo de 20,
+   antes de qualquer teste de capital.
 """
 from __future__ import annotations
 
@@ -67,8 +68,8 @@ B3 = SnapshotPaths.from_root(ROOT / "dados" / "pesquisa_expansao_76_b3")
 SMART = SnapshotPaths.from_root(ROOT / "dados" / "pesquisa_smart_candidates")
 OUT = ROOT / "output" / "directional_change"
 
-SCRIPT_RESEARCH_VERSION = "1.16.0-dev.1"
-EXECUTION_SCHEMA = "intelligent-candidate-screen-v1"
+SCRIPT_RESEARCH_VERSION = "1.16.1-dev.1"
+EXECUTION_SCHEMA = "intelligent-candidate-screen-u62-v1"
 CHECKPOINT_SHA = "4b6b71414ce6f7047dc465679e57629ba8a4c453"
 
 B2_ASSETS = (
@@ -96,11 +97,11 @@ EXCLUDED = (
 
 ALLOWED_EXCHANGES = {"NYSE","NASDAQ","AMEX","ARCA","BATS"}
 SYMBOL_RE = re.compile(r"^[A-Z]{1,5}$")
-SCOUT_START = "2023-01-01"
-SCOUT_MIN_ROWS = 700
+SCOUT_START = START_DATE
+SCOUT_MIN_ROWS = 2600
 SCOUT_MAX_GAP = 10.0
 SCOUT_CHUNK = 50
-MODEL_POOL_SIZE = 100
+MODEL_POOL_SIZE = 500
 SELECTED_COUNT = 20
 
 RAW_FEATURES = (
@@ -116,7 +117,7 @@ RAW_FEATURES = (
     "beta_spy",
 )
 
-SIGNATURE_NAME = "selective-specialist-v0.2"
+SIGNATURE_NAME = "selective-specialist-u62-v0.1"
 BEATS_MAX = 0.05
 SCORE_STD_MAX = 0.15
 SCORE_MEAN_MAX = 0.16
@@ -145,6 +146,7 @@ print("TCC - Intelligent Candidate Screen", flush=True)
 print(f"version={RESEARCH_VERSION}", flush=True)
 print("random_sampling=False", flush=True)
 print("candidate_strategy_replays=0", flush=True)
+print("score_reference=U62_CANDIDATE", flush=True)
 print("known_positive=" + ",".join(KNOWN_POS), flush=True)
 print("=" * 78, flush=True)
 
@@ -549,7 +551,32 @@ frames_u56, u56_exclusions, u56_diagnostics, u56_audit = prepare_model_frames(
 if len(frames_u56) != 56:
     raise RuntimeError(f"U56 deveria ter 56 ativos; obtidos {len(frames_u56)}.")
 
-frames_raw = {**frames_u56, **frames_candidates}
+frames_b2_pos, b2_pos_exclusions, b2_pos_diagnostics, b2_pos_audit = (
+    prepare_model_frames(
+        B2,
+        assets=tuple(sorted(B2_POS)),
+        comparar_snapshot_referencia=False,
+    )
+)
+frames_b3_pos, b3_pos_exclusions, b3_pos_diagnostics, b3_pos_audit = (
+    prepare_model_frames(
+        B3,
+        assets=tuple(sorted(B3_POS)),
+        comparar_snapshot_referencia=False,
+    )
+)
+if b2_pos_exclusions or b3_pos_exclusions:
+    raise RuntimeError(
+        "Um vencedor conhecido foi excluido estruturalmente; "
+        "nao e permitido montar silenciosamente um U62 incompleto."
+    )
+frames_u62 = {**frames_u56, **frames_b2_pos, **frames_b3_pos}
+if len(frames_u62) != 62:
+    raise RuntimeError(
+        f"U62 candidato deveria ter 62 ativos; obtidos {len(frames_u62)}."
+    )
+
+frames_raw = {**frames_u62, **frames_candidates}
 config_u56, _ = build_variant_configs(frames_u56, CONFIG)
 _, reference_calendar, reference_source = preparar_painel_rotacao(
     frames_u56, config_u56
@@ -572,8 +599,8 @@ config_all, _ = build_variant_configs(frames_raw, CONFIG)
 )
 
 position = {symbol:i+1 for i,symbol in enumerate(symbols_all)}
-u56_symbols = sorted(frames_u56)
-u56_idx = [position[s] for s in u56_symbols]
+u62_symbols = sorted(frames_u62)
+u62_idx = [position[s] for s in u62_symbols]
 artifacts = {}
 
 for i, fold in enumerate(folds, start=1):
@@ -614,7 +641,7 @@ def score_profile(symbol: str) -> dict:
             if idx >= len(u):
                 continue
             score = float(u[idx])
-            ref = u[u56_idx]
+            ref = u[u62_idx]
             finite = ref[np.isfinite(ref)]
             if not np.isfinite(score) or len(finite) == 0:
                 continue
@@ -622,9 +649,9 @@ def score_profile(symbol: str) -> dict:
             rows.append((score, float(np.mean(finite)), best, score > best))
     if not rows:
         return {
-            "model_score_corr_u56_mean":None,
-            "model_score_corr_u56_best":None,
-            "candidate_beats_u56_best_share":None,
+            "model_score_corr_u62_mean":None,
+            "model_score_corr_u62_best":None,
+            "candidate_beats_u62_best_share":None,
             "candidate_score_mean":None,
             "candidate_score_std":None,
             "candidate_positive_score_share":None,
@@ -632,9 +659,9 @@ def score_profile(symbol: str) -> dict:
         }
     f = pd.DataFrame(rows, columns=["score","mean","best","beats"])
     return {
-        "model_score_corr_u56_mean":corr(f["score"],f["mean"],5),
-        "model_score_corr_u56_best":corr(f["score"],f["best"],5),
-        "candidate_beats_u56_best_share":float(f["beats"].mean()),
+        "model_score_corr_u62_mean":corr(f["score"],f["mean"],5),
+        "model_score_corr_u62_best":corr(f["score"],f["best"],5),
+        "candidate_beats_u62_best_share":float(f["beats"].mean()),
         "candidate_score_mean":float(f["score"].mean()),
         "candidate_score_std":float(f["score"].std(ddof=0)),
         "candidate_positive_score_share":float((f["score"]>0).mean()),
@@ -643,10 +670,10 @@ def score_profile(symbol: str) -> dict:
 
 
 def classify(p: dict) -> tuple[str,bool]:
-    beats = p["candidate_beats_u56_best_share"]
+    beats = p["candidate_beats_u62_best_share"]
     std = p["candidate_score_std"]
     mean = p["candidate_score_mean"]
-    corr_best = p["model_score_corr_u56_best"]
+    corr_best = p["model_score_corr_u62_best"]
     sessions = p["model_score_sessions"]
     if (
         beats is None or std is None or mean is None or corr_best is None
@@ -669,8 +696,8 @@ for i, symbol in enumerate(candidates, start=1):
     p = score_profile(symbol)
     cls, predicted = classify(p)
     meta = stage1_map.loc[symbol].to_dict() if symbol in stage1_map.index else {}
-    cb = p["model_score_corr_u56_best"]
-    beats = p["candidate_beats_u56_best_share"]
+    cb = p["model_score_corr_u62_best"]
+    beats = p["candidate_beats_u62_best_share"]
     rank_rows.append({
         "asset":symbol,
         "name":meta.get("name"),
@@ -681,7 +708,7 @@ for i, symbol in enumerate(candidates, start=1):
         "signature_name":SIGNATURE_NAME,
         "signature_class":cls,
         "signature_predicted_positive":bool(predicted),
-        "abs_score_corr_u56_best":abs(float(cb)) if cb is not None else None,
+        "abs_score_corr_u62_best":abs(float(cb)) if cb is not None else None,
         "beats_target_distance":abs(float(beats)-BEATS_TARGET) if beats is not None else None,
     })
 
@@ -695,7 +722,7 @@ priority = {
 }
 ranked["_priority"] = ranked["signature_class"].map(priority).fillna(9)
 ranked["_corr"] = pd.to_numeric(
-    ranked["abs_score_corr_u56_best"], errors="coerce"
+    ranked["abs_score_corr_u62_best"], errors="coerce"
 ).fillna(999.0)
 ranked["_beats"] = pd.to_numeric(
     ranked["beats_target_distance"], errors="coerce"
@@ -714,22 +741,24 @@ ranked["selection_tier"] = np.where(
     "best_remaining_without_capital_replay",
 )
 ranked = ranked.drop(columns=["_priority","_corr","_beats","_prob"])
-selected = ranked.head(SELECTED_COUNT).copy()
+selected = ranked.loc[
+    ranked["signature_predicted_positive"].astype(bool)
+].head(SELECTED_COUNT).copy()
 selected_symbols = tuple(selected["asset"].astype(str))
-strong = int(selected["signature_predicted_positive"].astype(bool).sum())
+strong = int(len(selected))
 
 print(
-    f"[selection] selected={len(selected_symbols)} strong={strong} "
-    "capital_replays=0",
+    f"[selection] selected={len(selected_symbols)}/{SELECTED_COUNT} "
+    f"strong={strong} capital_replays=0 forced_fill=0",
     flush=True,
 )
 print(
     selected[
         [
             "selection_rank","asset","selection_tier","raw_winner_probability",
-            "signature_class","candidate_beats_u56_best_share",
+            "signature_class","candidate_beats_u62_best_share",
             "candidate_score_std","candidate_score_mean",
-            "model_score_corr_u56_best",
+            "model_score_corr_u62_best",
         ]
     ].to_string(index=False),
     flush=True,
@@ -758,9 +787,11 @@ payload = {
         "candidate_strategy_replays":0,
         "selection_uses_new_candidate_capital":False,
         "stage1_model_pool_size":MODEL_POOL_SIZE,
-        "stage2_score_reference":"U56",
-        "selected_count":SELECTED_COUNT,
-        "fallback_if_strong_under_20":"frozen rank without capital",
+        "stage2_score_reference":"U62_CANDIDATE",
+        "target_selected_count":SELECTED_COUNT,
+        "actual_selected_count":len(selected_symbols),
+        "forced_fill":False,
+        "if_strong_under_20":"freeze fewer than 20; never fill with rejected classes",
     },
     "signature":{
         "name":SIGNATURE_NAME,
@@ -778,15 +809,19 @@ payload = {
         "history_eligible_count":len(stage1),
     },
     "stage2":{
+        "score_reference":"U62_CANDIDATE",
+        "u62_assets":list(u62_symbols),
+        "known_positive_additions":list(KNOWN_POS),
         "model_eligible_count":len(candidates),
-        "strong_signature_in_selected_20":strong,
-        "selected_20":list(selected_symbols),
+        "strong_signature_selected":strong,
+        "selected_assets":list(selected_symbols),
         "structural_exclusions":structural_exclusions,
     },
     "runtime_seconds":float(time.perf_counter()-t0),
     "interpretation_rule":(
         "Selected assets are hypotheses only. Their capital was not observed "
-        "during selection. The next capital replay must use this frozen list."
+        "during selection. They were scored against the U62 candidate context. "
+        "The next capital replay must use this frozen list without forced fill."
     ),
 }
 with (OUT / "intelligent_candidate_screen.json").open(
