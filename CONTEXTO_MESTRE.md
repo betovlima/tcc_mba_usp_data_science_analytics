@@ -2087,3 +2087,61 @@ AVALIAR_CANDIDATOS_INDIVIDUALMENTE=False.
 
 Necessario atualizar a branch local, reiniciar o kernel do Spyder e executar
 novamente apenas o runner financeiro.
+
+
+## Resultado U59 + oito positivos exploratorios — 1.17.1-dev.1
+
+Pacote analisado: pacote_avaliacao_financeira_positivos8.zip.
+Schema: financial-evaluation-u59-positive8-v1.
+Versao financeira: 1.17.1-dev.1.
+Versao da busca de origem: 1.17.0-dev.1.
+Runtime: 93,310 s.
+
+Experimento exploratorio:
+U59 + THO, WDAY, EXR, XEL, SBFG, PAYX, MUX e SXC.
+
+Baseline U59 reproduzido:
+- capital final US$ 30.080.091,008142874;
+- CAGR 267,4033%;
+- Sharpe 2,33754894;
+- MaxDD -31,2189%;
+- worst fold +275,0509%.
+
+Grupo dos oito:
+- capital final US$ 58.557.157,67496595;
+- delta vs U59 +US$ 28.477.066,666823074;
+- ganho relativo +94,6708%;
+- CAGR 309,4001%;
+- Sharpe 2,51874371;
+- MaxDD -30,3591%;
+- worst fold +282,5896%.
+
+O grupo superou o U59 em todos os folds:
+- fold 1: +2,0100% no capital acumulado ao fim do fold;
+- fold 2: +14,2223%;
+- fold 3/final: +94,6708%.
+
+Uso dos oito no replay conjunto:
+- THO: 18 sessoes;
+- WDAY: 41 sessoes;
+- EXR: 2 sessoes;
+- XEL: 7 sessoes;
+- SBFG: 2 sessoes;
+- PAYX: 4 sessoes;
+- MUX: 2 sessoes;
+- SXC: 0 sessoes.
+
+O resultado mostra que os oito positivos individuais conseguiram coexistir e,
+em conjunto, quase dobraram o capital final do U59, com Sharpe maior e MaxDD
+ligeiramente menor. Entretanto, continua sendo resultado exploratorio e nao
+confirmatorio, porque a escolha dos oito foi feita depois de observar seus
+replays individuais.
+
+Interpretacao:
+- a falha do grupo original de 20 decorreu principalmente dos falsos positivos;
+- ha evidencia de que um subconjunto de vencedores marginais pode ser
+  compativel em grupo;
+- complementaridade/compatibilidade entre ativos importa e nao pode ser
+  inferida apenas pelo fato de cada ativo ser selective_specialist;
+- o proximo desenvolvimento deve usar os 20 rotulados para melhorar a assinatura
+  e depois validar a nova regra em candidatos completamente novos e congelados.
