@@ -4254,3 +4254,123 @@ tambem o grafico 04_perfil_comportamental_clusters e o CSV
 cluster_behavior_profiles.csv.
 
 Nenhuma nova regra prospectiva foi validada por este experimento.
+
+
+## Dataset de eventos de substituicao U67 — v1.0.0-dev.1
+
+Decisao:
+antes de introduzir Deep Learning, a pesquisa passa a estudar a unidade
+(candidato, incumbente, data de decisao) em vez de resumir cada ativo por uma
+unica assinatura agregada.
+
+Novo runner:
+pesquisas/eventos_substituicao_u67.py
+
+Objetivo:
+construir uma base temporal para descobrir quando um candidato substitui bem
+ou mal o incumbente do U67.
+
+O runner NAO:
+- refaz o replay financeiro de US$58,56M;
+- baixa dados da Alpaca;
+- executa nova busca de ativos.
+
+Ele exige que o checkpoint U67 ja esteja reproduzido e valida:
+- status reproduced;
+- capital observado = US$58.557.157,67496595;
+- u67_predictions.csv presente;
+- intelligent_candidates_ranked.csv presente;
+- snapshots BASE, B2 e SMART presentes.
+
+Custo computacional:
+na primeira execucao, ha uma passagem LightGBM por fold somente para produzir
+os scores temporais dos candidatos. Nao ha simulacao de capital. Esses scores
+sao gravados em cache e reutilizados nas execucoes seguintes quando os hashes
+dos inputs permanecem iguais.
+
+Cache:
+output/eventos_substituicao_u67/candidate_score_sequences.csv.gz
+output/eventos_substituicao_u67/score_cache_metadata.json
+
+Fingerprint do cache:
+- snapshot BASE;
+- snapshot B2;
+- snapshot SMART;
+- intelligent_candidates_ranked.csv;
+- u67_predictions.csv;
+- schema do cache.
+
+Definicao do evento primario:
+- incumbente diferente de CASH;
+- candidate_score > incumbent_score.
+
+Campos de decisao incluem:
+- candidate_score;
+- incumbent_score;
+- best_u67_score;
+- gap candidato-incumbente;
+- gap candidato-melhor U67;
+- forca = gap / effective_switch_margin;
+- clears_switch_margin;
+- beats_best_u67;
+- bucket de rank aproximado;
+- fold temporal;
+- bucket deterministico de ativo para futura validacao em ativos nao vistos;
+- regime SPY/breadth;
+- historico rolling do score do candidato.
+
+Features temporais rolling:
+- media de score 5, 20 e 60 sessoes;
+- desvio de score 5, 20 e 60;
+- participacao de score positivo 5, 20 e 60;
+- participacao de sessoes em que vence o melhor U67 5, 20 e 60;
+- participacao de sessoes em que vence o incumbente 5, 20 e 60;
+- mudanca de score em 1, 5 e 20 sessoes.
+
+Features tecnicas relativas candidato-incumbente:
+return_5, return_20, return_60, return_120, vol_20, vol_60,
+ema_distance_20, ema_20_vs_50, ema_slope_50_10, rsi_14, atr_pct_14,
+distance_from_high_20, channel_position_20, trend_efficiency_20,
+trend_efficiency_60, momentum_acceleration_5_20,
+momentum_acceleration_20_60 e volume_ratio_5_20.
+Para cada uma sao gravados valor do candidato, do incumbente e delta.
+
+Targets futuros, proibidos como features:
+- target_delta_utility_multi;
+- target_delta_net_log_return_multi;
+- target_delta_utility_5;
+- target_delta_utility_10;
+- target_delta_utility_20;
+- target_delta_utility_40;
+- target_delta_utility_60;
+- target_positive_multi.
+
+O target compara a utilidade futura do candidato com a utilidade futura do
+incumbente e aplica penalidade logaritmica correspondente ao custo de troca
+sell+buy usando a mesma funcao de custo do engine.
+
+Importante:
+os targets usam dados futuros e servem somente como gabarito. O JSON exportado
+lista separadamente feature_columns e target_columns para reduzir risco de
+leakage.
+
+Validacao predeclarada para a fase seguinte:
+- nunca usar split aleatorio por linha;
+- eixo temporal = walk_forward_fold;
+- eixo de generalizacao de ativos = asset_holdout_bucket deterministico.
+
+Saidas:
+- candidate_score_sequences.csv.gz;
+- candidate_substitution_events.csv.gz;
+- candidate_event_summary.csv;
+- substitution_strength_bins.csv;
+- event_analysis.json;
+- 01_calibracao_forca_substituicao.png/svg;
+- 02_frequencia_vs_utilidade.png/svg;
+- pacote_eventos_substituicao_u67.zip.
+
+Objetivo cientifico imediato:
+testar se frequencia, intensidade, timing, persistencia e contexto relativo da
+substituicao explicam melhor o resultado futuro do que as seis estatisticas
+agregadas usadas na clusterizacao. Somente depois dessa etapa sera decidido se
+Deep Learning tem justificativa empirica.
