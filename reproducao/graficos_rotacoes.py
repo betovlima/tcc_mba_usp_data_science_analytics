@@ -7,13 +7,19 @@ quando, entre quais ativos e com qual diferenca de score as rotacoes ocorreram.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import shutil
 from typing import Any
 
 import matplotlib
 
-matplotlib.use("Agg")
+if (
+    os.name != "nt"
+    and not os.environ.get("DISPLAY")
+    and not os.environ.get("WAYLAND_DISPLAY")
+):
+    matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,12 +28,22 @@ import pandas as pd
 from .graficos import construir_rotacoes
 
 
-def _save_pair(fig: Any, output_dir: Path, stem: str) -> dict[str, Path]:
+def _save_pair(
+    fig: Any,
+    output_dir: Path,
+    stem: str,
+    *,
+    show: bool,
+) -> dict[str, Path]:
     png = output_dir / f"{stem}.png"
     svg = output_dir / f"{stem}.svg"
     fig.savefig(png, dpi=180, bbox_inches="tight")
     fig.savefig(svg, bbox_inches="tight")
-    plt.close(fig)
+    if show:
+        fig.canvas.draw_idle()
+        plt.show(block=False)
+    else:
+        plt.close(fig)
     return {
         f"{stem}_png": png,
         f"{stem}_svg": svg,
@@ -207,6 +223,7 @@ def gerar_graficos_rotacoes(
     *,
     result: Any,
     universe_label: str,
+    show: bool = False,
 ) -> dict[str, Path]:
     """Gera as cinco visoes principais das rotacoes do universo informado.
 
@@ -295,7 +312,7 @@ def gerar_graficos_rotacoes(
     ax.grid(axis="x", alpha=0.20)
     fig.tight_layout()
     paths.update(
-        _save_pair(fig, visual_dir, "timeline_rotacoes")
+        _save_pair(fig, visual_dir, "timeline_rotacoes", show=show)
     )
 
     # 2. Matriz de transicoes
@@ -355,6 +372,7 @@ def gerar_graficos_rotacoes(
                 fig,
                 visual_dir,
                 "matriz_transicoes",
+                show=show,
             )
         )
 
@@ -379,7 +397,7 @@ def gerar_graficos_rotacoes(
     ax.grid(axis="x", alpha=0.25)
     fig.tight_layout()
     paths.update(
-        _save_pair(fig, visual_dir, "presenca_por_ativo")
+        _save_pair(fig, visual_dir, "presenca_por_ativo", show=show)
     )
 
     # 4. PnL realizado por ativo
@@ -411,6 +429,7 @@ def gerar_graficos_rotacoes(
             fig,
             visual_dir,
             "pnl_realizado_por_ativo",
+            show=show,
         )
     )
 
@@ -496,6 +515,7 @@ def gerar_graficos_rotacoes(
                     fig,
                     visual_dir,
                     "distancia_topo_rotacoes",
+                    show=show,
                 )
             )
 
@@ -527,4 +547,5 @@ def gerar_graficos_rotacoes_u59(
         output_dir,
         result=result,
         universe_label="U59",
+        show=False,
     )
