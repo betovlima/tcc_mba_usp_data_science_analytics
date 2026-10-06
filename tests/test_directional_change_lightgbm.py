@@ -28,6 +28,8 @@ from pesquisas.directional_change_lightgbm import (
     calcular_metricas_peak_gatilhos,
     calcular_peak_exit,
     decompor_distancia_topo_operacoes,
+    resumir_calibracao_score_entrada,
+    resumir_qualidade_ranking_ativos,
     criar_pacote_analise,
     sinal_sonoro_conclusao,
 )
@@ -1140,3 +1142,109 @@ def test_top_gap_decomposition_detects_excess_holding_after_peak() -> None:
     assert row["dominant_gap"] == "permanencia_excessiva"
     assert row["excess_holding_gap_pct"] > 35.0
     assert row["days_from_peak_to_exit"] >= 2
+
+
+def test_top_gap_ranking_uses_distribution_not_only_oracle_max() -> None:
+    dates = pd.date_range(
+        "2026-03-02",
+        periods=3,
+        freq="B",
+        tz="UTC",
+    )
+    frames = {}
+    ending_prices = {
+        "AAA": 105.0,
+        "BBB": 130.0,
+        "CCC": 120.0,
+        "DDD": 110.0,
+        "EEE": 100.0,
+        "FFF": 90.0,
+    }
+    for asset, ending in ending_prices.items():
+        frame = _base_frame([100.0, 100.0, ending])
+        frame.index = dates
+        frames[asset] = frame
+
+    trades = pd.DataFrame(
+        [
+            {
+                "timestamp": dates[0],
+                "action": "BUY",
+                "asset": "AAA",
+                "execution_price": 100.0,
+                "quantity": 100.0,
+                "final_action_score": 0.80,
+                "best_score": 0.80,
+                "second_score": 0.70,
+                "best_vs_second_gap": 0.10,
+                "best_score_zscore": 1.50,
+                "universe_score_mean": 0.20,
+                "universe_score_std": 0.30,
+                "positive_score_count": 6,
+                "finite_score_count": 6,
+                "decision_reason": "ENTER_BEST_ASSET",
+            },
+            {
+                "timestamp": dates[-1],
+                "action": "SELL",
+                "asset": "AAA",
+                "execution_price": 105.0,
+                "quantity": 100.0,
+                "entry_timestamp": dates[0],
+                "entry_price": 100.0,
+                "holding_bars": 2,
+                "walk_forward_fold": 1,
+            },
+        ]
+    )
+
+    _, detail, _ = decompor_distancia_topo_operacoes(
+        trades,
+        frames,
+        entry_lookback_sessions=1,
+        post_exit_sessions=1,
+    )
+
+    row = detail.iloc[0]
+    assert row["available_future_assets"] == 6
+    assert row["selected_future_rank"] == 4
+    assert abs(row["selected_future_percentile"] - 40.0) < 1e-12
+    assert bool(row["selected_in_top5"]) is True
+    assert bool(row["selected_in_top_half"]) is False
+    assert row["gap_to_future_p90_pct"] > 10.0
+    assert abs(row["entry_selected_score"] - 0.80) < 1e-12
+
+
+def test_asset_ranking_summary_and_score_calibration_are_generated() -> None:
+    detail = pd.DataFrame(
+        {
+            "walk_forward_fold": [1, 1, 2, 2, 3],
+            "selected_future_rank": [1, 2, 3, 4, 5],
+            "selected_future_percentile": [100, 80, 60, 40, 20],
+            "selected_in_top5": [True, True, True, True, True],
+            "selected_in_top10": [True, True, True, True, True],
+            "selected_in_top_half": [True, True, True, False, False],
+            "gap_to_top5_median_pct": [0, 1, 2, 3, 4],
+            "gap_to_future_p90_pct": [0, 2, 4, 6, 8],
+            "selected_same_holding_market_return_pct": [10, 8, 6, 4, 2],
+            "entry_selected_score": [0.1, 0.2, 0.3, 0.4, 0.5],
+            "entry_best_vs_second_gap": [0.01, 0.02, 0.03, 0.04, 0.05],
+        }
+    )
+
+    quality = resumir_qualidade_ranking_ativos(detail)
+    calibration = resumir_calibracao_score_entrada(
+        detail,
+        quantiles=5,
+    )
+
+    overall = quality.loc[quality["scope"] == "overall"].iloc[0]
+    assert overall["operations"] == 5
+    assert overall["median_future_rank"] == 3.0
+    assert abs(overall["top_half_share"] - 0.6) < 1e-12
+    assert overall["spearman_entry_score_vs_future_percentile"] < -0.99
+
+    assert len(calibration) == 5
+    assert list(calibration["score_bucket"]) == [
+        "Q1", "Q2", "Q3", "Q4", "Q5"
+    ]
