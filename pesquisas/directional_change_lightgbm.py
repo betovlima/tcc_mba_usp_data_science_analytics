@@ -4888,6 +4888,409 @@ def calcular_peak_exit(
     }, detail
 
 
+
+def decompor_distancia_topo_operacoes(
+    trades: pd.DataFrame,
+    frames: dict[str, pd.DataFrame],
+    *,
+    entry_lookback_sessions: int = 20,
+    post_exit_sessions: int = 10,
+) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
+    """Diagnostica onde cada operacao deixou retorno potencial.
+
+    Esta analise e estritamente ex post e nao altera a politica U67. Os quatro
+    gaps sao contrafactuais e podem se sobrepor, portanto nao devem ser somados
+    como se fossem uma decomposicao contabil fechada.
+
+    Gaps medidos:
+    - entrada_tardia: distancia da entrada ao menor low das sessoes anteriores;
+    - escolha_ativo: melhor ativo U67 no mesmo intervalo de holding;
+    - permanencia_excessiva: pico do ativo durante o holding menos a saida;
+    - saida_precoce: melhor high nas sessoes posteriores a saida.
+
+    O objetivo e localizar a principal fonte de oportunidade para a proxima
+    pesquisa, e nao criar uma regra usando informacao futura.
+    """
+    columns = (
+        "operation_id",
+        "asset",
+        "entry_timestamp",
+        "exit_timestamp",
+        "holding_bars",
+        "walk_forward_fold",
+        "entry_price",
+        "exit_price",
+        "quantity",
+        "actual_position_return_pct",
+        "entry_reference_low",
+        "entry_reference_low_timestamp",
+        "entry_late_gap_pct",
+        "entry_late_gap_proxy_usd",
+        "best_same_holding_asset",
+        "selected_same_holding_market_return_pct",
+        "best_same_holding_market_return_pct",
+        "asset_selection_gap_pct",
+        "asset_selection_gap_proxy_usd",
+        "peak_price_while_held",
+        "peak_timestamp_while_held",
+        "days_from_peak_to_exit",
+        "excess_holding_gap_pct",
+        "excess_holding_gap_proxy_usd",
+        "post_exit_best_high",
+        "post_exit_best_timestamp",
+        "early_exit_gap_pct",
+        "early_exit_gap_proxy_usd",
+        "dominant_gap",
+        "dominant_gap_pct",
+        "dominant_gap_proxy_usd",
+    )
+    empty = pd.DataFrame(columns=columns)
+    if trades is None or trades.empty:
+        return {
+            "closed_positions": 0,
+            "entry_lookback_sessions": int(entry_lookback_sessions),
+            "post_exit_sessions": int(post_exit_sessions),
+            "warning": "ex_post_non_additive_counterfactuals",
+        }, empty, pd.DataFrame()
+
+    normalized_frames: dict[str, pd.DataFrame] = {}
+    for symbol, frame in frames.items():
+        if frame is None or frame.empty:
+            continue
+        local = frame.copy()
+        local.index = pd.to_datetime(local.index, utc=True)
+        normalized_frames[str(symbol)] = local.sort_index()
+
+    rows: list[dict[str, Any]] = []
+    closed = trades.loc[
+        trades["action"].astype(str).str.upper().isin({"SELL", "FINAL_SELL"})
+    ].copy()
+    closed = closed.sort_values("timestamp", ignore_index=True)
+
+    for operation_number, trade in enumerate(
+        closed.to_dict(orient="records"),
+        start=1,
+    ):
+        asset = str(trade.get("asset") or "")
+        frame = normalized_frames.get(asset)
+        if frame is None or frame.empty:
+            continue
+
+        entry_value = trade.get("entry_timestamp")
+        exit_value = trade.get("timestamp")
+        if entry_value is None or exit_value is None:
+            continue
+        entry_at = pd.Timestamp(entry_value)
+        exit_at = pd.Timestamp(exit_value)
+        entry_at = (
+            entry_at.tz_localize("UTC")
+            if entry_at.tzinfo is None
+            else entry_at.tz_convert("UTC")
+        )
+        exit_at = (
+            exit_at.tz_localize("UTC")
+            if exit_at.tzinfo is None
+            else exit_at.tz_convert("UTC")
+        )
+        if entry_at not in frame.index or exit_at not in frame.index:
+            continue
+
+        entry_price = float(trade.get("entry_price") or 0.0)
+        exit_price = float(trade.get("execution_price") or 0.0)
+        quantity = float(trade.get("quantity") or 0.0)
+        if entry_price <= 0 or exit_price <= 0 or quantity <= 0:
+            continue
+        exposure = quantity * entry_price
+
+        action = str(trade.get("action") or "").upper()
+        selected_entry_market = float(frame.loc[entry_at, "open"])
+        selected_exit_market = float(
+            frame.loc[exit_at, "close" if action == "FINAL_SELL" else "open"]
+        )
+        selected_market_return = (
+            selected_exit_market / selected_entry_market - 1.0
+            if selected_entry_market > 0
+            else np.nan
+        )
+
+        # Entrada tardia: somente informacao anterior a entrada, mas usada aqui
+        # como diagnostico ex post, nao como gatilho operacional.
+        entry_position = int(frame.index.get_loc(entry_at))
+        lookback_start = max(
+            0,
+            entry_position - max(1, int(entry_lookback_sessions)) + 1,
+        )
+        entry_window = frame.iloc[lookback_start : entry_position + 1]
+        entry_lows = pd.to_numeric(
+            entry_window.get("low"),
+            errors="coerce",
+        ).dropna()
+        if entry_lows.empty:
+            entry_reference_low = np.nan
+            entry_reference_at = pd.NaT
+            entry_gap = 0.0
+        else:
+            entry_reference_at = pd.Timestamp(entry_lows.idxmin())
+            entry_reference_low = float(entry_lows.loc[entry_reference_at])
+            entry_gap = max(
+                0.0,
+                (entry_price - entry_reference_low) / entry_price,
+            )
+
+        # Escolha de ativo: mantem exatamente as datas da operacao observada e
+        # pergunta qual ativo U67 teria tido maior retorno bruto no intervalo.
+        best_asset = asset
+        best_return = selected_market_return
+        for candidate, candidate_frame in normalized_frames.items():
+            if (
+                entry_at not in candidate_frame.index
+                or exit_at not in candidate_frame.index
+            ):
+                continue
+            candidate_entry = float(candidate_frame.loc[entry_at, "open"])
+            candidate_exit = float(
+                candidate_frame.loc[
+                    exit_at,
+                    "close" if action == "FINAL_SELL" else "open",
+                ]
+            )
+            if candidate_entry <= 0 or not np.isfinite(candidate_exit):
+                continue
+            candidate_return = candidate_exit / candidate_entry - 1.0
+            if (
+                not np.isfinite(best_return)
+                or candidate_return > best_return
+            ):
+                best_return = float(candidate_return)
+                best_asset = candidate
+
+        selection_gap = (
+            max(0.0, float(best_return - selected_market_return))
+            if np.isfinite(best_return)
+            and np.isfinite(selected_market_return)
+            else 0.0
+        )
+
+        # Permanencia excessiva: quanto do retorno potencial do proprio ativo
+        # foi devolvido entre o pico observado durante o holding e a saida.
+        holding = frame.loc[
+            (frame.index >= entry_at)
+            & (
+                (frame.index <= exit_at)
+                if action == "FINAL_SELL"
+                else (frame.index < exit_at)
+            )
+        ]
+        highs = pd.to_numeric(holding.get("high"), errors="coerce").dropna()
+        peak_price = entry_price
+        peak_at = entry_at
+        if not highs.empty:
+            candidate_peak_at = pd.Timestamp(highs.idxmax())
+            candidate_peak = float(highs.loc[candidate_peak_at])
+            if candidate_peak >= peak_price:
+                peak_price = candidate_peak
+                peak_at = candidate_peak_at
+        excess_holding_gap = max(
+            0.0,
+            (peak_price - exit_price) / entry_price,
+        )
+        days_from_peak_to_exit = int(
+            ((frame.index > peak_at) & (frame.index <= exit_at)).sum()
+        )
+
+        # Saida precoce: upside que apareceu logo depois da venda. O horizonte
+        # e deliberadamente curto e fica registrado no resumo.
+        exit_position = int(frame.index.get_loc(exit_at))
+        post = frame.iloc[
+            exit_position + 1 :
+            exit_position + 1 + max(1, int(post_exit_sessions))
+        ]
+        post_highs = pd.to_numeric(post.get("high"), errors="coerce").dropna()
+        if post_highs.empty:
+            post_high = exit_price
+            post_high_at = pd.NaT
+            early_exit_gap = 0.0
+        else:
+            post_high_at = pd.Timestamp(post_highs.idxmax())
+            post_high = float(post_highs.loc[post_high_at])
+            early_exit_gap = max(
+                0.0,
+                (post_high - exit_price) / entry_price,
+            )
+
+        gap_map = {
+            "entrada_tardia": float(entry_gap),
+            "escolha_ativo": float(selection_gap),
+            "permanencia_excessiva": float(excess_holding_gap),
+            "saida_precoce": float(early_exit_gap),
+        }
+        dominant_gap = max(gap_map, key=gap_map.get)
+        dominant_value = float(gap_map[dominant_gap])
+
+        rows.append(
+            {
+                "operation_id": int(operation_number),
+                "asset": asset,
+                "entry_timestamp": entry_at,
+                "exit_timestamp": exit_at,
+                "holding_bars": trade.get("holding_bars"),
+                "walk_forward_fold": trade.get("walk_forward_fold"),
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "quantity": quantity,
+                "actual_position_return_pct": float(
+                    (exit_price / entry_price - 1.0) * 100.0
+                ),
+                "entry_reference_low": (
+                    float(entry_reference_low)
+                    if np.isfinite(entry_reference_low)
+                    else None
+                ),
+                "entry_reference_low_timestamp": entry_reference_at,
+                "entry_late_gap_pct": float(entry_gap * 100.0),
+                "entry_late_gap_proxy_usd": float(exposure * entry_gap),
+                "best_same_holding_asset": best_asset,
+                "selected_same_holding_market_return_pct": (
+                    float(selected_market_return * 100.0)
+                    if np.isfinite(selected_market_return)
+                    else None
+                ),
+                "best_same_holding_market_return_pct": (
+                    float(best_return * 100.0)
+                    if np.isfinite(best_return)
+                    else None
+                ),
+                "asset_selection_gap_pct": float(selection_gap * 100.0),
+                "asset_selection_gap_proxy_usd": float(
+                    exposure * selection_gap
+                ),
+                "peak_price_while_held": float(peak_price),
+                "peak_timestamp_while_held": peak_at,
+                "days_from_peak_to_exit": days_from_peak_to_exit,
+                "excess_holding_gap_pct": float(
+                    excess_holding_gap * 100.0
+                ),
+                "excess_holding_gap_proxy_usd": float(
+                    exposure * excess_holding_gap
+                ),
+                "post_exit_best_high": float(post_high),
+                "post_exit_best_timestamp": post_high_at,
+                "early_exit_gap_pct": float(early_exit_gap * 100.0),
+                "early_exit_gap_proxy_usd": float(
+                    exposure * early_exit_gap
+                ),
+                "dominant_gap": dominant_gap,
+                "dominant_gap_pct": dominant_value * 100.0,
+                "dominant_gap_proxy_usd": float(
+                    exposure * dominant_value
+                ),
+            }
+        )
+
+    detail = pd.DataFrame(rows, columns=columns)
+    if detail.empty:
+        return {
+            "closed_positions": 0,
+            "entry_lookback_sessions": int(entry_lookback_sessions),
+            "post_exit_sessions": int(post_exit_sessions),
+            "warning": "ex_post_non_additive_counterfactuals",
+        }, detail, pd.DataFrame()
+
+    gap_columns = {
+        "entrada_tardia": (
+            "entry_late_gap_pct",
+            "entry_late_gap_proxy_usd",
+        ),
+        "escolha_ativo": (
+            "asset_selection_gap_pct",
+            "asset_selection_gap_proxy_usd",
+        ),
+        "permanencia_excessiva": (
+            "excess_holding_gap_pct",
+            "excess_holding_gap_proxy_usd",
+        ),
+        "saida_precoce": (
+            "early_exit_gap_pct",
+            "early_exit_gap_proxy_usd",
+        ),
+    }
+    summary_rows: list[dict[str, Any]] = []
+    for cause, (pct_column, usd_column) in gap_columns.items():
+        pct_values = pd.to_numeric(
+            detail[pct_column],
+            errors="coerce",
+        ).dropna()
+        usd_values = pd.to_numeric(
+            detail[usd_column],
+            errors="coerce",
+        ).dropna()
+        dominant_count = int((detail["dominant_gap"] == cause).sum())
+        summary_rows.append(
+            {
+                "cause": cause,
+                "operations": int(len(detail)),
+                "dominant_operations": dominant_count,
+                "dominant_share": float(
+                    dominant_count / len(detail)
+                ),
+                "median_gap_pct": (
+                    float(pct_values.median())
+                    if not pct_values.empty
+                    else None
+                ),
+                "mean_gap_pct": (
+                    float(pct_values.mean())
+                    if not pct_values.empty
+                    else None
+                ),
+                "p90_gap_pct": (
+                    float(pct_values.quantile(0.90))
+                    if not pct_values.empty
+                    else None
+                ),
+                "proxy_usd_sum_non_additive": (
+                    float(usd_values.sum())
+                    if not usd_values.empty
+                    else 0.0
+                ),
+                "proxy_usd_median": (
+                    float(usd_values.median())
+                    if not usd_values.empty
+                    else None
+                ),
+            }
+        )
+    by_cause = pd.DataFrame(summary_rows).sort_values(
+        ["dominant_share", "proxy_usd_sum_non_additive"],
+        ascending=False,
+        ignore_index=True,
+    )
+
+    summary = {
+        "closed_positions": int(len(detail)),
+        "entry_lookback_sessions": int(entry_lookback_sessions),
+        "post_exit_sessions": int(post_exit_sessions),
+        "warning": "ex_post_non_additive_counterfactuals",
+        "dominant_cause": (
+            str(by_cause.iloc[0]["cause"])
+            if not by_cause.empty
+            else None
+        ),
+        "dominant_cause_share": (
+            float(by_cause.iloc[0]["dominant_share"])
+            if not by_cause.empty
+            else None
+        ),
+        "median_actual_position_return_pct": float(
+            pd.to_numeric(
+                detail["actual_position_return_pct"],
+                errors="coerce",
+            ).median()
+        ),
+    }
+    return summary, detail, by_cause
+
+
 def calcular_metricas_peak_gatilhos(
     peak_trades: pd.DataFrame,
     predictions: pd.DataFrame,
