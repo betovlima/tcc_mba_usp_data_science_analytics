@@ -510,3 +510,21 @@ def gerar_graficos_rotacoes(
 
     paths["graficos_rotacoes_dir"] = visual_dir
     return paths
+
+
+
+def gerar_graficos_rotacoes_u59(
+    output_dir: Path,
+    *,
+    result: Any,
+) -> dict[str, Path]:
+    """Compatibilidade com o nome usado na primeira revisao da branch.
+
+    Mantem runners locais momentaneamente defasados funcionando, delegando
+    integralmente para a API generalizada. Nao altera calculos ou graficos.
+    """
+    return gerar_graficos_rotacoes(
+        output_dir,
+        result=result,
+        universe_label="U59",
+    )
