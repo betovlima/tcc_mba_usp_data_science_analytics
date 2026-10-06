@@ -3532,3 +3532,75 @@ concluiu com sucesso em 06 out. 2026.
 A execucao financeira completa de reproduzir_experimento.py ainda deve ser
 feita localmente para confirmar que o novo runner simplificado reproduz
 exatamente os US$30.080.091,008142874.
+
+
+## Reproducao final confirmada do U59 — 1.20.0-dev.1
+
+Pacote recebido e auditado:
+pacote_reproducao_u59_30m.zip
+
+SHA-256 do pacote:
+72db04ed58fb779bb68951ebd7cb77cf5c2748bc11b7ffd3ef293074af586a91
+
+Runner:
+reproduzir_experimento.py
+
+Versao:
+1.20.0-dev.1
+
+Schema:
+u59-control-reproduction-v1
+
+Status registrado no pacote:
+reproduced
+
+Checkpoint:
+- esperado: US$ 30.080.091,008142874
+- observado: US$ 30.080.091,008142874
+- erro relativo: 0,0
+
+Universo:
+- U56 congelado;
+- adicoes COLB, AMS e FOXF;
+- total U59 = 59 ativos.
+
+Metricas reproduzidas:
+- capital inicial: US$ 10.000;
+- capital final: US$ 30.080.091,008142874;
+- retorno acumulado: 3007,009100814287 vezes sobre o capital inicial
+  (aprox. +300.700,91%);
+- CAGR: 267,403253%;
+- Sharpe: 2,33754894;
+- MaxDD: -31,2189259%;
+- worst fold: +275,050866%;
+- benchmark buy-and-hold fixo U56: US$ 38.978,52833728243;
+- buy-and-hold CAGR: 24,7372004%;
+- buy-and-hold Sharpe: 1,15661847;
+- buy-and-hold MaxDD: -28,1108931%.
+
+Folds:
+1. 2020-07-22 a 2022-07-21:
+   US$10.000 -> US$37.505,08664, retorno +275,050866%, 504 sessoes.
+2. 2022-07-22 a 2024-07-24:
+   US$37.505,08664 -> US$1.996.154,90154, retorno +5.222,357793%, 504 sessoes.
+3. 2024-07-25 a 2026-09-17:
+   US$1.996.154,90154 -> US$30.080.091,00814, retorno +1.406,901643%, 539 sessoes.
+
+Margens por fold:
+- fold 1: selected 0,0; effective 0,0005;
+- fold 2: selected 0,01; effective 0,01;
+- fold 3: selected 0,0; effective 0,0005.
+
+Auditoria adicional:
+- u59_assets.csv contem exatamente 59 ativos;
+- u59_predictions.csv contem 1.547 sessoes;
+- u59_trades.csv contem 688 registros:
+  344 BUY, 343 SELL e 1 FINAL_SELL;
+- equity final da serie de predictions coincide com o checkpoint;
+- pacote contem somente os cinco artefatos esperados da reproducao simplificada.
+
+Conclusao:
+o novo runner simplificado reproduz exatamente o resultado oficial U59 de
+aproximadamente US$30,08 milhoes usando somente os snapshots congelados.
+A limpeza dos runners experimentais nao alterou o resultado financeiro
+reprodutivel.
