@@ -3343,3 +3343,112 @@ mesmo treino/caches por fold.
 Regra:
 nao trocar candidatos, nao alterar R e nao realizar segunda selecao com este
 pool depois de observar os resultados.
+
+
+## Resultado oficial do filtro de aderencia de capital — v1.19
+
+Pacote analisado:
+pacote_validacao_aderencia_capital_v119.zip
+
+SHA-256 do pacote:
+17c57407b546ac652d815a77140193688bca2bbaafd7002b0b14b5e0c4cb43d9
+
+Runner:
+1.19.1-dev.1
+
+Schema:
+capital-adherence-financial-validation-v1
+
+O U59 reproduziu exatamente o checkpoint congelado:
+US$ 30.080.091,008142874
+erro relativo = 0.
+
+Coorte v1.19 congelada:
+TRST, DBB, MCD, CSB, WMK, WFC, RJF, FIBK.
+
+Endpoint primario pre-registrado:
+capital final U59+adherence8 > capital final U59.
+
+Resultado:
+- U59: US$ 30.080.091,01;
+- U59+adherence8: US$ 21.972.866,56;
+- delta: -US$ 8.107.224,45;
+- delta percentual: -26,9521%;
+- endpoint primario: NAO ATENDIDO;
+- benchmark exploratorio U59+positive8 = US$58.557.157,67 nao foi alcancado.
+
+Metricas U59+adherence8:
+- CAGR = 249,1261%;
+- Sharpe = 2,26638;
+- MaxDD = -31,2191%;
+- worst fold = +241,5744%.
+
+Efeitos individuais:
+- TRST: 0,0000%;
+- DBB: -18,2926% (harm10=true);
+- MCD: -4,4643%;
+- CSB: -2,9900%;
+- WMK: -4,5670%;
+- WFC: +1,3289%;
+- RJF: -0,2454%;
+- FIBK: -2,9152%.
+
+Diagnosticos:
+- 1/8 positivo;
+- 1/8 harm10;
+- 1/8 zero;
+- mediana individual = -2,9526%;
+- media individual = -4,0182%.
+
+Interpretacao:
+o filtro v1.19 teve sucesso descritivo em reduzir a incidencia de candidatos
+individualmente catastroficos. Na amostra de desenvolvimento, 25/44 ativos
+(56,8%) tinham dano <= -10%; na nova selecao, somente 1/8 (12,5%) teve harm10.
+A comparacao e exploratoria, pois a taxa historica nao foi pre-registrada como
+endpoint inferencial da v1.19.
+
+Contudo, a hipotese economica principal falhou. A baixa incidencia de dano
+individual nao garantiu aumento conjunto de capital. Oito candidatos
+individualmente pouco destrutivos ainda alteraram a sequencia de escolhas e
+deslocaram oportunidades do U59.
+
+Mecanismo de caminho observado no replay conjunto:
+- apenas 24/1547 sessoes (1,55%) tiveram ativo selecionado diferente do U59;
+- 17/1547 sessoes (1,10%) selecionaram diretamente um dos oito novos ativos;
+- 7 sessoes tiveram mudanca indireta para outro ativo legado;
+- TRST e FIBK nunca foram selecionados;
+- selecoes diretas por novo ativo: CSB 4, WMK 4, WFC 3, DBB 2, MCD 2, RJF 2;
+- os sete trades fechados nos novos ativos somaram aproximadamente
+  +US$244.797 de PnL realizado, apesar da estrategia conjunta terminar
+  US$8,107 milhoes abaixo do U59.
+
+Isso mostra que o prejuizo conjunto nao veio simplesmente de trades perdedores
+nos novos ativos. Ele veio principalmente de custo de oportunidade e
+dependencia de caminho: a introducao dos novos candidatos mudou quais ativos
+legados foram escolhidos e quando.
+
+Exemplo dominante:
+em 23-24 ago. 2022, DBB substituiu DNN por duas sessoes e a razao de capital
+(U59+adherence8)/U59 caiu aproximadamente 17,39% apenas nesse episodio.
+Outros deslocamentos relevantes envolveram NVDA/XOM, NVDA/AMD, NVDA/MYE e
+GKOS. Alguns episodios tiveram efeito positivo, mas o saldo acumulado foi
+negativo.
+
+Decomposicao descritiva do log-ratio final:
+- sessoes com novo ativo selecionado: log-excess -0,0884;
+- sessoes com ativo legado diferente: -0,0643;
+- sessoes com mesma selecao: -0,1614, refletindo a propagacao por
+  capital/quantidade/caminho apos divergencias anteriores;
+- log-ratio total = -0,3141, equivalente a -26,95%.
+
+Conclusao cientifica da v1.19:
+- o filtro de aderencia reduziu danos individuais severos: evidencia
+  descritiva favoravel;
+- a regra conjunta U59+adherence8 melhorou o capital: NAO;
+- baixa aderencia individual e compatibilidade conjunta continuam sendo
+  problemas diferentes;
+- a principal informacao nova e que minimizar risco marginal nao basta:
+  e necessario modelar explicitamente o custo de oportunidade causado pelo
+  deslocamento dos incumbentes e as interacoes entre candidatos;
+- nao retunar R com estes oito e nao realizar segunda selecao no mesmo pool
+  chamando-a de confirmacao v1.19.
