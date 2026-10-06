@@ -1,26 +1,28 @@
-"""REPRODUCAO OFICIAL DO RESULTADO U59 (~US$ 30 MILHOES).
+"""REPRODUCAO OFICIAL DO RESULTADO U67 (~US$ 58,56 MILHOES).
 
 Este e o runner principal de reproducao do experimento financeiro congelado.
 
 Objetivo
 --------
-Reproduzir o universo U59:
+Reproduzir o universo U67:
 - U56 congelado em dados/pesquisa;
-- + COLB, AMS e FOXF, congelados em dados/pesquisa_expansao_76_b2.
+- + COLB, AMS e FOXF, congelados em dados/pesquisa_expansao_76_b2;
+- + THO, WDAY, EXR, XEL, SBFG, PAYX, MUX e SXC, congelados em
+  dados/pesquisa_smart_candidates.
 
 Resultado de referencia:
-    capital final = US$ 30.080.091,008142874
+    capital final = US$ 58.557.157,67496595
 
 Regras
 ------
 - nao usa banco de dados;
 - nao baixa dados da Alpaca;
 - nao executa busca de ativos;
-- nao executa os testes exploratorios v1.18/v1.19;
-- usa somente snapshots CSV versionados;
+- nao executa as pesquisas de assinatura encerradas;
+- usa somente snapshots CSV congelados;
 - usa LightGBM Control, sem Soft Horizon Consensus;
 - fixa o calendario de referencia no U56 original;
-- aborta se o capital final nao reproduzir o checkpoint U59.
+- aborta se o capital final nao reproduzir o checkpoint U67.
 
 Execucao no Spyder:
 - abra reproduzir_experimento.py;
@@ -69,17 +71,25 @@ BASE = SnapshotPaths.research(ROOT)
 B2 = SnapshotPaths.from_root(
     ROOT / "dados" / "pesquisa_expansao_76_b2"
 )
+SMART = SnapshotPaths.from_root(
+    ROOT / "dados" / "pesquisa_smart_candidates"
+)
 
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.20.0-dev.1"
-EXECUTION_SCHEMA = "u59-control-reproduction-v1"
+REPRODUCTION_VERSION = "1.21.0"
+EXECUTION_SCHEMA = "u67-control-reproduction-v1"
 
 U59_ADDITIONS = ("COLB", "AMS", "FOXF")
+U67_ADDITIONS = (
+    "THO", "WDAY", "EXR", "XEL",
+    "SBFG", "PAYX", "MUX", "SXC",
+)
 EXPECTED_U56_COUNT = 56
 EXPECTED_U59_COUNT = 59
+EXPECTED_U67_COUNT = 67
 
-EXPECTED_ENDING_CAPITAL = 30_080_091.008142874
+EXPECTED_ENDING_CAPITAL = 58_557_157.67496595
 CAPITAL_REL_TOL = 1e-9
 CAPITAL_ABS_TOL = 0.01
 
@@ -89,9 +99,10 @@ started = time.perf_counter()
 
 manifest_u56 = validate_snapshot(BASE)
 manifest_b2 = validate_snapshot(B2)
+manifest_smart = validate_snapshot(SMART)
 
 print("=" * 78, flush=True)
-print("TCC MBA USP - REPRODUCAO U59", flush=True)
+print("TCC MBA USP - REPRODUCAO U67", flush=True)
 print(
     f"version={REPRODUCTION_VERSION} schema={EXECUTION_SCHEMA}",
     flush=True,
@@ -140,29 +151,59 @@ if exclusions_b2 or len(frames_b2) != len(U59_ADDITIONS):
         f"exclusoes={json.dumps(exclusions_b2, ensure_ascii=False, default=str)}"
     )
 
-frames_u59_raw = {
+frames_u67_raw = {
     **frames_u56,
     **frames_b2,
 }
-symbols_u59_requested = sorted(frames_u59_raw)
 
-if len(symbols_u59_requested) != EXPECTED_U59_COUNT:
+if len(frames_u67_raw) != EXPECTED_U59_COUNT:
     raise RuntimeError(
         "U59 deveria conter 59 ativos. "
-        f"observado={len(symbols_u59_requested)}"
+        f"observado={len(frames_u67_raw)}"
+    )
+
+
+# %% 4 - Oito ativos que transformam U59 em U67
+frames_smart, exclusions_smart, diagnostics_smart, audit_smart = (
+    prepare_model_frames(
+        SMART,
+        assets=U67_ADDITIONS,
+        comparar_snapshot_referencia=False,
+    )
+)
+
+if exclusions_smart or len(frames_smart) != len(U67_ADDITIONS):
+    raise RuntimeError(
+        "Os oito ativos do checkpoint U67 precisam estar integralmente "
+        "disponiveis. "
+        f"exclusoes={json.dumps(exclusions_smart, ensure_ascii=False, default=str)}"
+    )
+
+frames_u67_raw = {
+    **frames_u67_raw,
+    **frames_smart,
+}
+symbols_u67_requested = sorted(frames_u67_raw)
+
+if len(symbols_u67_requested) != EXPECTED_U67_COUNT:
+    raise RuntimeError(
+        "U67 deveria conter 67 ativos. "
+        f"observado={len(symbols_u67_requested)}"
     )
 
 print(
-    "[universe] U56=56 additions=COLB,AMS,FOXF U59=59",
+    "[universe] U56=56 U59=59 U67=67 "
+    "u59_additions=COLB,AMS,FOXF "
+    "u67_additions=THO,WDAY,EXR,XEL,SBFG,PAYX,MUX,SXC",
     flush=True,
 )
 print(
-    "[universe] assets=" + ",".join(symbols_u59_requested),
+    "[universe] assets=" + ",".join(symbols_u67_requested),
     flush=True,
 )
 
 
-# %% 4 - Calendario original U56 e contexto U59
+# %% 5 - Calendario original U56 e contexto U67
 config_u56, _ = build_variant_configs(
     frames_u56,
     CONFIG,
@@ -172,42 +213,42 @@ _, reference_calendar, reference_source = preparar_painel_rotacao(
     config_u56,
 )
 
-config_u59, _ = build_variant_configs(
-    frames_u59_raw,
+config_u67, _ = build_variant_configs(
+    frames_u67_raw,
     CONFIG,
 )
 
 (
-    frames_u59,
+    frames_u67,
     common_dates,
     calendar_source,
-    symbols_u59,
+    symbols_u67,
     folds,
     all_decision_dates,
     decision_to_fold,
     decision_metadata,
 ) = _construir_contexto_execucao(
-    frames_u59_raw,
-    config_u59,
+    frames_u67_raw,
+    config_u67,
     calendar_override=reference_calendar,
     calendar_source_label=f"U56_FIXED:{reference_source}",
 )
 
-if len(symbols_u59) != EXPECTED_U59_COUNT:
+if len(symbols_u67) != EXPECTED_U67_COUNT:
     raise RuntimeError(
-        "Contexto modelavel U59 nao contem 59 ativos. "
-        f"observado={len(symbols_u59)}"
+        "Contexto modelavel U67 nao contem 67 ativos. "
+        f"observado={len(symbols_u67)}"
     )
 
 candidate_margins = tuple(
     float(value)
-    for value in config_u59.rotation_switch_margin_candidates
+    for value in config_u67.rotation_switch_margin_candidates
 )
 
 
-# %% 5 - Benchmark fixo do universo original U56
+# %% 6 - Benchmark fixo do universo original U56
 benchmark_frames_u56 = {
-    symbol: frames_u59[symbol]
+    symbol: frames_u67[symbol]
     for symbol in sorted(frames_u56)
 }
 
@@ -215,8 +256,8 @@ shared_benchmark = _benchmark_pesos_iguais(
     benchmark_frames_u56,
     sorted(frames_u56),
     all_decision_dates[1:],
-    float(config_u59.initial_capital),
-    config_u59,
+    float(config_u67.initial_capital),
+    config_u67,
     calcular_taxas_referencia,
     aplicar_deslizamento,
 )
@@ -226,7 +267,7 @@ BENCHMARK_NAME = (
 )
 
 
-# %% 6 - Treino e calibracao walk-forward
+# %% 7 - Treino e calibracao walk-forward
 fold_policies = {}
 fold_margins = []
 
@@ -249,16 +290,16 @@ for fold_position, fold in enumerate(folds, start=1):
 
     print(
         f"[train] fold={fold_id} {fold_position}/{len(folds)} "
-        f"models={len(symbols_u59)} calibration",
+        f"models={len(symbols_u67)} calibration",
         flush=True,
     )
 
     calibration_models = _ajustar_modelos_lightgbm(
-        frames_u59,
-        symbols_u59,
+        frames_u67,
+        symbols_u67,
         train_dates,
-        config_u59,
-        phase=f"reproduction_u59_fold_{fold_id}_calibration",
+        config_u67,
+        phase=f"reproduction_u67_fold_{fold_id}_calibration",
         technical_log_callback=lambda message: print(
             f"[technical] {message}",
             flush=True,
@@ -267,35 +308,35 @@ for fold_position, fold in enumerate(folds, start=1):
 
     calibration_cache, _ = _precalcular_utilidades_modelo(
         calibration_models,
-        frames_u59,
-        symbols_u59,
+        frames_u67,
+        symbols_u67,
         calibration_dates,
-        config_u59,
+        config_u67,
     )
 
     candidate_scores = []
     for margin in candidate_margins:
         policy = _politica_utilidade(
             calibration_models,
-            frames_u59,
-            symbols_u59,
-            config_u59,
+            frames_u67,
+            symbols_u67,
+            config_u67,
             float(margin),
             utility_cache=calibration_cache,
         )
         score = _crescimento_politica_simples(
             policy,
-            frames_u59,
-            symbols_u59,
+            frames_u67,
+            symbols_u67,
             calibration_dates,
-            config_u59,
+            config_u67,
         )
         candidate_scores.append(
             (float(margin), float(score))
         )
 
     selection = _selecionar_switch_margin_fold(
-        config_u59,
+        config_u67,
         fold_id,
         candidate_scores,
     )
@@ -304,7 +345,7 @@ for fold_position, fold in enumerate(folds, start=1):
         selection["selected_candidate_margin"]
     )
     effective_margin = max(
-        float(config_u59.rotation_switch_margin),
+        float(config_u67.rotation_switch_margin),
         selected_margin,
     )
 
@@ -316,16 +357,16 @@ for fold_position, fold in enumerate(folds, start=1):
     )
 
     print(
-        f"[train] fold={fold_id} models={len(symbols_u59)} final",
+        f"[train] fold={fold_id} models={len(symbols_u67)} final",
         flush=True,
     )
 
     final_models = _ajustar_modelos_lightgbm(
-        frames_u59,
-        symbols_u59,
+        frames_u67,
+        symbols_u67,
         final_fit_dates,
-        config_u59,
-        phase=f"reproduction_u59_fold_{fold_id}_final",
+        config_u67,
+        phase=f"reproduction_u67_fold_{fold_id}_final",
         technical_log_callback=lambda message: print(
             f"[technical] {message}",
             flush=True,
@@ -334,17 +375,17 @@ for fold_position, fold in enumerate(folds, start=1):
 
     decision_cache, _ = _precalcular_utilidades_modelo(
         final_models,
-        frames_u59,
-        symbols_u59,
+        frames_u67,
+        symbols_u67,
         decision_dates,
-        config_u59,
+        config_u67,
     )
 
     fold_policies[fold_id] = _politica_utilidade(
         final_models,
-        frames_u59,
-        symbols_u59,
-        config_u59,
+        frames_u67,
+        symbols_u67,
+        config_u67,
         effective_margin,
         fold_id=fold_id,
         calibrated_switch_margin=selected_margin,
@@ -363,26 +404,26 @@ for fold_position, fold in enumerate(folds, start=1):
     )
 
 
-# %% 7 - Replay U59
+# %% 8 - Replay U67
 scheduled_policy = _politica_agendada(
     fold_policies,
     decision_to_fold,
 )
 
 result = _simular_exato(
-    "u59_control_reproduction",
+    "u67_control_reproduction",
     scheduled_policy,
-    frames_u59,
-    symbols_u59,
+    frames_u67,
+    symbols_u67,
     all_decision_dates,
-    config_u59,
+    config_u67,
     calcular_taxas_referencia,
     aplicar_deslizamento,
     decision_metadata=decision_metadata,
-    model_label="U59 Control - reproducao oficial",
+    model_label="U67 Control - reproducao oficial",
     method_line=(
-        "- Reproducao congelada do U59: U56 + COLB + AMS + FOXF; "
-        "LightGBM Control; calendario U56 fixo."
+        "- Reproducao congelada do U67: U59 + THO + WDAY + EXR + XEL + "
+        "SBFG + PAYX + MUX + SXC; LightGBM Control; calendario U56 fixo."
     ),
     benchmark_override=shared_benchmark,
     benchmark_override_name=BENCHMARK_NAME,
@@ -391,7 +432,7 @@ result = _simular_exato(
 metrics = summarize_metrics(
     result,
     folds,
-    float(config_u59.initial_capital),
+    float(config_u67.initial_capital),
 )
 
 ending_capital = float(metrics["ending_capital"])
@@ -424,34 +465,34 @@ reproduced = math.isclose(
 
 if not reproduced:
     raise RuntimeError(
-        "A reproducao U59 divergiu do checkpoint de US$ 30.080.091,01. "
+        "A reproducao U67 divergiu do checkpoint de US$ 58.557.157,67. "
         f"observado={ending_capital:,.8f} "
         f"esperado={EXPECTED_ENDING_CAPITAL:,.8f}"
     )
 
 
-# %% 8 - Artefatos finais de reproducao
+# %% 9 - Artefatos finais de reproducao
 OUT.mkdir(parents=True, exist_ok=True)
 
 pd.DataFrame(
-    {"asset": symbols_u59}
+    {"asset": symbols_u67}
 ).to_csv(
-    OUT / "u59_assets.csv",
+    OUT / "u67_assets.csv",
     index=False,
 )
 
 pd.DataFrame(fold_margins).to_csv(
-    OUT / "u59_fold_margins.csv",
+    OUT / "u67_fold_margins.csv",
     index=False,
 )
 
 result.predictions.reset_index().to_csv(
-    OUT / "u59_predictions.csv",
+    OUT / "u67_predictions.csv",
     index=False,
 )
 
 result.trades.to_csv(
-    OUT / "u59_trades.csv",
+    OUT / "u67_trades.csv",
     index=False,
 )
 
@@ -461,13 +502,15 @@ payload = {
     "status": "reproduced" if reproduced else "failed",
     "universe": {
         "base_u56_count": len(frames_u56),
-        "additions": list(U59_ADDITIONS),
-        "u59_count": len(symbols_u59),
-        "assets": list(symbols_u59),
+        "u59_additions": list(U59_ADDITIONS),
+        "u67_additions": list(U67_ADDITIONS),
+        "u67_count": len(symbols_u67),
+        "assets": list(symbols_u67),
     },
     "snapshots": {
         "u56": manifest_u56,
         "b2": manifest_b2,
+        "smart": manifest_smart,
     },
     "calendar": {
         "source": calendar_source,
@@ -485,7 +528,7 @@ payload = {
 }
 
 with (
-    OUT / "reproducao_u59.json"
+    OUT / "reproducao_u67.json"
 ).open(
     "w",
     encoding="utf-8",
@@ -500,14 +543,14 @@ with (
 
 package = criar_pacote_analise(
     OUT,
-    comparison_file="reproducao_u59.json",
+    comparison_file="reproducao_u67.json",
     execution_schema=EXECUTION_SCHEMA,
-    archive_name="pacote_reproducao_u59_30m.zip",
+    archive_name="pacote_reproducao_u67_58m.zip",
 )
 
 print("=" * 78, flush=True)
 print(
-    "[done] U59 REPRODUZIDO COM SUCESSO",
+    "[done] U67 REPRODUZIDO COM SUCESSO",
     flush=True,
 )
 print(
