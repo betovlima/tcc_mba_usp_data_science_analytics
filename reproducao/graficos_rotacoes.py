@@ -1,16 +1,11 @@
-"""Visualizacoes exploratorias das rotacoes do universo de referencia.
-
-Este modulo nao altera a politica, o treino ou a simulacao. Ele consome apenas
-os artefatos ja produzidos pelo replay e gera visoes por ativo para entender
-quando, entre quais ativos e com qual diferenca de score as rotacoes ocorreram.
-"""
+"""Visualizacoes limpas e auditaveis das rotacoes do baseline de pesquisa."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
 import shutil
-from typing import Any
+from typing import Any, Iterable
 
 import matplotlib
 
@@ -20,12 +15,40 @@ if (
     and not os.environ.get("WAYLAND_DISPLAY")
 ):
     matplotlib.use("Agg")
+
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 from .graficos import construir_rotacoes
+
+
+BASE_COLOR = "#2F6B9A"
+HIGHLIGHT_COLOR = "#D97706"
+POSITIVE_COLOR = "#2E7D32"
+NEGATIVE_COLOR = "#B23A48"
+NEUTRAL_COLOR = "#A7B0B7"
+GRID_COLOR = "#D8DEE4"
+
+
+def _visual_defaults() -> None:
+    plt.rcParams.update(
+        {
+            "figure.facecolor": "white",
+            "axes.facecolor": "white",
+            "axes.edgecolor": "#B8C0C8",
+            "axes.labelcolor": "#20262E",
+            "xtick.color": "#343B43",
+            "ytick.color": "#343B43",
+            "text.color": "#20262E",
+            "font.size": 10,
+            "axes.titlesize": 14,
+            "axes.titleweight": "bold",
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+        }
+    )
 
 
 def _save_pair(
@@ -37,8 +60,17 @@ def _save_pair(
 ) -> dict[str, Path]:
     png = output_dir / f"{stem}.png"
     svg = output_dir / f"{stem}.svg"
-    fig.savefig(png, dpi=180, bbox_inches="tight")
-    fig.savefig(svg, bbox_inches="tight")
+    fig.savefig(
+        png,
+        dpi=180,
+        bbox_inches="tight",
+        facecolor="white",
+    )
+    fig.savefig(
+        svg,
+        bbox_inches="tight",
+        facecolor="white",
+    )
     if show:
         fig.canvas.draw_idle()
         plt.show(block=False)
@@ -68,49 +100,6 @@ def _prediction_frame(result: Any) -> pd.DataFrame:
     return frame
 
 
-def _timeline_blocks(predictions: pd.DataFrame) -> pd.DataFrame:
-    if predictions.empty:
-        return pd.DataFrame(
-            columns=["asset", "start", "end", "sessions"]
-        )
-
-    rows: list[dict[str, Any]] = []
-    start_index = 0
-    assets = predictions["selected_asset"].tolist()
-
-    for idx in range(1, len(predictions) + 1):
-        boundary = (
-            idx == len(predictions)
-            or assets[idx] != assets[start_index]
-        )
-        if not boundary:
-            continue
-
-        start = pd.Timestamp(
-            predictions.iloc[start_index]["timestamp"]
-        )
-        if idx < len(predictions):
-            end = pd.Timestamp(
-                predictions.iloc[idx]["timestamp"]
-            )
-        else:
-            end = pd.Timestamp(
-                predictions.iloc[idx - 1]["timestamp"]
-            ) + pd.Timedelta(days=1)
-
-        rows.append(
-            {
-                "asset": assets[start_index],
-                "start": start,
-                "end": end,
-                "sessions": int(idx - start_index),
-            }
-        )
-        start_index = idx
-
-    return pd.DataFrame(rows)
-
-
 def _asset_summary(
     predictions: pd.DataFrame,
     trades: pd.DataFrame,
@@ -131,6 +120,14 @@ def _asset_summary(
                 "holding_bars",
             ]
         )
+
+    for column, default in (
+        ("asset", "CASH"),
+        ("action", ""),
+    ):
+        if column not in rows.columns:
+            rows[column] = default
+
     rows["asset"] = (
         rows["asset"].fillna("CASH").astype(str).str.upper()
     )
@@ -204,9 +201,8 @@ def _asset_summary(
     summary["realized_pnl"] = (
         summary["realized_pnl"].fillna(0.0)
     )
-    total_sessions = max(1, len(predictions))
     summary["session_share"] = (
-        summary["selected_sessions"] / total_sessions
+        summary["selected_sessions"] / max(1, len(predictions))
     )
     return (
         summary.reset_index()
@@ -218,222 +214,440 @@ def _asset_summary(
     )
 
 
+def _ordered_assets_by_first_use(
+    predictions: pd.DataFrame,
+) -> list[str]:
+    used = predictions.loc[
+        predictions["selected_asset"] != "CASH",
+        ["timestamp", "selected_asset"],
+    ]
+    if used.empty:
+        return []
+    first = (
+        used.groupby("selected_asset")["timestamp"]
+        .min()
+        .sort_values()
+    )
+    return first.index.astype(str).tolist()
+
+
+def _monthly_occupancy(
+    predictions: pd.DataFrame,
+    assets: list[str],
+) -> pd.DataFrame:
+    frame = predictions.copy()
+    frame["month"] = frame["timestamp"].dt.strftime("%Y-%m")
+    count = pd.crosstab(
+        frame["selected_asset"],
+        frame["month"],
+    )
+    monthly_sessions = (
+        frame.groupby("month").size().reindex(count.columns)
+    )
+    share = count.div(monthly_sessions, axis=1)
+    return share.reindex(index=assets, fill_value=0.0)
+
+
+def _selected_with_highlights(
+    summary: pd.DataFrame,
+    highlights: set[str],
+    *,
+    top_n: int,
+) -> pd.DataFrame:
+    non_cash = summary.loc[
+        summary["asset"].astype(str) != "CASH"
+    ].copy()
+    top = non_cash.nlargest(top_n, "selected_sessions")
+    highlighted = non_cash.loc[
+        non_cash["asset"].astype(str).isin(highlights)
+    ]
+    return (
+        pd.concat([top, highlighted], ignore_index=True)
+        .drop_duplicates("asset")
+        .sort_values(
+            ["selected_sessions", "asset"],
+            ascending=[True, True],
+            ignore_index=True,
+        )
+    )
+
+
+def _currency_label(value: float) -> str:
+    absolute = abs(float(value))
+    sign = "-" if value < 0 else ""
+    if absolute >= 1_000_000:
+        return f"{sign}US$ {absolute / 1_000_000:.1f}M"
+    if absolute >= 1_000:
+        return f"{sign}US$ {absolute / 1_000:.0f}k"
+    return f"{sign}US$ {absolute:.0f}"
+
+
 def gerar_graficos_rotacoes(
     output_dir: Path,
     *,
     result: Any,
     universe_label: str,
+    highlight_assets: Iterable[str] = (),
     show: bool = False,
 ) -> dict[str, Path]:
-    """Gera as cinco visoes principais das rotacoes do universo informado.
+    """Gera cinco visoes de rotacao com foco em leitura, nao em densidade.
 
-    Saidas:
-    1. timeline de permanencia por ativo;
-    2. matriz origem -> destino;
-    3. presenca/sessoes por ativo;
-    4. PnL realizado por ativo;
-    5. distancia de score nas rotacoes.
-
-    Os CSVs subjacentes sao gravados junto aos graficos para auditoria.
+    O CSV completo e sempre preservado. Os graficos resumem os dados para
+    evitar paineis poluidos com dezenas de rotulos ilegíveis.
     """
+    _visual_defaults()
+
     output_dir = Path(output_dir)
     visual_dir = output_dir / "graficos_rotacoes"
     if visual_dir.exists():
         shutil.rmtree(visual_dir)
     visual_dir.mkdir(parents=True, exist_ok=True)
 
+    highlights = {
+        str(asset).upper().strip()
+        for asset in highlight_assets
+    }
     predictions = _prediction_frame(result)
     trades = result.trades.copy()
     rotacoes = construir_rotacoes(trades)
-    timeline = _timeline_blocks(predictions)
     summary = _asset_summary(predictions, trades)
-
     paths: dict[str, Path] = {}
 
-    # Dados-base
-    timeline_csv = visual_dir / "timeline_blocos.csv"
-    timeline.to_csv(timeline_csv, index=False)
-    paths["timeline_csv"] = timeline_csv
-
-    summary_csv = visual_dir / "perfil_ativos.csv"
-    summary.to_csv(summary_csv, index=False)
-    paths["asset_summary_csv"] = summary_csv
-
+    # Dados-base completos.
     rotations_csv = visual_dir / "rotacoes.csv"
+    profile_csv = visual_dir / "perfil_ativos.csv"
     rotacoes.to_csv(rotations_csv, index=False)
+    summary.to_csv(profile_csv, index=False)
     paths["rotations_csv"] = rotations_csv
+    paths["asset_summary_csv"] = profile_csv
 
-    # 1. Timeline / Gantt
-    timeline_assets = [
-        asset
-        for asset in summary.loc[
-            summary["selected_sessions"] > 0,
-            "asset",
-        ].astype(str)
-        if asset != "CASH"
-    ]
-    if "CASH" in set(timeline["asset"].astype(str)):
-        timeline_assets.append("CASH")
+    # ------------------------------------------------------------------
+    # 1. Mapa temporal de ocupacao por ativo.
+    # ------------------------------------------------------------------
+    ordered_assets = _ordered_assets_by_first_use(predictions)
+    if "CASH" in set(predictions["selected_asset"]):
+        ordered_assets = [*ordered_assets, "CASH"]
 
-    order = {
-        asset: idx
-        for idx, asset in enumerate(reversed(timeline_assets))
-    }
-    fig_height = max(6.0, 0.30 * max(1, len(timeline_assets)) + 2.0)
-    fig, ax = plt.subplots(figsize=(15.0, fig_height))
-    cmap = plt.get_cmap("tab20")
-    color_map = {
-        asset: cmap(index % 20)
-        for index, asset in enumerate(timeline_assets)
-    }
-    for row in timeline.to_dict(orient="records"):
-        asset = str(row["asset"])
-        if asset not in order:
-            continue
-        start = pd.Timestamp(row["start"]).tz_convert(None)
-        end = pd.Timestamp(row["end"]).tz_convert(None)
-        start_num = mdates.date2num(start.to_pydatetime())
-        end_num = mdates.date2num(end.to_pydatetime())
-        ax.broken_barh(
-            [(start_num, max(end_num - start_num, 0.25))],
-            (order[asset] - 0.38, 0.76),
-            facecolors=color_map[asset],
-        )
-    ax.set_yticks(
-        [order[a] for a in timeline_assets],
-        timeline_assets,
+    occupancy = _monthly_occupancy(
+        predictions,
+        ordered_assets,
     )
-    ax.xaxis_date()
-    ax.xaxis.set_major_locator(mdates.YearLocator())
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
-    ax.set_xlabel("Data")
-    ax.set_ylabel("Ativo em carteira")
-    ax.set_title(f"{universe_label} · Linha do tempo das rotacoes")
-    ax.grid(axis="x", alpha=0.20)
-    fig.tight_layout()
-    paths.update(
-        _save_pair(fig, visual_dir, "timeline_rotacoes", show=show)
+    occupancy_csv = visual_dir / "ocupacao_mensal.csv"
+    occupancy.to_csv(
+        occupancy_csv,
+        index=True,
+        index_label="asset",
     )
+    paths["monthly_occupancy_csv"] = occupancy_csv
 
-    # 2. Matriz de transicoes
-    transitions = (
-        rotacoes.groupby(
-            ["from_asset", "to_asset"],
-            dropna=False,
+    if not occupancy.empty:
+        fig_height = max(6.2, 0.27 * len(occupancy.index) + 2.2)
+        fig, ax = plt.subplots(
+            figsize=(15.5, fig_height),
+            constrained_layout=True,
         )
-        .size()
-        .reset_index(name="rotations")
-    )
-    transition_csv = visual_dir / "matriz_transicoes.csv"
-    transitions.to_csv(transition_csv, index=False)
-    paths["transition_matrix_csv"] = transition_csv
-
-    if not transitions.empty:
-        involved = sorted(
-            set(transitions["from_asset"].astype(str))
-            | set(transitions["to_asset"].astype(str))
-        )
-        pivot = (
-            transitions.pivot_table(
-                index="from_asset",
-                columns="to_asset",
-                values="rotations",
-                aggfunc="sum",
-                fill_value=0,
-            )
-            .reindex(index=involved, columns=involved, fill_value=0)
-        )
-        n = len(involved)
-        size = min(20.0, max(9.0, 0.34 * n + 4.0))
-        fig, ax = plt.subplots(figsize=(size, size))
         image = ax.imshow(
-            pivot.to_numpy(dtype=float),
+            100.0 * occupancy.to_numpy(dtype=float),
             aspect="auto",
+            interpolation="nearest",
             cmap="Blues",
+            vmin=0.0,
+            vmax=max(
+                25.0,
+                float(
+                    np.nanpercentile(
+                        100.0 * occupancy.to_numpy(dtype=float),
+                        98,
+                    )
+                ),
+            ),
         )
+
+        months = occupancy.columns.astype(str).tolist()
+        ticks = list(range(0, len(months), 6))
         ax.set_xticks(
-            range(n),
-            involved,
-            rotation=90,
-            fontsize=7,
+            ticks,
+            [months[idx] for idx in ticks],
+            rotation=45,
+            ha="right",
         )
+        ylabels = [
+            f"{asset}  ★" if asset in highlights else asset
+            for asset in occupancy.index.astype(str)
+        ]
         ax.set_yticks(
-            range(n),
-            involved,
-            fontsize=7,
+            range(len(ylabels)),
+            ylabels,
+            fontsize=9,
         )
-        ax.set_xlabel("Ativo de destino")
-        ax.set_ylabel("Ativo de origem")
-        ax.set_title(f"{universe_label} · Matriz de transicao entre ativos")
-        fig.colorbar(image, ax=ax, label="Numero de rotacoes")
-        fig.tight_layout()
+        ax.set_xlabel("Mês")
+        ax.set_ylabel("Ativo selecionado")
+        ax.set_title(
+            f"{universe_label}\nMapa temporal de ocupação da carteira",
+            loc="left",
+        )
+        ax.text(
+            0.0,
+            1.01,
+            "Intensidade = parcela das sessões do mês em que o ativo ficou em carteira. ★ = ativo do grupo de oito.",
+            transform=ax.transAxes,
+            fontsize=9,
+            color="#5A626B",
+            va="bottom",
+        )
+        cbar = fig.colorbar(image, ax=ax, pad=0.015)
+        cbar.set_label("Ocupação no mês (%)")
         paths.update(
             _save_pair(
                 fig,
                 visual_dir,
-                "matriz_transicoes",
+                "01_mapa_temporal_ocupacao",
                 show=show,
             )
         )
 
-    # 3. Presenca por ativo
-    presence = summary.loc[
-        summary["selected_sessions"] > 0
-    ].sort_values(
-        ["selected_sessions", "asset"],
-        ascending=[True, True],
-    )
-    fig_height = max(6.0, 0.30 * max(1, len(presence)) + 2.0)
-    fig, ax = plt.subplots(figsize=(11.0, fig_height))
-    y = np.arange(len(presence))
-    ax.barh(
-        y,
-        presence["selected_sessions"].to_numpy(dtype=float),
-    )
-    ax.set_yticks(y, presence["asset"].astype(str).tolist())
-    ax.set_xlabel("Sessoes selecionado")
-    ax.set_ylabel("Ativo")
-    ax.set_title(f"{universe_label} · Presenca de cada ativo na carteira")
-    ax.grid(axis="x", alpha=0.25)
-    fig.tight_layout()
-    paths.update(
-        _save_pair(fig, visual_dir, "presenca_por_ativo", show=show)
-    )
-
-    # 4. PnL realizado por ativo
-    pnl = summary.loc[
-        summary["exits"] > 0
-    ].sort_values(
-        ["realized_pnl", "asset"],
-        ascending=[True, True],
-    )
-    fig_height = max(6.0, 0.30 * max(1, len(pnl)) + 2.0)
-    fig, ax = plt.subplots(figsize=(11.5, fig_height))
-    y = np.arange(len(pnl))
-    ax.barh(
-        y,
-        pnl["realized_pnl"].to_numpy(dtype=float),
-    )
-    ax.set_yticks(y, pnl["asset"].astype(str).tolist())
-    ax.axvline(0.0, linewidth=1.0)
-    ax.set_xlabel("PnL realizado (US$)")
-    ax.set_ylabel("Ativo")
-    ax.set_title(
-        f"{universe_label} · PnL realizado por ativo\n"
-        "(descritivo; nao equivale a contribuicao causal contrafactual)"
-    )
-    ax.grid(axis="x", alpha=0.25)
-    fig.tight_layout()
-    paths.update(
-        _save_pair(
-            fig,
-            visual_dir,
-            "pnl_realizado_por_ativo",
-            show=show,
+    # ------------------------------------------------------------------
+    # 2. Principais transicoes em vez de uma matriz gigante e ilegivel.
+    # ------------------------------------------------------------------
+    if not rotacoes.empty:
+        transition_pairs = (
+            rotacoes.assign(
+                par=(
+                    rotacoes["from_asset"].astype(str)
+                    + " → "
+                    + rotacoes["to_asset"].astype(str)
+                )
+            )
+            .groupby("par", as_index=False)
+            .agg(
+                rotations=("sequence", "count"),
+                realized_pnl=("realized_pnl", "sum"),
+            )
+            .sort_values(
+                ["rotations", "par"],
+                ascending=[False, True],
+                ignore_index=True,
+            )
         )
-    )
+    else:
+        transition_pairs = pd.DataFrame(
+            columns=["par", "rotations", "realized_pnl"]
+        )
 
-    # 5. Distancia ao topo nas decisoes que efetivamente rotacionaram
+    transition_csv = visual_dir / "transicoes_completas.csv"
+    transition_pairs.to_csv(transition_csv, index=False)
+    paths["transition_pairs_csv"] = transition_csv
+
+    top_transitions = transition_pairs.head(20).sort_values(
+        ["rotations", "par"],
+        ascending=[True, True],
+        ignore_index=True,
+    )
+    if not top_transitions.empty:
+        fig, ax = plt.subplots(
+            figsize=(11.5, 7.6),
+            constrained_layout=True,
+        )
+        y = np.arange(len(top_transitions))
+        ax.barh(
+            y,
+            top_transitions["rotations"].to_numpy(dtype=float),
+            color=BASE_COLOR,
+            alpha=0.9,
+        )
+        ax.set_yticks(
+            y,
+            top_transitions["par"].astype(str).tolist(),
+        )
+        ax.set_xlabel("Número de rotações")
+        ax.set_title(
+            f"{universe_label}\n20 transições mais frequentes",
+            loc="left",
+        )
+        ax.grid(
+            axis="x",
+            color=GRID_COLOR,
+            linewidth=0.8,
+            alpha=0.8,
+        )
+        ax.set_axisbelow(True)
+        for index, value in enumerate(
+            top_transitions["rotations"].to_numpy(dtype=int)
+        ):
+            ax.text(
+                value + 0.15,
+                index,
+                str(value),
+                va="center",
+                fontsize=9,
+            )
+        paths.update(
+            _save_pair(
+                fig,
+                visual_dir,
+                "02_principais_transicoes",
+                show=show,
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # 3. Presenca: top ativos + todos os oito destacados.
+    # ------------------------------------------------------------------
+    presence = _selected_with_highlights(
+        summary,
+        highlights,
+        top_n=18,
+    )
+    if not presence.empty:
+        fig_height = max(6.4, 0.34 * len(presence) + 2.2)
+        fig, ax = plt.subplots(
+            figsize=(11.5, fig_height),
+            constrained_layout=True,
+        )
+        y = np.arange(len(presence))
+        colors = [
+            HIGHLIGHT_COLOR
+            if asset in highlights
+            else BASE_COLOR
+            for asset in presence["asset"].astype(str)
+        ]
+        values = presence["selected_sessions"].to_numpy(dtype=float)
+        ax.barh(y, values, color=colors, alpha=0.92)
+        labels = [
+            f"{asset}  ★" if asset in highlights else asset
+            for asset in presence["asset"].astype(str)
+        ]
+        ax.set_yticks(y, labels)
+        ax.set_xlabel("Sessões em carteira")
+        ax.set_title(
+            f"{universe_label}\nAtivos com maior presença na carteira",
+            loc="left",
+        )
+        ax.grid(
+            axis="x",
+            color=GRID_COLOR,
+            linewidth=0.8,
+            alpha=0.8,
+        )
+        ax.set_axisbelow(True)
+        shares = 100.0 * presence["session_share"].to_numpy(dtype=float)
+        for index, (value, share) in enumerate(zip(values, shares)):
+            ax.text(
+                value + max(values.max() * 0.008, 0.25),
+                index,
+                f"{int(value)}  ({share:.1f}%)",
+                va="center",
+                fontsize=9,
+            )
+        paths.update(
+            _save_pair(
+                fig,
+                visual_dir,
+                "03_presenca_por_ativo",
+                show=show,
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # 4. Resultado realizado: extremos + todos os oito destacados.
+    # ------------------------------------------------------------------
+    pnl_source = summary.loc[
+        (summary["asset"] != "CASH")
+        & (summary["exits"] > 0)
+    ].copy()
+    if not pnl_source.empty:
+        bottom = pnl_source.nsmallest(8, "realized_pnl")
+        top = pnl_source.nlargest(10, "realized_pnl")
+        highlighted = pnl_source.loc[
+            pnl_source["asset"].astype(str).isin(highlights)
+        ]
+        pnl_plot = (
+            pd.concat([bottom, top, highlighted], ignore_index=True)
+            .drop_duplicates("asset")
+            .sort_values(
+                ["realized_pnl", "asset"],
+                ascending=[True, True],
+                ignore_index=True,
+            )
+        )
+        fig_height = max(6.4, 0.34 * len(pnl_plot) + 2.2)
+        fig, ax = plt.subplots(
+            figsize=(11.8, fig_height),
+            constrained_layout=True,
+        )
+        y = np.arange(len(pnl_plot))
+        values = pnl_plot["realized_pnl"].to_numpy(dtype=float)
+        colors = [
+            POSITIVE_COLOR if value >= 0 else NEGATIVE_COLOR
+            for value in values
+        ]
+        bars = ax.barh(
+            y,
+            values,
+            color=colors,
+            alpha=0.88,
+        )
+        for bar, asset in zip(
+            bars,
+            pnl_plot["asset"].astype(str),
+        ):
+            if asset in highlights:
+                bar.set_edgecolor(HIGHLIGHT_COLOR)
+                bar.set_linewidth(2.0)
+
+        labels = [
+            f"{asset}  ★" if asset in highlights else asset
+            for asset in pnl_plot["asset"].astype(str)
+        ]
+        ax.set_yticks(y, labels)
+        ax.axvline(0.0, color="#5A626B", linewidth=1.0)
+        ax.set_xlabel("PnL realizado")
+        ax.set_title(
+            f"{universe_label}\nPnL realizado por ativo",
+            loc="left",
+        )
+        ax.text(
+            0.0,
+            1.01,
+            "Visão descritiva das posições fechadas; não é contribuição causal contrafactual.",
+            transform=ax.transAxes,
+            fontsize=9,
+            color="#5A626B",
+            va="bottom",
+        )
+        ax.grid(
+            axis="x",
+            color=GRID_COLOR,
+            linewidth=0.8,
+            alpha=0.8,
+        )
+        ax.set_axisbelow(True)
+        span = max(
+            abs(float(np.nanmin(values))),
+            abs(float(np.nanmax(values))),
+            1.0,
+        )
+        for index, value in enumerate(values):
+            ax.text(
+                value + (0.018 * span if value >= 0 else -0.018 * span),
+                index,
+                _currency_label(value),
+                va="center",
+                ha="left" if value >= 0 else "right",
+                fontsize=8.5,
+            )
+        paths.update(
+            _save_pair(
+                fig,
+                visual_dir,
+                "04_pnl_realizado_por_ativo",
+                show=show,
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # 5. Forca das rotacoes: vantagem sobre incumbente / margem exigida.
+    # ------------------------------------------------------------------
     needed = {
         "timestamp",
         "selected_asset",
@@ -446,7 +660,7 @@ def gerar_graficos_rotacoes(
         "current_asset",
     }
     if needed.issubset(predictions.columns):
-        distance = predictions.loc[
+        strength = predictions.loc[
             predictions["trade_action"].astype(str).str.upper()
             == "ROTATE"
         ][
@@ -468,53 +682,117 @@ def gerar_graficos_rotacoes(
             "best_vs_second_gap",
             "effective_switch_margin",
         ):
-            distance[column] = pd.to_numeric(
-                distance[column],
+            strength[column] = pd.to_numeric(
+                strength[column],
                 errors="coerce",
             )
 
-        distance_csv = (
-            visual_dir / "distancia_topo_rotacoes.csv"
+        strength["rotation_strength"] = np.where(
+            strength["effective_switch_margin"] > 0,
+            (
+                strength["best_vs_current_gap"]
+                / strength["effective_switch_margin"]
+            ),
+            np.nan,
         )
-        distance.to_csv(distance_csv, index=False)
-        paths["score_gap_csv"] = distance_csv
+        strength["is_highlight"] = (
+            strength["selected_asset"]
+            .astype(str)
+            .str.upper()
+            .isin(highlights)
+        )
 
-        if not distance.empty:
-            fig, ax = plt.subplots(figsize=(14.0, 6.5))
+        strength_csv = visual_dir / "forca_rotacoes.csv"
+        strength.to_csv(strength_csv, index=False)
+        paths["rotation_strength_csv"] = strength_csv
+
+        plot = strength.replace(
+            [np.inf, -np.inf],
+            np.nan,
+        ).dropna(subset=["rotation_strength"])
+        if not plot.empty:
+            fig, ax = plt.subplots(
+                figsize=(14.0, 6.8),
+                constrained_layout=True,
+            )
+            normal = plot.loc[~plot["is_highlight"]]
+            special = plot.loc[plot["is_highlight"]]
+
             ax.scatter(
-                distance["timestamp"],
-                distance["best_vs_current_gap"],
-                label="Melhor - incumbente",
-                s=22,
-                alpha=0.75,
+                normal["timestamp"],
+                normal["rotation_strength"],
+                s=28,
+                alpha=0.62,
+                color=BASE_COLOR,
+                label="Demais ativos",
             )
-            ax.scatter(
-                distance["timestamp"],
-                distance["best_vs_second_gap"],
-                label="Melhor - segundo",
-                s=18,
-                alpha=0.55,
+            if not special.empty:
+                ax.scatter(
+                    special["timestamp"],
+                    special["rotation_strength"],
+                    s=52,
+                    alpha=0.9,
+                    color=HIGHLIGHT_COLOR,
+                    label="Grupo de oito",
+                )
+
+            ax.axhline(
+                1.0,
+                color="#5A626B",
+                linewidth=1.1,
+                linestyle="--",
             )
-            ax.plot(
-                distance["timestamp"],
-                distance["effective_switch_margin"],
-                label="Margem exigida",
-                linewidth=1.2,
-            )
-            ax.axhline(0.0, linewidth=1.0)
-            ax.set_xlabel("Data de execucao")
-            ax.set_ylabel("Diferenca de utilidade prevista")
+            ax.set_xlabel("Data da rotação")
+            ax.set_ylabel("Força = (melhor − incumbente) / margem")
             ax.set_title(
-                f"{universe_label} · Distancia ao topo nas rotacoes efetivas"
+                f"{universe_label}\nForça relativa das rotações executadas",
+                loc="left",
             )
-            ax.grid(alpha=0.25)
-            ax.legend()
-            fig.tight_layout()
+            ax.text(
+                0.0,
+                1.01,
+                "1,0 representa exatamente o limiar mínimo de troca. Quanto maior, mais folgada foi a decisão.",
+                transform=ax.transAxes,
+                fontsize=9,
+                color="#5A626B",
+                va="bottom",
+            )
+            ax.xaxis.set_major_locator(mdates.YearLocator())
+            ax.xaxis.set_major_formatter(
+                mdates.DateFormatter("%Y")
+            )
+            ax.grid(
+                axis="y",
+                color=GRID_COLOR,
+                linewidth=0.8,
+                alpha=0.8,
+            )
+            ax.set_axisbelow(True)
+            if not special.empty:
+                ax.legend(frameon=False, loc="upper left")
+
+            label_rows = (
+                plot.nlargest(7, "rotation_strength")
+                .sort_values("timestamp")
+            )
+            for row in label_rows.itertuples(index=False):
+                ax.annotate(
+                    str(row.selected_asset),
+                    (
+                        row.timestamp,
+                        row.rotation_strength,
+                    ),
+                    xytext=(4, 5),
+                    textcoords="offset points",
+                    fontsize=8,
+                    color="#343B43",
+                )
+
             paths.update(
                 _save_pair(
                     fig,
                     visual_dir,
-                    "distancia_topo_rotacoes",
+                    "05_forca_das_rotacoes",
                     show=show,
                 )
             )
@@ -522,7 +800,6 @@ def gerar_graficos_rotacoes(
     print(
         "[rotation-graphs] "
         f"dir={visual_dir} "
-        f"timeline_blocks={len(timeline)} "
         f"assets_used={int((summary['selected_sessions'] > 0).sum())} "
         f"rotations={len(rotacoes)}",
         flush=True,
@@ -532,17 +809,12 @@ def gerar_graficos_rotacoes(
     return paths
 
 
-
 def gerar_graficos_rotacoes_u59(
     output_dir: Path,
     *,
     result: Any,
 ) -> dict[str, Path]:
-    """Compatibilidade com o nome usado na primeira revisao da branch.
-
-    Mantem runners locais momentaneamente defasados funcionando, delegando
-    integralmente para a API generalizada. Nao altera calculos ou graficos.
-    """
+    """Compatibilidade retroativa com a primeira revisao da branch."""
     return gerar_graficos_rotacoes(
         output_dir,
         result=result,
