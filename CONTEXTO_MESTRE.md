@@ -3176,3 +3176,92 @@ Decisao:
 a partir deste ponto, alteracoes devem ser editoriais, bibliograficas ou de
 clareza metodologica. Nao executar novas campanhas financeiras para reescrever
 a conclusao da validacao v1.18.
+
+
+## Nova hipotese de filtro de aderencia de capital — v1.19
+
+A pedido do autor, foi aberta uma NOVA linha experimental depois do encerramento
+da validacao prospectiva v1.18.
+
+Regra de integridade:
+a v1.18 permanece congelada e concluida. Os 32 resultados prospectivos agora
+podem ser usados como dados de desenvolvimento apenas porque a v1.19 e uma
+hipotese nova. Nenhum resultado v1.19 deve ser descrito como extensao da mesma
+validacao prospectiva v1.18.
+
+Motivacao:
+a validacao v1.18 mostrou que o score contextual foi muito melhor para ordenar
+dano/beneficio e identificar candidatos destrutivos do que para classificar
+vencedores positivos. Em particular, o estrato low-S teve 0/8 positivos e
+mediana de aproximadamente -82% contra U59.
+
+Foi definida uma nova hipotese de "aderencia ao crescimento de capital" usando
+apenas os dois componentes que apresentaram associacao mais forte e replicada
+com dano financeiro:
+- beats_best_share;
+- score_std.
+
+Amostra de desenvolvimento v1.19:
+- Smart20: 20 candidatos ativos;
+- prospectiva v1.18: 24 candidatos ativos;
+- total: 44 candidatos ativos, todos com efeito financeiro medido contra U59;
+- os oito dormant da v1.18 foram excluidos do desenvolvimento de oportunidade,
+  pois produziram efeito financeiro zero.
+
+Alvo de baixa aderencia:
+harm10 = 1[capital_pct_vs_u59 <= -10%].
+
+Score de risco congelado:
+R = mean(
+    rank_active(beats_best_share),
+    rank_active(score_std)
+)
+
+Menor R = maior aderencia / menor risco de dano.
+
+Evidencia de desenvolvimento, que NAO e validacao externa da v1.19:
+- AUC Smart20 para harm10 = 0,8200;
+- AUC prospectiva24 para harm10 = 0,8630;
+- AUC pooled = 0,8432;
+- Spearman R vs delta de capital = -0,6081;
+- p de Spearman = 1,19e-05;
+- Mann-Whitney unilateral de risco maior nos harm10: p = 5,88e-05;
+- nos 10% de menor risco da amostra de desenvolvimento: 5 candidatos,
+  0 harm10 e 4 positivos.
+
+A remocao de abs(score_corr_best) define uma NOVA hipotese e nao altera a
+formula v1.18.
+
+Modelo machine-readable:
+dados/assinatura_matematica/capital_adherence_filter_v1_19_frozen.json
+
+Runner de congelamento:
+congelar_filtro_aderencia_capital_v119_spyder.py
+
+Versao:
+1.19.0-dev.1
+
+Schema:
+capital-adherence-freeze-v1
+
+Desenho do novo teste:
+- partir dos mesmos 446 candidatos da busca 1.17.0;
+- excluir os 20 Smart20 e os 32 da validacao prospectiva v1.18, todos com
+  capital ja conhecido;
+- restam 394 candidatos financeiramente intocados;
+- manter apenas candidatos elegiveis e ativos A=1;
+- recalcular R dentro desse pool ainda intocado;
+- selecionar deterministicamente os 8 menores R;
+- congelar a lista antes de qualquer replay financeiro.
+
+Endpoint economico planejado:
+capital final de U59 + adherence8 > capital final de U59.
+
+Diagnosticos secundarios:
+- numero de candidatos individuais com delta <= -10%;
+- efeitos individuais contra U59;
+- comparacao descritiva com o resultado exploratorio U59+positive8 =
+  US$58.557.157,67.
+
+Nao ha garantia de ganho. Se o grupo falhar, o resultado deve ser preservado e
+nao sera permitida segunda selecao usando o mesmo pool apos observar o capital.
