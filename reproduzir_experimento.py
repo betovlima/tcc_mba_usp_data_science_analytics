@@ -73,7 +73,7 @@ B2 = SnapshotPaths.from_root(
 
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.20.1-dev.3"
+REPRODUCTION_VERSION = "1.20.1-dev.4"
 EXECUTION_SCHEMA = "u59-control-reproduction-v1"
 
 U59_ADDITIONS = ("COLB", "AMS", "FOXF")
@@ -464,6 +464,7 @@ rotation_graphs = gerar_graficos_rotacoes(
     OUT,
     result=result,
     universe_label="U59",
+    show=True,
 )
 
 payload = {
