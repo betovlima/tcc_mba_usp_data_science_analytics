@@ -3844,3 +3844,76 @@ Versao:
 
 Essa alteracao afeta somente exibicao dos graficos e nao modifica politica,
 modelo, folds, universo ou calculos financeiros.
+
+
+## U67 como baseline de trabalho e redesign dos graficos — v1.21.0-dev.1
+
+Decisao do usuario:
+a partir desta etapa, as analises correntes devem usar como referencia de
+trabalho o resultado de aproximadamente US$58,56 milhoes, e nao mais o U59 de
+US$30,08 milhoes.
+
+Baseline de trabalho:
+U67 = U59 + THO + WDAY + EXR + XEL + SBFG + PAYX + MUX + SXC
+
+Checkpoint esperado:
+US$58.557.157,67496595
+
+Contagem:
+67 ativos.
+
+Status cientifico:
+o U67 passa a ser o baseline pratico das novas analises e visualizacoes.
+O U59 de US$30.080.091,008142874 permanece preservado como checkpoint
+historico confirmatorio. No TCC, o U67 continua identificado como resultado
+exploratorio porque os oito ativos adicionais foram escolhidos depois da
+observacao de seus efeitos financeiros individuais.
+
+Fonte dos oito ativos:
+dados/pesquisa_smart_candidates, snapshot local congelado ja usado na campanha
+financeira anterior. O runner nao baixa dados da Alpaca. Se esse snapshot
+local nao existir, a execucao aborta com mensagem explicita.
+
+Runner:
+reproduzir_experimento.py
+versao 1.21.0-dev.1
+schema u67-positive8-reproduction-v1
+
+Artefatos principais:
+- u67_assets.csv
+- u67_fold_margins.csv
+- u67_predictions.csv
+- u67_trades.csv
+- reproducao_u67.json
+- pacote_reproducao_u67_58m.zip
+
+Redesign visual:
+os graficos iniciais foram rejeitados por excesso de poluicao visual. A nova
+versao substitui as visualizacoes densas por cinco graficos de leitura direta:
+
+1. 01_mapa_temporal_ocupacao
+   heatmap mensal de ocupacao por ativo, com os oito ativos destacados por
+   estrela nos rotulos;
+
+2. 02_principais_transicoes
+   ranking horizontal das vinte transicoes origem -> destino mais frequentes,
+   mantendo o conjunto completo em CSV;
+
+3. 03_presenca_por_ativo
+   top de presenca mais todos os oito ativos, com sessoes e percentual de
+   ocupacao;
+
+4. 04_pnl_realizado_por_ativo
+   extremos positivos/negativos mais os oito ativos, mantendo a ressalva de
+   que PnL realizado nao equivale a contribuicao causal contrafactual;
+
+5. 05_forca_das_rotacoes
+   razao (Q_melhor - Q_incumbente) / margem_efetiva. O valor 1 representa
+   exatamente o limiar minimo para a troca; valores maiores representam
+   decisoes com folga maior.
+
+Os graficos continuam aparecendo no painel Plots do Spyder e sao salvos em:
+output/reproducao/graficos_rotacoes/
+
+A inclusao dos graficos nao pode alterar a politica. A execucao deve abortar se
+o capital observado divergir do checkpoint U67.
