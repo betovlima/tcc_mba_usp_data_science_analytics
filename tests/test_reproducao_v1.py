@@ -778,21 +778,21 @@ def test_rotation_visualization_suite_is_integrated() -> None:
         ROOT / "reproducao" / "graficos_rotacoes.py"
     ).read_text(encoding="utf-8")
 
-    assert "gerar_graficos_rotacoes_u59" in runner
+    assert "gerar_graficos_rotacoes" in runner
     assert "decision_diagnostics=decision_diagnostics" in runner
     assert (
         "policy_decision_diagnostics=decision_diagnostics"
         in runner
     )
-    assert 'REPRODUCTION_VERSION = "1.20.1-dev.1"' in runner
+    assert 'REPRODUCTION_VERSION = "1.20.1-dev.2"' in runner
 
     expected_outputs = (
-        "timeline_rotacoes_u59",
-        "matriz_transicoes_u59",
-        "presenca_por_ativo_u59",
-        "pnl_realizado_por_ativo_u59",
-        "distancia_topo_rotacoes_u59",
-        "perfil_ativos_u59.csv",
+        "timeline_rotacoes",
+        "matriz_transicoes",
+        "presenca_por_ativo",
+        "pnl_realizado_por_ativo",
+        "distancia_topo_rotacoes",
+        "perfil_ativos.csv",
     )
     for token in expected_outputs:
         assert token in graphs
