@@ -768,3 +768,36 @@ def test_official_reproduction_uses_frozen_u59_sources() -> None:
     assert "EXPECTED_U56_COUNT = 56" in source
     assert "EXPECTED_U59_COUNT = 59" in source
     assert "EXPECTED_ENDING_CAPITAL = 30_080_091.008142874" in source
+
+
+def test_rotation_visualization_suite_is_integrated() -> None:
+    runner = (ROOT / "reproduzir_experimento.py").read_text(
+        encoding="utf-8"
+    )
+    graphs = (
+        ROOT / "reproducao" / "graficos_rotacoes.py"
+    ).read_text(encoding="utf-8")
+
+    assert "gerar_graficos_rotacoes_u59" in runner
+    assert "decision_diagnostics=decision_diagnostics" in runner
+    assert (
+        "policy_decision_diagnostics=decision_diagnostics"
+        in runner
+    )
+    assert 'REPRODUCTION_VERSION = "1.20.1-dev.1"' in runner
+
+    expected_outputs = (
+        "timeline_rotacoes_u59",
+        "matriz_transicoes_u59",
+        "presenca_por_ativo_u59",
+        "pnl_realizado_por_ativo_u59",
+        "distancia_topo_rotacoes_u59",
+        "perfil_ativos_u59.csv",
+    )
+    for token in expected_outputs:
+        assert token in graphs
+
+    assert (
+        "nao equivale a contribuicao causal contrafactual"
+        in graphs
+    )
