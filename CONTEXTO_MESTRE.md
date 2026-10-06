@@ -2964,3 +2964,44 @@ dados, nao troca candidatos e nao permite segunda selecao.
 Regra final:
 independentemente do resultado, a assinatura v1.18 nao pode ser reajustada com
 esses 32 e continuar sendo chamada de mesma validacao prospectiva.
+
+
+## Correcao do guard de hash da coorte prospectiva — 1.18.2-dev.2
+
+Erro observado antes de qualquer replay financeiro:
+o runner validar_assinatura_prospectiva_v118_spyder.py abortou ao comparar o
+SHA-256 bruto do CSV da coorte congelada.
+
+Esperado do pacote original:
+a1fe00ea2a7c7691d55396366be0375e64294ab43d97d4949a2433d106443978
+
+Observado no working tree local:
+34b17a047821c0cd9de73f934b5afdec75cc0c194d448deb8413a632e5815a18
+
+A causa e de serializacao/working-tree: o hash bruto de CSV e sensivel a
+normalizacao CRLF/LF e representacao textual de floats. Esse comportamento
+pode mudar quando o arquivo passa pelo Git/checkout no Windows sem que a
+coorte cientifica tenha mudado.
+
+A correcao NAO altera a coorte, score, plano estatistico ou resultados.
+Nenhum capital havia sido revelado quando a correcao foi feita.
+
+Novo guard:
+- preserva o SHA-256 bruto do pacote original para proveniencia;
+- calcula adicionalmente um hash semantico canonico dos campos cientificamente
+  relevantes, independente de CRLF/LF e com floats canonizados a 12 casas;
+- exige o hash semantico congelado:
+  37fd32c3fc8c2a424f9a1f26a1fc0764ee8f6361eaec2ac7a13cd60a6439d2b6;
+- continua validando ordem, ativos, estratos, activation/dormant, S,
+  percentis, beats-share, abs corr, score_std, sessoes e identidades do
+  protocolo;
+- continua comparando a lista e ordem dos 32 ativos com o freeze JSON.
+
+Versao do runner:
+1.18.2-dev.2
+
+Commit da correcao:
+614c3e134d08aa914b3481f5d67bd15362a634fc
+
+Como a falha ocorreu antes do baseline U59 e antes da abertura dos 32
+resultados, a validade prospectiva permanece intacta.
