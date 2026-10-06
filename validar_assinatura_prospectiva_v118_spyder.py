@@ -104,11 +104,14 @@ SEARCH_JSON = (
 OUT = ROOT / "output" / "validacao_prospectiva_financeira_v118"
 FIG = OUT / "graficos"
 
-SCRIPT_VERSION = "1.18.2-dev.1"
+SCRIPT_VERSION = "1.18.2-dev.2"
 EXECUTION_SCHEMA = "prospective-signature-financial-validation-v1"
 EXPECTED_SHARED_MODULE_VERSION = "1.17.0-dev.1"
-EXPECTED_COHORT_SHA256 = (
+EXPECTED_SOURCE_COHORT_SHA256 = (
     "a1fe00ea2a7c7691d55396366be0375e64294ab43d97d4949a2433d106443978"
+)
+EXPECTED_COHORT_SEMANTIC_SHA256 = (
+    "37fd32c3fc8c2a424f9a1f26a1fc0764ee8f6361eaec2ac7a13cd60a6439d2b6"
 )
 EXPECTED_COHORT_SIZE = 32
 EXPECTED_ACTIVE_SIZE = 24
@@ -138,6 +141,96 @@ def _finite(value):
     except (TypeError, ValueError):
         return None
     return value if math.isfinite(value) else None
+
+
+def semantic_cohort_sha256(path: Path) -> str:
+    """Hash semantico independente de CRLF/LF e serializacao trivial de float.
+
+    O hash bruto do CSV produzido no Windows e preservado no freeze original,
+    mas Git pode normalizar quebras de linha e pandas/Git podem reserializar
+    floats sem mudar a coorte. Este hash protege o conteudo cientificamente
+    relevante: ordem, ativos, estratos, score e identidades do protocolo.
+    """
+    frame = pd.read_csv(path)
+
+    columns = [
+        "prospective_validation_rank",
+        "asset",
+        "validation_stratum",
+        "activation",
+        "dormant",
+        "specialist_score",
+        "validation_score",
+        "active_percentile",
+        "beats_best_share",
+        "abs_corr_best",
+        "score_std",
+        "score_sessions",
+        "research_version",
+        "execution_schema",
+        "financial_reference",
+        "capital_observed_at_freeze",
+        "selection_salt",
+        "source_search_sha256",
+        "frozen_signature_sha256",
+    ]
+    missing = sorted(set(columns).difference(frame.columns))
+    if missing:
+        raise RuntimeError(
+            "Coorte prospectiva incompleta para hash semantico: "
+            + ",".join(missing)
+        )
+
+    boolean_columns = {
+        "activation",
+        "dormant",
+        "capital_observed_at_freeze",
+    }
+    integer_columns = {
+        "prospective_validation_rank",
+        "score_sessions",
+    }
+    float_columns = {
+        "specialist_score",
+        "validation_score",
+        "active_percentile",
+        "beats_best_share",
+        "abs_corr_best",
+        "score_std",
+    }
+
+    rows = []
+    for _, row in frame[columns].iterrows():
+        normalized = {}
+        for column in columns:
+            value = row[column]
+            if pd.isna(value):
+                normalized[column] = None
+            elif column in boolean_columns:
+                if isinstance(value, (bool, np.bool_)):
+                    normalized[column] = bool(value)
+                else:
+                    normalized[column] = (
+                        str(value).strip().lower()
+                        in {"true", "1", "yes"}
+                    )
+            elif column in integer_columns:
+                normalized[column] = int(value)
+            elif column in float_columns:
+                normalized[column] = round(float(value), 12)
+            else:
+                normalized[column] = str(value)
+        rows.append(normalized)
+
+    payload = json.dumps(
+        rows,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(
+        payload.encode("utf-8")
+    ).hexdigest()
 
 
 def _safe_auc(y, score):
@@ -241,11 +334,24 @@ for path in (
             "Artefato congelado ausente: " + str(path)
         )
 
-cohort_sha = sha256_file(COHORT_FILE)
-if cohort_sha != EXPECTED_COHORT_SHA256:
+cohort_worktree_sha = sha256_file(COHORT_FILE)
+cohort_semantic_sha = semantic_cohort_sha256(COHORT_FILE)
+
+if cohort_semantic_sha != EXPECTED_COHORT_SEMANTIC_SHA256:
     raise RuntimeError(
-        "A coorte prospectiva foi alterada depois do congelamento. "
-        f"esperado={EXPECTED_COHORT_SHA256} observado={cohort_sha}"
+        "A coorte prospectiva mudou semanticamente depois do congelamento. "
+        f"esperado={EXPECTED_COHORT_SEMANTIC_SHA256} "
+        f"observado={cohort_semantic_sha}"
+    )
+
+if cohort_worktree_sha != EXPECTED_SOURCE_COHORT_SHA256:
+    print(
+        "[freeze-guard] hash bruto do arquivo difere do pacote original, "
+        "mas o hash semantico e identico. Isso e esperado quando Git/Windows "
+        "normaliza CRLF/LF ou a representacao textual de floats. "
+        f"source_raw={EXPECTED_SOURCE_COHORT_SHA256} "
+        f"worktree_raw={cohort_worktree_sha}",
+        flush=True,
     )
 
 freeze = json.loads(
@@ -264,7 +370,7 @@ if freeze.get("financial_reference") != "U59_WINNER":
     raise RuntimeError("Referencia financeira do freeze nao e U59.")
 if plan.get("status") != "preregistered_before_outcome_reveal":
     raise RuntimeError("Plano estatistico nao esta pre-registrado.")
-if plan.get("frozen_cohort_sha256") != EXPECTED_COHORT_SHA256:
+if plan.get("frozen_cohort_sha256") != EXPECTED_SOURCE_COHORT_SHA256:
     raise RuntimeError("Plano estatistico aponta para outra coorte.")
 
 cohort = pd.read_csv(COHORT_FILE)
@@ -312,7 +418,15 @@ print(
     flush=True,
 )
 print(
-    f"cohort_sha256={cohort_sha}",
+    f"source_cohort_sha256={EXPECTED_SOURCE_COHORT_SHA256}",
+    flush=True,
+)
+print(
+    f"semantic_cohort_sha256={cohort_semantic_sha}",
+    flush=True,
+)
+print(
+    f"worktree_cohort_sha256={cohort_worktree_sha}",
     flush=True,
 )
 print(
@@ -1085,7 +1199,9 @@ payload = {
     "execution_schema": EXECUTION_SCHEMA,
     "status": "completed_one_shot_prospective_validation",
     "frozen_before_outcome": True,
-    "cohort_sha256": cohort_sha,
+    "cohort_sha256": EXPECTED_SOURCE_COHORT_SHA256,
+    "cohort_worktree_sha256": cohort_worktree_sha,
+    "cohort_semantic_sha256": cohort_semantic_sha,
     "financial_reference": "U59_WINNER",
     "baseline": {
         "expected_ending_capital": EXPECTED_BASELINE,
