@@ -59,6 +59,7 @@ from pesquisas.directional_change_lightgbm import (
 )
 from reproducao.dados import SnapshotPaths, validate_snapshot
 from reproducao.experimento import build_variant_configs, summarize_metrics
+from reproducao.graficos_rotacoes import gerar_graficos_rotacoes_u59
 from reproducao.preparacao import prepare_model_frames
 
 
@@ -72,7 +73,7 @@ B2 = SnapshotPaths.from_root(
 
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.20.0-dev.1"
+REPRODUCTION_VERSION = "1.20.1-dev.1"
 EXECUTION_SCHEMA = "u59-control-reproduction-v1"
 
 U59_ADDITIONS = ("COLB", "AMS", "FOXF")
@@ -229,6 +230,7 @@ BENCHMARK_NAME = (
 # %% 6 - Treino e calibracao walk-forward
 fold_policies = {}
 fold_margins = []
+decision_diagnostics = {}
 
 for fold_position, fold in enumerate(folds, start=1):
     fold_id = int(fold["fold_id"])
@@ -349,6 +351,7 @@ for fold_position, fold in enumerate(folds, start=1):
         fold_id=fold_id,
         calibrated_switch_margin=selected_margin,
         utility_cache=decision_cache,
+        decision_diagnostics=decision_diagnostics,
     )
 
     fold_margins.append(
@@ -379,6 +382,7 @@ result = _simular_exato(
     calcular_taxas_referencia,
     aplicar_deslizamento,
     decision_metadata=decision_metadata,
+    policy_decision_diagnostics=decision_diagnostics,
     model_label="U59 Control - reproducao oficial",
     method_line=(
         "- Reproducao congelada do U59: U56 + COLB + AMS + FOXF; "
@@ -455,6 +459,12 @@ result.trades.to_csv(
     index=False,
 )
 
+# %% 9 - Visualizacoes exploratorias das rotacoes
+rotation_graphs = gerar_graficos_rotacoes_u59(
+    OUT,
+    result=result,
+)
+
 payload = {
     "reproduction_version": REPRODUCTION_VERSION,
     "execution_schema": EXECUTION_SCHEMA,
@@ -479,6 +489,11 @@ payload = {
     "observed_ending_capital": ending_capital,
     "relative_error": relative_error,
     "metrics": metrics,
+    "rotation_visualizations": {
+        key: str(path.relative_to(ROOT))
+        for key, path in rotation_graphs.items()
+        if isinstance(path, Path)
+    },
     "runtime_seconds": float(
         time.perf_counter() - started
     ),
@@ -516,6 +531,10 @@ print(
 )
 print(
     f"[done] package={package}",
+    flush=True,
+)
+print(
+    f"[done] graficos_rotacoes={OUT / 'graficos_rotacoes'}",
     flush=True,
 )
 print("=" * 78, flush=True)
