@@ -3764,3 +3764,27 @@ o U67, exporta:
 
 Nenhuma regra operacional nova foi introduzida. A main permanece congelada no
 checkpoint U67.
+
+
+### Refinamento de ranking de ativos — Top Gap v1.1.0-dev.1
+
+A metrica de escolha de ativo foi refinada para reduzir a dependencia do
+oraculo maximo. Para cada operacao encerrada, a pesquisa agora registra:
+- rank futuro do ativo escolhido dentro do universo disponivel;
+- percentil futuro do ativo escolhido;
+- presenca em Top 5, Top 10 e metade superior;
+- mediana dos cinco melhores retornos no mesmo holding;
+- percentil 90 dos retornos futuros;
+- gap para a mediana do Top 5 e para o percentil 90.
+
+Tambem sao preservadas as informacoes conhecidas no instante de entrada:
+score selecionado, score do segundo colocado, margem entre os dois, z-score e
+estatisticas do universo. Isso permite testar se a confianca do LightGBM no
+momento da escolha possui relacao monotona com a qualidade futura do ranking.
+
+Novos artefatos:
+- u67_asset_ranking_quality.csv;
+- u67_entry_score_calibration.csv.
+
+A analise continua estritamente diagnostica e ex post. Nenhuma informacao
+futura foi incorporada como feature e nenhuma regra da U67 foi alterada.
