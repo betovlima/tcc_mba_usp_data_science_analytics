@@ -1,4 +1,4 @@
-"""Visualizacoes exploratorias das rotacoes do U59.
+"""Visualizacoes exploratorias das rotacoes do universo de referencia.
 
 Este modulo nao altera a politica, o treino ou a simulacao. Ele consome apenas
 os artefatos ja produzidos pelo replay e gera visoes por ativo para entender
@@ -202,12 +202,13 @@ def _asset_summary(
     )
 
 
-def gerar_graficos_rotacoes_u59(
+def gerar_graficos_rotacoes(
     output_dir: Path,
     *,
     result: Any,
+    universe_label: str,
 ) -> dict[str, Path]:
-    """Gera as cinco visoes principais das rotacoes U59.
+    """Gera as cinco visoes principais das rotacoes do universo informado.
 
     Saidas:
     1. timeline de permanencia por ativo;
@@ -233,15 +234,15 @@ def gerar_graficos_rotacoes_u59(
     paths: dict[str, Path] = {}
 
     # Dados-base
-    timeline_csv = visual_dir / "timeline_blocos_u59.csv"
+    timeline_csv = visual_dir / "timeline_blocos.csv"
     timeline.to_csv(timeline_csv, index=False)
     paths["timeline_csv"] = timeline_csv
 
-    summary_csv = visual_dir / "perfil_ativos_u59.csv"
+    summary_csv = visual_dir / "perfil_ativos.csv"
     summary.to_csv(summary_csv, index=False)
     paths["asset_summary_csv"] = summary_csv
 
-    rotations_csv = visual_dir / "rotacoes_u59.csv"
+    rotations_csv = visual_dir / "rotacoes.csv"
     rotacoes.to_csv(rotations_csv, index=False)
     paths["rotations_csv"] = rotations_csv
 
@@ -290,11 +291,11 @@ def gerar_graficos_rotacoes_u59(
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
     ax.set_xlabel("Data")
     ax.set_ylabel("Ativo em carteira")
-    ax.set_title("U59 · Linha do tempo das rotacoes")
+    ax.set_title(f"{universe_label} · Linha do tempo das rotacoes")
     ax.grid(axis="x", alpha=0.20)
     fig.tight_layout()
     paths.update(
-        _save_pair(fig, visual_dir, "timeline_rotacoes_u59")
+        _save_pair(fig, visual_dir, "timeline_rotacoes")
     )
 
     # 2. Matriz de transicoes
@@ -306,7 +307,7 @@ def gerar_graficos_rotacoes_u59(
         .size()
         .reset_index(name="rotations")
     )
-    transition_csv = visual_dir / "matriz_transicoes_u59.csv"
+    transition_csv = visual_dir / "matriz_transicoes.csv"
     transitions.to_csv(transition_csv, index=False)
     paths["transition_matrix_csv"] = transition_csv
 
@@ -346,14 +347,14 @@ def gerar_graficos_rotacoes_u59(
         )
         ax.set_xlabel("Ativo de destino")
         ax.set_ylabel("Ativo de origem")
-        ax.set_title("U59 · Matriz de transicao entre ativos")
+        ax.set_title(f"{universe_label} · Matriz de transicao entre ativos")
         fig.colorbar(image, ax=ax, label="Numero de rotacoes")
         fig.tight_layout()
         paths.update(
             _save_pair(
                 fig,
                 visual_dir,
-                "matriz_transicoes_u59",
+                "matriz_transicoes",
             )
         )
 
@@ -374,11 +375,11 @@ def gerar_graficos_rotacoes_u59(
     ax.set_yticks(y, presence["asset"].astype(str).tolist())
     ax.set_xlabel("Sessoes selecionado")
     ax.set_ylabel("Ativo")
-    ax.set_title("U59 · Presenca de cada ativo na carteira")
+    ax.set_title(f"{universe_label} · Presenca de cada ativo na carteira")
     ax.grid(axis="x", alpha=0.25)
     fig.tight_layout()
     paths.update(
-        _save_pair(fig, visual_dir, "presenca_por_ativo_u59")
+        _save_pair(fig, visual_dir, "presenca_por_ativo")
     )
 
     # 4. PnL realizado por ativo
@@ -400,7 +401,7 @@ def gerar_graficos_rotacoes_u59(
     ax.set_xlabel("PnL realizado (US$)")
     ax.set_ylabel("Ativo")
     ax.set_title(
-        "U59 · PnL realizado por ativo\n"
+        f"{universe_label} · PnL realizado por ativo\n"
         "(descritivo; nao equivale a contribuicao causal contrafactual)"
     )
     ax.grid(axis="x", alpha=0.25)
@@ -409,7 +410,7 @@ def gerar_graficos_rotacoes_u59(
         _save_pair(
             fig,
             visual_dir,
-            "pnl_realizado_por_ativo_u59",
+            "pnl_realizado_por_ativo",
         )
     )
 
@@ -454,7 +455,7 @@ def gerar_graficos_rotacoes_u59(
             )
 
         distance_csv = (
-            visual_dir / "distancia_topo_rotacoes_u59.csv"
+            visual_dir / "distancia_topo_rotacoes.csv"
         )
         distance.to_csv(distance_csv, index=False)
         paths["score_gap_csv"] = distance_csv
@@ -485,7 +486,7 @@ def gerar_graficos_rotacoes_u59(
             ax.set_xlabel("Data de execucao")
             ax.set_ylabel("Diferenca de utilidade prevista")
             ax.set_title(
-                "U59 · Distancia ao topo nas rotacoes efetivas"
+                f"{universe_label} · Distancia ao topo nas rotacoes efetivas"
             )
             ax.grid(alpha=0.25)
             ax.legend()
@@ -494,7 +495,7 @@ def gerar_graficos_rotacoes_u59(
                 _save_pair(
                     fig,
                     visual_dir,
-                    "distancia_topo_rotacoes_u59",
+                    "distancia_topo_rotacoes",
                 )
             )
 
