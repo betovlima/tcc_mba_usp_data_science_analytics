@@ -8,26 +8,32 @@ A execução oficial não depende de MongoDB nem do Market Cycle Trader. Os dado
 utilizados para a reprodução ficam congelados em CSV e são validados por
 manifestos e hashes antes da execução.
 
-## Resultado oficial reproduzível
+## Baseline de trabalho atual
 
-O universo financeiro oficial é o **U59**:
+A partir desta etapa, o baseline usado nas análises e visualizações é o
+**U67**, formado por:
 
-- 56 ativos do snapshot-base em dados/pesquisa/;
-- mais COLB, AMS e FOXF, preservados em dados/pesquisa_expansao_76_b2/.
+- U59 = U56 + COLB + AMS + FOXF;
+- mais THO, WDAY, EXR, XEL, SBFG, PAYX, MUX e SXC.
 
-O capital inicial é de **US$ 10.000**. O checkpoint que o runner oficial deve
-reproduzir é:
+O capital inicial é de **US$ 10.000** e o checkpoint de trabalho é:
 
 | Métrica | Referência |
 | --- | ---: |
-| Capital final | **US$ 30.080.091,01** |
-| Universo | 59 ativos |
+| Capital final | **US$ 58.557.157,67** |
+| Universo | 67 ativos |
 | Modelo | LightGBM Control |
 | Período congelado | até 17 set. 2026 |
 | Banco de dados | não utilizado |
 | Download na reprodução | não realizado |
 
-O resultado descreve um backtest histórico e não constitui previsão ou
+O U59 de **US$ 30.080.091,01** permanece preservado como checkpoint histórico
+confirmatório. O U67 passa a ser a referência prática das próximas análises,
+mas deve continuar identificado no TCC como resultado exploratório, pois os
+oito ativos adicionais foram escolhidos depois da observação de seus efeitos
+financeiros individuais.
+
+Os resultados descrevem backtests históricos e não constituem previsão ou
 garantia de desempenho futuro.
 
 ## Entradas principais
@@ -42,8 +48,8 @@ reproduzir_experimento.py
 
 ### buscar_ativos.py
 
-É o runner de busca de candidatos. Ele usa a infraestrutura de pesquisa
-preservada para avaliar candidatos em relação ao U59. A busca é uma atividade
+É o runner de busca de candidatos. A próxima evolução da busca deve usar o
+U67 como referência de trabalho, preservando o U59 como checkpoint histórico. A busca é uma atividade
 de pesquisa separada da reprodução oficial e pode exigir credenciais da
 Alpaca quando houver coleta de novos dados.
 
@@ -57,16 +63,17 @@ No Spyder, abra buscar_ativos.py e execute com F5.
 
 ### reproduzir_experimento.py
 
-É a reprodução oficial do resultado U59. O script:
+É o runner do baseline de trabalho U67. O script:
 
-1. valida os snapshots congelados;
+1. valida os snapshots disponíveis;
 2. carrega o U56;
-3. acrescenta COLB, AMS e FOXF;
-4. fixa o calendário temporal no U56 original;
-5. executa a calibração walk-forward e o LightGBM Control;
-6. simula o U59;
-7. exige a reprodução de **US$ 30.080.091,008142874**;
-8. exporta previsões, operações, margens por fold e o pacote de auditoria.
+3. acrescenta COLB, AMS e FOXF para reconstruir o U59;
+4. acrescenta THO, WDAY, EXR, XEL, SBFG, PAYX, MUX e SXC;
+5. fixa o calendário temporal no U56 original;
+6. executa a calibração walk-forward e o LightGBM Control;
+7. simula o U67;
+8. exige a reprodução de **US$ 58.557.157,67496595**;
+9. exporta previsões, operações, margens e os gráficos de rotação.
 
 No terminal:
 
@@ -76,7 +83,8 @@ python reproduzir_experimento.py
 
 No Spyder, abra reproduzir_experimento.py, reinicie o kernel e execute com F5.
 
-A execução usa apenas os dados congelados e não acessa a Alpaca.
+A execução não acessa a Alpaca. O U67 depende também do snapshot local
+dados/pesquisa_smart_candidates, que contém os oito ativos adicionais.
 
 ## Estrutura do projeto
 
@@ -119,23 +127,29 @@ capital pertence a uma única conta e é reinvestido ao longo da trajetória.
 
 ## Dados congelados
 
-A reprodução U59 depende de dois conjuntos versionados:
+O U67 usa:
 
 ~~~text
 dados/pesquisa/
 dados/pesquisa_expansao_76_b2/
+dados/pesquisa_smart_candidates/
 ~~~
 
-O primeiro contém os 56 ativos-base. O segundo contém, entre outros ativos da
-campanha histórica, as três inclusões necessárias para o U59:
+Os dois primeiros reconstroem o U59. O terceiro fornece os oito ativos
+adicionais do baseline de trabalho:
 
 ~~~text
-COLB
-AMS
-FOXF
+THO
+WDAY
+EXR
+XEL
+SBFG
+PAYX
+MUX
+SXC
 ~~~
 
-A reprodução oficial não substitui esses arquivos por downloads atuais.
+O runner não substitui esses arquivos por downloads atuais.
 
 ## Resultados gerados
 
@@ -148,17 +162,17 @@ output/reproducao/
 os principais artefatos:
 
 ~~~text
-u59_assets.csv
-u59_fold_margins.csv
-u59_predictions.csv
-u59_trades.csv
-reproducao_u59.json
-pacote_reproducao_u59_30m.zip
+u67_assets.csv
+u67_fold_margins.csv
+u67_predictions.csv
+u67_trades.csv
+reproducao_u67.json
+pacote_reproducao_u67_58m.zip
 ~~~
 
-O arquivo reproducao_u59.json contém o universo, os snapshots, as margens
-selecionadas por fold, as métricas e o erro de reprodução em relação ao
-checkpoint oficial.
+O arquivo reproducao_u67.json contém o universo, os snapshots, as margens
+selecionadas por fold, as métricas, o status científico do baseline e o erro
+de reprodução em relação ao checkpoint de US$ 58,56 milhões.
 
 ## Instalação
 
@@ -169,7 +183,8 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ~~~
 
-Para a reprodução oficial não são necessárias credenciais da Alpaca.
+Para a reprodução do baseline U67 não são necessárias credenciais da Alpaca,
+desde que o snapshot local dos oito ativos esteja presente.
 
 Para buscar_ativos.py, quando houver coleta de dados, use um arquivo .env
 local:
@@ -198,5 +213,6 @@ Os experimentos anteriores, inclusive as análises de assinatura contextual,
 validação prospectiva e filtro de aderência de capital, permanecem documentados
 em CONTEXTO_MESTRE.md e no histórico Git.
 
-Esses experimentos não são necessários para reproduzir o checkpoint U59 de
-aproximadamente US$ 30 milhões.
+O U59 de aproximadamente US$ 30 milhões permanece como checkpoint histórico.
+As análises correntes passam a usar o U67 de aproximadamente US$ 58,56 milhões
+como baseline de trabalho.
