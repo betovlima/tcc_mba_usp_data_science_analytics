@@ -4135,3 +4135,122 @@ Status cientifico:
 fase exploratoria de descoberta. Os Smart20 foram usados apenas como gabarito
 externo de interpretacao. Qualquer regra derivada dessa analise exigira nova
 validacao congelada antes de ser chamada de generalizacao prospectiva.
+
+
+## Resultado da clusterizacao comportamental — pacote 2026-10-06
+
+Pacote analisado:
+pacote_clusterizacao_ativos.zip
+
+SHA-256:
+28a7bced5e3752bece9e20823cad6336aa78ae0760108a558d4cf4440eb5d6e1
+
+Runner:
+pesquisas/clusterizacao_candidatos.py
+versao executada: 1.0.0-dev.1
+schema: candidate-behavior-clustering-v1
+
+Entrada:
+output/busca_ativos/intelligent_candidates_ranked.csv
+
+Ajuste:
+- 246 candidatos ativos elegiveis;
+- 188 candidatos inativos/dormant separados antes do KMeans;
+- capital nao participou do fit;
+- seis variaveis comportamentais de score;
+- K testado de 2 a 6.
+
+Selecao de K:
+K=3 foi escolhido.
+Metricas K=3:
+- silhouette = 0,318817;
+- Davies-Bouldin = 1,227599;
+- Calinski-Harabasz = 84,9004;
+- estabilidade entre sementes ARI = 1,0000;
+- ARI KMeans vs hierarquico Ward = 0,666953;
+- PCA PC1+PC2 explica 63,8809% da variancia.
+
+Distribuicao:
+- cluster 0: 59 candidatos;
+- cluster 1: 23 candidatos;
+- cluster 2: 164 candidatos.
+
+O resultado importante e que os tres clusters naturais NAO correspondem
+diretamente aos tres rotulos financeiros Impulsionadores, Sobreviventes e
+Prejudiciais.
+
+Overlay Smart20:
+cluster 0:
+- 4 resultados conhecidos;
+- 3 positivos e 1 harm10;
+- mediana +1,9427%;
+- 3 dos oito ativos do U67: THO, MUX e SXC.
+
+cluster 1:
+- 0 resultados financeiros Smart20 conhecidos;
+- nenhum dos oito ativos do U67.
+
+cluster 2:
+- 16 resultados conhecidos;
+- 5 positivos;
+- 2 sobreviventes/neutros;
+- 9 harm10;
+- mediana -14,5161%;
+- 5 dos oito ativos do U67: WDAY, EXR, XEL, SBFG e PAYX.
+
+Logo, chamar cluster 0 de "Impulsionadores" e cluster 2 de "Prejudiciais" e
+enganoso. Cinco dos oito vencedores do U67 estao justamente no cluster 2.
+
+Evidencia externa adicional do historico:
+- os cinco vencedores positivos da validacao prospectiva v1.18
+  (ACU, HBCP, RDCM, RELL, NUE) tambem caem todos no cluster 2;
+- os oito ativos do filtro de aderencia v1.19
+  (TRST, DBB, MCD, CSB, WMK, WFC, RJF, FIBK) tambem caem todos no cluster 2;
+- os oito low-S destrutivos da v1.18 se espalham pelos tres clusters.
+Isso reforca que o cluster 2 representa um padrao de score amplo, nao uma
+classe financeira ruim.
+
+Perfil comportamental medio:
+cluster 0:
+- beats_best ~4,68%;
+- score medio ~0,0162;
+- score_std ~0,2241;
+- positive_share ~55,4%.
+Interpretação comportamental: oportunistas/intermitentes.
+
+cluster 1:
+- beats_best ~20,25%;
+- score medio ~0,1734;
+- score_std ~0,3409;
+- positive_share ~68,1%.
+Interpretação comportamental: dominantes/invasivos, com score muito intenso e
+volatil.
+
+cluster 2:
+- beats_best ~2,60%;
+- score medio ~0,1211;
+- score_std ~0,1198;
+- positive_share ~85,4%.
+Interpretação comportamental: persistentes/estaveis, normalmente positivos
+mas raramente o melhor ativo.
+
+Conclusao:
+a clusterizacao encontrou estrutura comportamental real e estavel, mas as seis
+variaveis resumidas de score sao insuficientes para separar vencedores de
+prejudiciais dentro do grande cluster persistente. O proximo alvo de pesquisa
+deve ser a qualidade da SUBSTITUICAO no momento em que o candidato tenta
+deslocar o incumbente, e nao apenas a assinatura marginal do score.
+
+Correcao metodologica implementada apos a leitura do pacote:
+versao de desenvolvimento 1.0.1-dev.1 passa a nomear clusters por comportamento
+sem usar capital:
+- Oportunistas;
+- Dominantes;
+- Persistentes.
+
+Os rotulos financeiros Impulsionador observado, Sobrevivente observado e
+Prejudicial observado ficam somente como overlay posterior. Foi adicionado
+tambem o grafico 04_perfil_comportamental_clusters e o CSV
+cluster_behavior_profiles.csv.
+
+Nenhuma nova regra prospectiva foi validada por este experimento.
