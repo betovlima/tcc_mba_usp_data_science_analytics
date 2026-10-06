@@ -27,6 +27,7 @@ from pesquisas.directional_change_lightgbm import (
     calcular_bottom_entry,
     calcular_metricas_peak_gatilhos,
     calcular_peak_exit,
+    decompor_distancia_topo_operacoes,
     criar_pacote_analise,
     sinal_sonoro_conclusao,
 )
@@ -1052,3 +1053,90 @@ def test_analysis_package_refuses_wrong_schema(tmp_path: Path) -> None:
 
     assert "intelligent-asset-search-u59-v1" in message
     assert "wrong-schema" in message
+
+
+def test_top_gap_decomposition_detects_wrong_asset_choice() -> None:
+    dates = pd.date_range(
+        "2026-01-05",
+        periods=3,
+        freq="B",
+        tz="UTC",
+    )
+    aaa = _base_frame([100.0, 101.0, 102.0])
+    bbb = _base_frame([100.0, 110.0, 120.0])
+    aaa.index = dates
+    bbb.index = dates
+
+    trades = pd.DataFrame(
+        [
+            {
+                "timestamp": dates[-1],
+                "action": "SELL",
+                "asset": "AAA",
+                "execution_price": 102.0,
+                "quantity": 100.0,
+                "entry_timestamp": dates[0],
+                "entry_price": 100.0,
+                "holding_bars": 2,
+                "walk_forward_fold": 1,
+            }
+        ]
+    )
+
+    summary, detail, by_cause = decompor_distancia_topo_operacoes(
+        trades,
+        {"AAA": aaa, "BBB": bbb},
+        entry_lookback_sessions=2,
+        post_exit_sessions=1,
+    )
+
+    assert summary["closed_positions"] == 1
+    assert detail.iloc[0]["best_same_holding_asset"] == "BBB"
+    assert detail.iloc[0]["asset_selection_gap_pct"] > 15.0
+    assert detail.iloc[0]["dominant_gap"] == "escolha_ativo"
+    assert set(by_cause["cause"]) == {
+        "entrada_tardia",
+        "escolha_ativo",
+        "permanencia_excessiva",
+        "saida_precoce",
+    }
+
+
+def test_top_gap_decomposition_detects_excess_holding_after_peak() -> None:
+    dates = pd.date_range(
+        "2026-02-02",
+        periods=5,
+        freq="B",
+        tz="UTC",
+    )
+    frame = _base_frame([100.0, 150.0, 140.0, 120.0, 110.0])
+    frame.index = dates
+
+    trades = pd.DataFrame(
+        [
+            {
+                "timestamp": dates[-1],
+                "action": "FINAL_SELL",
+                "asset": "AAA",
+                "execution_price": 110.0,
+                "quantity": 100.0,
+                "entry_timestamp": dates[0],
+                "entry_price": 100.0,
+                "holding_bars": 4,
+                "walk_forward_fold": 1,
+            }
+        ]
+    )
+
+    summary, detail, _ = decompor_distancia_topo_operacoes(
+        trades,
+        {"AAA": frame},
+        entry_lookback_sessions=1,
+        post_exit_sessions=1,
+    )
+
+    row = detail.iloc[0]
+    assert summary["closed_positions"] == 1
+    assert row["dominant_gap"] == "permanencia_excessiva"
+    assert row["excess_holding_gap_pct"] > 35.0
+    assert row["days_from_peak_to_exit"] >= 2
