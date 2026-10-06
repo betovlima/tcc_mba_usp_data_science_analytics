@@ -2758,3 +2758,63 @@ a estrutura matematica de desenvolvimento esta suficientemente definida para
 ser congelada. O proximo replay financeiro, quando ocorrer, nao deve ser usado
 para ajustar S. Ele deve ser uma unica validacao prospectiva em ativos
 intocados, escolhidos sem acesso ao seu delta de capital.
+
+
+## Execucao oficial e congelamento da assinatura matematica — v1.18
+
+Pacote oficial recebido e auditado:
+pacote_assinatura_matematica_v118.zip
+
+SHA-256 do pacote:
+32f7ead20b87fac3c6d9c17ef4fbd45ee27e73394200db2c13b4478d23993f9d
+
+SHA-256 de signature_math.json:
+0c35546efcd6e681eabb9af01e99cc6f927f98202c61710f163a38c1e08710d2
+
+A execucao reproduziu os resultados esperados sem discrepancias:
+- total contextual=40;
+- ativos=30;
+- dormant=10;
+- positivos entre ativos=11;
+- AUC pooled=0,8110;
+- AP pooled=0,7154;
+- Spearman S vs efeito de capital=0,6379, p=0,000149;
+- bootstrap AUC 95%=[0,629; 0,950];
+- batch3 AUC=0,9524;
+- smart20 AUC=0,7448;
+- features estaticas permaneceram perto do acaso entre coortes
+  (AUC 0,4792 e 0,5098).
+
+A calibracao logistica pooled foi reproduzida:
+P(deltaCapital>0 | A=1)=logistic(-3,536889 + 5,920287*S).
+
+Entretanto, a regressao treinada apenas no batch3 apresentou slope=12,4596 e
+a treinada apenas no smart20 slope=4,2899. As probabilidades absolutas,
+portanto, ainda nao devem ser tratadas como calibradas externamente.
+Curiosamente, a fronteira P=0,5 permaneceu proxima:
+- batch3: S=0,6206;
+- smart20: S=0,5916;
+- pooled: S=0,5974.
+
+Decisao estatistica:
+congelar S como SCORE CONTINUO DE ORDENACAO, e nao como probabilidade
+operacional calibrada. O arquivo machine-readable congelado e:
+dados/assinatura_matematica/signature_v1_18_frozen.json.
+
+Formula congelada:
+A = 1[beats_best_share > 0]
+S = 1 - mean(
+    rank_active(beats_best_share),
+    rank_active(abs(score_corr_best)),
+    rank_active(score_std)
+)
+
+Nao alterar componentes, sinais ou pesos depois de observar novos resultados
+financeiros. A referencia de validacao continua U59_WINNER; U67 permanece
+resultado exploratorio/post-hoc.
+
+Proximo passo permitido:
+uma unica validacao prospectiva usando candidatos cujo capital ainda nao foi
+consultado. O conjunto de candidatos pode ser obtido do
+intelligent_candidates_ranked.csv ja existente, sem nova busca Alpaca.
+A selecao deve ser congelada por S antes de qualquer replay financeiro.
