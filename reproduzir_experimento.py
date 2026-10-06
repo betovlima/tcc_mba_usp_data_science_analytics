@@ -57,6 +57,7 @@ from engine.rotacao import (
 )
 from pesquisas.directional_change_lightgbm import (
     criar_pacote_analise,
+    decompor_distancia_topo_operacoes,
     sinal_sonoro_conclusao,
 )
 from reproducao.dados import SnapshotPaths, validate_snapshot
@@ -471,7 +472,32 @@ if not reproduced:
     )
 
 
-# %% 9 - Artefatos finais de reproducao
+# %% 9 - Diagnostico ex post da distancia ao topo
+top_gap_summary, top_gap_operations, top_gap_by_cause = (
+    decompor_distancia_topo_operacoes(
+        result.trades,
+        frames_u67,
+        entry_lookback_sessions=20,
+        post_exit_sessions=10,
+    )
+)
+
+print(
+    "[top-gap] "
+    f"closed_positions={top_gap_summary.get('closed_positions')} "
+    f"dominant_cause={top_gap_summary.get('dominant_cause')} "
+    f"dominant_share={top_gap_summary.get('dominant_cause_share')}",
+    flush=True,
+)
+if not top_gap_by_cause.empty:
+    print(
+        "[top-gap-by-cause]\n"
+        + top_gap_by_cause.to_string(index=False),
+        flush=True,
+    )
+
+
+# %% 10 - Artefatos finais de reproducao
 OUT.mkdir(parents=True, exist_ok=True)
 
 pd.DataFrame(
@@ -493,6 +519,16 @@ result.predictions.reset_index().to_csv(
 
 result.trades.to_csv(
     OUT / "u67_trades.csv",
+    index=False,
+)
+
+top_gap_operations.to_csv(
+    OUT / "u67_top_gap_by_operation.csv",
+    index=False,
+)
+
+top_gap_by_cause.to_csv(
+    OUT / "u67_top_gap_by_cause.csv",
     index=False,
 )
 
@@ -522,6 +558,15 @@ payload = {
     "observed_ending_capital": ending_capital,
     "relative_error": relative_error,
     "metrics": metrics,
+    "top_gap_analysis": {
+        "status": "diagnostic_ex_post",
+        "summary": top_gap_summary,
+        "by_cause": top_gap_by_cause.to_dict(orient="records"),
+        "non_additive_warning": (
+            "Os gaps sao contrafactuais sobrepostos e nao devem ser somados "
+            "como decomposicao contabil do capital."
+        ),
+    },
     "runtime_seconds": float(
         time.perf_counter() - started
     ),
