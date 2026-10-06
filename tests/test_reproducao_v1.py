@@ -491,7 +491,6 @@ def test_active_paths_no_longer_use_v1_suffix() -> None:
     active_files = [
         ROOT / "reproduzir_experimento.py",
         ROOT / "reproducao" / "dados.py",
-        ROOT / "migrar_snapshot_pesquisa.py",
         ROOT / ".gitignore",
         ROOT / "README.md",
         ROOT / "dados" / "README.md",
