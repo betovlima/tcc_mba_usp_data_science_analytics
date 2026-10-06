@@ -3917,3 +3917,66 @@ output/reproducao/graficos_rotacoes/
 
 A inclusao dos graficos nao pode alterar a politica. A execucao deve abortar se
 o capital observado divergir do checkpoint U67.
+
+
+## Revisao do pacote U67 58m e refinamento visual — v1.21.0-dev.2
+
+Foi analisado o pacote executado:
+pacote_reproducao_u67_58m.zip
+
+Validacao financeira observada:
+- status: reproduced;
+- capital esperado = US$58.557.157,67496595;
+- capital observado = US$58.557.157,67496595;
+- erro relativo = 0;
+- CAGR = 309,4001049%;
+- Sharpe = 2,51874371;
+- MaxDD = -30,3591253%;
+- worst fold = +282,5895543%;
+- sessoes OOS = 1547;
+- 67 ativos no universo;
+- 349 BUY, 348 SELL e 1 FINAL_SELL.
+
+Comparacao com U59:
+- U59 = US$30.080.091,008142874;
+- U67 = US$58.557.157,67496595;
+- ganho absoluto = US$28.477.066,666823074;
+- ganho relativo = +94,6708128613%;
+- CAGR melhora cerca de 41,997 p.p.;
+- Sharpe aumenta cerca de 0,1812;
+- MaxDD melhora cerca de 0,86 p.p.
+
+Uso dos oito impulsionadores exploratorios dentro do U67:
+- WDAY: 41 sessoes, 10 entradas, PnL realizado ~US$11,98M;
+- THO: 18 sessoes, 5 entradas;
+- XEL: 7 sessoes;
+- PAYX: 4 sessoes;
+- EXR: 2 sessoes;
+- MUX: 2 sessoes;
+- SBFG: 2 sessoes;
+- SXC: zero sessoes selecionado no replay U67.
+No total, sete dos oito foram selecionados por 76 sessoes, cerca de 4,91% das
+1547 sessoes. O PnL realizado agregado desses sete foi ~US$12,21M. Isso e
+descritivo e nao deve ser interpretado como contribuicao causal isolada.
+
+Problemas encontrados no pacote:
+1. o ZIP continha artefatos antigos do U59, inclusive
+   pacote_reproducao_u59_30m.zip, reproducao_u59.json e CSVs u59_*;
+2. os graficos 01, 04 e 05 ainda apresentavam sobreposicao entre titulo e
+   texto explicativo;
+3. o grafico de forca das rotacoes ficava visualmente comprimido porque a
+   razao atingia valores proximos de 900;
+4. o grafico de ocupacao ainda mostrava linhas demais;
+5. rotulos negativos no grafico de PnL podiam colidir com nomes dos ativos.
+
+Correcoes v1.21.0-dev.2:
+- output/reproducao agora e apagado e recriado antes de salvar artefatos U67,
+  impedindo mistura de rodadas antigas;
+- mapa temporal mostra top 30 ativos usados + todos os oito impulsionadores;
+- SXC aparece mesmo com ocupacao zero;
+- notas explicativas foram movidas para o rodape;
+- forca das rotacoes usa escala logaritmica;
+- rotulos de PnL negativo foram reposicionados;
+- terminologia visual passa a usar "impulsionadores exploratorios".
+
+O checkpoint financeiro permanece exatamente US$58.557.157,67496595.
