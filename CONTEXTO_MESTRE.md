@@ -2885,3 +2885,82 @@ depois que a coorte for congelada, ela nao pode ser alterada por qualquer
 motivo relacionado ao resultado financeiro. O proximo runner podera somente
 revelar os resultados individuais contra U59 e calcular as metricas
 predeclaradas. Nao havera segunda tentativa de selecao apos observar capital.
+
+
+## Coorte prospectiva congelada e plano estatistico pre-registrado — 1.18.2-dev.1
+
+Pacote de congelamento recebido e auditado antes de qualquer resultado
+financeiro:
+pacote_congelamento_validacao_prospectiva_v118.zip
+
+SHA-256 do pacote:
+287efd76dbc84afb38055fbe25b529633dd5cc2ab68f2c457aa52f2490cb9bc5
+
+SHA-256 exato da coorte:
+a1fe00ea2a7c7691d55396366be0375e64294ab43d97d4949a2433d106443978
+
+O freeze reproduziu:
+- 446 candidatos no ranked original;
+- 426 candidatos financeiramente intocados apos excluir Smart20;
+- 414 com dados de score elegiveis;
+- 226 ativos;
+- 188 dormant;
+- 12 insuficientes;
+- estratos ativos: 76 high-S, 75 mid-S, 75 low-S.
+
+Coorte one-shot congelada de 32 ativos:
+
+High-S:
+HMN, LOCO, ACU, HBCP, LYV, PNFP, TCBI, OVLY.
+
+Mid-S:
+WDC, PROV, EDU, RARE, RDCM, RELL, NUE, JOUT.
+
+Low-S:
+NSIT, ENTG, PLUG, GOGO, STRA, CETX, IOVA, TANH.
+
+Dormant A=0:
+EQIX, FTQI, ILF, IPAC, MTG, QUAL, VAW, XSLV.
+
+A coorte exata e seus metadados foram gravados no Git antes da abertura do
+gabarito:
+- dados/assinatura_matematica/prospective_validation_cohort_v118.csv;
+- dados/assinatura_matematica/prospective_validation_freeze_v118.json.
+
+Plano estatistico pre-registrado:
+dados/assinatura_matematica/prospective_validation_plan_v118.json
+
+Endpoint primario:
+Spearman entre S e capital_pct_vs_u59 nos 24 candidatos ativos, com hipotese
+unilateral rho > 0 e p por 20.000 permutacoes deterministicas.
+
+Criterio de suporte prospectivo:
+rho > 0 E p_perm < 0,05.
+
+Endpoints secundarios, sem substituir o criterio primario:
+- ROC AUC de S para delta de capital positivo nos 24 ativos;
+- gradiente high/mid/low em taxa positiva e mediana do efeito;
+- Fisher unilateral high-S vs low-S;
+- comportamento dos oito dormant;
+- replay economico conjunto dos oito high-S congelados.
+
+O baseline U59 deve reproduzir US$ 30.080.091,008142874 dentro da tolerancia
+congelada antes que qualquer efeito individual seja revelado. Se nao
+reproduzir, o runner aborta antes da abertura do gabarito.
+
+Runner de abertura do gabarito:
+validar_assinatura_prospectiva_v118_spyder.py
+
+Versao:
+1.18.2-dev.1
+
+Schema:
+prospective-signature-financial-validation-v1
+
+O runner treina os modelos uma unica vez por fold para U59 + 32 candidatos e
+reutiliza os caches para os replays individuais. Nao faz nova busca, nao baixa
+dados, nao troca candidatos e nao permite segunda selecao.
+
+Regra final:
+independentemente do resultado, a assinatura v1.18 nao pode ser reajustada com
+esses 32 e continuar sendo chamada de mesma validacao prospectiva.
