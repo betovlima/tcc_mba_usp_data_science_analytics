@@ -5,8 +5,8 @@ import pandas as pd
 
 from pesquisas.clusterizacao_candidatos import (
     FEATURES,
+    _behavior_names,
     _quality_table,
-    _semantic_name,
 )
 
 
@@ -34,32 +34,27 @@ def test_quality_table_selects_one_k() -> None:
     assert quality["seed_stability_ari"].between(-1.0, 1.0).all()
 
 
-def test_semantic_names_are_post_fit_interpretation() -> None:
-    harmful = pd.Series(
+def test_behavior_names_do_not_use_financial_outcomes() -> None:
+    members = pd.DataFrame(
         {
-            "known_outcomes": 4,
-            "median_capital_pct_vs_u59": -0.25,
-            "positive_rate": 0.0,
-            "harm10_rate": 0.75,
+            "cluster_id": [0, 0, 1, 1, 2, 2],
+            "candidate_beats_u59_best_share": [
+                0.04, 0.05, 0.22, 0.18, 0.02, 0.03
+            ],
+            "candidate_positive_score_share": [
+                0.52, 0.56, 0.65, 0.70, 0.86, 0.84
+            ],
+            "candidate_score_std": [
+                0.22, 0.20, 0.34, 0.31, 0.11, 0.12
+            ],
+            "candidate_score_mean": [
+                0.02, 0.01, 0.17, 0.16, 0.12, 0.11
+            ],
         }
     )
-    positive = pd.Series(
-        {
-            "known_outcomes": 4,
-            "median_capital_pct_vs_u59": 0.08,
-            "positive_rate": 0.75,
-            "harm10_rate": 0.0,
-        }
-    )
-    survivor = pd.Series(
-        {
-            "known_outcomes": 4,
-            "median_capital_pct_vs_u59": -0.02,
-            "positive_rate": 0.25,
-            "harm10_rate": 0.25,
-        }
-    )
-
-    assert _semantic_name(harmful) == "Prejudiciais"
-    assert _semantic_name(positive) == "Impulsionadores"
-    assert _semantic_name(survivor) == "Sobreviventes"
+    names = _behavior_names(members)
+    assert set(names.values()) == {
+        "Oportunistas",
+        "Dominantes",
+        "Persistentes",
+    }
