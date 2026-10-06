@@ -3699,3 +3699,35 @@ SHA-256:
 - DOCX: 5d7ab9c169d126252aa5b4bf468e513fb0a0a7dcf1b7f6e88c8838c08aa9c463
 - PDF: e5e3da0a3c2b807343499f35c1f76a327afb08ecf65ef727ec85f688bf90da09
 - Markdown: fb87a75e011514122aaef9c815ae4dbca960e2f364e118c516ce4aa72fc3f41f
+
+
+## Fechamento do checkpoint U67 de US$ 58,56 milhoes — v1.21.0
+
+A execucao U59 + THO, WDAY, EXR, XEL, SBFG, PAYX, MUX e SXC foi promovida
+a checkpoint oficial de reproducao do TCC.
+
+Referencia congelada:
+- universo: U67;
+- capital inicial: US$ 10.000;
+- capital final: US$ 58.557.157,67496595;
+- CAGR: 309,4001%;
+- Sharpe: 2,51874371;
+- MaxDD: -30,3591%;
+- worst fold: +282,5896%;
+- modelo: LightGBM Control;
+- calendario: U56 original;
+- dados: snapshots congelados, sem banco e sem download durante a reproducao.
+
+O runner oficial passa a ser `reproduzir_experimento.py`, versao 1.21.0,
+schema `u67-control-reproduction-v1`. A arvore de trabalho mantem somente
+`buscar_ativos.py` e `reproduzir_experimento.py` como runners no diretorio
+raiz.
+
+As pesquisas de assinatura que nao generalizaram foram encerradas. Seus
+arquivos de trabalho em `dados/assinatura_matematica/` foram removidos da
+arvore atual. A evidencia negativa continua preservada no historico Git e
+neste documento; ela nao deve ser reintroduzida no checkpoint oficial.
+
+Proxima linha de pesquisa: decompor quantitativamente a distancia entre a
+trajetoria U67 e uma referencia de topo por operacao, separando perdas de
+timing de entrada, timing de saida, escolha de ativo e permanencia excessiva.
