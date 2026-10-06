@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import pandas as pd
 
@@ -62,13 +63,9 @@ def test_future_target_uses_relative_utility_and_switch_penalty() -> None:
 
 
 def test_substitution_runner_declares_non_random_validation() -> None:
-    source = (
-        pd.io.common.get_handle(
-            "pesquisas/eventos_substituicao_u67.py",
-            "r",
-            encoding="utf-8",
-        ).handle.read()
-    )
+    source = Path(
+        "pesquisas/eventos_substituicao_u67.py"
+    ).read_text(encoding="utf-8")
     assert '"random_row_split_allowed": False' in source
     assert "financial_replay=NO" in source
     assert "alpaca_download=NO" in source
