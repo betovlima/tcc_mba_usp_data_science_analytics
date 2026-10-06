@@ -4,13 +4,19 @@ from __future__ import annotations
 
 from collections import Counter, OrderedDict
 import math
+import os
 from pathlib import Path
 import shutil
 from typing import Any
 
 import matplotlib
 
-matplotlib.use("Agg")
+if (
+    os.name != "nt"
+    and not os.environ.get("DISPLAY")
+    and not os.environ.get("WAYLAND_DISPLAY")
+):
+    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
