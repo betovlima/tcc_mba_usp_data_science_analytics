@@ -787,13 +787,15 @@ def test_rotation_visualization_suite_is_integrated() -> None:
     assert "highlight_assets=POSITIVE8" in runner
     assert "EXPECTED_ENDING_CAPITAL = 58_557_157.67496595" in runner
     assert "EXPECTED_U67_COUNT = 67" in runner
+    assert "shutil.rmtree(OUT)" in runner
     assert "plt.show(block=False)" in graphs
+    assert 'ax.set_yscale("log")' in graphs
     assert "decision_diagnostics=decision_diagnostics" in runner
     assert (
         "policy_decision_diagnostics=decision_diagnostics"
         in runner
     )
-    assert 'REPRODUCTION_VERSION = "1.21.0-dev.1"' in runner
+    assert 'REPRODUCTION_VERSION = "1.21.0-dev.2"' in runner
 
     expected_outputs = (
         "01_mapa_temporal_ocupacao",
