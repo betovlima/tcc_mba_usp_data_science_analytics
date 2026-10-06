@@ -3793,3 +3793,27 @@ Esta alteracao e apenas de integracao da camada de visualizacao. Nao altera:
 
 O capital continua obrigado a reproduzir US$30.080.091,008142874 nesta branch
 antes de qualquer promocao ou mudanca de baseline.
+
+
+## Compatibilidade retroativa dos graficos de rotacao — v1.20.1-dev.3
+
+Foi observado novamente no ambiente local do Spyder o erro:
+ImportError: cannot import name 'gerar_graficos_rotacoes_u59'.
+
+Auditoria do remoto mostrou que:
+- reproduzir_experimento.py na branch atual ja importa gerar_graficos_rotacoes;
+- o traceback local ainda apontava para o nome antigo;
+- portanto o runner local estava defasado em relacao ao head remoto.
+
+Para tornar a branch resiliente a esse tipo de defasagem temporaria, o modulo
+reproducao/graficos_rotacoes.py agora tambem expoe a funcao de compatibilidade:
+
+gerar_graficos_rotacoes_u59(...)
+
+Ela apenas delega para:
+gerar_graficos_rotacoes(..., universe_label="U59")
+
+Nao ha alteracao de calculo, politica ou resultado financeiro.
+
+Versao do runner:
+1.20.1-dev.3
