@@ -3265,3 +3265,81 @@ Diagnosticos secundarios:
 
 Nao ha garantia de ganho. Se o grupo falhar, o resultado deve ser preservado e
 nao sera permitida segunda selecao usando o mesmo pool apos observar o capital.
+
+
+## Congelamento oficial e abertura planejada do filtro de aderencia — v1.19
+
+Pacote recebido e auditado antes de qualquer resultado financeiro novo:
+pacote_congelamento_aderencia_capital_v119.zip
+
+SHA-256 do pacote:
+8919f98a4613a67c55b595441234bc9b74cf0fb1c8ae49498ea7454f230ab38c
+
+SHA-256 bruto da selecao:
+dcb6b8746719c24a59b6b9a2c056366446372d9c38811a0885b1abab877ef3b2
+
+O congelamento reproduziu exatamente a evidencia de desenvolvimento v1.19:
+- 44 candidatos ativos conhecidos;
+- 25 com dano >=10% contra U59;
+- AUC Smart20 = 0,8200;
+- AUC prospectiva24 = 0,8630;
+- AUC pooled = 0,8432;
+- Spearman R vs delta de capital = -0,6081;
+- p = 1,194e-05;
+- Mann-Whitney unilateral = 5,883e-05.
+
+Pool ainda intocado:
+- 446 candidatos originais;
+- 52 resultados conhecidos excluidos;
+- 394 candidatos restantes;
+- 382 com dados de score elegiveis;
+- 202 ativos A=1;
+- 192 dormant ou inelegiveis.
+
+Os oito menores riscos R foram congelados, todos dentro dos ~4% de menor risco
+do pool ativo:
+1. TRST  R=0,0284653
+2. DBB   R=0,0309406
+3. MCD   R=0,0445545
+4. CSB   R=0,0655941
+5. WMK   R=0,0668317
+6. WFC   R=0,0680693
+7. RJF   R=0,0705446
+8. FIBK  R=0,0742574
+
+Nenhum capital desses oito foi consultado para produzir a selecao.
+
+A lista e o freeze foram gravados no Git:
+- dados/assinatura_matematica/capital_adherence_cohort_v119.csv
+- dados/assinatura_matematica/capital_adherence_freeze_v119.json
+
+Plano financeiro pre-registrado:
+dados/assinatura_matematica/capital_adherence_validation_plan_v119.json
+
+Endpoint primario confirmatorio da v1.19:
+capital final de U59 + adherence8 > capital final de U59.
+
+Diagnosticos secundarios:
+- quantidade de efeitos individuais <= -10%;
+- quantidade de positivos;
+- mediana/media do efeito individual;
+- comparacao descritiva, nao confirmatoria, com U59+positive8 =
+  US$58.557.157,67.
+
+Runner de abertura do gabarito:
+validar_filtro_aderencia_capital_v119_spyder.py
+
+Versao:
+1.19.1-dev.1
+
+Schema:
+capital-adherence-financial-validation-v1
+
+O runner reproduz primeiro o U59 em US$30.080.091,008142874 e aborta antes de
+qualquer resultado novo se houver divergencia. Em seguida revela os oito
+efeitos individuais e executa uma unica vez U59+adherence8, reutilizando o
+mesmo treino/caches por fold.
+
+Regra:
+nao trocar candidatos, nao alterar R e nao realizar segunda selecao com este
+pool depois de observar os resultados.
