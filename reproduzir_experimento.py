@@ -59,7 +59,7 @@ from pesquisas.directional_change_lightgbm import (
 )
 from reproducao.dados import SnapshotPaths, validate_snapshot
 from reproducao.experimento import build_variant_configs, summarize_metrics
-from reproducao.graficos_rotacoes import gerar_graficos_rotacoes_u59
+from reproducao.graficos_rotacoes import gerar_graficos_rotacoes
 from reproducao.preparacao import prepare_model_frames
 
 
@@ -73,7 +73,7 @@ B2 = SnapshotPaths.from_root(
 
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.20.1-dev.1"
+REPRODUCTION_VERSION = "1.20.1-dev.2"
 EXECUTION_SCHEMA = "u59-control-reproduction-v1"
 
 U59_ADDITIONS = ("COLB", "AMS", "FOXF")
@@ -460,9 +460,10 @@ result.trades.to_csv(
 )
 
 # %% 9 - Visualizacoes exploratorias das rotacoes
-rotation_graphs = gerar_graficos_rotacoes_u59(
+rotation_graphs = gerar_graficos_rotacoes(
     OUT,
     result=result,
+    universe_label="U59",
 )
 
 payload = {
