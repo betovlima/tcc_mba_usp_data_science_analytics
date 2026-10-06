@@ -790,12 +790,14 @@ def test_rotation_visualization_suite_is_integrated() -> None:
     assert "shutil.rmtree(OUT)" in runner
     assert "plt.show(block=False)" in graphs
     assert 'ax.set_yscale("log")' in graphs
+    assert "FuncFormatter" in graphs
+    assert "missing_highlights" in graphs
     assert "decision_diagnostics=decision_diagnostics" in runner
     assert (
         "policy_decision_diagnostics=decision_diagnostics"
         in runner
     )
-    assert 'REPRODUCTION_VERSION = "1.21.0-dev.2"' in runner
+    assert 'REPRODUCTION_VERSION = "1.21.0-dev.3"' in runner
 
     expected_outputs = (
         "01_mapa_temporal_ocupacao",
