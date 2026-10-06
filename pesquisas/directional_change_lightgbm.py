@@ -34,6 +34,7 @@ from engine.rotacao import (
 )
 
 RESEARCH_VERSION = "1.17.0-dev.1"
+TOP_GAP_RESEARCH_VERSION = "1.0.0-dev.1"
 EXPECTED_EXECUTION_SCHEMA = "intelligent-asset-search-u59-v1"
 EXPECTED_COMPARISON_FILE = "asset_search.json"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
@@ -4947,6 +4948,7 @@ def decompor_distancia_topo_operacoes(
     empty = pd.DataFrame(columns=columns)
     if trades is None or trades.empty:
         return {
+            "research_version": TOP_GAP_RESEARCH_VERSION,
             "closed_positions": 0,
             "entry_lookback_sessions": int(entry_lookback_sessions),
             "post_exit_sessions": int(post_exit_sessions),
@@ -5190,6 +5192,7 @@ def decompor_distancia_topo_operacoes(
     detail = pd.DataFrame(rows, columns=columns)
     if detail.empty:
         return {
+            "research_version": TOP_GAP_RESEARCH_VERSION,
             "closed_positions": 0,
             "entry_lookback_sessions": int(entry_lookback_sessions),
             "post_exit_sessions": int(post_exit_sessions),
@@ -5267,6 +5270,7 @@ def decompor_distancia_topo_operacoes(
     )
 
     summary = {
+        "research_version": TOP_GAP_RESEARCH_VERSION,
         "closed_positions": int(len(detail)),
         "entry_lookback_sessions": int(entry_lookback_sessions),
         "post_exit_sessions": int(post_exit_sessions),
