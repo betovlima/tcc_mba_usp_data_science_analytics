@@ -3452,3 +3452,83 @@ Conclusao cientifica da v1.19:
   deslocamento dos incumbentes e as interacoes entre candidatos;
 - nao retunar R com estes oito e nao realizar segunda selecao no mesmo pool
   chamando-a de confirmacao v1.19.
+
+
+## Simplificacao dos runners e reproducao oficial U59
+
+A pedido do autor, os runners experimentais de teste acumulados durante as
+campanhas anteriores foram removidos do diretorio raiz. A evidencia cientifica
+dos experimentos permaneceu preservada em CONTEXTO_MESTRE.md, nos dados
+congelados e no historico Git.
+
+Branch mantida:
+research/intelligent-asset-signature-v1
+
+Runners principais remanescentes:
+- buscar_ativos.py
+- reproduzir_experimento.py
+
+O arquivo migrar_snapshot_pesquisa.py foi mantido apenas como utilitario de
+manutencao/migracao de snapshots legados; nao integra o fluxo normal.
+
+Arquivos experimentais removidos do diretorio raiz:
+- analisar_topos_fundos_ativos_58m_spyder.py
+- avaliar_resultado_financeiro_spyder.py
+- calcular_buy_hold_universo_58m_spyder.py
+- congelar_filtro_aderencia_capital_v119_spyder.py
+- congelar_validacao_prospectiva_v118_spyder.py
+- modelar_assinatura_matematica_spyder.py
+- validar_assinatura_prospectiva_v118_spyder.py
+- validar_filtro_aderencia_capital_v119_spyder.py
+- buscar_ativos_spyder.py, substituido por buscar_ativos.py
+- reproduzir_experimento_spyder.py, substituido por reproduzir_experimento.py
+
+Nova reproducao oficial:
+reproduzir_experimento.py
+
+Versao do runner:
+1.20.0-dev.1
+
+Schema:
+u59-control-reproduction-v1
+
+Objetivo unico:
+reproduzir o checkpoint U59 de:
+US$ 30.080.091,008142874
+a partir de capital inicial de US$10.000.
+
+Universo:
+- U56 congelado em dados/pesquisa;
+- + COLB, AMS e FOXF de dados/pesquisa_expansao_76_b2;
+- total esperado: 59 ativos.
+
+Caracteristicas:
+- apenas snapshots CSV congelados;
+- sem MongoDB;
+- sem Market Cycle Trader;
+- sem download Alpaca;
+- LightGBM Control;
+- calendario fixado no U56 original;
+- calibracao walk-forward por fold;
+- aborta se o capital final divergir do checkpoint U59 em mais da tolerancia
+  congelada.
+
+Artefatos esperados:
+- output/reproducao/u59_assets.csv
+- output/reproducao/u59_fold_margins.csv
+- output/reproducao/u59_predictions.csv
+- output/reproducao/u59_trades.csv
+- output/reproducao/reproducao_u59.json
+- output/reproducao/pacote_reproducao_u59_30m.zip
+
+README, dados/README.md, testes automatizados e GitHub Actions foram
+atualizados para os novos nomes e para a reproducao U59.
+
+Validacao automatizada apos a limpeza:
+GitHub Actions reproduction-tests no commit
+28fa42b74fb9cbe45e5bef25ff809620c697bc1f
+concluiu com sucesso em 06 out. 2026.
+
+A execucao financeira completa de reproduzir_experimento.py ainda deve ser
+feita localmente para confirmar que o novo runner simplificado reproduz
+exatamente os US$30.080.091,008142874.
