@@ -4043,3 +4043,95 @@ Correcoes v1.21.0-dev.3:
 - grafico 04 usa eixo em US$ milhoes, sem notacao cientifica;
 - margens inferiores foram ampliadas nos graficos 04 e 05;
 - legenda do grafico 05 foi movida para fora da area de dados.
+
+
+## Clusterizacao leve de candidatos sem novo replay — v1.0.0-dev.1
+
+Decisao metodologica:
+nao repetir reproduzir_experimento.py para estudar clusters. O U67 de
+US$58.557.157,67496595 ja foi reproduzido com erro zero e passa a ser tratado
+como checkpoint congelado desta etapa.
+
+Novo runner leve:
+pesquisas/clusterizacao_candidatos.py
+
+Entrada principal:
+output/busca_ativos/intelligent_candidates_ranked.csv
+
+O runner NAO:
+- baixa Alpaca;
+- treina LightGBM;
+- executa backtest;
+- recalcula U67;
+- usa capital para ajustar clusters.
+
+Variaveis usadas no ajuste:
+- candidate_beats_u59_best_share;
+- candidate_score_mean;
+- candidate_score_std;
+- candidate_positive_score_share;
+- abs_score_corr_u59_best;
+- model_score_corr_u59_mean.
+
+Observacao:
+essas variaveis sao historicas e foram calculadas no contexto U59. Portanto a
+clusterizacao desta fase e exploratoria e serve para estudar a geometria das
+assinaturas ja observadas e a posicao dos oito ativos que formaram o U67. Ela
+NAO deve ser apresentada como seletor prospectivo ja recalibrado contra U67.
+
+Separacao estrutural:
+- candidatos com beats_best_share <= 0 sao tratados como inativos/dormentes e
+  ficam fora do KMeans;
+- a clusterizacao e feita apenas entre candidatos ativos e com dados completos.
+
+Selecao do numero de clusters:
+- testar K=2..6;
+- silhouette maior e melhor;
+- Davies-Bouldin menor e melhor;
+- Calinski-Harabasz maior e melhor;
+- estabilidade entre 12 sementes por Adjusted Rand Index maior e melhor;
+- K final escolhido pelo menor somatorio de ranks desses quatro criterios;
+- comparar ainda KMeans com clustering hierarquico Ward pelo ARI.
+
+Visualizacao:
+- PCA e usada apenas para projetar os clusters em 2D, nao para decidir capital;
+- os oito ativos THO, WDAY, EXR, XEL, SBFG, PAYX, MUX e SXC sao destacados no
+  mapa;
+- efeitos financeiros dos Smart20 sao sobrepostos somente DEPOIS do ajuste.
+
+Arquivo de overlay:
+dados/assinatura_matematica/smart20_outcomes_u59.csv
+
+Esse arquivo preserva os 20 resultados individuais ja conhecidos contra U59.
+Ele nao entra na matriz X. Serve apenas para interpretar os clusters e dar
+nomes humanos provisórios:
+- Impulsionadores;
+- Sobreviventes;
+- Prejudiciais.
+
+Regra de interpretacao dos resultados conhecidos:
+- Impulsionador observado: delta individual > 0;
+- Sobrevivente observado: -10% < delta <= 0;
+- Prejudicial observado: delta <= -10%.
+
+Os nomes dos clusters sao atribuidos somente apos o fit, usando a distribuicao
+dos resultados conhecidos dentro de cada grupo. Se nao houver ao menos dois
+resultados conhecidos em um cluster, ele permanece "Grupo comportamental".
+
+Saidas:
+output/clusterizacao_ativos/
+- cluster_quality.csv;
+- cluster_members.csv;
+- cluster_summary.csv;
+- inactive_candidates.csv;
+- known_outcomes_overlay.csv;
+- cluster_analysis.json;
+- 01_mapa_clusters_pca.png/svg;
+- 02_qualidade_clusters.png/svg;
+- 03_resultados_conhecidos_por_cluster.png/svg;
+- pacote_clusterizacao_ativos.zip.
+
+Status cientifico:
+fase exploratoria de descoberta. Os Smart20 foram usados apenas como gabarito
+externo de interpretacao. Qualquer regra derivada dessa analise exigira nova
+validacao congelada antes de ser chamada de generalizacao prospectiva.
