@@ -34,7 +34,7 @@ from engine.rotacao import (
 )
 
 RESEARCH_VERSION = "1.17.0-dev.1"
-TOP_GAP_RESEARCH_VERSION = "1.0.0-dev.1"
+TOP_GAP_RESEARCH_VERSION = "1.1.0-dev.1"
 EXPECTED_EXECUTION_SCHEMA = "intelligent-asset-search-u59-v1"
 EXPECTED_COMPARISON_FILE = "asset_search.json"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
@@ -4932,6 +4932,26 @@ def decompor_distancia_topo_operacoes(
         "best_same_holding_market_return_pct",
         "asset_selection_gap_pct",
         "asset_selection_gap_proxy_usd",
+        "available_future_assets",
+        "selected_future_rank",
+        "selected_future_percentile",
+        "selected_in_top5",
+        "selected_in_top10",
+        "selected_in_top_half",
+        "top5_median_return_pct",
+        "future_return_p90_pct",
+        "gap_to_top5_median_pct",
+        "gap_to_future_p90_pct",
+        "entry_selected_score",
+        "entry_best_score",
+        "entry_second_score",
+        "entry_best_vs_second_gap",
+        "entry_score_zscore",
+        "entry_universe_score_mean",
+        "entry_universe_score_std",
+        "entry_positive_score_count",
+        "entry_finite_score_count",
+        "entry_decision_reason",
         "peak_price_while_held",
         "peak_timestamp_while_held",
         "days_from_peak_to_exit",
@@ -4962,6 +4982,31 @@ def decompor_distancia_topo_operacoes(
         local = frame.copy()
         local.index = pd.to_datetime(local.index, utc=True)
         normalized_frames[str(symbol)] = local.sort_index()
+
+    entry_diagnostics: dict[tuple[pd.Timestamp, str], dict[str, Any]] = {}
+    buy_rows = trades.loc[
+        trades["action"].astype(str).str.upper().eq("BUY")
+    ].copy()
+    for buy in buy_rows.to_dict(orient="records"):
+        buy_asset = str(buy.get("asset") or "")
+        buy_timestamp = pd.Timestamp(buy.get("timestamp"))
+        buy_timestamp = (
+            buy_timestamp.tz_localize("UTC")
+            if buy_timestamp.tzinfo is None
+            else buy_timestamp.tz_convert("UTC")
+        )
+        entry_diagnostics[(buy_timestamp, buy_asset)] = {
+            "entry_selected_score": buy.get("final_action_score"),
+            "entry_best_score": buy.get("best_score"),
+            "entry_second_score": buy.get("second_score"),
+            "entry_best_vs_second_gap": buy.get("best_vs_second_gap"),
+            "entry_score_zscore": buy.get("best_score_zscore"),
+            "entry_universe_score_mean": buy.get("universe_score_mean"),
+            "entry_universe_score_std": buy.get("universe_score_std"),
+            "entry_positive_score_count": buy.get("positive_score_count"),
+            "entry_finite_score_count": buy.get("finite_score_count"),
+            "entry_decision_reason": buy.get("decision_reason"),
+        }
 
     rows: list[dict[str, Any]] = []
     closed = trades.loc[
@@ -5039,10 +5084,11 @@ def decompor_distancia_topo_operacoes(
                 (entry_price - entry_reference_low) / entry_price,
             )
 
-        # Escolha de ativo: mantem exatamente as datas da operacao observada e
-        # pergunta qual ativo U67 teria tido maior retorno bruto no intervalo.
-        best_asset = asset
-        best_return = selected_market_return
+        # Escolha de ativo: compara o ativo escolhido com toda a distribuicao
+        # de retornos futuros no mesmo intervalo. O maximo continua disponivel
+        # como referencia de oraculo, mas a pesquisa passa a privilegiar rank,
+        # percentil, Top 5/10 e percentil 90, que sao menos sensiveis a outliers.
+        future_returns: list[tuple[str, float]] = []
         for candidate, candidate_frame in normalized_frames.items():
             if (
                 entry_at not in candidate_frame.index
@@ -5056,21 +5102,118 @@ def decompor_distancia_topo_operacoes(
                     "close" if action == "FINAL_SELL" else "open",
                 ]
             )
-            if candidate_entry <= 0 or not np.isfinite(candidate_exit):
+            if (
+                candidate_entry <= 0
+                or not np.isfinite(candidate_entry)
+                or not np.isfinite(candidate_exit)
+            ):
                 continue
             candidate_return = candidate_exit / candidate_entry - 1.0
-            if (
-                not np.isfinite(best_return)
-                or candidate_return > best_return
-            ):
-                best_return = float(candidate_return)
-                best_asset = candidate
+            if np.isfinite(candidate_return):
+                future_returns.append(
+                    (candidate, float(candidate_return))
+                )
 
+        future_returns.sort(key=lambda item: item[1], reverse=True)
+        best_asset = (
+            future_returns[0][0]
+            if future_returns
+            else asset
+        )
+        best_return = (
+            float(future_returns[0][1])
+            if future_returns
+            else selected_market_return
+        )
         selection_gap = (
             max(0.0, float(best_return - selected_market_return))
             if np.isfinite(best_return)
             and np.isfinite(selected_market_return)
             else 0.0
+        )
+
+        available_future_assets = int(len(future_returns))
+        selected_future_rank = None
+        if future_returns:
+            for rank, (candidate, _) in enumerate(
+                future_returns,
+                start=1,
+            ):
+                if candidate == asset:
+                    selected_future_rank = int(rank)
+                    break
+
+        if (
+            selected_future_rank is not None
+            and available_future_assets > 1
+        ):
+            selected_future_percentile = float(
+                100.0
+                * (
+                    available_future_assets - selected_future_rank
+                )
+                / (available_future_assets - 1)
+            )
+        elif selected_future_rank == 1:
+            selected_future_percentile = 100.0
+        else:
+            selected_future_percentile = None
+
+        future_values = np.asarray(
+            [value for _, value in future_returns],
+            dtype=float,
+        )
+        top5_values = future_values[: min(5, len(future_values))]
+        top5_median_return = (
+            float(np.median(top5_values))
+            if top5_values.size
+            else np.nan
+        )
+        future_return_p90 = (
+            float(np.quantile(future_values, 0.90))
+            if future_values.size
+            else np.nan
+        )
+        gap_to_top5_median = (
+            max(
+                0.0,
+                top5_median_return - selected_market_return,
+            )
+            if np.isfinite(top5_median_return)
+            and np.isfinite(selected_market_return)
+            else np.nan
+        )
+        gap_to_future_p90 = (
+            max(
+                0.0,
+                future_return_p90 - selected_market_return,
+            )
+            if np.isfinite(future_return_p90)
+            and np.isfinite(selected_market_return)
+            else np.nan
+        )
+        selected_in_top5 = (
+            bool(selected_future_rank <= 5)
+            if selected_future_rank is not None
+            else False
+        )
+        selected_in_top10 = (
+            bool(selected_future_rank <= 10)
+            if selected_future_rank is not None
+            else False
+        )
+        selected_in_top_half = (
+            bool(
+                selected_future_rank
+                <= int(np.ceil(available_future_assets / 2.0))
+            )
+            if selected_future_rank is not None
+            and available_future_assets > 0
+            else False
+        )
+        entry_diag = entry_diagnostics.get(
+            (entry_at, asset),
+            {},
         )
 
         # Permanencia excessiva: quanto do retorno potencial do proprio ativo
@@ -5166,6 +5309,33 @@ def decompor_distancia_topo_operacoes(
                 "asset_selection_gap_proxy_usd": float(
                     exposure * selection_gap
                 ),
+                "available_future_assets": available_future_assets,
+                "selected_future_rank": selected_future_rank,
+                "selected_future_percentile": selected_future_percentile,
+                "selected_in_top5": selected_in_top5,
+                "selected_in_top10": selected_in_top10,
+                "selected_in_top_half": selected_in_top_half,
+                "top5_median_return_pct": (
+                    float(top5_median_return * 100.0)
+                    if np.isfinite(top5_median_return)
+                    else None
+                ),
+                "future_return_p90_pct": (
+                    float(future_return_p90 * 100.0)
+                    if np.isfinite(future_return_p90)
+                    else None
+                ),
+                "gap_to_top5_median_pct": (
+                    float(gap_to_top5_median * 100.0)
+                    if np.isfinite(gap_to_top5_median)
+                    else None
+                ),
+                "gap_to_future_p90_pct": (
+                    float(gap_to_future_p90 * 100.0)
+                    if np.isfinite(gap_to_future_p90)
+                    else None
+                ),
+                **entry_diag,
                 "peak_price_while_held": float(peak_price),
                 "peak_timestamp_while_held": peak_at,
                 "days_from_peak_to_exit": days_from_peak_to_exit,
@@ -5293,6 +5463,271 @@ def decompor_distancia_topo_operacoes(
         ),
     }
     return summary, detail, by_cause
+
+
+def resumir_qualidade_ranking_ativos(
+    detail: pd.DataFrame,
+) -> pd.DataFrame:
+    """Resume a qualidade relativa do ativo escolhido, no total e por fold."""
+    columns = (
+        "scope",
+        "walk_forward_fold",
+        "operations",
+        "median_future_rank",
+        "median_future_percentile",
+        "top5_share",
+        "top10_share",
+        "top_half_share",
+        "median_gap_to_top5_median_pct",
+        "median_gap_to_future_p90_pct",
+        "median_selected_future_return_pct",
+        "spearman_entry_score_vs_future_percentile",
+        "spearman_entry_margin_vs_future_percentile",
+    )
+    if detail is None or detail.empty:
+        return pd.DataFrame(columns=columns)
+
+    groups: list[tuple[str, Any, pd.DataFrame]] = [
+        ("overall", None, detail)
+    ]
+    if "walk_forward_fold" in detail.columns:
+        for fold_id, group in detail.groupby(
+            "walk_forward_fold",
+            dropna=True,
+        ):
+            groups.append(("fold", fold_id, group))
+
+    rows: list[dict[str, Any]] = []
+    for scope, fold_id, group in groups:
+        rank = pd.to_numeric(
+            group["selected_future_rank"],
+            errors="coerce",
+        )
+        percentile = pd.to_numeric(
+            group["selected_future_percentile"],
+            errors="coerce",
+        )
+        gap_top5 = pd.to_numeric(
+            group["gap_to_top5_median_pct"],
+            errors="coerce",
+        )
+        gap_p90 = pd.to_numeric(
+            group["gap_to_future_p90_pct"],
+            errors="coerce",
+        )
+        selected_return = pd.to_numeric(
+            group["selected_same_holding_market_return_pct"],
+            errors="coerce",
+        )
+        score = pd.to_numeric(
+            group["entry_selected_score"],
+            errors="coerce",
+        )
+        margin = pd.to_numeric(
+            group["entry_best_vs_second_gap"],
+            errors="coerce",
+        )
+
+        def share(column: str) -> float | None:
+            values = group[column].dropna()
+            if values.empty:
+                return None
+            return float(values.astype(bool).mean())
+
+        score_pair = pd.concat(
+            [score.rename("score"), percentile.rename("percentile")],
+            axis=1,
+        ).dropna()
+        margin_pair = pd.concat(
+            [margin.rename("margin"), percentile.rename("percentile")],
+            axis=1,
+        ).dropna()
+
+        rows.append(
+            {
+                "scope": scope,
+                "walk_forward_fold": fold_id,
+                "operations": int(len(group)),
+                "median_future_rank": (
+                    float(rank.median())
+                    if rank.notna().any()
+                    else None
+                ),
+                "median_future_percentile": (
+                    float(percentile.median())
+                    if percentile.notna().any()
+                    else None
+                ),
+                "top5_share": share("selected_in_top5"),
+                "top10_share": share("selected_in_top10"),
+                "top_half_share": share("selected_in_top_half"),
+                "median_gap_to_top5_median_pct": (
+                    float(gap_top5.median())
+                    if gap_top5.notna().any()
+                    else None
+                ),
+                "median_gap_to_future_p90_pct": (
+                    float(gap_p90.median())
+                    if gap_p90.notna().any()
+                    else None
+                ),
+                "median_selected_future_return_pct": (
+                    float(selected_return.median())
+                    if selected_return.notna().any()
+                    else None
+                ),
+                "spearman_entry_score_vs_future_percentile": (
+                    float(
+                        score_pair["score"].corr(
+                            score_pair["percentile"],
+                            method="spearman",
+                        )
+                    )
+                    if len(score_pair) >= 3
+                    else None
+                ),
+                "spearman_entry_margin_vs_future_percentile": (
+                    float(
+                        margin_pair["margin"].corr(
+                            margin_pair["percentile"],
+                            method="spearman",
+                        )
+                    )
+                    if len(margin_pair) >= 3
+                    else None
+                ),
+            }
+        )
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def resumir_calibracao_score_entrada(
+    detail: pd.DataFrame,
+    *,
+    quantiles: int = 5,
+) -> pd.DataFrame:
+    """Compara o score conhecido na entrada com o ranking futuro ex post."""
+    columns = (
+        "score_bucket",
+        "operations",
+        "score_min",
+        "score_median",
+        "score_max",
+        "median_future_rank",
+        "median_future_percentile",
+        "top5_share",
+        "top10_share",
+        "top_half_share",
+        "median_gap_to_future_p90_pct",
+        "median_selected_future_return_pct",
+    )
+    if detail is None or detail.empty:
+        return pd.DataFrame(columns=columns)
+
+    frame = detail.copy()
+    frame["entry_selected_score"] = pd.to_numeric(
+        frame["entry_selected_score"],
+        errors="coerce",
+    )
+    frame["selected_future_rank"] = pd.to_numeric(
+        frame["selected_future_rank"],
+        errors="coerce",
+    )
+    frame["selected_future_percentile"] = pd.to_numeric(
+        frame["selected_future_percentile"],
+        errors="coerce",
+    )
+    frame = frame.dropna(
+        subset=[
+            "entry_selected_score",
+            "selected_future_percentile",
+        ]
+    )
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+
+    effective_quantiles = max(
+        1,
+        min(
+            int(quantiles),
+            int(frame["entry_selected_score"].nunique()),
+            int(len(frame)),
+        ),
+    )
+    if effective_quantiles == 1:
+        frame["score_bucket"] = "Q1"
+    else:
+        ranked = frame["entry_selected_score"].rank(
+            method="first",
+        )
+        frame["score_bucket"] = pd.qcut(
+            ranked,
+            q=effective_quantiles,
+            labels=[
+                f"Q{index}"
+                for index in range(1, effective_quantiles + 1)
+            ],
+        ).astype(str)
+
+    rows: list[dict[str, Any]] = []
+    for bucket, group in frame.groupby(
+        "score_bucket",
+        sort=True,
+        observed=False,
+    ):
+        score = group["entry_selected_score"]
+        rank = group["selected_future_rank"]
+        percentile = group["selected_future_percentile"]
+        gap_p90 = pd.to_numeric(
+            group["gap_to_future_p90_pct"],
+            errors="coerce",
+        )
+        selected_return = pd.to_numeric(
+            group["selected_same_holding_market_return_pct"],
+            errors="coerce",
+        )
+
+        rows.append(
+            {
+                "score_bucket": str(bucket),
+                "operations": int(len(group)),
+                "score_min": float(score.min()),
+                "score_median": float(score.median()),
+                "score_max": float(score.max()),
+                "median_future_rank": (
+                    float(rank.median())
+                    if rank.notna().any()
+                    else None
+                ),
+                "median_future_percentile": (
+                    float(percentile.median())
+                    if percentile.notna().any()
+                    else None
+                ),
+                "top5_share": float(
+                    group["selected_in_top5"].astype(bool).mean()
+                ),
+                "top10_share": float(
+                    group["selected_in_top10"].astype(bool).mean()
+                ),
+                "top_half_share": float(
+                    group["selected_in_top_half"].astype(bool).mean()
+                ),
+                "median_gap_to_future_p90_pct": (
+                    float(gap_p90.median())
+                    if gap_p90.notna().any()
+                    else None
+                ),
+                "median_selected_future_return_pct": (
+                    float(selected_return.median())
+                    if selected_return.notna().any()
+                    else None
+                ),
+            }
+        )
+
+    return pd.DataFrame(rows, columns=columns)
 
 
 def calcular_metricas_peak_gatilhos(
