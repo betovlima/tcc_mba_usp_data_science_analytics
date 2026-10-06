@@ -151,15 +151,15 @@ if exclusions_b2 or len(frames_b2) != len(U59_ADDITIONS):
         f"exclusoes={json.dumps(exclusions_b2, ensure_ascii=False, default=str)}"
     )
 
-frames_u67_raw = {
+frames_u59_raw = {
     **frames_u56,
     **frames_b2,
 }
 
-if len(frames_u67_raw) != EXPECTED_U59_COUNT:
+if len(frames_u59_raw) != EXPECTED_U59_COUNT:
     raise RuntimeError(
         "U59 deveria conter 59 ativos. "
-        f"observado={len(frames_u67_raw)}"
+        f"observado={len(frames_u59_raw)}"
     )
 
 
@@ -180,7 +180,7 @@ if exclusions_smart or len(frames_smart) != len(U67_ADDITIONS):
     )
 
 frames_u67_raw = {
-    **frames_u67_raw,
+    **frames_u59_raw,
     **frames_smart,
 }
 symbols_u67_requested = sorted(frames_u67_raw)
