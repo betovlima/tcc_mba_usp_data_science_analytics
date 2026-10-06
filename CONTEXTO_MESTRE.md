@@ -3817,3 +3817,30 @@ Nao ha alteracao de calculo, politica ou resultado financeiro.
 
 Versao do runner:
 1.20.1-dev.3
+
+
+## Exibicao dos graficos no Spyder — v1.20.1-dev.4
+
+Problema observado:
+os PNG/SVG eram gerados em output/reproducao/graficos_rotacoes, mas os
+graficos nao apareciam no painel Plots do Spyder.
+
+Causa:
+os modulos reproducao/graficos.py e reproducao/graficos_rotacoes.py forçavam
+matplotlib.use("Agg"), backend nao interativo, e cada figura era fechada logo
+apos o savefig.
+
+Correcao:
+- backend Agg agora e usado apenas em ambiente headless sem DISPLAY/Wayland;
+- no Windows/Spyder o backend configurado pelo IDE e preservado;
+- gerar_graficos_rotacoes ganhou parametro show;
+- reproduzir_experimento.py chama show=True;
+- quando show=True, a figura e salva e tambem enviada ao backend interativo
+  com plt.show(block=False), sem fechamento imediato;
+- em execucoes headless/testes, show=False continua fechando as figuras.
+
+Versao:
+1.20.1-dev.4
+
+Essa alteracao afeta somente exibicao dos graficos e nao modifica politica,
+modelo, folds, universo ou calculos financeiros.
