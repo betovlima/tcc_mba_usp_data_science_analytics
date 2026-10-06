@@ -38,6 +38,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import math
+import shutil
 import time
 
 import pandas as pd
@@ -81,7 +82,7 @@ SMART = SnapshotPaths.from_root(
 
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.21.0-dev.1"
+REPRODUCTION_VERSION = "1.21.0-dev.2"
 EXECUTION_SCHEMA = "u67-positive8-reproduction-v1"
 
 U59_ADDITIONS = ("COLB", "AMS", "FOXF")
@@ -490,6 +491,9 @@ if not reproduced:
 
 
 # %% 8 - Artefatos finais de reproducao
+# A pasta e recriada para impedir mistura de artefatos U59/U67 entre rodadas.
+if OUT.exists():
+    shutil.rmtree(OUT)
 OUT.mkdir(parents=True, exist_ok=True)
 
 pd.DataFrame(
