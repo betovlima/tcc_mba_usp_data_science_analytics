@@ -3604,3 +3604,50 @@ o novo runner simplificado reproduz exatamente o resultado oficial U59 de
 aproximadamente US$30,08 milhoes usando somente os snapshots congelados.
 A limpeza dos runners experimentais nao alterou o resultado financeiro
 reprodutivel.
+
+
+## Integracao final na main e checkpoint U59 30M
+
+A linha de pesquisa da branch research/intelligent-asset-signature-v1 foi
+integrada na main por meio do Pull Request #4.
+
+PR:
+Integrate reproducible U59 checkpoint (~US$ 30.08M)
+
+Merge commit:
+eb1adf3b57a92ef2e7de6b97dd45f68a637094db
+
+Antes do merge:
+- main estava em f9cf29fdb736676d0d3e26780481be99813c602a;
+- branch estava 223 commits a frente e 0 atras;
+- GitHub reportou mergeable_state=clean;
+- o workflow reproduction-tests no head da branch
+  599305c008d08a7741eb7c281837fb9e4b36309f concluiu com sucesso.
+
+Checkpoint cientifico integrado:
+- universo: U59 = U56 + COLB + AMS + FOXF;
+- capital inicial: US$10.000;
+- capital final reproduzido: US$30.080.091,008142874;
+- erro relativo da reproducao: 0;
+- CAGR: 267,403253%;
+- Sharpe: 2,33754894;
+- MaxDD: -31,2189259%;
+- worst fold: +275,050866%;
+- pacote final SHA-256:
+  72db04ed58fb779bb68951ebd7cb77cf5c2748bc11b7ffd3ef293074af586a91.
+
+O runner oficial e:
+reproduzir_experimento.py
+
+O runner de pesquisa de novos ativos e:
+buscar_ativos.py
+
+Apos o merge, o utilitario legado migrar_snapshot_pesquisa.py foi removido da
+main para evitar execucao acidental. README e testes foram ajustados para que
+o fluxo normal tenha apenas os dois runners acima no diretorio raiz.
+
+Tag planejada para este checkpoint:
+tcc-u59-30m-v1.20.0
+
+A tag deve apontar para o commit final da main apos esta consolidacao e somente
+depois de o workflow reproduction-tests dessa revisao concluir com sucesso.
