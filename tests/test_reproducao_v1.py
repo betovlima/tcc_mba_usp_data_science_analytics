@@ -779,12 +779,13 @@ def test_rotation_visualization_suite_is_integrated() -> None:
     ).read_text(encoding="utf-8")
 
     assert "gerar_graficos_rotacoes" in runner
+    assert "def gerar_graficos_rotacoes_u59(" in graphs
     assert "decision_diagnostics=decision_diagnostics" in runner
     assert (
         "policy_decision_diagnostics=decision_diagnostics"
         in runner
     )
-    assert 'REPRODUCTION_VERSION = "1.20.1-dev.2"' in runner
+    assert 'REPRODUCTION_VERSION = "1.20.1-dev.3"' in runner
 
     expected_outputs = (
         "timeline_rotacoes",
