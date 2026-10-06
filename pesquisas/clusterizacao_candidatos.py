@@ -83,7 +83,7 @@ OUTCOMES_FILE = (
 )
 OUT = ROOT / "output" / "clusterizacao_ativos"
 
-ANALYSIS_VERSION = "1.0.0-dev.1"
+ANALYSIS_VERSION = "1.0.1-dev.1"
 ANALYSIS_SCHEMA = "candidate-behavior-clustering-v1"
 SHOW_PLOTS = True
 RANDOM_STATE = 42
@@ -273,37 +273,100 @@ def _quality_table(x_scaled: np.ndarray) -> pd.DataFrame:
     return quality
 
 
-def _semantic_name(row: pd.Series) -> str:
-    known = int(row.get("known_outcomes", 0))
-    if known < 2:
-        return "Grupo comportamental"
+def _behavior_names(members: pd.DataFrame) -> dict[int, str]:
+    """Da nomes humanos aos clusters usando somente variaveis de score."""
+    profiles = (
+        members.groupby("cluster_id", as_index=False)
+        .agg(
+            mean_beats=(
+                "candidate_beats_u59_best_share",
+                "mean",
+            ),
+            mean_positive_share=(
+                "candidate_positive_score_share",
+                "mean",
+            ),
+            mean_score_std=(
+                "candidate_score_std",
+                "mean",
+            ),
+            mean_score=(
+                "candidate_score_mean",
+                "mean",
+            ),
+        )
+    )
 
-    median_effect = row.get("median_capital_pct_vs_u59")
-    positive_rate = row.get("positive_rate")
-    harm_rate = row.get("harm10_rate")
+    cluster_ids = profiles["cluster_id"].astype(int).tolist()
+    if len(cluster_ids) != 3:
+        return {
+            cluster_id: f"Grupo comportamental {cluster_id + 1}"
+            for cluster_id in cluster_ids
+        }
 
-    if (
-        pd.notna(harm_rate)
-        and harm_rate >= 0.50
-    ) or (
-        pd.notna(median_effect)
-        and median_effect <= -0.10
-    ):
-        return "Prejudiciais"
+    dominant = int(
+        profiles.sort_values(
+            ["mean_beats", "mean_score_std"],
+            ascending=[False, False],
+        ).iloc[0]["cluster_id"]
+    )
+    remaining = profiles.loc[
+        profiles["cluster_id"] != dominant
+    ].copy()
+    persistent = int(
+        remaining.sort_values(
+            ["mean_positive_share", "mean_score_std"],
+            ascending=[False, True],
+        ).iloc[0]["cluster_id"]
+    )
+    opportunistic = int(
+        remaining.loc[
+            remaining["cluster_id"] != persistent,
+            "cluster_id",
+        ].iloc[0]
+    )
 
-    if (
-        pd.notna(positive_rate)
-        and positive_rate >= 0.50
-        and pd.notna(median_effect)
-        and median_effect > 0.0
-    ):
-        return "Impulsionadores"
+    return {
+        dominant: "Dominantes",
+        persistent: "Persistentes",
+        opportunistic: "Oportunistas",
+    }
 
-    return "Sobreviventes"
+
+def _cluster_feature_profiles(
+    members: pd.DataFrame,
+    behavior_names: dict[int, str],
+) -> pd.DataFrame:
+    feature_frame = members[list(FEATURES)].copy()
+    standardized = StandardScaler().fit_transform(feature_frame)
+    z = pd.DataFrame(
+        standardized,
+        columns=FEATURES,
+        index=members.index,
+    )
+    z["cluster_id"] = members["cluster_id"].to_numpy()
+
+    rows = []
+    for cluster_id, group in members.groupby("cluster_id"):
+        z_group = z.loc[group.index]
+        row = {
+            "cluster_id": int(cluster_id),
+            "behavior_name": behavior_names[int(cluster_id)],
+            "candidate_count": int(len(group)),
+        }
+        for feature in FEATURES:
+            row[f"mean_{feature}"] = float(group[feature].mean())
+            row[f"z_{feature}"] = float(z_group[feature].mean())
+        rows.append(row)
+    return pd.DataFrame(rows).sort_values(
+        "cluster_id",
+        ignore_index=True,
+    )
 
 
 def _build_cluster_summary(
     members: pd.DataFrame,
+    behavior_names: dict[int, str],
 ) -> pd.DataFrame:
     rows = []
     for cluster_id, group in members.groupby("cluster_id"):
@@ -335,18 +398,14 @@ def _build_cluster_summary(
                 "mean_capital_pct_vs_u59": mean_effect,
                 "positive_rate": positive_rate,
                 "harm10_rate": harm_rate,
+                "behavior_name": behavior_names[int(cluster_id)],
             }
         )
 
-    summary = pd.DataFrame(rows).sort_values(
+    return pd.DataFrame(rows).sort_values(
         "cluster_id",
         ignore_index=True,
     )
-    summary["semantic_name"] = summary.apply(
-        _semantic_name,
-        axis=1,
-    )
-    return summary
 
 
 def _plot_pca(
@@ -357,12 +416,12 @@ def _plot_pca(
     fig, ax = plt.subplots(figsize=(11.8, 8.0))
     colors = plt.get_cmap("tab10")
 
-    semantic = summary.set_index("cluster_id")["semantic_name"].to_dict()
+    behavior = summary.set_index("cluster_id")["behavior_name"].to_dict()
 
     for cluster_id, group in members.groupby("cluster_id"):
         label = (
             f"Grupo {cluster_id + 1} · "
-            f"{semantic.get(cluster_id, 'Grupo comportamental')}"
+            f"{behavior.get(cluster_id, 'Grupo comportamental')}"
         )
         ax.scatter(
             group["pc1"],
@@ -548,7 +607,7 @@ def _plot_known_outcomes(
     ax.set_xticks(
         list(range(len(cluster_ids))),
         [
-            f"Grupo {cid + 1}\n{semantic.get(cid, '')}"
+            f"Grupo {cid + 1}\n{behavior.get(cid, '')}"
             for cid in cluster_ids
         ],
     )
@@ -565,6 +624,59 @@ def _plot_known_outcomes(
         fig,
         "03_resultados_conhecidos_por_cluster",
     )
+
+
+def _plot_cluster_profiles(
+    profiles: pd.DataFrame,
+) -> dict[str, str]:
+    z_columns = [f"z_{feature}" for feature in FEATURES]
+    matrix = profiles[z_columns].to_numpy(dtype=float)
+
+    labels = [
+        "Vence o melhor U59",
+        "Score medio",
+        "Volatilidade do score",
+        "Score positivo",
+        "Correlacao abs. com melhor",
+        "Correlacao com media U59",
+    ]
+
+    fig, ax = plt.subplots(figsize=(11.5, 5.8))
+    limit = max(
+        1.0,
+        float(np.nanmax(np.abs(matrix))) * 1.05,
+    )
+    image = ax.imshow(
+        matrix,
+        aspect="auto",
+        cmap="coolwarm",
+        vmin=-limit,
+        vmax=limit,
+    )
+    ax.set_xticks(
+        range(len(labels)),
+        labels,
+        rotation=30,
+        ha="right",
+    )
+    ax.set_yticks(
+        range(len(profiles)),
+        [
+            f"Grupo {int(row.cluster_id) + 1} · {row.behavior_name}"
+            for row in profiles.itertuples(index=False)
+        ],
+    )
+    ax.set_title(
+        "Perfil comportamental dos clusters\n"
+        "Valores padronizados; sem uso de capital",
+        loc="left",
+        pad=14,
+        fontweight="bold",
+    )
+    cbar = fig.colorbar(image, ax=ax, pad=0.02)
+    cbar.set_label("Desvio-padrao em relacao ao conjunto")
+    fig.tight_layout()
+    return _save_pair(fig, "04_perfil_comportamental_clusters")
 
 
 def main() -> None:
@@ -642,12 +754,17 @@ def main() -> None:
         validate="one_to_one",
     )
 
-    summary = _build_cluster_summary(members)
-    semantic_map = summary.set_index("cluster_id")[
-        "semantic_name"
-    ].to_dict()
-    members["semantic_name"] = members["cluster_id"].map(
-        semantic_map
+    behavior_names = _behavior_names(members)
+    profiles = _cluster_feature_profiles(
+        members,
+        behavior_names,
+    )
+    summary = _build_cluster_summary(
+        members,
+        behavior_names,
+    )
+    members["behavior_name"] = members["cluster_id"].map(
+        behavior_names
     )
 
     if OUT.exists():
@@ -657,6 +774,10 @@ def main() -> None:
     quality.to_csv(OUT / "cluster_quality.csv", index=False)
     members.to_csv(OUT / "cluster_members.csv", index=False)
     summary.to_csv(OUT / "cluster_summary.csv", index=False)
+    profiles.to_csv(
+        OUT / "cluster_behavior_profiles.csv",
+        index=False,
+    )
     dormant.to_csv(OUT / "inactive_candidates.csv", index=False)
     members.loc[
         members["capital_pct_vs_u59"].notna()
@@ -675,6 +796,9 @@ def main() -> None:
         "known_outcomes": _plot_known_outcomes(
             members,
             summary,
+        ),
+        "behavior_profiles": _plot_cluster_profiles(
+            profiles,
         ),
     }
 
@@ -704,11 +828,12 @@ def main() -> None:
         "cluster_summary": summary.to_dict(orient="records"),
         "graphs": graphs,
         "interpretation": (
-            "Clusters are fitted without capital outcomes. Smart20 financial "
-            "effects are merged only afterwards to give provisional human "
-            "names such as Impulsionadores, Sobreviventes and Prejudiciais. "
-            "These names are descriptive and are not yet a prospective U67 "
-            "selection rule."
+            "Clusters are fitted and named behaviorally without capital outcomes. "
+            "Smart20 financial effects are merged only afterwards as an "
+            "external overlay. The observed outcome labels Impulsionador, "
+            "Sobrevivente and Prejudicial are not cluster names because the "
+            "current unsupervised groups do not cleanly reproduce those "
+            "financial classes."
         ),
     }
     with (
