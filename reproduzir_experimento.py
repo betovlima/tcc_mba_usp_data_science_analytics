@@ -421,7 +421,7 @@ for fold_position, fold in enumerate(folds, start=1):
     )
 
 
-# %% 7 - Replay U59
+# %% 7 - Replay U67
 scheduled_policy = _politica_agendada(
     fold_policies,
     decision_to_fold,
