@@ -3699,3 +3699,67 @@ SHA-256:
 - DOCX: 5d7ab9c169d126252aa5b4bf468e513fb0a0a7dcf1b7f6e88c8838c08aa9c463
 - PDF: e5e3da0a3c2b807343499f35c1f76a327afb08ecf65ef727ec85f688bf90da09
 - Markdown: fb87a75e011514122aaef9c815ae4dbca960e2f364e118c516ce4aa72fc3f41f
+
+
+## Visualizacao das rotacoes U59 — v1.20.1-dev.1
+
+Foi criada, a partir da main atualizada no commit
+4427f3963501bb7adc5c56fc78e4ef3cfa043f51, a branch:
+
+research/rotation-visualizations-v1
+
+Objetivo:
+testar visualmente o comportamento das rotacoes do U59 sem alterar a politica,
+o treino, o universo ou o checkpoint financeiro de US$30.080.091,008142874.
+
+O runner principal continua sendo:
+reproduzir_experimento.py
+
+Versao nesta branch:
+1.20.1-dev.1
+
+Foi adicionado o modulo:
+reproducao/graficos_rotacoes.py
+
+O replay agora registra tambem os diagnosticos de decisao ja calculados pela
+politica, sem mudar a acao escolhida:
+- best_asset;
+- current_asset;
+- best_vs_current_gap;
+- best_vs_second_gap;
+- effective_switch_margin;
+- top 1/2/3;
+- motivo da decisao.
+
+Visualizacoes geradas em:
+output/reproducao/graficos_rotacoes/
+
+Conjunto inicial de graficos:
+1. timeline_rotacoes_u59:
+   linha do tempo/Gantt indicando qual ativo ficou em carteira ao longo do
+   periodo;
+2. matriz_transicoes_u59:
+   matriz origem -> destino com o numero de rotacoes;
+3. presenca_por_ativo_u59:
+   numero de sessoes em que cada ativo esteve selecionado;
+4. pnl_realizado_por_ativo_u59:
+   PnL realizado agregado por ativo, explicitamente marcado como descritivo e
+   nao como contribuicao causal contrafactual;
+5. distancia_topo_rotacoes_u59:
+   nas rotacoes efetivas, compara melhor score vs incumbente, melhor vs segundo
+   colocado e a margem minima exigida.
+
+Dados auxiliares exportados:
+- timeline_blocos_u59.csv;
+- matriz_transicoes_u59.csv;
+- perfil_ativos_u59.csv;
+- rotacoes_u59.csv;
+- distancia_topo_rotacoes_u59.csv.
+
+A execucao continua obrigada a reproduzir exatamente o checkpoint U59. Se a
+inclusao dos diagnosticos/graficos alterar o capital final, a branch nao deve
+ser promovida.
+
+Regra:
+esta branch e apenas de visualizacao/diagnostico. Nao alterar parametros do
+modelo nem a composicao U59 durante esta etapa.
