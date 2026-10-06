@@ -3731,3 +3731,36 @@ neste documento; ela nao deve ser reintroduzida no checkpoint oficial.
 Proxima linha de pesquisa: decompor quantitativamente a distancia entre a
 trajetoria U67 e uma referencia de topo por operacao, separando perdas de
 timing de entrada, timing de saida, escolha de ativo e permanencia excessiva.
+
+
+## Pesquisa U67 Top Gap Decomposition v1 — branch research/u67-top-gap-decomposition-v2
+
+Objetivo: localizar, sem alterar a politica U67, onde cada operacao deixa
+retorno potencial em relacao a referencias ex post.
+
+Versao da pesquisa:
+- top_gap_research_version=1.0.0-dev.1;
+- checkpoint-base=U67 v1.21.0;
+- capital congelado de referencia=US$ 58.557.157,67496595;
+- branch criada diretamente da main no commit
+  4b5f16030afa8b850790747bb0e3e3063d233e79.
+
+A decomposicao mede quatro causas por posicao encerrada:
+- entrada_tardia: distancia da compra ao menor low das 20 sessoes anteriores;
+- escolha_ativo: melhor ativo U67 no mesmo intervalo de holding;
+- permanencia_excessiva: retorno devolvido entre o pico durante o holding e a saida;
+- saida_precoce: upside maximo nas 10 sessoes posteriores a saida.
+
+Os quatro gaps sao contrafactuais ex post e podem se sobrepor. Portanto, os
+proxies em dolares nao podem ser somados como se formassem uma decomposicao
+contabil do capital. Nesta etapa eles servem somente para identificar onde se
+concentra a oportunidade e escolher a proxima hipotese de pesquisa.
+
+A execucao da branch reutiliza reproduzir_experimento.py. Depois de reproduzir
+o U67, exporta:
+- u67_top_gap_by_operation.csv;
+- u67_top_gap_by_cause.csv;
+- top_gap_analysis dentro de reproducao_u67.json.
+
+Nenhuma regra operacional nova foi introduzida. A main permanece congelada no
+checkpoint U67.
