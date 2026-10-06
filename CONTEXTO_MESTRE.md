@@ -2818,3 +2818,70 @@ uma unica validacao prospectiva usando candidatos cujo capital ainda nao foi
 consultado. O conjunto de candidatos pode ser obtido do
 intelligent_candidates_ranked.csv ja existente, sem nova busca Alpaca.
 A selecao deve ser congelada por S antes de qualquer replay financeiro.
+
+
+## Congelamento da validacao prospectiva one-shot — 1.18.1-dev.1
+
+Foi criado o runner:
+congelar_validacao_prospectiva_v118_spyder.py
+
+Objetivo:
+aplicar a assinatura matematica v1.18 ja congelada aos candidatos cujo
+resultado financeiro ainda nao foi consultado e congelar uma unica coorte de
+validacao antes de qualquer replay.
+
+Este runner NAO executa backtest e NAO consulta capital.
+
+Fonte:
+- output/busca_ativos/intelligent_candidates_ranked.csv;
+- busca 1.17.0-dev.1, schema intelligent-asset-search-u59-v1;
+- referencia de score U59_WINNER;
+- assinatura machine-readable congelada em
+  dados/assinatura_matematica/signature_v1_18_frozen.json.
+
+Guardas:
+- ranked deve conter exatamente 446 candidatos;
+- os 20 candidatos Smart20 cujo capital ja foi revelado sao excluidos;
+- portanto o pool prospectivo deve conter exatamente 426 candidatos;
+- candidatos com dados de score insuficientes nao entram na validacao;
+- nenhum resultado de capital pode participar da selecao.
+
+Formula aplicada ao pool prospectivo:
+A = 1[beats_best_share > 0]
+S = 1 - mean(
+    rank_active(beats_best_share),
+    rank_active(abs(score_corr_best)),
+    rank_active(score_std)
+)
+
+Os ranks sao recalculados dentro da nova coorte prospectiva, apenas entre
+candidatos ativos, conforme a definicao congelada.
+
+Desenho amostral predeclarado:
+- dividir os candidatos ativos em tres tercis por S;
+- selecionar 8 do tercil alto;
+- selecionar 8 do tercil medio;
+- selecionar 8 do tercil baixo;
+- selecionar 8 dormant A=0;
+- total planejado = 32 candidatos.
+
+A escolha dentro de cada estrato usa SHA-256 deterministico com salt congelado:
+tcc-v118-prospective-u59-one-shot-v1
+
+Isso evita escolha manual por ticker, setor, score stage1 ou qualquer
+informacao financeira. O objetivo e ter cobertura do espectro do score para
+testar monotonicidade, AUC/Spearman e a hipotese hurdle A=0.
+
+Artefatos:
+- prospective_validation_cohort_v118.csv;
+- prospective_untouched_pool_scored.csv;
+- prospective_validation_freeze.json;
+- pacote_congelamento_validacao_prospectiva_v118.zip;
+- copia local da coorte congelada em
+  dados/assinatura_matematica/prospective_validation_cohort_v118.csv.
+
+Regra:
+depois que a coorte for congelada, ela nao pode ser alterada por qualquer
+motivo relacionado ao resultado financeiro. O proximo runner podera somente
+revelar os resultados individuais contra U59 e calcular as metricas
+predeclaradas. Nao havera segunda tentativa de selecao apos observar capital.
