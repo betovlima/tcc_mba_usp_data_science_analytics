@@ -3113,3 +3113,66 @@ Conclusao cientifica:
 A v1.18 deve ser mantida congelada como resultado cientifico. Qualquer modelo
 novo que use estas 32 observacoes passa a ser uma nova hipotese de
 desenvolvimento e exigiria, futuramente, outra amostra realmente intocada.
+
+
+## Redacao do rascunho tecnico-cientifico do TCC — v1
+
+A linha experimental da assinatura contextual foi encerrada apos a validacao
+prospectiva one-shot v1.18. A etapa seguinte passou a ser exclusivamente de
+redacao, organizacao e revisao academica, sem novos replays para buscar
+resultados melhores.
+
+Foi preparado um primeiro rascunho completo usando o template oficial
+"Template TCC - Implementação de Algoritmo(s) de Machine Learning (251, 252)"
+e as normas do Manual de Instrucoes e Normas para TCC do MBA USP/Esalq.
+
+Titulo de trabalho provisório:
+"Assinatura contextual para seleção de ativos em estratégia de rotação com
+aprendizado de máquina".
+
+Estrutura adotada:
+- Resumo e Palavras-chave;
+- Considerações Iniciais;
+- Implementação de Algoritmo(s) de Machine Learning;
+- Resultados e Discussão;
+- Conclusões;
+- Referências.
+
+O texto separou explicitamente:
+- U59 como baseline financeiro congelado;
+- U59+8 positivos como resultado exploratorio pos-hoc;
+- v1.18 como assinatura matematica congelada;
+- validacao prospectiva one-shot como teste confirmatorio do ranking continuo;
+- falha da AUC binaria como resultado negativo;
+- falha economica de U59+High-S8 como evidencia de nao aditividade e de que
+  ordenacao marginal e composicao conjunta sao problemas distintos.
+
+Foram incluidos no rascunho:
+- tabela da estrutura cronologica dos tres folds;
+- tabela comparativa U56, U59, U59+20 Smart20, U59+8 positivos e U59+High-S8;
+- tabela dos resultados prospectivos por estrato;
+- grafico de capital final dos principais cenarios;
+- grafico da assinatura contextual na amostra de desenvolvimento;
+- grafico da morfologia temporal de entrada/saida;
+- grafico do score congelado S contra efeito financeiro prospectivo.
+
+Referencias cientificas usadas na fundamentacao/discussao:
+Ke et al. (2017), Gu et al. (2020), Gama et al. (2014),
+Bailey et al. (2017) e Lopez de Prado (2018).
+
+Controle editorial:
+- titulo provisório com 14 palavras, abaixo do limite institucional de 15;
+- resumo com 229 palavras, abaixo do limite institucional de 250;
+- documento renderizado com 13 paginas;
+- todas as 13 paginas foram inspecionadas visualmente sem clipping,
+  sobreposicao ou tabelas quebradas;
+- ficaram em aberto somente dados pessoais/editoriais que precisam de
+  confirmacao do autor: nome/titulacao/e-mail do orientador e e-mail do autor.
+
+Artefato produzido fora do repositorio para revisao:
+TCC_Assinatura_Contextual_Rascunho_v1.docx
+
+Decisao:
+a partir deste ponto, alteracoes devem ser editoriais, bibliograficas ou de
+clareza metodologica. Nao executar novas campanhas financeiras para reescrever
+a conclusao da validacao v1.18.
