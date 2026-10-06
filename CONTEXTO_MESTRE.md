@@ -3651,3 +3651,51 @@ tcc-u59-30m-v1.20.0
 
 A tag deve apontar para o commit final da main apos esta consolidacao e somente
 depois de o workflow reproduction-tests dessa revisao concluir com sucesso.
+
+
+## TCC v2 — formalizacao matematica da selecao e rotacao
+
+O rascunho do TCC foi atualizado para incorporar explicitamente a matematica
+da selecao do melhor ativo por sessao e da politica de rotacao do U59.
+
+Nova subsecao:
+"Mecanismo matematico da selecao e da rotacao".
+
+A redacao agora formaliza:
+- vetor de features X(a,t) construido apenas com informacao disponivel ate t;
+- execucao da decisao de t na abertura de t+1;
+- alvo supervisionado multi-horizonte em 5, 10, 20, 40 e 60 sessoes;
+- retorno logaritmico futuro e penalizacoes de excursao adversa e drawdown;
+- pesos de horizonte 0,10, 0,15, 0,20, 0,30 e 0,25;
+- componentes de movement capture e trend persistence;
+- alvo final Y(a,t) do LightGBM;
+- score de utilidade prevista Q(a,t)=f_a[X(a,t)];
+- escolha transversal a*(t)=arg max_a Q(a,t);
+- permanencia minima de duas sessoes;
+- rotacao somente quando a vantagem do melhor candidato sobre o incumbente
+  supera a margem efetiva calibrada;
+- margens efetivas do checkpoint U59: 0,0005; 0,01; 0,0005 nos folds 1, 2 e 3;
+- limiar de entrada a partir de caixa de 0,001;
+- composicao recursiva do capital.
+
+A Discussao passou a formalizar tambem o custo de oportunidade da rotacao:
+OC(a,b,t;k)=R_b(t,t+k)-R_a(t,t+k), para representar o retorno que deixa de ser
+capturado quando um novo candidato desloca o ativo que seria escolhido pelo
+universo original.
+
+A Conclusao passou a registrar que selecao, substituicao do incumbente e
+composicao do capital sao componentes matematicamente distintos do problema.
+
+Artefatos produzidos:
+- TCC_Assinatura_Contextual_Rascunho_v2.docx
+- TCC_Assinatura_Contextual_Rascunho_v2.pdf
+- TCC_RASCUNHO_V2.md
+
+O documento final renderizado possui 16 paginas. Todas as paginas foram
+inspecionadas visualmente, e o PDF final foi novamente renderizado para
+verificacao das paginas contendo a nova formalizacao matematica.
+
+SHA-256:
+- DOCX: 5d7ab9c169d126252aa5b4bf468e513fb0a0a7dcf1b7f6e88c8838c08aa9c463
+- PDF: e5e3da0a3c2b807343499f35c1f76a327afb08ecf65ef727ec85f688bf90da09
+- Markdown: fb87a75e011514122aaef9c815ae4dbca960e2f364e118c516ce4aa72fc3f41f
