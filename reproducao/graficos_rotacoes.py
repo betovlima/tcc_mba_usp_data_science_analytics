@@ -325,12 +325,30 @@ def gerar_graficos_rotacoes(
     # 1. Mapa temporal de ocupacao por ativo.
     # ------------------------------------------------------------------
     ordered_assets = _ordered_assets_by_first_use(predictions)
+    selected_counts = (
+        predictions["selected_asset"]
+        .value_counts()
+        .drop(labels=["CASH"], errors="ignore")
+    )
+    visible_assets = selected_counts.head(30).index.astype(str).tolist()
+    for asset in sorted(highlights):
+        if asset not in visible_assets:
+            visible_assets.append(asset)
+    visible_assets = [
+        asset
+        for asset in ordered_assets
+        if asset in set(visible_assets)
+    ] + [
+        asset
+        for asset in sorted(highlights)
+        if asset not in set(ordered_assets)
+    ]
     if "CASH" in set(predictions["selected_asset"]):
-        ordered_assets = [*ordered_assets, "CASH"]
+        visible_assets.append("CASH")
 
     occupancy = _monthly_occupancy(
         predictions,
-        ordered_assets,
+        visible_assets,
     )
     occupancy_csv = visual_dir / "ocupacao_mensal.csv"
     occupancy.to_csv(
@@ -385,15 +403,14 @@ def gerar_graficos_rotacoes(
         ax.set_title(
             f"{universe_label}\nMapa temporal de ocupação da carteira",
             loc="left",
+            pad=18,
         )
-        ax.text(
-            0.0,
-            1.01,
-            "Intensidade = parcela das sessões do mês em que o ativo ficou em carteira. ★ = ativo do grupo de oito.",
-            transform=ax.transAxes,
+        fig.text(
+            0.08,
+            0.012,
+            "Intensidade = parcela das sessões do mês em que o ativo ficou em carteira. ★ = impulsionador exploratório.",
             fontsize=9,
             color="#5A626B",
-            va="bottom",
         )
         cbar = fig.colorbar(image, ax=ax, pad=0.015)
         cbar.set_label("Ocupação no mês (%)")
@@ -605,15 +622,14 @@ def gerar_graficos_rotacoes(
         ax.set_title(
             f"{universe_label}\nPnL realizado por ativo",
             loc="left",
+            pad=18,
         )
-        ax.text(
-            0.0,
-            1.01,
-            "Visão descritiva das posições fechadas; não é contribuição causal contrafactual.",
-            transform=ax.transAxes,
+        fig.text(
+            0.08,
+            0.012,
+            "Visão descritiva das posições fechadas; não é contribuição causal contrafactual. ★ = impulsionador exploratório.",
             fontsize=9,
             color="#5A626B",
-            va="bottom",
         )
         ax.grid(
             axis="x",
@@ -627,13 +643,24 @@ def gerar_graficos_rotacoes(
             abs(float(np.nanmax(values))),
             1.0,
         )
+        current_left, current_right = ax.get_xlim()
+        ax.set_xlim(
+            min(current_left, float(np.nanmin(values)) - 0.06 * span),
+            max(current_right, float(np.nanmax(values)) + 0.14 * span),
+        )
         for index, value in enumerate(values):
+            if value >= 0:
+                x = value + 0.018 * span
+                ha = "left"
+            else:
+                x = value + 0.018 * span
+                ha = "left"
             ax.text(
-                value + (0.018 * span if value >= 0 else -0.018 * span),
+                x,
                 index,
                 _currency_label(value),
                 va="center",
-                ha="left" if value >= 0 else "right",
+                ha=ha,
                 fontsize=8.5,
             )
         paths.update(
@@ -733,7 +760,7 @@ def gerar_graficos_rotacoes(
                     s=52,
                     alpha=0.9,
                     color=HIGHLIGHT_COLOR,
-                    label="Grupo de oito",
+                    label="Impulsionadores exploratórios",
                 )
 
             ax.axhline(
@@ -744,18 +771,25 @@ def gerar_graficos_rotacoes(
             )
             ax.set_xlabel("Data da rotação")
             ax.set_ylabel("Força = (melhor − incumbente) / margem")
+            ax.set_yscale("log")
+            ax.set_ylim(
+                0.9,
+                max(
+                    10.0,
+                    float(plot["rotation_strength"].max()) * 1.25,
+                ),
+            )
             ax.set_title(
                 f"{universe_label}\nForça relativa das rotações executadas",
                 loc="left",
+                pad=18,
             )
-            ax.text(
-                0.0,
-                1.01,
-                "1,0 representa exatamente o limiar mínimo de troca. Quanto maior, mais folgada foi a decisão.",
-                transform=ax.transAxes,
+            fig.text(
+                0.08,
+                0.012,
+                "Escala logarítmica. 1,0 = limiar mínimo de troca; valores maiores indicam maior folga. Laranja = impulsionador exploratório.",
                 fontsize=9,
                 color="#5A626B",
-                va="bottom",
             )
             ax.xaxis.set_major_locator(mdates.YearLocator())
             ax.xaxis.set_major_formatter(
