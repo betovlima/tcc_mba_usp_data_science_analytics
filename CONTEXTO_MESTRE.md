@@ -3980,3 +3980,66 @@ Correcoes v1.21.0-dev.2:
 - terminologia visual passa a usar "impulsionadores exploratorios".
 
 O checkpoint financeiro permanece exatamente US$58.557.157,67496595.
+
+
+## Segunda revisao visual do U67 — v1.21.0-dev.3
+
+Foi analisado o pacote:
+pacote_reproducao_u67_58m(1).zip
+
+O pacote ficou limpo:
+- 20 arquivos;
+- nenhum artefato U59 antigo;
+- somente u67_*, reproducao_u67.json e graficos_rotacoes.
+
+A reproducao permaneceu exata:
+- esperado = observado = US$58.557.157,67496595;
+- erro relativo = 0;
+- 67 ativos;
+- 1547 sessoes;
+- 349 BUY, 348 SELL e 1 FINAL_SELL.
+
+Leitura dos oito impulsionadores exploratorios:
+- WDAY: 41 sessoes, 10 entradas, PnL realizado ~US$11,976M;
+- THO: 18 sessoes, 5 entradas;
+- XEL: 7 sessoes;
+- PAYX: 4 sessoes;
+- EXR, MUX e SBFG: 2 sessoes cada;
+- SXC: 0 sessoes e 0 rotacoes.
+
+Nas 348 rotacoes executadas, 22 tiveram como destino um dos sete
+impulsionadores usados. A forca mediana dessas rotacoes foi ~40,86 vezes a
+margem, contra ~34,11 para as demais. SBFG teve uma unica entrada com forca
+~522,5; WDAY mediana ~56,1; THO mediana ~78,0.
+
+Comparacao temporal U59 vs U67 usando os replays alinhados:
+- apenas 93 de 1547 sessoes tiveram ativo selecionado diferente;
+- 76 sessoes foram ocupacao direta de um dos sete impulsionadores;
+- 17 sessoes foram mudancas indiretas em ativos legados, produzidas pela
+  alteracao do caminho da carteira;
+- o log-ratio final foi 0,6661398, equivalente ao multiplicador 1,9467081;
+- 86,04% desse log-ratio ocorreu em sessoes de ocupacao direta dos novos
+  ativos;
+- 17,41% em sessoes de diferenca indireta entre ativos legados;
+- sessoes em que o ativo selecionado era igual nos dois replays somaram
+  -3,46% do log-ratio total.
+Essa decomposicao e de caminho relativo observado, nao atribuicao causal.
+
+Insight importante:
+o PnL realizado por ativo e a contribuicao para a vantagem U67/U59 contam
+historias diferentes. WDAY apresenta o maior PnL realizado entre os oito,
+~US$11,98M, mas THO responde por maior soma de variacao do log-ratio nas
+sessoes em que foi selecionado (0,3696 contra 0,1471 de WDAY). Isso reforca
+que oportunidade, substituicao e dependencia de caminho sao centrais.
+
+A segunda revisao visual encontrou dois detalhes restantes:
+1. SXC aparecia no heatmap com zero ocupacao, mas nao nos graficos de presenca
+   e PnL;
+2. rodapes dos graficos 04 e 05 ainda podiam colidir com o rotulo do eixo X e
+   o grafico 04 exibia notacao cientifica 1e7.
+
+Correcoes v1.21.0-dev.3:
+- todos os oito impulsionadores aparecem nos graficos, inclusive SXC com zero;
+- grafico 04 usa eixo em US$ milhoes, sem notacao cientifica;
+- margens inferiores foram ampliadas nos graficos 04 e 05;
+- legenda do grafico 05 foi movida para fora da area de dados.
