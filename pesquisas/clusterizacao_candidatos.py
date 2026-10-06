@@ -539,7 +539,7 @@ def _plot_known_outcomes(
     if known.empty:
         return None
 
-    semantic = summary.set_index("cluster_id")["semantic_name"].to_dict()
+    behavior = summary.set_index("cluster_id")["behavior_name"].to_dict()
     cluster_ids = sorted(known["cluster_id"].unique())
     x_positions = {
         cluster_id: index
