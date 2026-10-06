@@ -1,0 +1,21 @@
+asset,capital_pct_vs_u59,observed_group,u67_positive8,financial_reference,scientific_role
+SGA,-0.1213898031782675,Prejudicial observado,False,U59_WINNER,posthoc_overlay_only
+THO,0.2985966485004629,Impulsionador observado,True,U59_WINNER,posthoc_overlay_only
+XNTK,-0.0060642003161124,Sobrevivente observado,False,U59_WINNER,posthoc_overlay_only
+CIVB,0,Sobrevivente observado,False,U59_WINNER,posthoc_overlay_only
+WDAY,0.1611279104700289,Impulsionador observado,True,U59_WINNER,posthoc_overlay_only
+EXR,0.150229785914546,Impulsionador observado,True,U59_WINNER,posthoc_overlay_only
+PAYX,0.0280505245194395,Impulsionador observado,True,U59_WINNER,posthoc_overlay_only
+FMBH,-0.2443273602314529,Prejudicial observado,False,U59_WINNER,posthoc_overlay_only
+SBFG,0.0557892408537519,Impulsionador observado,True,U59_WINNER,posthoc_overlay_only
+ALNY,-0.2584354333761023,Prejudicial observado,False,U59_WINNER,posthoc_overlay_only
+SXC,0.0177801914510296,Impulsionador observado,True,U59_WINNER,posthoc_overlay_only
+ICCC,-0.1689313194878604,Prejudicial observado,False,U59_WINNER,posthoc_overlay_only
+XEL,0.108885501474462,Impulsionador observado,True,U59_WINNER,posthoc_overlay_only
+EBMT,-0.2749713629367226,Prejudicial observado,False,U59_WINNER,posthoc_overlay_only
+VLRS,-0.6210466934933634,Prejudicial observado,False,U59_WINNER,posthoc_overlay_only
+PDFS,-0.178728825809751,Prejudicial observado,False,U59_WINNER,posthoc_overlay_only
+SITC,-0.3939835532403795,Prejudicial observado,False,U59_WINNER,posthoc_overlay_only
+FDX,-0.1993113709999824,Prejudicial observado,False,U59_WINNER,posthoc_overlay_only
+FNWB,-0.2032560878178345,Prejudicial observado,False,U59_WINNER,posthoc_overlay_only
+MUX,0.0210742632222769,Impulsionador observado,True,U59_WINNER,posthoc_overlay_only
