@@ -1,34 +1,41 @@
 # Dados da pesquisa
 
-O projeto separa o snapshot oficial do TCC dos downloads usados em execucoes
-com dados novamente consultados na Alpaca.
+A reprodução oficial do TCC usa snapshots versionados e não baixa dados novos.
 
-```text
+## U59 reproduzível
+
+O universo oficial que reproduz aproximadamente US$ 30 milhões é formado por:
+
+- 56 ativos-base em pesquisa/;
+- COLB, AMS e FOXF em pesquisa_expansao_76_b2/.
+
+Estrutura principal:
+
+~~~text
 dados/
-├── pesquisa/                 # versionado no Git
+├── pesquisa/
 │   ├── raw_bars/
 │   ├── corporate_actions/
 │   └── manifest.json
-└── temporario/reproducao/    # ignorado pelo Git
-    ├── raw_bars/
-    ├── corporate_actions/
-    └── manifest.json
-```
+├── pesquisa_expansao_76_b2/
+│   ├── raw_bars/
+│   ├── corporate_actions/
+│   └── manifest.json
+├── pesquisa_smart_candidates/
+└── assinatura_matematica/
+~~~
 
-`pesquisa/` e a evidencia congelada da pesquisa e deve permanecer
-versionada.
+A normalização de splits é calculada em memória durante a preparação.
 
-`temporario/` e recriado para novas consultas a Alpaca e nao deve ser enviado
-ao Git.
+O arquivo reproduzir_experimento.py usa apenas pesquisa/ e
+pesquisa_expansao_76_b2/. Os demais diretórios preservam evidências das
+campanhas de pesquisa anteriores e não são necessários para reproduzir o U59.
 
-A normalizacao de splits continua sendo calculada em memoria.
+## Dados temporários
 
-## Modos de execucao
+O diretório temporario/ continua ignorado pelo Git e pode ser usado por
+rotinas auxiliares ou por novas buscas. Ele não participa da reprodução
+oficial do checkpoint U59.
 
-`USAR_DADOS_PESQUISA_CONGELADOS=True` usa somente `pesquisa/` e nunca
-baixa ou altera o snapshot.
-
-Com `USAR_DADOS_PESQUISA_CONGELADOS=False`, toda leitura e escrita ocorre em
-`temporario/reproducao/`. Se `FORCAR_DOWNLOAD=True`, essa pasta temporaria
-e limpa antes do download completo. O snapshot `pesquisa/` permanece
-intocado.
+Os snapshots congelados não devem ser substituídos por downloads atuais quando
+o objetivo for reproduzir o resultado oficial.
