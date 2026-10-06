@@ -261,15 +261,18 @@ def test_lightgbm_parameters_are_frozen() -> None:
     assert settings["random_state"] == 42
 
 
-def test_official_u59_workflow_is_explicitly_sectioned() -> None:
+def test_official_u67_workflow_is_explicitly_sectioned() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(encoding="utf-8")
-    assert source.count("# %%") >= 9
+    assert source.count("# %%") >= 10
     assert "# %% 2 - U56 congelado" in source
     assert "# %% 3 - Adicoes que transformam U56 em U59" in source
-    assert "# %% 6 - Treino e calibracao walk-forward" in source
-    assert "# %% 7 - Replay U59" in source
+    assert "# %% 4 - Oito ativos que transformam U59 em U67" in source
+    assert "# %% 7 - Treino e calibracao walk-forward" in source
+    assert "# %% 8 - Replay U67" in source
     assert "U59_ADDITIONS = (\"COLB\", \"AMS\", \"FOXF\")" in source
-    assert "EXPECTED_ENDING_CAPITAL = 30_080_091.008142874" in source
+    assert "U67_ADDITIONS = (" in source
+    assert "EXPECTED_U67_COUNT = 67" in source
+    assert "EXPECTED_ENDING_CAPITAL = 58_557_157.67496595" in source
     assert "_simular_exato(" in source
 
 
@@ -758,13 +761,18 @@ def test_research_data_is_versioned_and_temporary_data_is_ignored() -> None:
     assert "!dados/pesquisa/manifest.json" in rules
 
 
-def test_official_reproduction_uses_frozen_u59_sources() -> None:
+def test_official_reproduction_uses_frozen_u67_sources() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(
         encoding="utf-8"
     )
     assert "BASE = SnapshotPaths.research(ROOT)" in source
     assert 'ROOT / "dados" / "pesquisa_expansao_76_b2"' in source
+    assert 'ROOT / "dados" / "pesquisa_smart_candidates"' in source
     assert 'U59_ADDITIONS = ("COLB", "AMS", "FOXF")' in source
+    assert "U67_ADDITIONS = (" in source
+    for asset in ("THO", "WDAY", "EXR", "XEL", "SBFG", "PAYX", "MUX", "SXC"):
+        assert f'"{asset}"' in source
     assert "EXPECTED_U56_COUNT = 56" in source
     assert "EXPECTED_U59_COUNT = 59" in source
-    assert "EXPECTED_ENDING_CAPITAL = 30_080_091.008142874" in source
+    assert "EXPECTED_U67_COUNT = 67" in source
+    assert "EXPECTED_ENDING_CAPITAL = 58_557_157.67496595" in source
