@@ -781,20 +781,23 @@ def test_rotation_visualization_suite_is_integrated() -> None:
     assert "gerar_graficos_rotacoes" in runner
     assert "def gerar_graficos_rotacoes_u59(" in graphs
     assert "show=True" in runner
+    assert "highlight_assets=POSITIVE8" in runner
+    assert "EXPECTED_ENDING_CAPITAL = 58_557_157.67496595" in runner
+    assert "EXPECTED_U67_COUNT = 67" in runner
     assert "plt.show(block=False)" in graphs
     assert "decision_diagnostics=decision_diagnostics" in runner
     assert (
         "policy_decision_diagnostics=decision_diagnostics"
         in runner
     )
-    assert 'REPRODUCTION_VERSION = "1.20.1-dev.4"' in runner
+    assert 'REPRODUCTION_VERSION = "1.21.0-dev.1"' in runner
 
     expected_outputs = (
-        "timeline_rotacoes",
-        "matriz_transicoes",
-        "presenca_por_ativo",
-        "pnl_realizado_por_ativo",
-        "distancia_topo_rotacoes",
+        "01_mapa_temporal_ocupacao",
+        "02_principais_transicoes",
+        "03_presenca_por_ativo",
+        "04_pnl_realizado_por_ativo",
+        "05_forca_das_rotacoes",
         "perfil_ativos.csv",
     )
     for token in expected_outputs:
