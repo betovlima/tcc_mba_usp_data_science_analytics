@@ -82,7 +82,7 @@ SMART = SnapshotPaths.from_root(
 
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.21.0-dev.2"
+REPRODUCTION_VERSION = "1.21.0-dev.3"
 EXECUTION_SCHEMA = "u67-positive8-reproduction-v1"
 
 U59_ADDITIONS = ("COLB", "AMS", "FOXF")
