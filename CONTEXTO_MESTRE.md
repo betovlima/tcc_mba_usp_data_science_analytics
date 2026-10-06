@@ -2643,3 +2643,118 @@ features, iniciando em 2016-10-17. O benchmark U67 usa corretamente o OHLC
 congelado desde 2016-01-04. Portanto, para comparacoes de buy-and-hold, usar
 este benchmark U67 como referencia oficial e nao o calculo parcial anterior
 dos oito.
+
+
+## Assinatura matematica contextual — 1.18.0-dev.1
+
+A pesquisa entrou oficialmente na fase de modelagem estatistica da assinatura,
+sem novos backtests durante o ajuste.
+
+Branch:
+research/intelligent-asset-signature-v1
+
+Runner:
+modelar_assinatura_matematica_spyder.py
+
+Schema:
+contextual-marginal-signature-math-v1
+
+Dados contextuais congelados no Git:
+- dados/assinatura_matematica/contextual_batch3.csv;
+- dados/assinatura_matematica/contextual_smart20.csv.
+
+Pergunta:
+quais propriedades contextuais, ja disponiveis antes do replay financeiro,
+separam candidatos que aumentam o capital daqueles que degradam ou nao alteram
+o universo?
+
+A analise confirmou que um unico modelo monotono sobre todos os 40 candidatos
+e inadequado porque existe uma massa de candidatos dormant. No batch3, os 10
+candidatos com beats_best_share=0 foram todos nao positivos. Portanto a
+assinatura foi formalizada como um processo hurdle em dois niveis:
+
+1. ativacao:
+A = 1[beats_best_share > 0]
+
+2. qualidade entre ativos:
+S = 1 - mean(
+    rank_active(beats_best_share),
+    rank_active(abs(score_corr_best)),
+    rank_active(score_std)
+)
+
+Os ranks sao relativos a cada coorte e calculados somente entre candidatos
+ativos. Valores maiores de S representam especialista mais raro, menos
+correlacionado com o melhor score do universo e com score mais estavel.
+
+Amostra contextual:
+- 40 candidatos totais;
+- 30 ativos;
+- 10 dormant;
+- 11 positivos entre os 30 ativos;
+- batch3: 20 totais, 10 ativos, 3 positivos;
+- smart20: 20 ativos, 8 positivos.
+
+Controle negativo de features estaticas:
+uma regressao logistica com CAGR, volatilidade, drawdown, liquidez,
+positive-day-share, momentum, trend efficiency, corr SPY e beta ficou proxima
+do acaso ao atravessar coortes:
+- batch2 -> batch3: AUC 0,4792;
+- batch3 -> batch2: AUC 0,5098.
+Isso reforca que a assinatura nao esta em caracteristicas estaticas do ticker.
+
+Replicacao direcional entre candidatos ativos:
+- menor beats-share: AUC batch3 0,7381; smart20 0,8021;
+- menor abs(corr_best): AUC batch3 0,8571; smart20 0,6146;
+- menor score_std: AUC batch3 1,0000; smart20 0,6354;
+- maior positive_score_share: AUC batch3 0,6190; smart20 0,5833;
+- maior score_mean: AUC batch3 0,5714; smart20 0,5833.
+
+Resultado do score S:
+- AUC pooled = 0,8110;
+- average precision pooled = 0,7154;
+- Spearman S vs efeito de capital = 0,6379;
+- p de Spearman = 0,000149;
+- bootstrap por coorte, AUC 95% aproximadamente [0,629; 0,950];
+- bootstrap por coorte, Spearman 95% aproximadamente [0,400; 0,800].
+
+Por coorte:
+- batch3 ativo: AUC 0,9524; AP 0,9167; Spearman 0,6322;
+- smart20: AUC 0,7448; AP 0,6882; Spearman 0,5987.
+
+Leave-one-cohort-out do score de uma dimensao:
+- treina batch3, testa smart20: AUC 0,7448;
+- treina smart20, testa batch3: AUC 0,9524.
+Esta e robustez interna, nao validacao externa, pois a composicao do score foi
+sintetizada usando as coortes de desenvolvimento ja observadas.
+
+Calibracao logistica de desenvolvimento nos 30 candidatos ativos:
+P(deltaCapital > 0 | A=1)
+    = logistic(-3,536889 + 5,920287 * S)
+
+Exemplos apenas de calibracao interna:
+- S=0,25 -> P aproximada 11,3%;
+- S=0,50 -> P aproximada 36,0%;
+- S=0,75 -> P aproximada 71,2%;
+- S=1,00 -> P aproximada 91,6%.
+
+A camada temporal dos 22 trades dos oito vencedores permanece explicativa e
+nao entra no score classificador porque nao existe um controle equivalente de
+trades para os candidatos negativos. Ela continua sustentando a morfologia de
+micro-fundo/pullback -> recuperacao curta -> saida perto do pico.
+
+Limitacoes obrigatorias:
+- smart20 e uma amostra range-restricted porque os 20 ja haviam passado pelo
+  filtro anterior;
+- batch3 usa features contextuais relativas a U56, mas o alvo financeiro usado
+  nesta sintese e relativo a U59;
+- ranks por coorte reduzem a incompatibilidade de escala/contexto, mas nao a
+  eliminam;
+- o score foi sintetizado com dados ja observados;
+- nenhuma afirmacao de generalizacao externa pode ser feita ainda.
+
+Decisao:
+a estrutura matematica de desenvolvimento esta suficientemente definida para
+ser congelada. O proximo replay financeiro, quando ocorrer, nao deve ser usado
+para ajustar S. Ele deve ser uma unica validacao prospectiva em ativos
+intocados, escolhidos sem acesso ao seu delta de capital.
