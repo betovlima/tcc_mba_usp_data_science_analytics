@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "research_version": "1.19.0-dev.1",
+  "execution_schema": "capital-adherence-filter-development-v1",
+  "status": "new_hypothesis_frozen_before_new_candidate_capital",
+  "relationship_to_v118": {
+    "v118_result": "preserved_unchanged",
+    "statement": "v1.18 remains the completed prospective validation of continuous contextual ranking. v1.19 is a new development hypothesis derived after observing the v1.18 prospective outcomes.",
+    "prohibited_claim": "Do not describe v1.19 as part of, or a continuation of, the original v1.18 prospective validation."
+  },
+  "development_population": {
+    "reference": "U59_WINNER",
+    "smart20_active": 20,
+    "prospective_v118_active": 24,
+    "total_active": 44,
+    "dormant_v118_excluded": 8,
+    "reason_for_excluding_dormant": "A=0 produced zero financial effect and is not an opportunity set for capital increase."
+  },
+  "harm_target": {
+    "formula": "harm10 = 1[capital_pct_vs_u59 <= -0.10]",
+    "threshold": -0.1,
+    "rationale": "A loss of at least 10% relative to U59 is treated as materially poor adherence to the capital-growth process."
+  },
+  "risk_score": {
+    "formula": "R = mean(rank_active(beats_best_share), rank_active(score_std))",
+    "rank_scope": "within each candidate cohort among active candidates",
+    "direction": "lower_is_safer",
+    "components": [
+      {
+        "name": "beats_best_share",
+        "direction": "lower_is_safer"
+      },
+      {
+        "name": "score_std",
+        "direction": "lower_is_safer"
+      }
+    ],
+    "excluded_component": {
+      "name": "abs_score_corr_best",
+      "reason": "Its prospective association with capital effect was weak; removing it defines a NEW v1.19 hypothesis and does not alter v1.18."
+    }
+  },
+  "development_evidence": {
+    "smart20_auc_harm10": 0.82,
+    "prospective24_auc_harm10": 0.862962962962963,
+    "pooled_auc_harm10": 0.8431578947368421,
+    "pooled_spearman_risk_vs_capital_effect": -0.6081271647092549,
+    "pooled_spearman_pvalue": 0.000011940411493963518,
+    "mann_whitney_harm_risk_greater_pvalue": 0.00005883116718176337,
+    "lowest_risk_10pct": {
+      "n": 5,
+      "harm10_count": 0,
+      "positive_count": 4,
+      "mean_capital_effect": 0.06620846726010128,
+      "median_capital_effect": 0.0557892408537519
+    }
+  },
+  "new_untouched_pool": {
+    "ranked_source_rows": 446,
+    "known_financial_assets_to_exclude": 52,
+    "expected_remaining_rows": 394,
+    "selection_rule": "Exclude all known 52 outcomes; keep score-data-eligible active candidates only; compute R in the remaining active pool; select the eight lowest R deterministically."
+  },
+  "frozen_selection_size": 8,
+  "next_test": {
+    "primary_economic_endpoint": "ending_capital(U59 + frozen_adherence8) > ending_capital(U59)",
+    "individual_safety_diagnostic": "count candidates with capital_pct_vs_u59 <= -0.10",
+    "stretch_benchmark": "US$58,557,157.67496595 from exploratory U59+positive8; descriptive only",
+    "post_outcome_retuning_allowed": false,
+    "second_selection_attempt_allowed": false
+  }
+}

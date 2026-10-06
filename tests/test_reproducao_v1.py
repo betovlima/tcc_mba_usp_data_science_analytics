@@ -13,6 +13,7 @@ from reproducao.dados import (
     data_final_temporaria_atual,
     snapshot_cobre_data_final,
 )
+from reproducao.preparacao import structural_identity_issue
 from reproducao.graficos import (
     calcular_retornos_mensais,
     construir_rotacoes,
@@ -23,6 +24,7 @@ from engine.rotacao import (
     _executar_compra,
     _selecionar_ativo_fonte_calendario,
 )
+from engine.modelo_lightgbm import _selecionar_switch_margin_fold
 from engine.configuracao import (
     ANALYSIS_END_DATE,
     ASSETS,
@@ -63,7 +65,7 @@ def test_official_reproduction_has_no_database_dependency() -> None:
     assert "sqlalchemy" not in requirements
 
     official_files = [
-        ROOT / "reproduzir_experimento_spyder.py",
+        ROOT / "reproduzir_experimento.py",
         ROOT / "reproducao" / "dados.py",
         ROOT / "reproducao" / "preparacao.py",
         ROOT / "reproducao" / "experimento.py",
@@ -91,6 +93,47 @@ def test_frozen_universe_and_dates_match_cpu_reference() -> None:
         0.25,
     )
 
+
+
+def test_clmt_cusip_transition_accepts_float_parsed_cusip() -> None:
+    issue = structural_identity_issue(
+        "CLMT",
+        [
+            {
+                "action_type": "name_change",
+                "old_symbol": "CLMT",
+                "new_symbol": "CLMT",
+                "old_cusip": 131476103.0,
+                "new_cusip": 131428104.0,
+                "process_date": "2024-07-11",
+            }
+        ],
+    )
+
+    assert issue is not None
+    assert issue["reason"] == "structural_identity_change"
+    assert issue["symbol"] == "CLMT"
+
+
+def test_clmt_cusip_transition_is_structurally_excluded() -> None:
+    issue = structural_identity_issue(
+        "CLMT",
+        [
+            {
+                "action_type": "name_change",
+                "old_symbol": "CLMT",
+                "new_symbol": "CLMT",
+                "old_cusip": "131476103",
+                "new_cusip": "131428104",
+                "process_date": "2024-07-11",
+            }
+        ],
+    )
+
+    assert issue is not None
+    assert issue["reason"] == "structural_identity_change"
+    assert issue["old_cusip"] == "131476103"
+    assert issue["new_cusip"] == "131428104"
 
 
 def test_asset_universe_has_no_manual_reference_or_candidate_split() -> None:
@@ -150,6 +193,46 @@ def test_execution_helpers_use_portuguese_names() -> None:
         assert retired not in execution_source
         assert retired not in experiment_source
 
+
+def test_counterfactual_switch_margin_override_uses_frozen_candidate() -> None:
+    config = SimpleNamespace(
+        research_model_settings={
+            "counterfactual_switch_margin_by_fold": {"1": 0.0}
+        }
+    )
+    selection = _selecionar_switch_margin_fold(
+        config,
+        1,
+        [(0.0, 1.0), (0.01, 2.0)],
+    )
+
+    assert selection["auto_candidate_margin"] == 0.01
+    assert selection["selected_candidate_margin"] == 0.0
+    assert selection["selected_calibration_score"] == 1.0
+    assert selection["selection_source"] == "counterfactual_override"
+
+
+def test_counterfactual_switch_margin_refuses_new_tuning_value() -> None:
+    config = SimpleNamespace(
+        research_model_settings={
+            "counterfactual_switch_margin_by_fold": {"1": 0.0075}
+        }
+    )
+
+    try:
+        _selecionar_switch_margin_fold(
+            config,
+            1,
+            [(0.0, 1.0), (0.01, 2.0)],
+        )
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("non-frozen margin should have been refused")
+
+    assert "outside frozen candidates" in message
+
+
 def test_control_and_soft_share_same_lightgbm() -> None:
     control = construir_configuracao_controle(CONFIG)
     soft = construir_configuracao_soft(CONFIG)
@@ -178,14 +261,16 @@ def test_lightgbm_parameters_are_frozen() -> None:
     assert settings["random_state"] == 42
 
 
-def test_spyder_workflow_is_explicitly_sectioned() -> None:
-    source = (ROOT / "reproduzir_experimento_spyder.py").read_text(encoding="utf-8")
-    assert source.count("# %%") >= 12
-    assert "# %% 7 - CONTROL" in source
-    assert "# %% 8 - SOFT HORIZON CONSENSUS" in source
-    assert "# %% 11 - BACKTEST ANALYTICS, GRAFICOS E PLANILHA" in source
-    assert "run_variant(" in source
-    assert "gerar_analises_backtest(" in source
+def test_official_u59_workflow_is_explicitly_sectioned() -> None:
+    source = (ROOT / "reproduzir_experimento.py").read_text(encoding="utf-8")
+    assert source.count("# %%") >= 9
+    assert "# %% 2 - U56 congelado" in source
+    assert "# %% 3 - Adicoes que transformam U56 em U59" in source
+    assert "# %% 6 - Treino e calibracao walk-forward" in source
+    assert "# %% 7 - Replay U59" in source
+    assert "U59_ADDITIONS = (\"COLB\", \"AMS\", \"FOXF\")" in source
+    assert "EXPECTED_ENDING_CAPITAL = 30_080_091.008142874" in source
+    assert "_simular_exato(" in source
 
 
 def test_snapshot_layout_is_csv_per_asset() -> None:
@@ -308,16 +393,16 @@ def test_analysis_end_date_is_inclusive_for_nyse_utc_timestamp() -> None:
     assert pd.Timestamp("2026-09-23 04:00:00+00:00") not in dates
 
 
-def test_spyder_refreshes_stale_temporary_snapshot_through_effective_end() -> None:
-    source = (ROOT / "reproduzir_experimento_spyder.py").read_text(
+def test_official_reproduction_does_not_refresh_market_data() -> None:
+    source = (ROOT / "reproduzir_experimento.py").read_text(
         encoding="utf-8"
-    )
-    assert "DATA_FINAL_EFETIVA = data_final_temporaria_atual()" in source
-    assert "snapshot_cobre_data_final(" in source
-    assert "modo=download-temporario-atualizacao" in source
-    assert 'update={"analysis_end_date": DATA_FINAL_EFETIVA}' in source
-    assert "bar_snapshot_as_of_end=BAR_SNAPSHOT_AS_OF_EFETIVO" in source
-    assert "query_end=DATA_FINAL_EFETIVA" in source
+    ).lower()
+    assert "snapshotpaths.research(root)" in source
+    assert "pesquisa_expansao_76_b2" in source
+    assert "download_raw_bars" not in source
+    assert "download_corporate_actions" not in source
+    assert "load_alpaca_credentials" not in source
+    assert "dados/temporario" not in source
 
 def test_capital_rotations_follow_backtest_analytics_semantics() -> None:
     trades = pd.DataFrame(
@@ -404,7 +489,7 @@ def test_monthly_returns_match_backtest_analytics_reference() -> None:
 
 def test_active_paths_no_longer_use_v1_suffix() -> None:
     active_files = [
-        ROOT / "reproduzir_experimento_spyder.py",
+        ROOT / "reproduzir_experimento.py",
         ROOT / "reproducao" / "dados.py",
         ROOT / "migrar_snapshot_pesquisa.py",
         ROOT / ".gitignore",
@@ -540,7 +625,7 @@ def test_official_runtime_has_no_historical_references() -> None:
         "caro",
     )
     runtime_files = [
-        ROOT / "reproduzir_experimento_spyder.py",
+        ROOT / "reproduzir_experimento.py",
         *sorted((ROOT / "engine").glob("*.py")),
         *sorted((ROOT / "reproducao").glob("*.py")),
     ]
@@ -553,7 +638,7 @@ def test_official_runtime_has_no_historical_references() -> None:
 def test_runtime_has_no_retired_model_tokens() -> None:
     forbidden = ("x" + "gb", "x" + "gboost")
     runtime_files = [
-        ROOT / "reproduzir_experimento_spyder.py",
+        ROOT / "reproduzir_experimento.py",
         *sorted((ROOT / "engine").glob("*.py")),
         *sorted((ROOT / "reproducao").glob("*.py")),
     ]
@@ -674,16 +759,13 @@ def test_research_data_is_versioned_and_temporary_data_is_ignored() -> None:
     assert "!dados/pesquisa/manifest.json" in rules
 
 
-def test_spyder_data_modes_protect_frozen_research_snapshot() -> None:
-    source = (ROOT / "reproduzir_experimento_spyder.py").read_text(
+def test_official_reproduction_uses_frozen_u59_sources() -> None:
+    source = (ROOT / "reproduzir_experimento.py").read_text(
         encoding="utf-8"
     )
-    assert "USAR_DADOS_PESQUISA_CONGELADOS = False" in source
-    assert "CAMINHOS_TEMPORARIOS" in source
-    assert "modo=download-temporario-forcado" in source
-    assert "modo=download-temporario-reutilizavel" in source
-    assert "modo=pesquisa-versionada" in source
-    assert "CAMINHOS = CAMINHOS_TEMPORARIOS" in source
-    assert "CAMINHOS = CAMINHOS_PESQUISA" in source
-    assert "modo=atualizar-pesquisa-versionada" not in source
-    assert "replace=RECRIAR_DADOS_TEMPORARIOS" in source
+    assert "BASE = SnapshotPaths.research(ROOT)" in source
+    assert 'ROOT / "dados" / "pesquisa_expansao_76_b2"' in source
+    assert 'U59_ADDITIONS = ("COLB", "AMS", "FOXF")' in source
+    assert "EXPECTED_U56_COUNT = 56" in source
+    assert "EXPECTED_U59_COUNT = 59" in source
+    assert "EXPECTED_ENDING_CAPITAL = 30_080_091.008142874" in source

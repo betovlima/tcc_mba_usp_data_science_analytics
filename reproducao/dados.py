@@ -521,6 +521,9 @@ def build_snapshot_manifest(
     credentials: AlpacaCredentials | None = None,
     bar_snapshot_as_of_end: str = BAR_SNAPSHOT_AS_OF_END,
     analysis_end_date: str = ANALYSIS_END_DATE,
+    assets: tuple[str, ...] = ASSETS,
+    snapshot_name: str = "tcc-research-v1",
+    parent_snapshot_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Calcula hashes do snapshot; credenciais nunca sao persistidas."""
     file_hashes: dict[str, str] = {}
@@ -537,7 +540,7 @@ def build_snapshot_manifest(
 
     identity = {
         "schema_version": 2,
-        "snapshot_name": "tcc-research-v1",
+        "snapshot_name": str(snapshot_name),
         "source": "alpaca",
         "bars": {
             "feed": "sip",
@@ -551,11 +554,14 @@ def build_snapshot_manifest(
             "query_end": analysis_end_date,
             "types": list(REQUEST_TYPES),
         },
-        "assets": list(ASSETS),
+        "assets": list(assets),
         "row_counts": row_counts,
         "corporate_action_counts": action_counts,
         "file_hashes": file_hashes,
     }
+    if parent_snapshot_sha256:
+        identity["parent_snapshot_sha256"] = str(parent_snapshot_sha256)
+
     manifest = dict(identity)
     manifest["snapshot_sha256"] = _canonical_sha256(identity)
     manifest["created_for_experiment_version"] = EXPERIMENT_VERSION

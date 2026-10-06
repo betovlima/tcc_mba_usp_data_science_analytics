@@ -1,365 +1,204 @@
 # TCC MBA USP — Rotação de Capital com Machine Learning
 
-Este projeto implementa uma pesquisa reproduzível de rotação de capital entre
-ativos financeiros usando Machine Learning. O objetivo é estudar se uma
-política que escolhe dinamicamente onde manter o capital pode melhorar o
-crescimento composto quando comparada a uma estratégia simples de comprar e
-manter.
+Este repositório contém a implementação reproduzível do TCC sobre rotação de
+capital entre ativos financeiros usando LightGBM e validação temporal
+walk-forward.
 
-O experimento utiliza dados diários de mercado, LightGBM, validação temporal
-walk-forward e uma única conta de capital reinvestida ao longo do tempo. O
-projeto não depende de MongoDB nem de serviços do Market Cycle Trader em tempo
-de execução.
+A execução oficial não depende de MongoDB nem do Market Cycle Trader. Os dados
+utilizados para a reprodução ficam congelados em CSV e são validados por
+manifestos e hashes antes da execução.
 
-## O que o sistema faz
+## Resultado oficial reproduzível
 
-O pipeline baixa da Alpaca barras OHLCV diárias em formato RAW usando o feed
-SIP e consulta Corporate Actions para tratar eventos como splits. Os arquivos
-são armazenados localmente em CSV, um por ativo, e um `manifest.json` registra
-a identidade do snapshot e hashes SHA-256 para permitir reproduções posteriores.
+O universo financeiro oficial é o **U59**:
 
-Antes do treinamento, o pipeline valida a continuidade dos dados. Quando um
-ativo apresenta um problema estrutural de identidade, histórico ou origem, ele
-é excluído de forma explícita em vez de ter sua série reconstruída manualmente.
-Na execução validada, DOC foi excluído por uma mudança estrutural associada à
-operação DOC -> PEAK.
+- 56 ativos do snapshot-base em dados/pesquisa/;
+- mais COLB, AMS e FOXF, preservados em dados/pesquisa_expansao_76_b2/.
 
-Os splits são normalizados em memória. Depois disso o sistema calcula variáveis
-de retorno, tendência, volatilidade, médias móveis, RSI, ATR, posição em canais
-de preço, eficiência de tendência e volume. O LightGBM aprende uma utilidade
-multi-horizonte usando horizontes de 5, 10, 20, 40 e 60 sessões.
+O capital inicial é de **US$ 10.000**. O checkpoint que o runner oficial deve
+reproduzir é:
 
-A avaliação é cronológica. Cada fold possui período de treinamento, calibração,
-purge temporal e teste fora da amostra. Assim, uma decisão em uma determinada
-data utiliza apenas informações disponíveis antes dela.
+| Métrica | Referência |
+| --- | ---: |
+| Capital final | **US$ 30.080.091,01** |
+| Universo | 59 ativos |
+| Modelo | LightGBM Control |
+| Período congelado | até 17 set. 2026 |
+| Banco de dados | não utilizado |
+| Download na reprodução | não realizado |
 
-O universo da pesquisa possui uma única fonte de verdade: `ASSETS`. Não há
-mais divisão manual entre ativos de referência e candidatos. O calendário
-temporal é derivado automaticamente do ativo elegível com o maior histórico
-válido; os demais ativos passam a participar quando possuem dados e histórico
-suficientes para o treinamento. Empates na escolha do calendário são resolvidos
-de forma determinística por início mais antigo, fim mais recente e símbolo.
+O resultado descreve um backtest histórico e não constitui previsão ou
+garantia de desempenho futuro.
 
-As mudanças de posição são executadas na abertura da sessão seguinte. Todo o
-capital pertence a uma única conta e é reinvestido após cada rotação.
+## Entradas principais
 
-## Pesquisa sobre rotação de capital
+O repositório foi simplificado para dois runners de pesquisa no diretório
+raiz:
 
-A pesquisa compara três comportamentos sobre o mesmo capital inicial de
-**US$ 10.000**.
+~~~text
+buscar_ativos.py
+reproduzir_experimento.py
+~~~
 
-**Control** é a política-base. O LightGBM estima a utilidade dos ativos e a
-estratégia decide permanecer no ativo atual, trocar para outro ativo ou ficar em
-caixa. Uma margem mínima evita rotações quando a vantagem prevista é pequena.
+### buscar_ativos.py
 
-**Soft Horizon Consensus** utiliza exatamente o mesmo LightGBM e a mesma
-política-base, mas consulta a concordância entre os horizontes de 5, 10, 20, 40
-e 60 sessões. Quando o suporte entre horizontes é menor, a margem necessária
-para uma troca aumenta. O Soft não escolhe outro ativo por conta própria: ele
-apenas aceita a decisão-base ou bloqueia uma rotação marginal.
+É o runner de busca de candidatos. Ele usa a infraestrutura de pesquisa
+preservada para avaliar candidatos em relação ao U59. A busca é uma atividade
+de pesquisa separada da reprodução oficial e pode exigir credenciais da
+Alpaca quando houver coleta de novos dados.
 
-**Comprar e manter** é o benchmark. O capital inicial é distribuído em pesos
-iguais entre os ativos com preços completos na janela de execução e as posições
-são mantidas. Esse benchmark usa o mesmo período histórico e o mesmo capital
-inicial da estratégia de rotação.
+No terminal:
 
-A reprodução validada utiliza dados de 2016-01-01 até 2026-09-17. Foram
-solicitados 56 ativos e 55 permaneceram elegíveis. A avaliação fora da amostra
-contém 1.546 sessões distribuídas em três folds.
+~~~bash
+python buscar_ativos.py
+~~~
 
-### Resultado da reprodução validada
+No Spyder, abra buscar_ativos.py e execute com F5.
 
-| Estratégia | Capital inicial | Capital final | Retorno total | CAGR | Sharpe | Máx. Drawdown |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Control | US$ 10.000,00 | US$ 10.094.316,30 | +100.843,16% | 207,83% | 2,102 | -31,22% |
-| Soft Horizon Consensus | US$ 10.000,00 | US$ 9.851.632,93 | +98.416,33% | 206,62% | 2,101 | -31,22% |
-| Comprar e manter | US$ 10.000,00 | US$ 39.001,99 | +290,02% | 24,76% | 1,154 | -28,15% |
+### reproduzir_experimento.py
 
-No experimento validado, o Control terminou com aproximadamente **258,8 vezes**
-o capital final do benchmark comprar-e-manter, enquanto o Soft terminou com
-aproximadamente **252,6 vezes** esse benchmark. O Soft modificou somente 5 das
-1.546 decisões da política-base e terminou 2,40% abaixo do Control.
+É a reprodução oficial do resultado U59. O script:
 
-Esses números descrevem um backtest histórico com validação temporal fora da
-amostra. Eles não constituem previsão nem garantia de desempenho futuro.
+1. valida os snapshots congelados;
+2. carrega o U56;
+3. acrescenta COLB, AMS e FOXF;
+4. fixa o calendário temporal no U56 original;
+5. executa a calibração walk-forward e o LightGBM Control;
+6. simula o U59;
+7. exige a reprodução de **US$ 30.080.091,008142874**;
+8. exporta previsões, operações, margens por fold e o pacote de auditoria.
 
-## Tecnologias utilizadas
+No terminal:
 
-- **Python 3.12** como ambiente de referência do projeto e do CI.
-- **Pandas** e **NumPy** para séries temporais, transformação e cálculo numérico.
-- **LightGBM** para os modelos de regressão de utilidade.
-- **scikit-learn** como dependência do ecossistema de modelagem usado pelo
-  LightGBM.
-- **threadpoolctl** para controle do paralelismo numérico.
-- **alpaca-py** e **requests** para obtenção dos dados de mercado.
-- **python-dotenv** para carregar as credenciais locais da Alpaca.
-- **CSV + JSON + SHA-256** para congelamento e auditoria do snapshot de dados.
-- **pytest** para testes automatizados.
-- **Ruff** para análise estática do código.
-- **GitHub Actions** para executar Ruff e pytest em cada atualização relevante.
-- **Spyder** é opcional e pode ser usado para executar o experimento célula por
-  célula e inspecionar as variáveis intermediárias.
+~~~bash
+python reproduzir_experimento.py
+~~~
+
+No Spyder, abra reproduzir_experimento.py, reinicie o kernel e execute com F5.
+
+A execução usa apenas os dados congelados e não acessa a Alpaca.
 
 ## Estrutura do projeto
 
-```text
+~~~text
 .
+├── buscar_ativos.py
+├── reproduzir_experimento.py
+├── CONTEXTO_MESTRE.md
 ├── dados/
 │   ├── pesquisa/
-│   │   ├── raw_bars/
-│   │   ├── corporate_actions/
-│   │   └── manifest.json
-│   └── temporario/
+│   ├── pesquisa_expansao_76_b2/
+│   ├── pesquisa_smart_candidates/
+│   └── assinatura_matematica/
 ├── engine/
-│   ├── configuracao.py
-│   ├── diagnosticos.py
-│   ├── execucao.py
-│   ├── modelo_lightgbm.py
-│   └── rotacao.py
+├── pesquisas/
 ├── reproducao/
-│   ├── artefatos.py
-│   ├── dados.py
-│   ├── experimento.py
-│   └── preparacao.py
 ├── tests/
-├── reproduzir_experimento_spyder.py
 ├── requirements.txt
 └── .env.example
-```
+~~~
 
-A pasta `dados/pesquisa/` contém o snapshot oficial utilizado no TCC e é
-versionada no Git. Já `dados/temporario/` e `output/` são locais e ignoradas.
-Isso separa a evidência congelada da pesquisa dos downloads usados em novas
-execuções.
+Os antigos runners experimentais de análise, congelamento e validação foram
+removidos do diretório raiz após seus resultados terem sido registrados. A
+evidência científica correspondente continua preservada nos dados congelados,
+no histórico Git e no CONTEXTO_MESTRE.md.
 
-## Pré-requisitos
+O arquivo migrar_snapshot_pesquisa.py permanece apenas como utilitário de
+manutenção/migração de snapshots legados e não faz parte do fluxo normal.
 
-Para criar um snapshot novo são necessários:
+## Metodologia resumida
 
-1. Python 3.12.
-2. Acesso à internet.
-3. Uma conta Alpaca.
-4. Uma API Key e uma Secret Key da Alpaca com acesso aos dados históricos
-   necessários, incluindo o feed SIP utilizado pelo experimento.
-5. Git para baixar o projeto.
+As séries diárias são preparadas a partir dos snapshots versionados. Splits são
+normalizados em memória e problemas estruturais de identidade são tratados de
+forma explícita conforme as regras congeladas da pesquisa.
 
-A Alpaca utiliza **duas credenciais**, não um único token: uma API Key e uma
-Secret Key. Elas são usadas somente para criar ou substituir o snapshot local.
-Depois disso, com o manifesto e os CSVs presentes, a reprodução pode funcionar
-sem acessar a Alpaca.
+O LightGBM estima utilidade multi-horizonte com horizontes de 5, 10, 20, 40 e
+60 sessões. A validação é cronológica e utiliza folds walk-forward com
+treinamento, calibração, purge temporal e teste fora da amostra.
 
-Nunca adicione as credenciais ao Git.
+As mudanças de posição são executadas na abertura da sessão seguinte. Todo o
+capital pertence a uma única conta e é reinvestido ao longo da trajetória.
 
-## Instalação
+## Dados congelados
 
-Clone o projeto e entre no diretório:
+A reprodução U59 depende de dois conjuntos versionados:
 
-```bash
-git clone https://github.com/betovlima/tcc_mba_usp_data_science_analytics.git
-cd tcc_mba_usp_data_science_analytics
-```
+~~~text
+dados/pesquisa/
+dados/pesquisa_expansao_76_b2/
+~~~
 
-Crie um ambiente virtual:
+O primeiro contém os 56 ativos-base. O segundo contém, entre outros ativos da
+campanha histórica, as três inclusões necessárias para o U59:
 
-```bash
-python -m venv .venv
-```
+~~~text
+COLB
+AMS
+FOXF
+~~~
 
-No Windows usando Git Bash:
-
-```bash
-source .venv/Scripts/activate
-```
-
-No Linux ou macOS:
-
-```bash
-source .venv/bin/activate
-```
-
-Instale as dependências:
-
-```bash
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-## Configuração das credenciais da Alpaca
-
-Copie o arquivo de exemplo:
-
-```bash
-cp .env.example .env
-```
-
-Preencha o arquivo `.env`:
-
-```text
-ALPACA_API_KEY=sua_api_key
-ALPACA_SECRET_KEY=sua_secret_key
-```
-
-O arquivo `.env` é ignorado pelo Git.
-
-As credenciais são necessárias para execuções que baixam dados novamente da
-Alpaca. A reprodução do snapshot oficial em `dados/pesquisa/` não depende
-de internet nem de credenciais.
-
-## Executando a pesquisa
-
-O modo mais simples é executar:
-
-```bash
-python reproduzir_experimento_spyder.py
-```
-
-O fluxo executado é:
-
-```text
-Alpaca RAW/SIP
-    -> CSV OHLCV por ativo
-    -> Corporate Actions
-    -> manifest.json + SHA-256
-    -> validação estrutural
-    -> normalização de splits
-    -> features e targets
-    -> folds walk-forward
-    -> LightGBM CPU
-    -> Control
-    -> Soft Horizon Consensus
-    -> comparação e exportação
-```
-
-Por padrão:
-
-```python
-FORCAR_DOWNLOAD = False
-```
-
-Mantenha esse valor em `False` para reutilizar os arquivos temporários já
-baixados, quando existirem. Altere para `True` quando quiser apagar somente
-`dados/temporario/reproducao/` e baixar novamente todas as séries e
-Corporate Actions da Alpaca. O snapshot oficial em `dados/pesquisa/` não é
-alterado por essa chave.
-
-## Modos de dados
-
-O script possui duas chaves:
-
-```python
-USAR_DADOS_PESQUISA_CONGELADOS = False
-FORCAR_DOWNLOAD = False
-```
-
-Com `USAR_DADOS_PESQUISA_CONGELADOS=True`, o sistema usa somente
-`dados/pesquisa/`, valida os hashes e não acessa a Alpaca.
-
-Com `USAR_DADOS_PESQUISA_CONGELADOS=False` e `FORCAR_DOWNLOAD=False`, o
-sistema usa `dados/temporario/reproducao/`. O manifesto é comparado com a
-data final efetiva: se o snapshot temporário estiver atrasado, ele é atualizado
-automaticamente; se já cobrir a data alvo, os arquivos são reutilizados. Esses
-arquivos não entram no Git.
-
-Com `USAR_DADOS_PESQUISA_CONGELADOS=False` e `FORCAR_DOWNLOAD=True`, o
-sistema limpa somente `dados/temporario/reproducao/`, baixa novamente
-todos os ativos e Corporate Actions da Alpaca, recria o manifesto temporário e
-executa a partir desse conjunto. O snapshot oficial em `dados/pesquisa/`
-permanece intocado.
-
-### Data final no modo temporário
-
-O snapshot oficial da pesquisa continua congelado em `2026-09-17`.
-
-No modo temporário, a data final é dinâmica. Depois de 16:15 no horário de
-Nova York, a execução consulta também a sessão do próprio dia. Antes desse
-horário, usa como limite o dia calendário anterior para evitar uma barra diária
-ainda incompleta. Em fins de semana e feriados, a Alpaca naturalmente retorna
-como última observação a sessão de mercado mais recente.
-
-Assim, uma execução temporária feita após o fechamento de 22/09/2026 pode
-terminar em 22/09/2026 e a liquidação final do backtest ocorre nessa última
-sessão disponível.
-
-Para migrar o snapshot local antigo para a pasta versionada:
-
-```bash
-python migrar_snapshot_pesquisa.py
-```
-
-## Execução no Spyder
-
-Abra `reproduzir_experimento_spyder.py` e execute as células `# %%` de cima
-para baixo:
-
-```text
-0  configuração
-1  origem dos dados: pesquisa congelada ou download
-2  barras OHLCV RAW
-3  Corporate Actions
-4  manifesto e SHA-256
-5  preparação dos dados
-6  configurações e folds
-7  Control
-8  Soft Horizon Consensus
-9  comparação
-10 exportação
-```
-
-O Variable Explorer permite inspecionar, entre outras:
-
-```text
-frames
-ativos_elegiveis
-folds
-config_control
-config_soft
-control_result
-control_metrics
-soft_result
-soft_metrics
-comparacao
-```
-
-## Testes e análise estática
-
-Antes de executar uma pesquisa completa, rode:
-
-```bash
-python -m ruff check engine reproducao reproduzir_experimento_spyder.py tests --select F401,F811,F821,F841
-python -m pytest -q
-```
+A reprodução oficial não substitui esses arquivos por downloads atuais.
 
 ## Resultados gerados
 
-A execução cria:
+A execução de reproduzir_experimento.py grava em:
 
-```text
+~~~text
 output/reproducao/
-├── summary.json
-├── summary.txt
-├── comparison.csv
-├── control_predictions.csv
-├── control_trades.csv
-├── soft_horizon_consensus_predictions.csv
-├── soft_horizon_consensus_trades.csv
-├── folds.csv
-├── data_diagnostics.csv
-├── data_audit.json
-├── structural_exclusions.csv
-└── graficos/
-    ├── backtest_analytics.xlsx
-    ├── monthly_realized_pnl_*.csv
-    ├── monthly_realized_pnl_heatmap_*.png/.svg
-    ├── monthly_returns_*.csv
-    ├── monthly_return_heatmap_*.csv/.png/.svg
-    ├── capital_rotations_*.csv
-    ├── capital_rotations_monthly_*.csv
-    ├── capital_rotations_transition_matrix_*.csv
-    └── capital_rotations_heatmap_*.csv/.png/.svg
-```
+~~~
 
-`summary.json` concentra as métricas principais. `comparison.csv` resume a
-comparação Control versus Soft. Os arquivos de predictions e trades permitem
-auditar as decisões individuais, enquanto `data_audit.json` e
-`structural_exclusions.csv` documentam a integridade do snapshot e eventuais
-exclusões estruturais.
+os principais artefatos:
+
+~~~text
+u59_assets.csv
+u59_fold_margins.csv
+u59_predictions.csv
+u59_trades.csv
+reproducao_u59.json
+pacote_reproducao_u59_30m.zip
+~~~
+
+O arquivo reproducao_u59.json contém o universo, os snapshots, as margens
+selecionadas por fold, as métricas e o erro de reprodução em relação ao
+checkpoint oficial.
+
+## Instalação
+
+Crie um ambiente Python e instale:
+
+~~~bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+~~~
+
+Para a reprodução oficial não são necessárias credenciais da Alpaca.
+
+Para buscar_ativos.py, quando houver coleta de dados, use um arquivo .env
+local:
+
+~~~text
+ALPACA_API_KEY=sua_api_key
+ALPACA_SECRET_KEY=sua_secret_key
+~~~
+
+Nunca adicione credenciais ao Git.
+
+## Testes e análise estática
+
+Execute:
+
+~~~bash
+python -m ruff check engine reproducao pesquisas buscar_ativos.py reproduzir_experimento.py tests --select F401,F811,F821,F841
+python -m pytest -q
+~~~
+
+O GitHub Actions executa os mesmos checks nas branches de pesquisa.
+
+## Histórico científico
+
+Os experimentos anteriores, inclusive as análises de assinatura contextual,
+validação prospectiva e filtro de aderência de capital, permanecem documentados
+em CONTEXTO_MESTRE.md e no histórico Git.
+
+Esses experimentos não são necessários para reproduzir o checkpoint U59 de
+aproximadamente US$ 30 milhões.

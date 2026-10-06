@@ -16,6 +16,44 @@ REFERENCE_FILE = Path(__file__).with_name(
     "reference_10_8_74_raw_snapshot_diagnostics.json"
 )
 
+# Exclusoes estruturais conhecidas e deliberadas. O snapshot permanece
+# congelado; a exclusao acontece apenas no pipeline de modelagem.
+KNOWN_STRUCTURAL_EXCLUSIONS: dict[str, dict[str, Any]] = {
+    "CLMT": {
+        "symbol": "CLMT",
+        "reason": "structural_identity_change",
+        "action_type": "name_change",
+        "process_date": "2024-07-11",
+        "effective_date": None,
+        "old_cusip": "131476103",
+        "new_cusip": "131428104",
+        "acquiree_symbol": "CLMT",
+        "acquirer_symbol": "CLMT",
+        "note": (
+            "same ticker with CUSIP/legal-identity transition; "
+            "series excluded instead of bridged"
+        ),
+    },
+}
+
+
+def _normalize_identifier(value: Any) -> str:
+    """Normaliza identificadores CSV que o pandas pode ler como float."""
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+
+    text = str(value).strip()
+    if text.endswith(".0"):
+        candidate = text[:-2]
+        if candidate.isdigit():
+            return candidate
+    return text
+
 
 def _clean_record(row: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
@@ -59,6 +97,28 @@ def structural_identity_issue(
     actions: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     normalized = symbol.strip().upper()
+
+    known = KNOWN_STRUCTURAL_EXCLUSIONS.get(normalized)
+    if known is not None:
+        matching = next(
+            (
+                action
+                for action in actions
+                if str(action.get("action_type") or "") == "name_change"
+                and str(action.get("old_symbol") or "").strip().upper()
+                == normalized
+                and str(action.get("new_symbol") or "").strip().upper()
+                == normalized
+                and _normalize_identifier(action.get("old_cusip"))
+                == _normalize_identifier(known.get("old_cusip"))
+                and _normalize_identifier(action.get("new_cusip"))
+                == _normalize_identifier(known.get("new_cusip"))
+            ),
+            None,
+        )
+        if matching is not None:
+            return dict(known)
+
     for action in actions:
         action_type = str(action.get("action_type") or "")
         if action_type not in {
@@ -144,14 +204,25 @@ def prepare_model_frames(
     *,
     assets: tuple[str, ...] = ASSETS,
     comparar_snapshot_referencia: bool = True,
+    allow_structural_assets: frozenset[str] = frozenset(),
 ) -> tuple[
     dict[str, pd.DataFrame],
     list[dict[str, Any]],
     list[dict[str, Any]],
     dict[str, Any],
 ]:
-    """Carrega o snapshot, exclui identidades quebradas e normaliza splits."""
+    """Carrega o snapshot, exclui identidades quebradas e normaliza splits.
+
+    allow_structural_assets existe apenas para campanhas de sensibilidade:
+    o evento estrutural continua auditado, mas o ativo pode ser mantido no
+    replay de forma explícita e registrada. O comportamento padrao continua
+    sendo excluir.
+    """
     paths.ensure()
+    allowed_structural = {
+        str(symbol).strip().upper()
+        for symbol in allow_structural_assets
+    }
     frames: dict[str, pd.DataFrame] = {}
     exclusions: list[dict[str, Any]] = []
     diagnostics: list[dict[str, Any]] = []
@@ -162,13 +233,22 @@ def prepare_model_frames(
         raw = load_raw_bar_file(raw_path)
         actions = load_actions_file(action_path)
         issue = structural_identity_issue(symbol, actions)
+        structural_override = bool(
+            issue is not None
+            and symbol.strip().upper() in allowed_structural
+        )
 
-        if issue is not None:
+        if issue is not None and not structural_override:
             exclusions.append(issue)
+            detail = (
+                issue.get("acquirer_symbol")
+                or issue.get("new_cusip")
+                or "n/a"
+            )
             print(
                 f"[data] {position}/{len(assets)} {symbol} excluded "
                 f"reason={issue['reason']} action={issue['action_type']} "
-                f"acquirer={issue['acquirer_symbol']}",
+                f"detail={detail}",
                 flush=True,
             )
             diagnostics.append(
@@ -183,6 +263,14 @@ def prepare_model_frames(
             )
             continue
 
+        if structural_override:
+            print(
+                f"[data] {position}/{len(assets)} {symbol} "
+                f"structural_override=True reason={issue['reason']} "
+                f"action={issue['action_type']}",
+                flush=True,
+            )
+
         normalized, applied = split_normalize(raw, actions)
         frames[symbol] = normalized
         diagnostics.append(
@@ -193,6 +281,11 @@ def prepare_model_frames(
                 "splits_applied": len(applied),
                 "excluded": False,
                 "exclusion_reason": None,
+                "structural_override": bool(structural_override),
+                "structural_issue": (
+                    dict(issue) if structural_override and issue is not None
+                    else None
+                ),
             }
         )
         print(
