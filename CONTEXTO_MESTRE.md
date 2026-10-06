@@ -3005,3 +3005,111 @@ Commit da correcao:
 
 Como a falha ocorreu antes do baseline U59 e antes da abertura dos 32
 resultados, a validade prospectiva permanece intacta.
+
+
+## Resultado oficial da validacao prospectiva one-shot — v1.18
+
+Pacote analisado:
+pacote_validacao_prospectiva_financeira_v118.zip
+
+SHA-256 do pacote:
+f05a0efac2b8dff4e85fb641a3fdf9cf50e0271012f93cc33babebe8704b74df
+
+Runner:
+1.18.2-dev.2
+
+Schema:
+prospective-signature-financial-validation-v1
+
+O U59 reproduziu exatamente o checkpoint congelado:
+US$ 30.080.091,008142874
+erro relativo = 0.
+
+Endpoint primario pre-registrado nos 24 candidatos ativos:
+Spearman(S, capital_pct_vs_u59) = 0,6217391304
+p unilateral por 20.000 permutacoes = 0,0006999650
+bootstrap 95% de rho = [0,2516; 0,8451]
+
+Pelo criterio pre-registrado rho>0 e p<0,05, o endpoint primario foi
+ATENDIDO. Portanto existe suporte prospectivo para a capacidade do score S de
+ORDENAR contribuicao marginal de capital entre candidatos ativos.
+
+Porem o resultado deve ser interpretado com precisao:
+- AUC para classificar efeito positivo = 0,6421;
+- p unilateral por permutacao da AUC = 0,18199;
+- average precision = 0,33663;
+- portanto a assinatura NAO validou, neste teste, um classificador binario
+  confiavel de vencedores positivos.
+
+Resultados por estrato:
+High-S:
+- 2/8 positivos (25%);
+- 1/8 zero;
+- mediana delta = -2,827%;
+- media delta = -12,993%;
+- minimo -63,768%; maximo +9,249%.
+
+Mid-S:
+- 3/8 positivos (37,5%);
+- mediana delta = -11,532%;
+- media delta = -17,431%;
+- minimo -59,171%; maximo +19,159%.
+
+Low-S:
+- 0/8 positivos;
+- mediana delta = -82,032%;
+- media delta = -74,189%;
+- minimo -99,090%; maximo -39,521%.
+
+Dormant A=0:
+- 0/8 positivos;
+- 8/8 efeito exatamente zero;
+- mediana e media delta = 0.
+
+Vencedores prospectivos individuais:
+- ACU +9,2491%;
+- HBCP +3,6461%;
+- RDCM +4,1743%;
+- RELL +19,1592%;
+- NUE +4,0780%.
+
+Controle high-S vs low-S em taxa de positivos:
+2/8 vs 0/8, Fisher unilateral p=0,2333, portanto nao significativo.
+
+A relacao continua de ranking e fortemente explicada pela separacao entre
+candidatos low-S muito destrutivos e os estratos high/mid. Em analise de
+sensibilidade pos-resultado, apenas high+mid juntos nao apresentam relacao
+monotona interna relevante (Spearman ~0,0176). Esta analise de sensibilidade e
+exploratoria e NAO altera o endpoint primario.
+
+Decomposicao exploratoria dos componentes nos 24 ativos:
+- menor beats_best_share vs efeito: Spearman orientado +0,7654;
+- menor score_std vs efeito: +0,6070;
+- menor abs(score_corr_best) vs efeito: +0,1226.
+Nao retunar pesos ou remover componentes com base nisso; registrar apenas como
+resultado descritivo prospectivo.
+
+Teste economico secundario dos oito high-S juntos:
+U59 + high-S8 terminou em US$ 6.660.799,10
+delta = -US$ 23.419.291,91
+delta percentual = -77,8565%
+Sharpe = 2,0980
+MaxDD = -31,2200%.
+
+Portanto a assinatura validou ORDENACAO RELATIVA de dano/beneficio individual,
+mas NAO validou a regra operacional "adicionar em conjunto os ativos de maior
+S". O score parece especialmente eficaz em identificar/evitar candidatos
+destrutivos de baixo S. Ele ainda e insuficiente, sozinho, para selecionar um
+grupo economicamente superior ao U59.
+
+Conclusao cientifica:
+- evidencia prospectiva de generalizacao do ranking continuo: SIM;
+- evidencia prospectiva de classificacao binaria de positivos: NAO;
+- evidencia prospectiva de que high-S em conjunto melhora o U59: NAO;
+- hurdle dormant A=0: fortemente corroborado nesta amostra (8/8 efeito zero);
+- nao ajustar a assinatura v1.18 usando estes 32 e chamar o resultado de mesma
+  validacao prospectiva.
+
+A v1.18 deve ser mantida congelada como resultado cientifico. Qualquer modelo
+novo que use estas 32 observacoes passa a ser uma nova hipotese de
+desenvolvimento e exigiria, futuramente, outra amostra realmente intocada.
