@@ -3763,3 +3763,33 @@ ser promovida.
 Regra:
 esta branch e apenas de visualizacao/diagnostico. Nao alterar parametros do
 modelo nem a composicao U59 durante esta etapa.
+
+
+## Correcao de importacao dos graficos de rotacao — v1.20.1-dev.2
+
+Erro observado no Spyder:
+ImportError: cannot import name 'gerar_graficos_rotacoes_u59'
+from 'reproducao.graficos_rotacoes'.
+
+Causa:
+o modulo de graficos foi generalizado para permitir uso com diferentes
+universos e a funcao passou a se chamar gerar_graficos_rotacoes, mas o runner
+reproduzir_experimento.py e o teste automatizado ainda apontavam para o nome
+antigo gerar_graficos_rotacoes_u59.
+
+Correcao:
+- reproduzir_experimento.py agora importa gerar_graficos_rotacoes;
+- a chamada passa universe_label="U59";
+- testes foram atualizados para a API e nomes de arquivos generalizados;
+- versao do runner atualizada para 1.20.1-dev.2.
+
+Esta alteracao e apenas de integracao da camada de visualizacao. Nao altera:
+- universo financeiro;
+- LightGBM;
+- margens;
+- folds;
+- politica de rotacao;
+- checkpoint esperado.
+
+O capital continua obrigado a reproduzir US$30.080.091,008142874 nesta branch
+antes de qualquer promocao ou mudanca de baseline.
