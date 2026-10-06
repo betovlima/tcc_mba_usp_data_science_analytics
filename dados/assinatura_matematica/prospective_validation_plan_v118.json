@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "research_version": "1.18.2-dev.1",
+  "execution_schema": "prospective-signature-financial-validation-v1",
+  "status": "preregistered_before_outcome_reveal",
+  "baseline": "U59_WINNER",
+  "frozen_cohort_sha256": "a1fe00ea2a7c7691d55396366be0375e64294ab43d97d4949a2433d106443978",
+  "frozen_package_sha256": "287efd76dbc84afb38055fbe25b529633dd5cc2ab68f2c457aa52f2490cb9bc5",
+  "cohort_size": 32,
+  "active_size": 24,
+  "dormant_size": 8,
+  "primary_endpoint": {
+    "population": "24 active candidates only",
+    "predictor": "specialist_score S frozen before capital",
+    "outcome": "capital_pct_vs_u59 from individual U59+candidate replay",
+    "statistic": "Spearman rho",
+    "direction": "positive",
+    "p_value": "one-sided deterministic permutation test",
+    "permutations": 20000,
+    "alpha": 0.05,
+    "decision_rule": "prospective ranking generalization is supported if rho>0 and one-sided permutation p<0.05"
+  },
+  "secondary_endpoints": [
+    {
+      "name": "AUC",
+      "population": "24 active candidates",
+      "label": "capital_pct_vs_u59 > 0",
+      "predictor": "specialist_score",
+      "statistic": "ROC AUC",
+      "direction": ">0.5",
+      "inference": "one-sided deterministic permutation test, descriptive/supportive"
+    },
+    {
+      "name": "tercile_gradient",
+      "population": "24 active candidates",
+      "groups": [
+        "active_high_S",
+        "active_mid_S",
+        "active_low_S"
+      ],
+      "outcomes": [
+        "positive_rate",
+        "median_capital_pct_vs_u59"
+      ],
+      "interpretation": "descriptive/supportive; expect high > mid > low"
+    },
+    {
+      "name": "high_vs_low_positive_rate",
+      "population": "16 active candidates from high and low S strata",
+      "statistic": "one-sided Fisher exact test",
+      "alternative": "high S has higher positive rate than low S"
+    },
+    {
+      "name": "dormant_control",
+      "population": "8 dormant candidates",
+      "outcomes": [
+        "positive_rate",
+        "median_capital_pct_vs_u59",
+        "exact_zero_rate"
+      ],
+      "interpretation": "negative-control check; no post-outcome retuning"
+    },
+    {
+      "name": "high_S_group_economic_effect",
+      "population": "the 8 pre-frozen active_high_S assets as one simultaneous group",
+      "outcome": "capital_pct_vs_u59",
+      "interpretation": "secondary economic interaction test; not part of primary signature inference"
+    }
+  ],
+  "guards": {
+    "reproduce_historical_u59_ending_capital": 30080091.008142874,
+    "u59_relative_tolerance": 1e-9,
+    "no_new_asset_search": true,
+    "no_alpaca_download": true,
+    "no_formula_retuning": true,
+    "no_cohort_changes": true,
+    "no_second_selection_attempt": true,
+    "use_fixed_u56_calendar_and_benchmark": true
+  },
+  "output_policy": {
+    "reveal_all_32_individual_outcomes": true,
+    "preserve_null_and_zero_results": true,
+    "report_failures_without_replacing_assets": true
+  }
+}
