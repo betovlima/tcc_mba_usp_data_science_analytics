@@ -18,6 +18,7 @@ if (
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 import numpy as np
 import pandas as pd
 
@@ -311,6 +312,26 @@ def gerar_graficos_rotacoes(
     trades = result.trades.copy()
     rotacoes = construir_rotacoes(trades)
     summary = _asset_summary(predictions, trades)
+    missing_highlights = sorted(
+        highlights.difference(set(summary["asset"].astype(str)))
+    )
+    if missing_highlights:
+        zero_rows = pd.DataFrame(
+            {
+                "asset": missing_highlights,
+                "selected_sessions": 0,
+                "entries": 0,
+                "exits": 0,
+                "realized_pnl": 0.0,
+                "average_holding_sessions": np.nan,
+                "exit_win_rate": np.nan,
+                "session_share": 0.0,
+            }
+        )
+        summary = pd.concat(
+            [summary, zero_rows],
+            ignore_index=True,
+        )
     paths: dict[str, Path] = {}
 
     # Dados-base completos.
@@ -575,8 +596,8 @@ def gerar_graficos_rotacoes(
     if not pnl_source.empty:
         bottom = pnl_source.nsmallest(8, "realized_pnl")
         top = pnl_source.nlargest(10, "realized_pnl")
-        highlighted = pnl_source.loc[
-            pnl_source["asset"].astype(str).isin(highlights)
+        highlighted = summary.loc[
+            summary["asset"].astype(str).isin(highlights)
         ]
         pnl_plot = (
             pd.concat([bottom, top, highlighted], ignore_index=True)
@@ -590,7 +611,13 @@ def gerar_graficos_rotacoes(
         fig_height = max(6.4, 0.34 * len(pnl_plot) + 2.2)
         fig, ax = plt.subplots(
             figsize=(11.8, fig_height),
-            constrained_layout=True,
+            constrained_layout=False,
+        )
+        fig.subplots_adjust(
+            left=0.11,
+            right=0.97,
+            top=0.90,
+            bottom=0.14,
         )
         y = np.arange(len(pnl_plot))
         values = pnl_plot["realized_pnl"].to_numpy(dtype=float)
@@ -618,7 +645,12 @@ def gerar_graficos_rotacoes(
         ]
         ax.set_yticks(y, labels)
         ax.axvline(0.0, color="#5A626B", linewidth=1.0)
-        ax.set_xlabel("PnL realizado")
+        ax.set_xlabel("PnL realizado (US$ milhões)")
+        ax.xaxis.set_major_formatter(
+            FuncFormatter(
+                lambda value, _: f"{value / 1_000_000:.1f}"
+            )
+        )
         ax.set_title(
             f"{universe_label}\nPnL realizado por ativo",
             loc="left",
@@ -626,7 +658,7 @@ def gerar_graficos_rotacoes(
         )
         fig.text(
             0.08,
-            0.012,
+            0.025,
             "Visão descritiva das posições fechadas; não é contribuição causal contrafactual. ★ = impulsionador exploratório.",
             fontsize=9,
             color="#5A626B",
@@ -740,7 +772,13 @@ def gerar_graficos_rotacoes(
         if not plot.empty:
             fig, ax = plt.subplots(
                 figsize=(14.0, 6.8),
-                constrained_layout=True,
+                constrained_layout=False,
+            )
+            fig.subplots_adjust(
+                left=0.08,
+                right=0.82,
+                top=0.88,
+                bottom=0.15,
             )
             normal = plot.loc[~plot["is_highlight"]]
             special = plot.loc[plot["is_highlight"]]
@@ -786,7 +824,7 @@ def gerar_graficos_rotacoes(
             )
             fig.text(
                 0.08,
-                0.012,
+                0.025,
                 "Escala logarítmica. 1,0 = limiar mínimo de troca; valores maiores indicam maior folga. Laranja = impulsionador exploratório.",
                 fontsize=9,
                 color="#5A626B",
@@ -803,7 +841,12 @@ def gerar_graficos_rotacoes(
             )
             ax.set_axisbelow(True)
             if not special.empty:
-                ax.legend(frameon=False, loc="upper left")
+                ax.legend(
+                    frameon=False,
+                    loc="upper left",
+                    bbox_to_anchor=(1.01, 1.0),
+                    borderaxespad=0.0,
+                )
 
             label_rows = (
                 plot.nlargest(7, "rotation_strength")
