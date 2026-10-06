@@ -1,0 +1,46 @@
+{
+  "research_version": "1.18.1-dev.1",
+  "execution_schema": "prospective-signature-validation-freeze-v1",
+  "status": "frozen_before_financial_replay",
+  "financial_reference": "U59_WINNER",
+  "source": {
+    "search_version": "1.17.0-dev.1",
+    "search_schema": "intelligent-asset-search-u59-v1",
+    "ranked_rows": 446,
+    "untouched_rows": 426,
+    "source_ranked_sha256": "1f25105d65ad9d6cce12228f6f3b529a7f0e16240b3dff849057611c1530d03b",
+    "frozen_signature_sha256": "29dcbd4ee229d74d41af16d7bdc8ce14defd93810305db534891c46d23f463f1"
+  },
+  "protocol": {
+    "financial_outcomes_used": false,
+    "capital_replays": 0,
+    "known_smart20_excluded": ["ALNY","CIVB","EBMT","EXR","FDX","FMBH","FNWB","ICCC","MUX","PAYX","PDFS","SBFG","SGA","SITC","SXC","THO","VLRS","WDAY","XEL","XNTK"],
+    "score_formula": "A=1[beats_best_share>0]; S=1-mean(rank_active(beats),rank_active(abs_corr_best),rank_active(score_std))",
+    "rank_scope": "all eligible active candidates in the untouched prospective cohort",
+    "sampling": "8 deterministic SHA256-sampled candidates from each active S tercile plus 8 dormant",
+    "per_stratum": 8,
+    "selection_salt": "tcc-v118-prospective-u59-one-shot-v1",
+    "post_outcome_retuning_allowed": false
+  },
+  "pool": {
+    "untouched": 426,
+    "score_data_eligible": 414,
+    "active": 226,
+    "dormant": 188,
+    "insufficient": 12,
+    "stratum_counts": {
+      "active_high_S": 76,
+      "active_mid_S": 75,
+      "active_low_S": 75,
+      "dormant_A0": 188
+    }
+  },
+  "selection": {
+    "count": 32,
+    "assets": ["HMN","LOCO","ACU","HBCP","LYV","PNFP","TCBI","OVLY","WDC","PROV","EDU","RARE","RDCM","RELL","NUE","JOUT","NSIT","ENTG","PLUG","GOGO","STRA","CETX","IOVA","TANH","EQIX","FTQI","ILF","IPAC","MTG","QUAL","VAW","XSLV"],
+    "selection_sha256": "a1fe00ea2a7c7691d55396366be0375e64294ab43d97d4949a2433d106443978",
+    "local_freeze_path": "dados\\assinatura_matematica\\prospective_validation_cohort_v118.csv"
+  },
+  "next_step": "Do not change this cohort. The next runner may reveal financial outcomes versus U59.",
+  "runtime_seconds": 0.05313719998230226
+}
