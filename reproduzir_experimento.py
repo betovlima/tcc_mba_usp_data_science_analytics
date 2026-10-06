@@ -200,15 +200,15 @@ if exclusions_positive8 or len(frames_positive8) != len(POSITIVE8):
     )
 
 frames_u67_raw = {
-    **frames_u67_raw,
+    **frames_u59_raw,
     **frames_positive8,
 }
 symbols_u67_requested = sorted(frames_u67_raw)
 
-if len(symbols_u59_requested) != EXPECTED_U67_COUNT:
+if len(symbols_u67_requested) != EXPECTED_U67_COUNT:
     raise RuntimeError(
         "U67 deveria conter 67 ativos. "
-        f"observado={len(symbols_u59_requested)}"
+        f"observado={len(symbols_u67_requested)}"
     )
 
 print(
@@ -483,7 +483,7 @@ reproduced = math.isclose(
 
 if not reproduced:
     raise RuntimeError(
-        "A reproducao U59 divergiu do checkpoint de US$ 30.080.091,01. "
+        "A reproducao U67 divergiu do checkpoint de US$ 58.557.157,67. "
         f"observado={ending_capital:,.8f} "
         f"esperado={EXPECTED_ENDING_CAPITAL:,.8f}"
     )
