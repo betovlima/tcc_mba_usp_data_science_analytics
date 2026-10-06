@@ -103,8 +103,6 @@ removidos do diretório raiz após seus resultados terem sido registrados. A
 evidência científica correspondente continua preservada nos dados congelados,
 no histórico Git e no CONTEXTO_MESTRE.md.
 
-O arquivo migrar_snapshot_pesquisa.py permanece apenas como utilitário de
-manutenção/migração de snapshots legados e não faz parte do fluxo normal.
 
 ## Metodologia resumida
 
