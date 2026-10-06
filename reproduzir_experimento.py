@@ -58,6 +58,8 @@ from engine.rotacao import (
 from pesquisas.directional_change_lightgbm import (
     criar_pacote_analise,
     decompor_distancia_topo_operacoes,
+    resumir_calibracao_score_entrada,
+    resumir_qualidade_ranking_ativos,
     sinal_sonoro_conclusao,
 )
 from reproducao.dados import SnapshotPaths, validate_snapshot
@@ -481,6 +483,13 @@ top_gap_summary, top_gap_operations, top_gap_by_cause = (
         post_exit_sessions=10,
     )
 )
+asset_ranking_quality = resumir_qualidade_ranking_ativos(
+    top_gap_operations
+)
+entry_score_calibration = resumir_calibracao_score_entrada(
+    top_gap_operations,
+    quantiles=5,
+)
 
 print(
     "[top-gap] "
@@ -493,6 +502,18 @@ if not top_gap_by_cause.empty:
     print(
         "[top-gap-by-cause]\n"
         + top_gap_by_cause.to_string(index=False),
+        flush=True,
+    )
+if not asset_ranking_quality.empty:
+    print(
+        "[asset-ranking-quality]\n"
+        + asset_ranking_quality.to_string(index=False),
+        flush=True,
+    )
+if not entry_score_calibration.empty:
+    print(
+        "[entry-score-calibration]\n"
+        + entry_score_calibration.to_string(index=False),
         flush=True,
     )
 
@@ -532,6 +553,16 @@ top_gap_by_cause.to_csv(
     index=False,
 )
 
+asset_ranking_quality.to_csv(
+    OUT / "u67_asset_ranking_quality.csv",
+    index=False,
+)
+
+entry_score_calibration.to_csv(
+    OUT / "u67_entry_score_calibration.csv",
+    index=False,
+)
+
 payload = {
     "reproduction_version": REPRODUCTION_VERSION,
     "execution_schema": EXECUTION_SCHEMA,
@@ -562,6 +593,12 @@ payload = {
         "status": "diagnostic_ex_post",
         "summary": top_gap_summary,
         "by_cause": top_gap_by_cause.to_dict(orient="records"),
+        "asset_ranking_quality": asset_ranking_quality.to_dict(
+            orient="records"
+        ),
+        "entry_score_calibration": entry_score_calibration.to_dict(
+            orient="records"
+        ),
         "non_additive_warning": (
             "Os gaps sao contrafactuais sobrepostos e nao devem ser somados "
             "como decomposicao contabil do capital."
