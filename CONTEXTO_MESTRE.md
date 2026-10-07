@@ -3820,3 +3820,47 @@ Novos artefatos:
 
 A main permanece intacta. O checkpoint financeiro de referencia continua
 US$ 58.557.157,67496595.
+
+
+### Top-K reranking walk-forward — Top Gap v1.3.0-dev.1
+
+A pesquisa foi estreitada para uma unica pergunta: dado o Top 5 ou Top 10
+produzido pela U67, e possivel escolher dentro desse grupo melhor do que
+aceitar automaticamente o atual Top 1?
+
+O experimento e apenas diagnostico. A politica financeira U67 nao foi
+alterada. O reranker usa Ridge com alpha fixo 10.0 e somente informacoes
+disponiveis na data da decisao:
+- score U67, rank, percentil e distancia para o Top 1;
+- retornos 5/20/60/120;
+- volatilidades 20/60;
+- distancias e inclinacoes de medias;
+- RSI, ATR e distancia do topo de 20 sessoes;
+- posicao de canal, eficiencia de tendencia, aceleracao de momentum e
+  volume relativo.
+
+O alvo e o percentil do retorno futuro dentro do proprio Top-K. Ele e usado
+somente no treino de folds anteriores e nunca como feature.
+
+Validacao:
+- Fold 2: treino exclusivamente no Fold 1;
+- Fold 3: treino exclusivamente nos Folds 1 e 2;
+- observacoes cujo horizonte futuro cruza a fronteira do fold sao excluidas;
+- Top-K avaliados: 5 e 10;
+- horizontes avaliados: 5, 20 e 60 sessoes.
+
+Metricas principais:
+- ganho medio e mediano de retorno do reranker contra o Top 1 U67;
+- proporcao de decisoes em que o reranker vence o Top 1;
+- rank e percentil futuro mediano da selecao;
+- taxa de acerto no melhor ativo futuro dentro do Top-K;
+- correlacao de Spearman entre score do reranker e retorno futuro dentro do
+  grupo.
+
+Novos artefatos:
+- u67_topk_rerank_decisions.csv;
+- u67_topk_rerank_summary.csv.
+
+A promocao para replay financeiro so sera considerada se o ganho for
+consistente nos dois folds de avaliacao e nao depender de um unico horizonte
+ou Top-K.
