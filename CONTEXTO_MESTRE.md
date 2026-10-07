@@ -51,6 +51,48 @@ de interpretar o universo selecionado.
 As linhas antigas descritas abaixo ficam preservadas apenas como historico e
 nao sao a pesquisa ativa atual.
 
+### Resultado v1.22.0-dev.1
+
+Execucao local auditada em 2026-10-07, pacote `pacote_analise.zip`.
+
+A guarda reproduziu exatamente o U67 oficial:
+
+- U67 Control: US$ 58.557.157,67496595;
+- U67 buy-and-hold dos mesmos 67 ativos: US$ 34.723,64;
+- CAGR Control: 309,4001%;
+- Sharpe Control: 2,51874371;
+- MaxDD Control: -30,3591%.
+
+A regra preregistrada de correlacao de ranking positiva selecionou 45 de 67
+ativos e removeu 22. CLMT foi removido pela regra geral, sem CUSIP ou excecao
+por ticker.
+
+Resultado do universo selecionado:
+
+- Control selecionado: US$ 1.923.817,08;
+- buy-and-hold dos mesmos 45 ativos: US$ 26.604,22;
+- CAGR: 135,0314%;
+- Sharpe: 1,830657;
+- MaxDD: -52,9258%;
+- pior fold: +241,4884%.
+
+Conclusao: a rotacao ainda supera amplamente o buy-and-hold do mesmo universo,
+inclusive em todos os folds, mas a regra de selecao destruiu 96,7146% do
+capital final em relacao ao U67 completo e piorou risco e estabilidade.
+
+Diagnostico metodologico: correlacao positiva entre score previsto e utilidade
+realizada mede ordenacao/preditibilidade, nao atratividade economica do ativo.
+A regra manteve 17 ativos com utilidade media realizada negativa na calibracao
+e removeu 14 ativos com utilidade media realizada positiva, incluindo AMD,
+AMZN, META e NVDA. Portanto esta regra nao deve ser promovida nem usada para
+alterar a main ou o MCT.
+
+Este resultado responde afirmativamente a pergunta restrita de que a rotacao
+pode superar buy-and-hold usando o mesmo capital e exatamente o mesmo grupo
+selecionado, mas rejeita esta primeira regra como metodo de construcao do
+universo final.
+
+
 
 ## Baseline preservado
 
