@@ -1,5 +1,79 @@
 # CONTEXTO_MESTRE
 
+## Fechamento validado 2026-10-07 - paridade exata TCC x MCT Strategy #13
+
+A campanha `research/tcc-mct-u67-parity-v1` foi concluida com reproducao exata
+do backtest da Strategy #13 do Market Cycle Trader.
+
+Resultado validado:
+
+- job MCT de referencia: `20261007T095423-60e489c0`;
+- universo solicitado: 67 ativos U67;
+- universo efetivo: 65 ativos;
+- exclusoes efetivas no runtime reproduzido: DOC e CLMT;
+- dados: Alpaca, barras diarias, feed SIP, adjustment RAW, full refresh;
+- inicio historico: 2016-01-01;
+- fim da janela reproduzida: 2026-10-06;
+- capital em 2026-09-17: US$ 78.782.538,31270888;
+- capital em 2026-10-06: US$ 76.927.051,38897176;
+- delta TCC x MCT em 2026-09-17: US$ 0,00;
+- delta TCC x MCT em 2026-10-06: US$ 0,00;
+- CAGR: 322,7752607%;
+- Sharpe: 2,56904268;
+- MaxDD: -30,3589700%;
+- pior fold: +282,5895543%.
+
+A validacao foi feita em varios niveis:
+
+- 65/65 hashes RAW coincidiram com o MCT;
+- 65/65 hashes normalizados coincidiram com o MCT;
+- 1.560 linhas de decisoes/predictions coincidiram;
+- 674 trades coincidiram;
+- capital final e capital na data comum de 2026-09-17 coincidiram ate o centavo;
+- nao foi necessario forcar `switch_margin`, ativo, score, decisao ou trade.
+
+Margens obtidas normalmente pela calibracao:
+
+- fold 1: candidato 0,0000; margem efetiva 0,0005;
+- fold 2: candidato 0,0100; margem efetiva 0,0100;
+- fold 3: candidato 0,0000; margem efetiva 0,0005.
+
+A causa da falha de reproducao intermediaria foi identificada na camada CSV do
+TCC. O MCT usa os `float64` recebidos da Alpaca diretamente em memoria. O TCC
+persistia esses valores com `%.17g` e os recarregava com o parser padrao do
+pandas, que podia alterar alguns valores em 1 ULP. Nesta campanha foi usado
+`float_precision="round_trip"`, recuperando exatamente os `float64`
+serializados. Depois dessa correcao, hashes, scores, decisoes, trades e capital
+ficaram em paridade exata.
+
+Conclusao metodologica:
+
+> O resultado de aproximadamente US$ 78,78 milhoes em 2026-09-17 e
+> US$ 76,93 milhoes em 2026-10-06 e um resultado reproduzivel do backtest
+> executado pelo MCT. As rotacoes decorrem do LightGBM e da politica
+> matematica de rotacao, sem codigo forcando a sequencia de decisoes.
+
+O checkpoint anterior U67 v1.21.0 de US$ 58.557.157,67 permanece preservado no
+historico. Ele representa outro checkpoint cientifico, com universo efetivo e
+snapshot distintos. Esta validacao nao deve apagar ou reescrever esse marco.
+
+A exclusao de CLMT nesta campanha registra o comportamento efetivamente
+executado pelo MCT e necessario para a paridade. Ela nao restabelece CUSIP,
+isoladamente, como criterio cientifico geral de exclusao de ativos.
+
+Estado para integracao:
+
+- branch: `research/tcc-mct-u67-parity-v1`;
+- PR: #7;
+- resultado: validado;
+- destino: `main` do TCC;
+- tag de fechamento recomendada para o estado atual:
+  `v1.22.0-dev.3`.
+- se a string interna de versao for promovida posteriormente de
+  `1.22.0-dev.3` para `1.22.0`, usar a tag estavel `v1.22.0` somente
+  depois dessa alteracao explicita.
+
+
 ## Pesquisa ativa 2026-10-07 - paridade TCC x MCT Strategy #13
 
 Branch ativa unica: `research/tcc-mct-u67-parity-v1`.
