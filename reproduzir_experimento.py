@@ -23,12 +23,19 @@ Abra reproduzir_experimento.py, reinicie o kernel e execute com F5.
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
+import hashlib
 import json
 import math
+import platform
+import shutil
+import sys
 import time
 
+import numpy as np
 import pandas as pd
+from threadpoolctl import threadpool_info
 
 from engine.configuracao import CONFIG
 from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
@@ -59,7 +66,7 @@ from reproducao.dados import (
     validate_snapshot,
 )
 from reproducao.experimento import build_variant_configs, summarize_metrics
-from reproducao.preparacao import prepare_model_frames
+from reproducao.preparacao import load_raw_bar_file, prepare_model_frames
 
 
 # %% 0 - Contrato de paridade com o job MCT auditado
@@ -67,7 +74,7 @@ ROOT = Path(__file__).resolve().parent
 TEMP = SnapshotPaths.temporary(ROOT)
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.22.0-dev.1"
+REPRODUCTION_VERSION = "1.22.0-dev.2"
 EXECUTION_SCHEMA = "u67-mct-operational-parity-v1"
 
 U59_ADDITIONS = ("COLB", "AMS", "FOXF")
@@ -100,6 +107,52 @@ MCT_MARKET_DATA_SIGNATURE = (
 )
 
 PARITY_ABS_TOL = 0.01
+MODEL_DATA_COLUMNS = ("open", "high", "low", "close", "volume")
+
+
+def _canonical_history_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Replica a canonicalizacao usada pelo MCT antes do SHA-256."""
+    canonical = frame[list(MODEL_DATA_COLUMNS)].copy()
+    canonical.index = pd.to_datetime(
+        canonical.index,
+        utc=True,
+        errors="coerce",
+    )
+    canonical = canonical.loc[~canonical.index.isna()]
+    canonical = canonical[
+        ~canonical.index.duplicated(keep="last")
+    ].sort_index()
+    try:
+        canonical.index = canonical.index.as_unit("ns")
+    except AttributeError:
+        canonical.index = pd.DatetimeIndex(
+            canonical.index.to_numpy(dtype="datetime64[ns]"),
+            tz="UTC",
+        )
+    for column in MODEL_DATA_COLUMNS:
+        canonical[column] = pd.to_numeric(
+            canonical[column],
+            errors="coerce",
+        ).astype(np.float64, copy=False)
+    return canonical
+
+
+def _history_frame_sha256(frame: pd.DataFrame) -> str:
+    """Replica o hash OHLCV usado no manifest de reproducibilidade do MCT."""
+    canonical = _canonical_history_frame(frame)
+    row_hashes = pd.util.hash_pandas_object(
+        canonical,
+        index=True,
+    ).to_numpy(dtype=np.uint64, copy=False)
+    return hashlib.sha256(row_hashes.tobytes()).hexdigest()
+
+
+def _package_version(name: str) -> str | None:
+    try:
+        return package_version(name)
+    except PackageNotFoundError:
+        return None
+
 
 if len(U67_REQUESTED_ASSETS) != EXPECTED_REQUESTED_COUNT:
     raise RuntimeError(
@@ -207,6 +260,51 @@ print(
     flush=True,
 )
 
+# Hashes calculados com exatamente a mesma canonicalizacao OHLCV do MCT.
+# Eles permitem comparar os 65 ativos sem depender do hash fisico do CSV.
+market_data_hash_rows = []
+for symbol in effective_assets_requested_order:
+    raw_frame = load_raw_bar_file(
+        TEMP.raw_bars / f"{symbol}.csv"
+    )
+    normalized_frame = frames_raw[symbol]
+    raw_canonical = _canonical_history_frame(raw_frame)
+    normalized_canonical = _canonical_history_frame(normalized_frame)
+    row = {
+        "asset": symbol,
+        "raw_sha256": _history_frame_sha256(raw_frame),
+        "normalized_sha256": _history_frame_sha256(normalized_frame),
+        "raw_rows": int(len(raw_canonical)),
+        "normalized_rows": int(len(normalized_canonical)),
+        "raw_first_timestamp": (
+            pd.Timestamp(raw_canonical.index.min()).isoformat()
+            if len(raw_canonical)
+            else None
+        ),
+        "raw_last_timestamp": (
+            pd.Timestamp(raw_canonical.index.max()).isoformat()
+            if len(raw_canonical)
+            else None
+        ),
+        "normalized_first_timestamp": (
+            pd.Timestamp(normalized_canonical.index.min()).isoformat()
+            if len(normalized_canonical)
+            else None
+        ),
+        "normalized_last_timestamp": (
+            pd.Timestamp(normalized_canonical.index.max()).isoformat()
+            if len(normalized_canonical)
+            else None
+        ),
+    }
+    market_data_hash_rows.append(row)
+    print(
+        f"[hash] {symbol} "
+        f"raw={row['raw_sha256']} "
+        f"normalized={row['normalized_sha256']}",
+        flush=True,
+    )
+
 
 # %% 3 - Mesmo calendario U56 elegivel e mesma configuracao Control
 u56_eligible = tuple(
@@ -303,6 +401,7 @@ candidate_margins = tuple(
 )
 fold_policies = {}
 fold_margins = []
+fold_calibration_candidates = []
 
 for fold_position, fold in enumerate(folds, start=1):
     fold_id = int(fold["fold_id"])
@@ -369,10 +468,25 @@ for fold_position, fold in enumerate(folds, start=1):
         selected_margin,
     )
 
+    for candidate_margin, candidate_score in candidate_scores:
+        fold_calibration_candidates.append(
+            {
+                "fold_id": fold_id,
+                "candidate_margin": float(candidate_margin),
+                "calibration_score": float(candidate_score),
+                "selected": bool(
+                    abs(float(candidate_margin) - selected_margin) <= 1e-12
+                ),
+                "selected_margin": selected_margin,
+                "effective_margin": effective_margin,
+            }
+        )
+
     print(
         f"[calibration] fold={fold_id} "
         f"selected_margin={selected_margin:.6f} "
-        f"effective_margin={effective_margin:.6f}",
+        f"effective_margin={effective_margin:.6f} "
+        f"candidates={candidate_scores}",
         flush=True,
     )
 
@@ -530,7 +644,28 @@ print("=" * 78, flush=True)
 
 
 # %% 8 - Artefatos de auditoria
+# Limpa completamente a pasta para impedir que pacotes antigos entrem no ZIP.
+if OUT.exists():
+    shutil.rmtree(OUT)
 OUT.mkdir(parents=True, exist_ok=True)
+
+runtime_environment = {
+    "python": sys.version,
+    "platform": platform.platform(),
+    "numpy": np.__version__,
+    "pandas": pd.__version__,
+    "lightgbm": _package_version("lightgbm"),
+    "scikit_learn": _package_version("scikit-learn"),
+    "threadpoolctl": _package_version("threadpoolctl"),
+    "threadpool_runtime": threadpool_info(),
+    "deterministic_execution": bool(config_u67.deterministic_execution),
+    "numeric_thread_limit": int(config_u67.numeric_thread_limit),
+    "lightgbm_n_jobs": (
+        (config_u67.research_model_settings.get("lightgbm") or {}).get(
+            "n_jobs"
+        )
+    ),
+}
 
 pd.DataFrame(
     {"asset": U67_REQUESTED_ASSETS}
@@ -552,6 +687,24 @@ pd.DataFrame(fold_margins).to_csv(
     OUT / "u67_fold_margins.csv",
     index=False,
 )
+pd.DataFrame(fold_calibration_candidates).to_csv(
+    OUT / "u67_fold_calibration_candidates.csv",
+    index=False,
+)
+pd.DataFrame(market_data_hash_rows).to_csv(
+    OUT / "u67_market_data_hashes.csv",
+    index=False,
+)
+with (
+    OUT / "u67_runtime_environment.json"
+).open("w", encoding="utf-8") as handle:
+    json.dump(
+        runtime_environment,
+        handle,
+        ensure_ascii=False,
+        indent=2,
+        default=str,
+    )
 predictions.to_csv(
     OUT / "u67_predictions.csv",
     index=False,
@@ -585,6 +738,7 @@ payload = {
         "snapshot": snapshot_manifest,
         "data_audit": data_audit,
         "diagnostics": diagnostics,
+        "market_data_hashes": market_data_hash_rows,
     },
     "universe": {
         "requested_count": len(U67_REQUESTED_ASSETS),
@@ -600,6 +754,8 @@ payload = {
         "decision_sessions": len(all_decision_dates) - 1,
     },
     "fold_margins": fold_margins,
+    "fold_calibration_candidates": fold_calibration_candidates,
+    "runtime_environment": runtime_environment,
     "metrics": metrics,
     "parity": {
         "tcc_ending_capital": ending_capital,
