@@ -358,10 +358,34 @@ def _run_control_universe(
         calendar_source_label=f"U56_FIXED:{reference_source}",
     )
 
+    benchmark_dates = pd.DatetimeIndex(all_decision_dates[1:])
+    incomplete_benchmark_assets: list[str] = []
+    for symbol in symbols:
+        window = frames[symbol].reindex(benchmark_dates)
+        first_open = (
+            float(window.iloc[0]["open"])
+            if not window.empty
+            else float("nan")
+        )
+        closes = pd.to_numeric(window["close"], errors="coerce")
+        if (
+            not np.isfinite(first_open)
+            or first_open <= 0.0
+            or closes.isna().any()
+            or bool((closes <= 0.0).any())
+        ):
+            incomplete_benchmark_assets.append(symbol)
+    if incomplete_benchmark_assets:
+        raise RuntimeError(
+            "O buy-and-hold precisa usar exatamente o mesmo universo da "
+            "rotacao. Ativos sem cobertura completa: "
+            + ",".join(incomplete_benchmark_assets)
+        )
+
     benchmark = _benchmark_pesos_iguais(
         {symbol: frames[symbol] for symbol in symbols},
         symbols,
-        all_decision_dates[1:],
+        benchmark_dates,
         float(config.initial_capital),
         config,
         calcular_taxas_referencia,
@@ -698,6 +722,10 @@ payload = {
         "selection_window": "first_fold_calibration",
         "training_sessions": len(selection_train_dates),
         "calibration_sessions": len(selection_calibration_dates),
+        "training_start": str(selection_train_dates.min()),
+        "training_end": str(selection_train_dates.max()),
+        "calibration_start": str(selection_calibration_dates.min()),
+        "calibration_end": str(selection_calibration_dates.max()),
         "minimum_calibration_rows": MIN_CALIBRATION_ROWS,
         "minimum_validation_rank_correlation_exclusive": (
             MIN_VALIDATION_RANK_CORRELATION
