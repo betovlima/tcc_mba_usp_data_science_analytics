@@ -73,10 +73,30 @@ A interpretacao da proxima execucao deve seguir esta ordem:
 
 1. comparar os 65 hashes RAW e normalizados com o job MCT
    `20261007T095423-60e489c0`;
-2. se houver hashes diferentes, atribuir primeiro a divergencia aos dados;
-3. se os hashes forem iguais, comparar ambiente numerico e scores de
-   calibracao para investigar LightGBM/threads;
+2. se houver hashes diferentes, verificar primeiro se a diferenca foi
+   introduzida pela serializacao CSV do TCC;
+3. se os hashes forem iguais apos parsing round-trip, comparar ambiente
+   numerico e scores de calibracao para investigar LightGBM/threads;
 4. nao forcar `switch_margin` para reproduzir capital.
+
+### Resultado da auditoria de hashes
+
+Na execucao v1.22.0-dev.2, apenas 8 de 65 hashes RAW e normalizados coincidiram
+com o MCT. Entretanto, todos os 65 ativos tinham exatamente 2705 linhas e as
+mesmas datas inicial e final. O buy-and-hold tambem permaneceu numericamente
+identico ao MCT.
+
+Foi identificado um fator de implementacao que precisa ser eliminado antes de
+interpretar esses hashes como revisao da Alpaca: o MCT usa os floats recebidos
+da Alpaca diretamente em memoria, enquanto o TCC grava CSV com `%.17g` e
+depois recarrega com o parser padrao do pandas. O parser padrao pode alterar
+um float64 em 1 ULP; `float_precision="round_trip"` recupera exatamente o
+float64 serializado.
+
+A v1.22.0-dev.3 usa parsing `round_trip` apenas nesta campanha de paridade,
+preservando o comportamento padrao das demais reproducoes. O objetivo e testar
+se essa camada CSV explica a divergencia de hashes/scores antes de atribuir o
+problema a revisoes historicas da Alpaca ou ao LightGBM.
 
 
 ## Baseline preservado
