@@ -56,6 +56,7 @@ from engine.rotacao import (
     preparar_painel_rotacao,
 )
 from pesquisas.directional_change_lightgbm import (
+    analisar_ranking_scores_u67,
     criar_pacote_analise,
     decompor_distancia_topo_operacoes,
     resumir_calibracao_score_entrada,
@@ -273,6 +274,8 @@ BENCHMARK_NAME = (
 # %% 7 - Treino e calibracao walk-forward
 fold_policies = {}
 fold_margins = []
+policy_decision_diagnostics = {}
+full_decision_score_cache = {}
 
 for fold_position, fold in enumerate(folds, start=1):
     fold_id = int(fold["fold_id"])
@@ -383,6 +386,12 @@ for fold_position, fold in enumerate(folds, start=1):
         decision_dates,
         config_u67,
     )
+    full_decision_score_cache.update(
+        {
+            pd.Timestamp(timestamp): values.copy()
+            for timestamp, values in decision_cache.items()
+        }
+    )
 
     fold_policies[fold_id] = _politica_utilidade(
         final_models,
@@ -390,6 +399,7 @@ for fold_position, fold in enumerate(folds, start=1):
         symbols_u67,
         config_u67,
         effective_margin,
+        decision_diagnostics=policy_decision_diagnostics,
         fold_id=fold_id,
         calibrated_switch_margin=selected_margin,
         utility_cache=decision_cache,
@@ -423,6 +433,7 @@ result = _simular_exato(
     calcular_taxas_referencia,
     aplicar_deslizamento,
     decision_metadata=decision_metadata,
+    policy_decision_diagnostics=policy_decision_diagnostics,
     model_label="U67 Control - reproducao oficial",
     method_line=(
         "- Reproducao congelada do U67: U59 + THO + WDAY + EXR + XEL + "
@@ -475,6 +486,17 @@ if not reproduced:
 
 
 # %% 9 - Diagnostico ex post da distancia ao topo
+score_rank_future_detail, score_rank_future_summary = (
+    analisar_ranking_scores_u67(
+        full_decision_score_cache,
+        frames_u67,
+        symbols_u67,
+        all_decision_dates,
+        decision_to_fold,
+        horizons=(5, 20, 60),
+    )
+)
+
 top_gap_summary, top_gap_operations, top_gap_by_cause = (
     decompor_distancia_topo_operacoes(
         result.trades,
@@ -490,6 +512,13 @@ entry_score_calibration = resumir_calibracao_score_entrada(
     top_gap_operations,
     quantiles=5,
 )
+
+if not score_rank_future_summary.empty:
+    print(
+        "[score-rank-future-summary]\n"
+        + score_rank_future_summary.to_string(index=False),
+        flush=True,
+    )
 
 print(
     "[top-gap] "
@@ -543,6 +572,16 @@ result.trades.to_csv(
     index=False,
 )
 
+score_rank_future_detail.to_csv(
+    OUT / "u67_score_rank_future_detail.csv",
+    index=False,
+)
+
+score_rank_future_summary.to_csv(
+    OUT / "u67_score_rank_future_summary.csv",
+    index=False,
+)
+
 top_gap_operations.to_csv(
     OUT / "u67_top_gap_by_operation.csv",
     index=False,
@@ -589,6 +628,17 @@ payload = {
     "observed_ending_capital": ending_capital,
     "relative_error": relative_error,
     "metrics": metrics,
+    "score_rank_future_analysis": {
+        "status": "diagnostic_ex_post",
+        "horizons_sessions": [5, 20, 60],
+        "summary": score_rank_future_summary.to_dict(
+            orient="records"
+        ),
+        "target_definition": (
+            "future open-to-open return from next execution session "
+            "to H sessions ahead; never used as a feature"
+        ),
+    },
     "top_gap_analysis": {
         "status": "diagnostic_ex_post",
         "summary": top_gap_summary,
