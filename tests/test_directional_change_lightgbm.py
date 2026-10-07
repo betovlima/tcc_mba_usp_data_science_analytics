@@ -11,6 +11,7 @@ import pandas as pd
 from pesquisas.directional_change_lightgbm import (
     DC_FEATURES,
     analisar_ranking_scores_u67,
+    avaliar_reranking_topk_u67,
     HSMMAssetModel,
     _agrupar_gatilhos_ablation,
     _bocpd_downward_scores,
@@ -1304,3 +1305,60 @@ def test_full_score_rank_future_diagnostic_recovers_monotonic_ranking() -> None:
     assert first["score_rank"] == 1
     assert first["future_return_rank"] == 1
     assert first["future_return_percentile"] == 100.0
+
+
+def test_topk_reranker_is_walk_forward_and_can_reverse_bad_top1() -> None:
+    dates = pd.date_range(
+        "2026-05-01",
+        periods=26,
+        freq="B",
+        tz="UTC",
+    )
+    symbols = ["AAA", "BBB", "CCC"]
+
+    frames = {}
+    price_paths = {
+        "AAA": [120.0 - 0.2 * i for i in range(len(dates))],
+        "BBB": [100.0 + 0.4 * i for i in range(len(dates))],
+        "CCC": [80.0 + 1.2 * i for i in range(len(dates))],
+    }
+    for symbol, prices in price_paths.items():
+        frame = _base_frame(prices)
+        frame.index = dates
+        frames[symbol] = frame
+
+    score_cache = {}
+    for timestamp in dates[:-3]:
+        score_cache[timestamp] = np.asarray(
+            [0.0, 0.90, 0.50, 0.10],
+            dtype=float,
+        )
+
+    decision_to_fold = {
+        timestamp: (1 if index < 13 else 2)
+        for index, timestamp in enumerate(dates)
+    }
+
+    decisions, summary = avaliar_reranking_topk_u67(
+        score_cache,
+        frames,
+        symbols,
+        dates,
+        decision_to_fold,
+        top_ks=(3,),
+        horizons=(2,),
+        ridge_alpha=10.0,
+    )
+
+    assert not decisions.empty
+    assert not summary.empty
+    row = summary.iloc[0]
+    assert row["evaluation_fold"] == 2
+    assert row["train_folds"] == "1"
+    assert row["top_k"] == 3
+    assert row["horizon_sessions"] == 2
+    assert row["selection_changed_share"] > 0.90
+    assert row["mean_return_delta_pct"] > 0.0
+    assert row["reranked_future_rank_median"] < row[
+        "base_future_rank_median"
+    ]
