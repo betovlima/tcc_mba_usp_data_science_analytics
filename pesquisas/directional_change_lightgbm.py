@@ -34,7 +34,7 @@ from engine.rotacao import (
 )
 
 RESEARCH_VERSION = "1.17.0-dev.1"
-TOP_GAP_RESEARCH_VERSION = "1.1.0-dev.1"
+TOP_GAP_RESEARCH_VERSION = "1.2.0-dev.1"
 EXPECTED_EXECUTION_SCHEMA = "intelligent-asset-search-u59-v1"
 EXPECTED_COMPARISON_FILE = "asset_search.json"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
@@ -5728,6 +5728,404 @@ def resumir_calibracao_score_entrada(
         )
 
     return pd.DataFrame(rows, columns=columns)
+
+
+
+def analisar_ranking_scores_u67(
+    score_cache: dict[pd.Timestamp, np.ndarray],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    decision_dates: pd.DatetimeIndex,
+    decision_to_fold: dict[pd.Timestamp, int],
+    *,
+    horizons: tuple[int, ...] = (5, 20, 60),
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Compara o ranking causal de scores com o ranking futuro ex post.
+
+    Para cada data de decisao e horizonte, o retorno futuro usa o open da
+    sessao de execucao seguinte como ponto inicial e o open apos H sessoes
+    como ponto final. Assim, todos os ativos sao comparados no mesmo intervalo
+    de calendario. O retorno futuro e usado apenas como alvo diagnostico.
+
+    A metrica principal e o IC cross-sectional de Spearman por data:
+    score rank -> future return rank.
+    """
+    detail_columns = (
+        "decision_timestamp",
+        "execution_timestamp",
+        "future_timestamp",
+        "walk_forward_fold",
+        "horizon_sessions",
+        "asset",
+        "score",
+        "score_rank",
+        "score_percentile",
+        "future_return_pct",
+        "future_return_rank",
+        "future_return_percentile",
+        "is_score_top1",
+        "is_score_top5",
+        "is_score_top10",
+        "is_future_top5",
+        "is_future_top10",
+        "rank_percentile_error_abs",
+    )
+    summary_columns = (
+        "scope",
+        "walk_forward_fold",
+        "horizon_sessions",
+        "decisions",
+        "asset_rows",
+        "mean_spearman_ic",
+        "median_spearman_ic",
+        "positive_ic_share",
+        "top1_future_percentile_median",
+        "top1_future_rank_median",
+        "top1_future_return_median_pct",
+        "top1_in_future_top5_share",
+        "top1_in_future_top10_share",
+        "top5_overlap_share_mean",
+        "top10_overlap_share_mean",
+        "random_top5_share_reference",
+        "random_top10_share_reference",
+    )
+    empty_detail = pd.DataFrame(columns=detail_columns)
+    empty_summary = pd.DataFrame(columns=summary_columns)
+    if not score_cache or not symbols or len(decision_dates) < 3:
+        return empty_detail, empty_summary
+
+    normalized_frames: dict[str, pd.DataFrame] = {}
+    for symbol in symbols:
+        frame = frames.get(symbol)
+        if frame is None or frame.empty:
+            continue
+        local = frame.copy()
+        local.index = pd.to_datetime(local.index, utc=True)
+        normalized_frames[str(symbol)] = local.sort_index()
+
+    dates = pd.DatetimeIndex(
+        pd.to_datetime(decision_dates, utc=True)
+    ).sort_values()
+    date_to_position = {
+        pd.Timestamp(date): int(position)
+        for position, date in enumerate(dates)
+    }
+
+    rows: list[dict[str, Any]] = []
+    per_decision_rows: list[dict[str, Any]] = []
+
+    for decision_key, raw_scores in sorted(
+        score_cache.items(),
+        key=lambda item: pd.Timestamp(item[0]),
+    ):
+        decision_at = pd.Timestamp(decision_key)
+        decision_at = (
+            decision_at.tz_localize("UTC")
+            if decision_at.tzinfo is None
+            else decision_at.tz_convert("UTC")
+        )
+        decision_position = date_to_position.get(decision_at)
+        if decision_position is None:
+            continue
+        execution_position = decision_position + 1
+        if execution_position >= len(dates):
+            continue
+        execution_at = pd.Timestamp(dates[execution_position])
+
+        scores = np.asarray(raw_scores, dtype=float)
+        if len(scores) != len(symbols) + 1:
+            continue
+
+        fold_id = decision_to_fold.get(decision_at)
+        if fold_id is None:
+            fold_id = decision_to_fold.get(pd.Timestamp(decision_key))
+
+        for horizon in horizons:
+            horizon = int(horizon)
+            if horizon <= 0:
+                continue
+            future_position = execution_position + horizon
+            if future_position >= len(dates):
+                continue
+            future_at = pd.Timestamp(dates[future_position])
+
+            candidates: list[dict[str, Any]] = []
+            for symbol_index, symbol in enumerate(symbols, start=1):
+                score = float(scores[symbol_index])
+                if not np.isfinite(score):
+                    continue
+                frame = normalized_frames.get(symbol)
+                if (
+                    frame is None
+                    or execution_at not in frame.index
+                    or future_at not in frame.index
+                ):
+                    continue
+                entry_open = float(frame.loc[execution_at, "open"])
+                future_open = float(frame.loc[future_at, "open"])
+                if (
+                    not np.isfinite(entry_open)
+                    or entry_open <= 0.0
+                    or not np.isfinite(future_open)
+                    or future_open <= 0.0
+                ):
+                    continue
+                future_return = future_open / entry_open - 1.0
+                candidates.append(
+                    {
+                        "asset": symbol,
+                        "score": score,
+                        "future_return": float(future_return),
+                    }
+                )
+
+            if len(candidates) < 3:
+                continue
+
+            local = pd.DataFrame(candidates)
+            local["score_rank"] = local["score"].rank(
+                method="min",
+                ascending=False,
+            )
+            local["future_return_rank"] = local["future_return"].rank(
+                method="min",
+                ascending=False,
+            )
+            n_assets = int(len(local))
+            denominator = max(1, n_assets - 1)
+            local["score_percentile"] = (
+                100.0
+                * (n_assets - local["score_rank"])
+                / denominator
+            )
+            local["future_return_percentile"] = (
+                100.0
+                * (n_assets - local["future_return_rank"])
+                / denominator
+            )
+            local["rank_percentile_error_abs"] = (
+                local["score_percentile"]
+                - local["future_return_percentile"]
+            ).abs()
+
+            ic = float(
+                local["score"].corr(
+                    local["future_return"],
+                    method="spearman",
+                )
+            )
+
+            score_top1 = local.sort_values(
+                ["score", "asset"],
+                ascending=[False, True],
+            ).iloc[0]
+            top5_score_assets = set(
+                local.nlargest(min(5, n_assets), "score")["asset"]
+            )
+            top10_score_assets = set(
+                local.nlargest(min(10, n_assets), "score")["asset"]
+            )
+            top5_future_assets = set(
+                local.nlargest(
+                    min(5, n_assets),
+                    "future_return",
+                )["asset"]
+            )
+            top10_future_assets = set(
+                local.nlargest(
+                    min(10, n_assets),
+                    "future_return",
+                )["asset"]
+            )
+
+            per_decision_rows.append(
+                {
+                    "decision_timestamp": decision_at,
+                    "walk_forward_fold": fold_id,
+                    "horizon_sessions": horizon,
+                    "asset_count": n_assets,
+                    "spearman_ic": ic,
+                    "top1_future_percentile": float(
+                        score_top1["future_return_percentile"]
+                    ),
+                    "top1_future_rank": float(
+                        score_top1["future_return_rank"]
+                    ),
+                    "top1_future_return_pct": float(
+                        score_top1["future_return"] * 100.0
+                    ),
+                    "top1_in_future_top5": bool(
+                        score_top1["asset"] in top5_future_assets
+                    ),
+                    "top1_in_future_top10": bool(
+                        score_top1["asset"] in top10_future_assets
+                    ),
+                    "top5_overlap_share": float(
+                        len(top5_score_assets & top5_future_assets)
+                        / max(1, len(top5_score_assets))
+                    ),
+                    "top10_overlap_share": float(
+                        len(top10_score_assets & top10_future_assets)
+                        / max(1, len(top10_score_assets))
+                    ),
+                }
+            )
+
+            for _, candidate in local.iterrows():
+                score_rank = int(candidate["score_rank"])
+                future_rank = int(candidate["future_return_rank"])
+                rows.append(
+                    {
+                        "decision_timestamp": decision_at,
+                        "execution_timestamp": execution_at,
+                        "future_timestamp": future_at,
+                        "walk_forward_fold": fold_id,
+                        "horizon_sessions": horizon,
+                        "asset": str(candidate["asset"]),
+                        "score": float(candidate["score"]),
+                        "score_rank": score_rank,
+                        "score_percentile": float(
+                            candidate["score_percentile"]
+                        ),
+                        "future_return_pct": float(
+                            candidate["future_return"] * 100.0
+                        ),
+                        "future_return_rank": future_rank,
+                        "future_return_percentile": float(
+                            candidate["future_return_percentile"]
+                        ),
+                        "is_score_top1": bool(score_rank == 1),
+                        "is_score_top5": bool(score_rank <= 5),
+                        "is_score_top10": bool(score_rank <= 10),
+                        "is_future_top5": bool(future_rank <= 5),
+                        "is_future_top10": bool(future_rank <= 10),
+                        "rank_percentile_error_abs": float(
+                            candidate["rank_percentile_error_abs"]
+                        ),
+                    }
+                )
+
+    detail = pd.DataFrame(rows, columns=detail_columns)
+    decisions = pd.DataFrame(per_decision_rows)
+    if detail.empty or decisions.empty:
+        return detail, empty_summary
+
+    summary_rows: list[dict[str, Any]] = []
+    for horizon in sorted(decisions["horizon_sessions"].unique()):
+        horizon_rows = decisions.loc[
+            decisions["horizon_sessions"] == horizon
+        ]
+        groups: list[tuple[str, Any, pd.DataFrame]] = [
+            ("overall", None, horizon_rows)
+        ]
+        for fold_id, group in horizon_rows.groupby(
+            "walk_forward_fold",
+            dropna=True,
+        ):
+            groups.append(("fold", fold_id, group))
+
+        for scope, fold_id, group in groups:
+            ic_values = pd.to_numeric(
+                group["spearman_ic"],
+                errors="coerce",
+            ).dropna()
+            asset_counts = pd.to_numeric(
+                group["asset_count"],
+                errors="coerce",
+            ).dropna()
+            reference_n = (
+                float(asset_counts.median())
+                if not asset_counts.empty
+                else float(len(symbols))
+            )
+            summary_rows.append(
+                {
+                    "scope": scope,
+                    "walk_forward_fold": fold_id,
+                    "horizon_sessions": int(horizon),
+                    "decisions": int(len(group)),
+                    "asset_rows": int(
+                        len(
+                            detail.loc[
+                                detail["horizon_sessions"] == horizon
+                            ]
+                        )
+                        if scope == "overall"
+                        else len(
+                            detail.loc[
+                                (detail["horizon_sessions"] == horizon)
+                                & (
+                                    detail["walk_forward_fold"]
+                                    == fold_id
+                                )
+                            ]
+                        )
+                    ),
+                    "mean_spearman_ic": (
+                        float(ic_values.mean())
+                        if not ic_values.empty
+                        else None
+                    ),
+                    "median_spearman_ic": (
+                        float(ic_values.median())
+                        if not ic_values.empty
+                        else None
+                    ),
+                    "positive_ic_share": (
+                        float((ic_values > 0.0).mean())
+                        if not ic_values.empty
+                        else None
+                    ),
+                    "top1_future_percentile_median": float(
+                        pd.to_numeric(
+                            group["top1_future_percentile"],
+                            errors="coerce",
+                        ).median()
+                    ),
+                    "top1_future_rank_median": float(
+                        pd.to_numeric(
+                            group["top1_future_rank"],
+                            errors="coerce",
+                        ).median()
+                    ),
+                    "top1_future_return_median_pct": float(
+                        pd.to_numeric(
+                            group["top1_future_return_pct"],
+                            errors="coerce",
+                        ).median()
+                    ),
+                    "top1_in_future_top5_share": float(
+                        group["top1_in_future_top5"].astype(bool).mean()
+                    ),
+                    "top1_in_future_top10_share": float(
+                        group["top1_in_future_top10"].astype(bool).mean()
+                    ),
+                    "top5_overlap_share_mean": float(
+                        pd.to_numeric(
+                            group["top5_overlap_share"],
+                            errors="coerce",
+                        ).mean()
+                    ),
+                    "top10_overlap_share_mean": float(
+                        pd.to_numeric(
+                            group["top10_overlap_share"],
+                            errors="coerce",
+                        ).mean()
+                    ),
+                    "random_top5_share_reference": float(
+                        min(5.0, reference_n) / reference_n
+                    ),
+                    "random_top10_share_reference": float(
+                        min(10.0, reference_n) / reference_n
+                    ),
+                }
+            )
+
+    summary = pd.DataFrame(
+        summary_rows,
+        columns=summary_columns,
+    )
+    return detail, summary
 
 
 def calcular_metricas_peak_gatilhos(
