@@ -57,6 +57,7 @@ from engine.rotacao import (
 )
 from pesquisas.directional_change_lightgbm import (
     analisar_ranking_scores_u67,
+    avaliar_reranking_topk_u67,
     criar_pacote_analise,
     decompor_distancia_topo_operacoes,
     resumir_calibracao_score_entrada,
@@ -497,6 +498,19 @@ score_rank_future_detail, score_rank_future_summary = (
     )
 )
 
+topk_rerank_decisions, topk_rerank_summary = (
+    avaliar_reranking_topk_u67(
+        full_decision_score_cache,
+        frames_u67,
+        symbols_u67,
+        all_decision_dates,
+        decision_to_fold,
+        top_ks=(5, 10),
+        horizons=(5, 20, 60),
+        ridge_alpha=10.0,
+    )
+)
+
 top_gap_summary, top_gap_operations, top_gap_by_cause = (
     decompor_distancia_topo_operacoes(
         result.trades,
@@ -517,6 +531,12 @@ if not score_rank_future_summary.empty:
     print(
         "[score-rank-future-summary]\n"
         + score_rank_future_summary.to_string(index=False),
+        flush=True,
+    )
+if not topk_rerank_summary.empty:
+    print(
+        "[topk-rerank-summary]\n"
+        + topk_rerank_summary.to_string(index=False),
         flush=True,
     )
 
@@ -582,6 +602,16 @@ score_rank_future_summary.to_csv(
     index=False,
 )
 
+topk_rerank_decisions.to_csv(
+    OUT / "u67_topk_rerank_decisions.csv",
+    index=False,
+)
+
+topk_rerank_summary.to_csv(
+    OUT / "u67_topk_rerank_summary.csv",
+    index=False,
+)
+
 top_gap_operations.to_csv(
     OUT / "u67_top_gap_by_operation.csv",
     index=False,
@@ -638,6 +668,20 @@ payload = {
             "future open-to-open return from next execution session "
             "to H sessions ahead; never used as a feature"
         ),
+    },
+    "topk_rerank_analysis": {
+        "status": "walk_forward_diagnostic_only",
+        "top_ks": [5, 10],
+        "horizons_sessions": [5, 20, 60],
+        "ridge_alpha": 10.0,
+        "validation": (
+            "Fold 2 trains only on Fold 1; Fold 3 trains only on "
+            "Folds 1 and 2. Targets crossing fold boundaries are excluded."
+        ),
+        "summary": topk_rerank_summary.to_dict(
+            orient="records"
+        ),
+        "policy_changed": False,
     },
     "top_gap_analysis": {
         "status": "diagnostic_ex_post",
