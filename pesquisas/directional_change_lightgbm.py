@@ -34,7 +34,27 @@ from engine.rotacao import (
 )
 
 RESEARCH_VERSION = "1.17.0-dev.1"
-TOP_GAP_RESEARCH_VERSION = "1.2.0-dev.1"
+TOP_GAP_RESEARCH_VERSION = "1.3.0-dev.1"
+TOP_K_RERANK_FEATURES = (
+    "return_5",
+    "return_20",
+    "return_60",
+    "return_120",
+    "vol_20",
+    "vol_60",
+    "ema_distance_20",
+    "ema_20_vs_50",
+    "ema_slope_50_10",
+    "rsi_14",
+    "atr_pct_14",
+    "distance_from_high_20",
+    "channel_position_20",
+    "trend_efficiency_20",
+    "trend_efficiency_60",
+    "momentum_acceleration_5_20",
+    "momentum_acceleration_20_60",
+    "volume_ratio_5_20",
+)
 EXPECTED_EXECUTION_SCHEMA = "intelligent-asset-search-u59-v1"
 EXPECTED_COMPARISON_FILE = "asset_search.json"
 DIRECTIONAL_CHANGE_THRESHOLDS = (0.02, 0.04, 0.08)
@@ -6126,6 +6146,468 @@ def analisar_ranking_scores_u67(
         columns=summary_columns,
     )
     return detail, summary
+
+
+
+def avaliar_reranking_topk_u67(
+    score_cache: dict[pd.Timestamp, np.ndarray],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    decision_dates: pd.DatetimeIndex,
+    decision_to_fold: dict[pd.Timestamp, int],
+    *,
+    top_ks: tuple[int, ...] = (5, 10),
+    horizons: tuple[int, ...] = (5, 20, 60),
+    ridge_alpha: float = 10.0,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Valida um reranker linear somente dentro do Top-K produzido pela U67.
+
+    O modelo secundario usa apenas informacao disponivel na data da decisao.
+    O alvo e o percentil do retorno futuro dentro do proprio Top-K, usado
+    somente no treino de folds anteriores. A validacao e estritamente
+    walk-forward:
+    - Fold 2: treino no Fold 1;
+    - Fold 3: treino nos Folds 1 e 2.
+
+    Nenhuma decisao financeira da U67 e alterada nesta etapa.
+    """
+    from sklearn.impute import SimpleImputer
+    from sklearn.linear_model import Ridge
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    decision_columns = (
+        "evaluation_fold",
+        "horizon_sessions",
+        "top_k",
+        "decision_timestamp",
+        "base_asset",
+        "reranked_asset",
+        "selection_changed",
+        "base_future_return_pct",
+        "reranked_future_return_pct",
+        "return_delta_pct",
+        "base_future_rank_within_topk",
+        "reranked_future_rank_within_topk",
+        "base_future_percentile_within_topk",
+        "reranked_future_percentile_within_topk",
+        "reranker_candidate_spearman",
+    )
+    summary_columns = (
+        "evaluation_fold",
+        "train_folds",
+        "horizon_sessions",
+        "top_k",
+        "decisions",
+        "selection_changed_share",
+        "reranker_win_share",
+        "mean_return_delta_pct",
+        "median_return_delta_pct",
+        "base_future_rank_median",
+        "reranked_future_rank_median",
+        "base_future_percentile_median",
+        "reranked_future_percentile_median",
+        "base_future_best_hit_share",
+        "reranked_future_best_hit_share",
+        "mean_candidate_spearman",
+        "ridge_alpha",
+        "feature_count",
+    )
+    empty_decisions = pd.DataFrame(columns=decision_columns)
+    empty_summary = pd.DataFrame(columns=summary_columns)
+    if not score_cache or len(symbols) < 3:
+        return empty_decisions, empty_summary
+
+    normalized_frames: dict[str, pd.DataFrame] = {}
+    for symbol in symbols:
+        frame = frames.get(symbol)
+        if frame is None or frame.empty:
+            continue
+        local = frame.copy()
+        local.index = pd.to_datetime(local.index, utc=True)
+        normalized_frames[str(symbol)] = local.sort_index()
+
+    dates = pd.DatetimeIndex(
+        pd.to_datetime(decision_dates, utc=True)
+    ).sort_values()
+    date_to_position = {
+        pd.Timestamp(date): int(position)
+        for position, date in enumerate(dates)
+    }
+    normalized_fold_map = {
+        (
+            pd.Timestamp(timestamp).tz_localize("UTC")
+            if pd.Timestamp(timestamp).tzinfo is None
+            else pd.Timestamp(timestamp).tz_convert("UTC")
+        ): int(fold_id)
+        for timestamp, fold_id in decision_to_fold.items()
+    }
+
+    base_feature_names = (
+        "u67_score",
+        "u67_score_rank",
+        "u67_score_percentile",
+        "u67_gap_to_top1",
+        *TOP_K_RERANK_FEATURES,
+    )
+
+    candidate_rows: list[dict[str, Any]] = []
+    for decision_key, raw_scores in sorted(
+        score_cache.items(),
+        key=lambda item: pd.Timestamp(item[0]),
+    ):
+        decision_at = pd.Timestamp(decision_key)
+        decision_at = (
+            decision_at.tz_localize("UTC")
+            if decision_at.tzinfo is None
+            else decision_at.tz_convert("UTC")
+        )
+        fold_id = normalized_fold_map.get(decision_at)
+        decision_position = date_to_position.get(decision_at)
+        if fold_id is None or decision_position is None:
+            continue
+
+        execution_position = decision_position + 1
+        if execution_position >= len(dates):
+            continue
+        execution_at = pd.Timestamp(dates[execution_position])
+
+        scores = np.asarray(raw_scores, dtype=float)
+        if len(scores) != len(symbols) + 1:
+            continue
+
+        ranked = sorted(
+            (
+                (symbol, float(scores[index]))
+                for index, symbol in enumerate(symbols, start=1)
+                if np.isfinite(scores[index])
+            ),
+            key=lambda item: (-item[1], item[0]),
+        )
+        if len(ranked) < 3:
+            continue
+        top1_score = float(ranked[0][1])
+        n_ranked = len(ranked)
+        denominator = max(1, n_ranked - 1)
+
+        for horizon in horizons:
+            horizon = int(horizon)
+            if horizon <= 0:
+                continue
+            future_position = execution_position + horizon
+            if future_position >= len(dates):
+                continue
+            future_at = pd.Timestamp(dates[future_position])
+            if normalized_fold_map.get(future_at) != fold_id:
+                continue
+
+            for top_k in top_ks:
+                top_k = int(top_k)
+                if top_k < 2 or len(ranked) < top_k:
+                    continue
+                selected = ranked[:top_k]
+                local_rows: list[dict[str, Any]] = []
+                for score_rank, (symbol, score) in enumerate(
+                    selected,
+                    start=1,
+                ):
+                    frame = normalized_frames.get(symbol)
+                    if (
+                        frame is None
+                        or decision_at not in frame.index
+                        or execution_at not in frame.index
+                        or future_at not in frame.index
+                    ):
+                        continue
+
+                    entry_open = float(frame.loc[execution_at, "open"])
+                    future_open = float(frame.loc[future_at, "open"])
+                    if (
+                        not np.isfinite(entry_open)
+                        or entry_open <= 0.0
+                        or not np.isfinite(future_open)
+                        or future_open <= 0.0
+                    ):
+                        continue
+
+                    row: dict[str, Any] = {
+                        "fold_id": fold_id,
+                        "horizon_sessions": horizon,
+                        "top_k": top_k,
+                        "decision_timestamp": decision_at,
+                        "asset": symbol,
+                        "future_return": float(
+                            future_open / entry_open - 1.0
+                        ),
+                        "u67_score": float(score),
+                        "u67_score_rank": float(score_rank),
+                        "u67_score_percentile": float(
+                            100.0
+                            * (n_ranked - score_rank)
+                            / denominator
+                        ),
+                        "u67_gap_to_top1": float(top1_score - score),
+                    }
+                    current = frame.loc[decision_at]
+                    for feature in TOP_K_RERANK_FEATURES:
+                        value = current.get(feature, np.nan)
+                        row[feature] = (
+                            float(value)
+                            if value is not None
+                            and np.isfinite(float(value))
+                            else np.nan
+                        )
+                    local_rows.append(row)
+
+                if len(local_rows) != top_k:
+                    continue
+                local = pd.DataFrame(local_rows)
+                local["future_rank"] = local["future_return"].rank(
+                    method="min",
+                    ascending=False,
+                )
+                local["target_future_percentile"] = (
+                    100.0
+                    * (top_k - local["future_rank"])
+                    / max(1, top_k - 1)
+                )
+                candidate_rows.extend(
+                    local.to_dict(orient="records")
+                )
+
+    candidates = pd.DataFrame(candidate_rows)
+    if candidates.empty:
+        return empty_decisions, empty_summary
+
+    decision_results: list[dict[str, Any]] = []
+    summary_rows: list[dict[str, Any]] = []
+    available_folds = sorted(
+        int(value)
+        for value in candidates["fold_id"].dropna().unique()
+    )
+
+    for evaluation_fold in available_folds:
+        train_folds = [
+            fold_id
+            for fold_id in available_folds
+            if fold_id < evaluation_fold
+        ]
+        if not train_folds:
+            continue
+
+        for horizon in horizons:
+            for top_k in top_ks:
+                train = candidates.loc[
+                    candidates["fold_id"].isin(train_folds)
+                    & (candidates["horizon_sessions"] == int(horizon))
+                    & (candidates["top_k"] == int(top_k))
+                ].copy()
+                test = candidates.loc[
+                    (candidates["fold_id"] == evaluation_fold)
+                    & (candidates["horizon_sessions"] == int(horizon))
+                    & (candidates["top_k"] == int(top_k))
+                ].copy()
+                if train.empty or test.empty:
+                    continue
+
+                usable_features = [
+                    feature
+                    for feature in base_feature_names
+                    if feature in train.columns
+                    and pd.to_numeric(
+                        train[feature],
+                        errors="coerce",
+                    ).notna().any()
+                ]
+                if not usable_features:
+                    continue
+
+                x_train = train[usable_features].apply(
+                    pd.to_numeric,
+                    errors="coerce",
+                )
+                y_train = pd.to_numeric(
+                    train["target_future_percentile"],
+                    errors="coerce",
+                )
+                train_ok = y_train.notna()
+                if int(train_ok.sum()) < max(20, len(usable_features) + 2):
+                    continue
+
+                model = Pipeline(
+                    steps=[
+                        (
+                            "imputer",
+                            SimpleImputer(strategy="median"),
+                        ),
+                        ("scaler", StandardScaler()),
+                        (
+                            "ridge",
+                            Ridge(alpha=float(ridge_alpha)),
+                        ),
+                    ]
+                )
+                model.fit(
+                    x_train.loc[train_ok],
+                    y_train.loc[train_ok],
+                )
+
+                test["rerank_score"] = model.predict(
+                    test[usable_features].apply(
+                        pd.to_numeric,
+                        errors="coerce",
+                    )
+                )
+
+                fold_decisions: list[dict[str, Any]] = []
+                for decision_at, group in test.groupby(
+                    "decision_timestamp",
+                    sort=True,
+                ):
+                    if len(group) != int(top_k):
+                        continue
+                    base = group.sort_values(
+                        ["u67_score_rank", "asset"],
+                        ascending=[True, True],
+                    ).iloc[0]
+                    reranked = group.sort_values(
+                        ["rerank_score", "asset"],
+                        ascending=[False, True],
+                    ).iloc[0]
+
+                    candidate_spearman = float(
+                        group["rerank_score"].corr(
+                            group["future_return"],
+                            method="spearman",
+                        )
+                    )
+                    result_row = {
+                        "evaluation_fold": int(evaluation_fold),
+                        "horizon_sessions": int(horizon),
+                        "top_k": int(top_k),
+                        "decision_timestamp": pd.Timestamp(decision_at),
+                        "base_asset": str(base["asset"]),
+                        "reranked_asset": str(reranked["asset"]),
+                        "selection_changed": bool(
+                            base["asset"] != reranked["asset"]
+                        ),
+                        "base_future_return_pct": float(
+                            base["future_return"] * 100.0
+                        ),
+                        "reranked_future_return_pct": float(
+                            reranked["future_return"] * 100.0
+                        ),
+                        "return_delta_pct": float(
+                            (
+                                reranked["future_return"]
+                                - base["future_return"]
+                            )
+                            * 100.0
+                        ),
+                        "base_future_rank_within_topk": float(
+                            base["future_rank"]
+                        ),
+                        "reranked_future_rank_within_topk": float(
+                            reranked["future_rank"]
+                        ),
+                        "base_future_percentile_within_topk": float(
+                            base["target_future_percentile"]
+                        ),
+                        "reranked_future_percentile_within_topk": float(
+                            reranked["target_future_percentile"]
+                        ),
+                        "reranker_candidate_spearman": candidate_spearman,
+                    }
+                    fold_decisions.append(result_row)
+                    decision_results.append(result_row)
+
+                if not fold_decisions:
+                    continue
+                evaluated = pd.DataFrame(fold_decisions)
+                delta = pd.to_numeric(
+                    evaluated["return_delta_pct"],
+                    errors="coerce",
+                ).dropna()
+                candidate_ic = pd.to_numeric(
+                    evaluated["reranker_candidate_spearman"],
+                    errors="coerce",
+                ).dropna()
+                summary_rows.append(
+                    {
+                        "evaluation_fold": int(evaluation_fold),
+                        "train_folds": ",".join(
+                            str(value) for value in train_folds
+                        ),
+                        "horizon_sessions": int(horizon),
+                        "top_k": int(top_k),
+                        "decisions": int(len(evaluated)),
+                        "selection_changed_share": float(
+                            evaluated["selection_changed"]
+                            .astype(bool)
+                            .mean()
+                        ),
+                        "reranker_win_share": float(
+                            (delta > 0.0).mean()
+                        ),
+                        "mean_return_delta_pct": float(delta.mean()),
+                        "median_return_delta_pct": float(
+                            delta.median()
+                        ),
+                        "base_future_rank_median": float(
+                            evaluated[
+                                "base_future_rank_within_topk"
+                            ].median()
+                        ),
+                        "reranked_future_rank_median": float(
+                            evaluated[
+                                "reranked_future_rank_within_topk"
+                            ].median()
+                        ),
+                        "base_future_percentile_median": float(
+                            evaluated[
+                                "base_future_percentile_within_topk"
+                            ].median()
+                        ),
+                        "reranked_future_percentile_median": float(
+                            evaluated[
+                                "reranked_future_percentile_within_topk"
+                            ].median()
+                        ),
+                        "base_future_best_hit_share": float(
+                            (
+                                evaluated[
+                                    "base_future_rank_within_topk"
+                                ]
+                                == 1.0
+                            ).mean()
+                        ),
+                        "reranked_future_best_hit_share": float(
+                            (
+                                evaluated[
+                                    "reranked_future_rank_within_topk"
+                                ]
+                                == 1.0
+                            ).mean()
+                        ),
+                        "mean_candidate_spearman": (
+                            float(candidate_ic.mean())
+                            if not candidate_ic.empty
+                            else None
+                        ),
+                        "ridge_alpha": float(ridge_alpha),
+                        "feature_count": int(len(usable_features)),
+                    }
+                )
+
+    decisions = pd.DataFrame(
+        decision_results,
+        columns=decision_columns,
+    )
+    summary = pd.DataFrame(
+        summary_rows,
+        columns=summary_columns,
+    )
+    return decisions, summary
 
 
 def calcular_metricas_peak_gatilhos(
