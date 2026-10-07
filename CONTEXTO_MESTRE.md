@@ -1,98 +1,46 @@
 # CONTEXTO_MESTRE
 
-## Pesquisa ativa 2026-10-07 - selecao causal do universo U67
+## Pesquisa ativa 2026-10-07 - atribuicao causal U67 x MCT
 
 Branch ativa unica: `research/u67-causal-universe-selection-v1`.
 
 Base: `main` no commit `4b5f16030afa8b850790747bb0e3e3063d233e79`,
 checkpoint oficial U67 Control v1.21.0 de US$ 58.557.157,67.
 
-Pergunta de pesquisa desta linha:
+Pergunta atual e unica:
 
-> Com o mesmo capital inicial, uma estrategia de rotacao LightGBM aplicada a
-> um grupo de ativos selecionado sem olhar o periodo OOS supera o buy-and-hold
-> dos mesmos ativos?
+> Por que a Strategy #13 do MCT chegou a aproximadamente US$ 76,93 milhoes,
+> enquanto o TCC U67 congelado chegou a aproximadamente US$ 58,56 milhoes?
 
-Regra metodologica:
+Auditoria dos dois exports reais mostrou que o MCT executou com 65 ativos e o
+TCC com 67. Os dois ativos ausentes no MCT foram somente CLMT e DOC. A primeira
+divergencia de estado ocorre em 2022-08-09: o TCC gira de META para CLMT,
+enquanto o MCT permanece fora de CLMT. Ate a sessao anterior, o estado e o
+capital das duas execucoes coincidem.
 
-- a selecao usa os 67 ativos do checkpoint oficial, inclusive CLMT e DOC;
-- CUSIP nao e criterio de escolha ou retirada;
-- nao existe excecao hardcoded por ticker;
-- capital OOS, retorno OOS e resultado do buy-and-hold nao participam da selecao;
-- o universo e escolhido uma unica vez antes de todo o OOS;
-- somente o primeiro bloco de calibracao e usado para decidir a elegibilidade;
-- os modelos usados nessa decisao sao treinados apenas no bloco de treino
-  anterior ao primeiro bloco de calibracao;
-- um ativo e mantido quando possui pelo menos 63 observacoes validas de
-  calibracao e correlacao de ranking estritamente positiva entre a utilidade
-  prevista e a utilidade futura realizada na calibracao;
-- o segundo purge do fold permanece entre calibracao e teste;
-- depois da selecao, o universo fica congelado durante todo o OOS.
+A tentativa anterior de criar um seletor generico de 45 ativos foi um desvio da
+pergunta e esta descartada. Ela nao deve ser promovida, interpretada como
+solucao nem usada para alterar main/MCT.
 
-Comparacoes obrigatorias, todas com capital inicial de US$ 10.000:
+O runner `buscar_ativos.py` agora executa somente a atribuicao controlada:
 
-1. buy-and-hold equal-weight do U67 completo;
-2. Control LightGBM no U67 completo;
-3. buy-and-hold equal-weight do universo selecionado;
-4. Control LightGBM no mesmo universo selecionado.
+1. U67 completo, 67 ativos, com guarda exata de US$ 58.557.157,67496595;
+2. U67 sem DOC;
+3. U67 sem CLMT;
+4. U67 sem CLMT e DOC, reproduzindo o universo de 65 ativos observado no MCT.
 
-O efeito da selecao deve ser separado do efeito da rotacao. O benchmark
-principal da estrategia selecionada e o buy-and-hold dos mesmos ativos, nao um
-universo diferente.
+Entre as quatro variantes nada mais muda: mesmos snapshots congelados, mesmo
+calendario U56, mesmo LightGBM, mesmos folds, purge, custos, slippage e
+calibracao. Assim, o delta de capital mede exclusivamente o efeito da presenca
+ou ausencia de CLMT/DOC no universo congelado do TCC.
 
-O runner de pesquisa desta branch e `buscar_ativos.py`. Ele foi reaproveitado
-para evitar criar outro runner raiz. A `main` permanece intocada. O resultado
-vai para `output/selecao_universo/pacote_analise.zip`.
+Depois da execucao, o resultado da variante sem CLMT e DOC deve ser comparado
+com o capital do MCT na mesma data de corte 2026-09-17. O residual mede o efeito
+de dados Alpaca atualizados/normalizacao, e o periodo 2026-09-18 a 2026-10-06
+deve ser tratado separadamente.
 
-A execucao deve primeiro reproduzir exatamente o checkpoint U67 completo. Se o
-capital de US$ 58.557.157,67496595 nao for reproduzido, a pesquisa aborta antes
-de interpretar o universo selecionado.
-
-As linhas antigas descritas abaixo ficam preservadas apenas como historico e
-nao sao a pesquisa ativa atual.
-
-### Resultado v1.22.0-dev.1
-
-Execucao local auditada em 2026-10-07, pacote `pacote_analise.zip`.
-
-A guarda reproduziu exatamente o U67 oficial:
-
-- U67 Control: US$ 58.557.157,67496595;
-- U67 buy-and-hold dos mesmos 67 ativos: US$ 34.723,64;
-- CAGR Control: 309,4001%;
-- Sharpe Control: 2,51874371;
-- MaxDD Control: -30,3591%.
-
-A regra preregistrada de correlacao de ranking positiva selecionou 45 de 67
-ativos e removeu 22. CLMT foi removido pela regra geral, sem CUSIP ou excecao
-por ticker.
-
-Resultado do universo selecionado:
-
-- Control selecionado: US$ 1.923.817,08;
-- buy-and-hold dos mesmos 45 ativos: US$ 26.604,22;
-- CAGR: 135,0314%;
-- Sharpe: 1,830657;
-- MaxDD: -52,9258%;
-- pior fold: +241,4884%.
-
-Conclusao: a rotacao ainda supera amplamente o buy-and-hold do mesmo universo,
-inclusive em todos os folds, mas a regra de selecao destruiu 96,7146% do
-capital final em relacao ao U67 completo e piorou risco e estabilidade.
-
-Diagnostico metodologico: correlacao positiva entre score previsto e utilidade
-realizada mede ordenacao/preditibilidade, nao atratividade economica do ativo.
-A regra manteve 17 ativos com utilidade media realizada negativa na calibracao
-e removeu 14 ativos com utilidade media realizada positiva, incluindo AMD,
-AMZN, META e NVDA. Portanto esta regra nao deve ser promovida nem usada para
-alterar a main ou o MCT.
-
-Este resultado responde afirmativamente a pergunta restrita de que a rotacao
-pode superar buy-and-hold usando o mesmo capital e exatamente o mesmo grupo
-selecionado, mas rejeita esta primeira regra como metodo de construcao do
-universo final.
-
-
+A `main` permanece intocada. O PR continua draft ate a atribuicao ser
+concluida.
 
 ## Baseline preservado
 
