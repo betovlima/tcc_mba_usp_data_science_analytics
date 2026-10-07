@@ -1,14 +1,66 @@
 # CONTEXTO_MESTRE
 
+## Pesquisa ativa 2026-10-07 - selecao causal do universo U67
+
+Branch ativa unica: `research/u67-causal-universe-selection-v1`.
+
+Base: `main` no commit `4b5f16030afa8b850790747bb0e3e3063d233e79`,
+checkpoint oficial U67 Control v1.21.0 de US$ 58.557.157,67.
+
+Pergunta de pesquisa desta linha:
+
+> Com o mesmo capital inicial, uma estrategia de rotacao LightGBM aplicada a
+> um grupo de ativos selecionado sem olhar o periodo OOS supera o buy-and-hold
+> dos mesmos ativos?
+
+Regra metodologica:
+
+- a selecao usa os 67 ativos do checkpoint oficial, inclusive CLMT e DOC;
+- CUSIP nao e criterio de escolha ou retirada;
+- nao existe excecao hardcoded por ticker;
+- capital OOS, retorno OOS e resultado do buy-and-hold nao participam da selecao;
+- o universo e escolhido uma unica vez antes de todo o OOS;
+- somente o primeiro bloco de calibracao e usado para decidir a elegibilidade;
+- os modelos usados nessa decisao sao treinados apenas no bloco de treino
+  anterior ao primeiro bloco de calibracao;
+- um ativo e mantido quando possui pelo menos 63 observacoes validas de
+  calibracao e correlacao de ranking estritamente positiva entre a utilidade
+  prevista e a utilidade futura realizada na calibracao;
+- o segundo purge do fold permanece entre calibracao e teste;
+- depois da selecao, o universo fica congelado durante todo o OOS.
+
+Comparacoes obrigatorias, todas com capital inicial de US$ 10.000:
+
+1. buy-and-hold equal-weight do U67 completo;
+2. Control LightGBM no U67 completo;
+3. buy-and-hold equal-weight do universo selecionado;
+4. Control LightGBM no mesmo universo selecionado.
+
+O efeito da selecao deve ser separado do efeito da rotacao. O benchmark
+principal da estrategia selecionada e o buy-and-hold dos mesmos ativos, nao um
+universo diferente.
+
+O runner de pesquisa desta branch e `buscar_ativos.py`. Ele foi reaproveitado
+para evitar criar outro runner raiz. A `main` permanece intocada. O resultado
+vai para `output/selecao_universo/pacote_analise.zip`.
+
+A execucao deve primeiro reproduzir exatamente o checkpoint U67 completo. Se o
+capital de US$ 58.557.157,67496595 nao for reproduzido, a pesquisa aborta antes
+de interpretar o universo selecionado.
+
+As linhas antigas descritas abaixo ficam preservadas apenas como historico e
+nao sao a pesquisa ativa atual.
+
+
 ## Baseline preservado
 
 A reproducao oficial permanece Control vs Soft Horizon Consensus, com dados
 congelados em `dados/pesquisa/`. A pesquisa Directional Change nao altera o
 Control oficial nem o MCT.
 
-## Regra de continuidade da pesquisa
+## Regra historica de continuidade da pesquisa Directional Change
 
-Esta linha de pesquisa evolui exclusivamente nesta unica branch de pesquisa:
+Esta secao descreve a linha anterior, hoje encerrada. Ela evoluiu na branch historica:
 `research/reversal-bocpd-comparison`.
 A `main` permanece intocada durante a pesquisa; o historico fica nos commits
 desta branch.
@@ -143,9 +195,9 @@ deve comparar este Top-Turn congelado com uma tecnica de deteccao de mudanca
 de regime diferente, sem alterar a main.
 
 
-## Pesquisa ativa — Top-Turn vs BOCPD
+## Pesquisa historica — Top-Turn vs BOCPD
 
-Branch ativa: `research/reversal-bocpd-comparison`.
+Branch historica: `research/reversal-bocpd-comparison`.
 
 Base congelada desta comparacao: checkpoint Top-Turn do commit
 `bf9e11338ee9a43b070d65714ca2522332efd771`.
