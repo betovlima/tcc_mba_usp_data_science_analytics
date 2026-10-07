@@ -10,6 +10,7 @@ import pandas as pd
 
 from pesquisas.directional_change_lightgbm import (
     DC_FEATURES,
+    analisar_ranking_scores_u67,
     HSMMAssetModel,
     _agrupar_gatilhos_ablation,
     _bocpd_downward_scores,
@@ -1248,3 +1249,58 @@ def test_asset_ranking_summary_and_score_calibration_are_generated() -> None:
     assert list(calibration["score_bucket"]) == [
         "Q1", "Q2", "Q3", "Q4", "Q5"
     ]
+
+
+def test_full_score_rank_future_diagnostic_recovers_monotonic_ranking() -> None:
+    dates = pd.date_range(
+        "2026-04-01",
+        periods=8,
+        freq="B",
+        tz="UTC",
+    )
+    symbols = ["AAA", "BBB", "CCC"]
+    frames = {}
+    growth = {
+        "AAA": [100, 101, 102, 103, 104, 105, 106, 107],
+        "BBB": [100, 100, 101, 101, 102, 102, 103, 103],
+        "CCC": [100, 99, 98, 97, 96, 95, 94, 93],
+    }
+    for symbol in symbols:
+        frame = _base_frame([float(v) for v in growth[symbol]])
+        frame.index = dates
+        frames[symbol] = frame
+
+    score_cache = {
+        dates[0]: np.asarray([0.0, 0.9, 0.5, 0.1], dtype=float),
+        dates[1]: np.asarray([0.0, 0.9, 0.5, 0.1], dtype=float),
+    }
+    decision_to_fold = {
+        dates[0]: 1,
+        dates[1]: 1,
+    }
+
+    detail, summary = analisar_ranking_scores_u67(
+        score_cache,
+        frames,
+        symbols,
+        dates,
+        decision_to_fold,
+        horizons=(2,),
+    )
+
+    assert not detail.empty
+    overall = summary.loc[
+        (summary["scope"] == "overall")
+        & (summary["horizon_sessions"] == 2)
+    ].iloc[0]
+    assert overall["decisions"] == 2
+    assert overall["median_spearman_ic"] > 0.99
+    assert overall["top1_in_future_top5_share"] == 1.0
+
+    first = detail.loc[
+        (detail["decision_timestamp"] == dates[0])
+        & (detail["asset"] == "AAA")
+    ].iloc[0]
+    assert first["score_rank"] == 1
+    assert first["future_return_rank"] == 1
+    assert first["future_return_percentile"] == 100.0
