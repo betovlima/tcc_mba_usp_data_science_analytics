@@ -1,5 +1,56 @@
 # CONTEXTO_MESTRE
 
+## Pesquisa ativa 2026-10-07 - paridade TCC x MCT Strategy #13
+
+Branch ativa unica: `research/tcc-mct-u67-parity-v1`.
+
+A `main` permanece preservada no checkpoint U67 v1.21.0 de
+US$ 58.557.157,67. Esta branch nao substitui esse checkpoint antes da
+validacao.
+
+Objetivo atual:
+
+> reproduzir dentro do TCC o mesmo comportamento observado no backtest da
+> Strategy #13 do MCT, usando a mesma serie historica completa baixada
+> novamente da Alpaca, o mesmo universo solicitado, o mesmo universo efetivo
+> e as mesmas configuracoes cientificas.
+
+Referencia MCT auditada:
+
+- job: `20261007T095423-60e489c0`;
+- 67 ativos solicitados;
+- 65 ativos efetivos;
+- exclusoes efetivas: CLMT e DOC;
+- dados: Alpaca, 1Day, SIP, RAW, full refresh;
+- inicio: 2016-01-01;
+- fim da execucao auditada: 2026-10-06;
+- capital em 2026-09-17: US$ 78.782.538,31;
+- capital em 2026-10-06: US$ 76.927.051,39;
+- engine cientifico vendorizado byte a byte da main do TCC commit
+  `4b5f16030afa8b850790747bb0e3e3063d233e79`.
+
+O runner `reproduzir_experimento.py` foi atualizado SOMENTE nesta branch para:
+
+1. baixar novamente os 67 ativos U67 completos da Alpaca;
+2. usar feed SIP, barras diarias e adjustment RAW;
+3. baixar Corporate Actions;
+4. normalizar splits;
+5. aplicar o mesmo processamento estrutural que resulta em 65 ativos efetivos;
+6. abortar se os excluidos nao forem exatamente CLMT e DOC;
+7. usar o calendario do subconjunto U56 elegivel, como no runtime MCT;
+8. usar o mesmo LightGBM Control, folds, purge, margens, custos e capital;
+9. exportar requested/effective assets, exclusoes, folds, predictions, trades,
+   snapshot e comparacao direta com o job MCT.
+
+A primeira execucao de paridade fica travada em 2026-10-06 para permitir
+comparacao exata com o job MCT ja auditado. Depois da paridade, a decisao sobre
+tornar o refresh dinamico sera feita separadamente.
+
+A regra de CLMT/DOC nesta branch e usada para reproduzir o comportamento
+efetivamente executado no MCT. Esta pesquisa nao redefine, por si so, o
+criterio cientifico geral de exclusao de ativos.
+
+
 ## Baseline preservado
 
 A reproducao oficial permanece Control vs Soft Horizon Consensus, com dados
