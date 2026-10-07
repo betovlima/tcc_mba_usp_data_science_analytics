@@ -67,8 +67,15 @@ def _clean_record(row: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def load_raw_bar_file(path: Path) -> pd.DataFrame:
-    frame = pd.read_csv(path)
+def load_raw_bar_file(
+    path: Path,
+    *,
+    float_precision: str | None = None,
+) -> pd.DataFrame:
+    frame = pd.read_csv(
+        path,
+        float_precision=float_precision,
+    )
     required = ["timestamp", "open", "high", "low", "close", "volume"]
     missing = [column for column in required if column not in frame.columns]
     if missing:
@@ -205,6 +212,7 @@ def prepare_model_frames(
     assets: tuple[str, ...] = ASSETS,
     comparar_snapshot_referencia: bool = True,
     allow_structural_assets: frozenset[str] = frozenset(),
+    csv_float_precision: str | None = None,
 ) -> tuple[
     dict[str, pd.DataFrame],
     list[dict[str, Any]],
@@ -230,7 +238,10 @@ def prepare_model_frames(
     for position, symbol in enumerate(assets, start=1):
         raw_path = paths.raw_bars / f"{symbol}.csv"
         action_path = paths.corporate_actions / f"{symbol}.csv"
-        raw = load_raw_bar_file(raw_path)
+        raw = load_raw_bar_file(
+            raw_path,
+            float_precision=csv_float_precision,
+        )
         actions = load_actions_file(action_path)
         issue = structural_identity_issue(symbol, actions)
         structural_override = bool(
