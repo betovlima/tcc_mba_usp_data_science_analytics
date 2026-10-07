@@ -1,56 +1,14 @@
 # CONTEXTO_MESTRE
 
-## Pesquisa ativa 2026-10-07 - atribuicao causal U67 x MCT
-
-Branch ativa unica: `research/u67-causal-universe-selection-v1`.
-
-Base: `main` no commit `4b5f16030afa8b850790747bb0e3e3063d233e79`,
-checkpoint oficial U67 Control v1.21.0 de US$ 58.557.157,67.
-
-Pergunta atual e unica:
-
-> Por que a Strategy #13 do MCT chegou a aproximadamente US$ 76,93 milhoes,
-> enquanto o TCC U67 congelado chegou a aproximadamente US$ 58,56 milhoes?
-
-Auditoria dos dois exports reais mostrou que o MCT executou com 65 ativos e o
-TCC com 67. Os dois ativos ausentes no MCT foram somente CLMT e DOC. A primeira
-divergencia de estado ocorre em 2022-08-09: o TCC gira de META para CLMT,
-enquanto o MCT permanece fora de CLMT. Ate a sessao anterior, o estado e o
-capital das duas execucoes coincidem.
-
-A tentativa anterior de criar um seletor generico de 45 ativos foi um desvio da
-pergunta e esta descartada. Ela nao deve ser promovida, interpretada como
-solucao nem usada para alterar main/MCT.
-
-O runner `buscar_ativos.py` agora executa somente a atribuicao controlada:
-
-1. U67 completo, 67 ativos, com guarda exata de US$ 58.557.157,67496595;
-2. U67 sem DOC;
-3. U67 sem CLMT;
-4. U67 sem CLMT e DOC, reproduzindo o universo de 65 ativos observado no MCT.
-
-Entre as quatro variantes nada mais muda: mesmos snapshots congelados, mesmo
-calendario U56, mesmo LightGBM, mesmos folds, purge, custos, slippage e
-calibracao. Assim, o delta de capital mede exclusivamente o efeito da presenca
-ou ausencia de CLMT/DOC no universo congelado do TCC.
-
-Depois da execucao, o resultado da variante sem CLMT e DOC deve ser comparado
-com o capital do MCT na mesma data de corte 2026-09-17. O residual mede o efeito
-de dados Alpaca atualizados/normalizacao, e o periodo 2026-09-18 a 2026-10-06
-deve ser tratado separadamente.
-
-A `main` permanece intocada. O PR continua draft ate a atribuicao ser
-concluida.
-
 ## Baseline preservado
 
 A reproducao oficial permanece Control vs Soft Horizon Consensus, com dados
 congelados em `dados/pesquisa/`. A pesquisa Directional Change nao altera o
 Control oficial nem o MCT.
 
-## Regra historica de continuidade da pesquisa Directional Change
+## Regra de continuidade da pesquisa
 
-Esta secao descreve a linha anterior, hoje encerrada. Ela evoluiu na branch historica:
+Esta linha de pesquisa evolui exclusivamente nesta unica branch de pesquisa:
 `research/reversal-bocpd-comparison`.
 A `main` permanece intocada durante a pesquisa; o historico fica nos commits
 desta branch.
@@ -185,9 +143,9 @@ deve comparar este Top-Turn congelado com uma tecnica de deteccao de mudanca
 de regime diferente, sem alterar a main.
 
 
-## Pesquisa historica — Top-Turn vs BOCPD
+## Pesquisa ativa — Top-Turn vs BOCPD
 
-Branch historica: `research/reversal-bocpd-comparison`.
+Branch ativa: `research/reversal-bocpd-comparison`.
 
 Base congelada desta comparacao: checkpoint Top-Turn do commit
 `bf9e11338ee9a43b070d65714ca2522332efd771`.
