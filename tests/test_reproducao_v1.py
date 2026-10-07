@@ -13,7 +13,7 @@ from reproducao.dados import (
     data_final_temporaria_atual,
     snapshot_cobre_data_final,
 )
-from reproducao.preparacao import structural_identity_issue
+from reproducao.preparacao import load_raw_bar_file, structural_identity_issue
 from reproducao.graficos import (
     calcular_retornos_mensais,
     construir_rotacoes,
@@ -38,6 +38,34 @@ from engine.configuracao import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_round_trip_csv_parser_preserves_float64_for_mct_parity(tmp_path) -> None:
+    original = 950.4636963259353
+    path = tmp_path / "AAA.csv"
+    pd.DataFrame(
+        [
+            {
+                "timestamp": "2026-01-02T05:00:00+00:00",
+                "open": original,
+                "high": original,
+                "low": original,
+                "close": original,
+                "volume": original,
+            }
+        ]
+    ).to_csv(path, index=False, float_format="%.17g")
+
+    frame = load_raw_bar_file(
+        path,
+        float_precision="round_trip",
+    )
+
+    assert float(frame.iloc[0]["open"]) == original
+    assert float(frame.iloc[0]["high"]) == original
+    assert float(frame.iloc[0]["low"]) == original
+    assert float(frame.iloc[0]["close"]) == original
+    assert float(frame.iloc[0]["volume"]) == original
 
 
 
@@ -407,6 +435,7 @@ def test_official_reproduction_refreshes_market_data_for_mct_parity() -> None:
     assert "download_corporate_actions" in source
     assert "load_alpaca_credentials" in source
     assert "replace=true" in source
+    assert 'csv_float_precision="round_trip"' in source
     assert 'mct_analysis_end_date = "2026-10-06"' in source
 
 def test_capital_rotations_follow_backtest_analytics_semantics() -> None:
