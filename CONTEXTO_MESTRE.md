@@ -3904,3 +3904,23 @@ neste documento; ela nao deve ser reintroduzida no checkpoint oficial.
 Proxima linha de pesquisa: decompor quantitativamente a distancia entre a
 trajetoria U67 e uma referencia de topo por operacao, separando perdas de
 timing de entrada, timing de saida, escolha de ativo e permanencia excessiva.
+
+## 2026-10-07 — limpeza de referência histórica da API 10.8.74
+
+### Alteração
+Removido `reproducao/reference_10_8_74_raw_snapshot_diagnostics.json`.
+
+### Motivo
+O arquivo era apenas uma referência histórica de auditoria de um snapshot antigo
+do MCT (API 10.8.74). Não era entrada do modelo, não participava do tuning, não
+era importado pelo runner principal e não era necessário para reproduzir o
+experimento atual.
+
+### Impacto
+Nenhuma alteração no engine, nos dados congelados oficiais, no backtest ou nos
+resultados científicos. A mudança apenas remove uma referência obsoleta da pasta
+`reproducao/`.
+
+### Branch
+`maintenance/remove-obsolete-snapshot-diagnostics`
+
