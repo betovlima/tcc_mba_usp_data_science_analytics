@@ -13,7 +13,7 @@ from reproducao.dados import (
     data_final_temporaria_atual,
     snapshot_cobre_data_final,
 )
-from reproducao.preparacao import structural_identity_issue
+from reproducao.preparacao import load_raw_bar_file, structural_identity_issue
 from reproducao.graficos import (
     calcular_retornos_mensais,
     construir_rotacoes,
@@ -38,6 +38,34 @@ from engine.configuracao import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_round_trip_csv_parser_preserves_float64_for_mct_parity(tmp_path) -> None:
+    original = 950.4636963259353
+    path = tmp_path / "AAA.csv"
+    pd.DataFrame(
+        [
+            {
+                "timestamp": "2026-01-02T05:00:00+00:00",
+                "open": original,
+                "high": original,
+                "low": original,
+                "close": original,
+                "volume": original,
+            }
+        ]
+    ).to_csv(path, index=False, float_format="%.17g")
+
+    frame = load_raw_bar_file(
+        path,
+        float_precision="round_trip",
+    )
+
+    assert float(frame.iloc[0]["open"]) == original
+    assert float(frame.iloc[0]["high"]) == original
+    assert float(frame.iloc[0]["low"]) == original
+    assert float(frame.iloc[0]["close"]) == original
+    assert float(frame.iloc[0]["volume"]) == original
 
 
 
@@ -263,16 +291,18 @@ def test_lightgbm_parameters_are_frozen() -> None:
 
 def test_official_u67_workflow_is_explicitly_sectioned() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(encoding="utf-8")
-    assert source.count("# %%") >= 10
-    assert "# %% 2 - U56 congelado" in source
-    assert "# %% 3 - Adicoes que transformam U56 em U59" in source
-    assert "# %% 4 - Oito ativos que transformam U59 em U67" in source
-    assert "# %% 7 - Treino e calibracao walk-forward" in source
-    assert "# %% 8 - Replay U67" in source
-    assert "U59_ADDITIONS = (\"COLB\", \"AMS\", \"FOXF\")" in source
+    assert source.count("# %%") >= 9
+    assert "# %% 1 - Full refresh Alpaca" in source
+    assert "# %% 2 - Mesmo processamento estrutural observado no MCT" in source
+    assert "# %% 3 - Mesmo calendario U56 elegivel" in source
+    assert "# %% 5 - Treino, calibracao e politicas identicos ao MCT" in source
+    assert "# %% 6 - Replay financeiro" in source
+    assert 'U59_ADDITIONS = ("COLB", "AMS", "FOXF")' in source
     assert "U67_ADDITIONS = (" in source
-    assert "EXPECTED_U67_COUNT = 67" in source
-    assert "EXPECTED_ENDING_CAPITAL = 58_557_157.67496595" in source
+    assert "EXPECTED_REQUESTED_COUNT = 67" in source
+    assert "EXPECTED_EFFECTIVE_COUNT = 65" in source
+    assert 'EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})' in source
+    assert "MCT_ENDING_CAPITAL = 76_927_051.38897176" in source
     assert "_simular_exato(" in source
 
 
@@ -396,16 +426,17 @@ def test_analysis_end_date_is_inclusive_for_nyse_utc_timestamp() -> None:
     assert pd.Timestamp("2026-09-23 04:00:00+00:00") not in dates
 
 
-def test_official_reproduction_does_not_refresh_market_data() -> None:
+def test_official_reproduction_refreshes_market_data_for_mct_parity() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(
         encoding="utf-8"
     ).lower()
-    assert "snapshotpaths.research(root)" in source
-    assert "pesquisa_expansao_76_b2" in source
-    assert "download_raw_bars" not in source
-    assert "download_corporate_actions" not in source
-    assert "load_alpaca_credentials" not in source
-    assert "dados/temporario" not in source
+    assert "snapshotpaths.temporary(root)" in source
+    assert "download_raw_bars" in source
+    assert "download_corporate_actions" in source
+    assert "load_alpaca_credentials" in source
+    assert "replace=true" in source
+    assert 'csv_float_precision="round_trip"' in source
+    assert 'mct_analysis_end_date = "2026-10-06"' in source
 
 def test_capital_rotations_follow_backtest_analytics_semantics() -> None:
     trades = pd.DataFrame(
@@ -761,18 +792,18 @@ def test_research_data_is_versioned_and_temporary_data_is_ignored() -> None:
     assert "!dados/pesquisa/manifest.json" in rules
 
 
-def test_official_reproduction_uses_frozen_u67_sources() -> None:
+def test_official_reproduction_uses_mct_u67_parity_contract() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(
         encoding="utf-8"
     )
-    assert "BASE = SnapshotPaths.research(ROOT)" in source
-    assert 'ROOT / "dados" / "pesquisa_expansao_76_b2"' in source
-    assert 'ROOT / "dados" / "pesquisa_smart_candidates"' in source
+    assert "TEMP = SnapshotPaths.temporary(ROOT)" in source
     assert 'U59_ADDITIONS = ("COLB", "AMS", "FOXF")' in source
     assert "U67_ADDITIONS = (" in source
     for asset in ("THO", "WDAY", "EXR", "XEL", "SBFG", "PAYX", "MUX", "SXC"):
         assert f'"{asset}"' in source
-    assert "EXPECTED_U56_COUNT = 56" in source
-    assert "EXPECTED_U59_COUNT = 59" in source
-    assert "EXPECTED_U67_COUNT = 67" in source
-    assert "EXPECTED_ENDING_CAPITAL = 58_557_157.67496595" in source
+    assert "EXPECTED_REQUESTED_COUNT = 67" in source
+    assert "EXPECTED_EFFECTIVE_COUNT = 65" in source
+    assert 'EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})' in source
+    assert 'MCT_JOB_ID = "20261007T095423-60e489c0"' in source
+    assert "MCT_CAPITAL_AT_2026_09_17 = 78_782_538.31270888" in source
+    assert "MCT_ENDING_CAPITAL = 76_927_051.38897176" in source

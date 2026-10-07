@@ -1,43 +1,41 @@
-"""REPRODUCAO OFICIAL DO RESULTADO U67 (~US$ 58,56 MILHOES).
-
-Este e o runner principal de reproducao do experimento financeiro congelado.
+"""REPRODUCAO DE PARIDADE TCC x MCT U67.
 
 Objetivo
 --------
-Reproduzir o universo U67:
-- U56 congelado em dados/pesquisa;
-- + COLB, AMS e FOXF, congelados em dados/pesquisa_expansao_76_b2;
-- + THO, WDAY, EXR, XEL, SBFG, PAYX, MUX e SXC, congelados em
-  dados/pesquisa_smart_candidates.
+Executar no TCC exatamente o comportamento observado na Strategy #13 do MCT:
 
-Resultado de referencia:
-    capital final = US$ 58.557.157,67496595
+- solicitar os mesmos 67 ativos do U67;
+- baixar novamente TODA a serie historica da Alpaca;
+- usar barras 1Day, SIP, RAW;
+- baixar Corporate Actions;
+- normalizar splits;
+- aplicar a mesma politica estrutural que deixou 65 ativos efetivos no job MCT;
+- usar o mesmo LightGBM Control, folds, purge, custos e regras de rotacao;
+- comparar o resultado com o job MCT auditado.
 
-Regras
-------
-- nao usa banco de dados;
-- nao baixa dados da Alpaca;
-- nao executa busca de ativos;
-- nao executa as pesquisas de assinatura encerradas;
-- usa somente snapshots CSV congelados;
-- usa LightGBM Control, sem Soft Horizon Consensus;
-- fixa o calendario de referencia no U56 original;
-- aborta se o capital final nao reproduzir o checkpoint U67.
+Esta branch nao altera a main. O checkpoint oficial congelado de
+US$ 58.557.157,67 continua preservado na main.
 
-Execucao no Spyder:
-- abra reproduzir_experimento.py;
-- reinicie o kernel;
-- execute com F5.
+Execucao no Spyder
+------------------
+Abra reproduzir_experimento.py, reinicie o kernel e execute com F5.
 """
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
+import hashlib
 import json
 import math
+import platform
+import shutil
+import sys
 import time
 
+import numpy as np
 import pandas as pd
+from threadpoolctl import threadpool_info
 
 from engine.configuracao import CONFIG
 from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
@@ -59,202 +57,339 @@ from pesquisas.directional_change_lightgbm import (
     criar_pacote_analise,
     sinal_sonoro_conclusao,
 )
-from reproducao.dados import SnapshotPaths, validate_snapshot
+from reproducao.dados import (
+    SnapshotPaths,
+    build_snapshot_manifest,
+    download_corporate_actions,
+    download_raw_bars,
+    load_alpaca_credentials,
+    validate_snapshot,
+)
 from reproducao.experimento import build_variant_configs, summarize_metrics
-from reproducao.preparacao import prepare_model_frames
+from reproducao.preparacao import load_raw_bar_file, prepare_model_frames
 
 
-# %% 0 - Configuracao congelada
+# %% 0 - Contrato de paridade com o job MCT auditado
 ROOT = Path(__file__).resolve().parent
-
-BASE = SnapshotPaths.research(ROOT)
-B2 = SnapshotPaths.from_root(
-    ROOT / "dados" / "pesquisa_expansao_76_b2"
-)
-SMART = SnapshotPaths.from_root(
-    ROOT / "dados" / "pesquisa_smart_candidates"
-)
-
+TEMP = SnapshotPaths.temporary(ROOT)
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.21.0"
-EXECUTION_SCHEMA = "u67-control-reproduction-v1"
+REPRODUCTION_VERSION = "1.22.0-dev.3"
+EXECUTION_SCHEMA = "u67-mct-operational-parity-v1"
 
 U59_ADDITIONS = ("COLB", "AMS", "FOXF")
 U67_ADDITIONS = (
     "THO", "WDAY", "EXR", "XEL",
     "SBFG", "PAYX", "MUX", "SXC",
 )
-EXPECTED_U56_COUNT = 56
-EXPECTED_U59_COUNT = 59
-EXPECTED_U67_COUNT = 67
+U67_REQUESTED_ASSETS = (
+    *tuple(CONFIG.assets),
+    *U59_ADDITIONS,
+    *U67_ADDITIONS,
+)
+EXPECTED_REQUESTED_COUNT = 67
+EXPECTED_EFFECTIVE_COUNT = 65
+EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})
 
-EXPECTED_ENDING_CAPITAL = 58_557_157.67496595
-CAPITAL_REL_TOL = 1e-9
-CAPITAL_ABS_TOL = 0.01
+# O job MCT 20261007T095423-60e489c0 foi auditado com dados ate 2026-10-06.
+# Mantemos a mesma data para que a primeira execucao de paridade seja
+# comparavel operacao por operacao.
+MCT_JOB_ID = "20261007T095423-60e489c0"
+MCT_ANALYSIS_END_DATE = "2026-10-06"
+MCT_SAME_CUTOFF_DATE = "2026-09-17"
+MCT_ENDING_CAPITAL = 76_927_051.38897176
+MCT_CAPITAL_AT_2026_09_17 = 78_782_538.31270888
+MCT_SNAPSHOT_SHA256 = (
+    "3f1159fced345e6ed2888256a135e36a9337398c992ffc2e2b83fe16929d5d81"
+)
+MCT_MARKET_DATA_SIGNATURE = (
+    "a88a2c658e493ca46ba2573a830d69a3ada07dba3f13feefd87bf963bc1591ce"
+)
+
+PARITY_ABS_TOL = 0.01
+MODEL_DATA_COLUMNS = ("open", "high", "low", "close", "volume")
 
 
-# %% 1 - Validacao dos snapshots congelados
+def _canonical_history_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Replica a canonicalizacao usada pelo MCT antes do SHA-256."""
+    canonical = frame[list(MODEL_DATA_COLUMNS)].copy()
+    canonical.index = pd.to_datetime(
+        canonical.index,
+        utc=True,
+        errors="coerce",
+    )
+    canonical = canonical.loc[~canonical.index.isna()]
+    canonical = canonical[
+        ~canonical.index.duplicated(keep="last")
+    ].sort_index()
+    try:
+        canonical.index = canonical.index.as_unit("ns")
+    except AttributeError:
+        canonical.index = pd.DatetimeIndex(
+            canonical.index.to_numpy(dtype="datetime64[ns]"),
+            tz="UTC",
+        )
+    for column in MODEL_DATA_COLUMNS:
+        canonical[column] = pd.to_numeric(
+            canonical[column],
+            errors="coerce",
+        ).astype(np.float64, copy=False)
+    return canonical
+
+
+def _history_frame_sha256(frame: pd.DataFrame) -> str:
+    """Replica o hash OHLCV usado no manifest de reproducibilidade do MCT."""
+    canonical = _canonical_history_frame(frame)
+    row_hashes = pd.util.hash_pandas_object(
+        canonical,
+        index=True,
+    ).to_numpy(dtype=np.uint64, copy=False)
+    return hashlib.sha256(row_hashes.tobytes()).hexdigest()
+
+
+def _package_version(name: str) -> str | None:
+    try:
+        return package_version(name)
+    except PackageNotFoundError:
+        return None
+
+
+if len(U67_REQUESTED_ASSETS) != EXPECTED_REQUESTED_COUNT:
+    raise RuntimeError(
+        "Contrato U67 invalido: "
+        f"esperado={EXPECTED_REQUESTED_COUNT} "
+        f"observado={len(U67_REQUESTED_ASSETS)}"
+    )
+if len(set(U67_REQUESTED_ASSETS)) != EXPECTED_REQUESTED_COUNT:
+    raise RuntimeError("Contrato U67 contem ativos duplicados.")
+
 started = time.perf_counter()
 
-manifest_u56 = validate_snapshot(BASE)
-manifest_b2 = validate_snapshot(B2)
-manifest_smart = validate_snapshot(SMART)
-
 print("=" * 78, flush=True)
-print("TCC MBA USP - REPRODUCAO U67", flush=True)
+print("TCC MBA USP - PARIDADE COM MCT STRATEGY #13", flush=True)
 print(
     f"version={REPRODUCTION_VERSION} schema={EXECUTION_SCHEMA}",
     flush=True,
 )
-print("data_source=frozen_csv_snapshots", flush=True)
+print(f"mct_job={MCT_JOB_ID}", flush=True)
+print(f"analysis_end={MCT_ANALYSIS_END_DATE}", flush=True)
+print("data_source=ALPACA_FRESH_FULL_HISTORY", flush=True)
+print("feed=SIP adjustment=RAW timeframe=1Day", flush=True)
 print("database=NO", flush=True)
-print("alpaca_download=NO", flush=True)
-print("variant=CONTROL", flush=True)
-print(
-    f"expected_capital={EXPECTED_ENDING_CAPITAL:,.8f}",
-    flush=True,
-)
+print("csv_float_precision=round_trip", flush=True)
+print("requested_assets=67 expected_effective_assets=65", flush=True)
+print("expected_runtime_exclusions=CLMT,DOC", flush=True)
 print("=" * 78, flush=True)
 
 
-# %% 2 - U56 congelado
-frames_u56, exclusions_u56, diagnostics_u56, audit_u56 = (
-    prepare_model_frames(
-        BASE,
-        assets=CONFIG.assets,
-        comparar_snapshot_referencia=False,
-        allow_structural_assets=frozenset({"CLMT", "DOC"}),
-    )
+# %% 1 - Full refresh Alpaca dos mesmos 67 ativos solicitados pelo MCT
+credentials = load_alpaca_credentials(ROOT)
+TEMP.clear_generated()
+
+raw_files = download_raw_bars(
+    credentials,
+    TEMP,
+    assets=U67_REQUESTED_ASSETS,
+    replace=True,
+    bar_snapshot_as_of_end=MCT_ANALYSIS_END_DATE,
+    analysis_end_date=MCT_ANALYSIS_END_DATE,
 )
-
-if len(frames_u56) != EXPECTED_U56_COUNT:
-    raise RuntimeError(
-        "U56 nao foi reproduzido integralmente. "
-        f"esperado={EXPECTED_U56_COUNT} observado={len(frames_u56)} "
-        f"exclusoes={json.dumps(exclusions_u56, ensure_ascii=False, default=str)}"
-    )
-
-
-# %% 3 - Adicoes que transformam U56 em U59
-frames_b2, exclusions_b2, diagnostics_b2, audit_b2 = (
-    prepare_model_frames(
-        B2,
-        assets=U59_ADDITIONS,
-        comparar_snapshot_referencia=False,
-    )
+action_files = download_corporate_actions(
+    credentials,
+    TEMP,
+    assets=U67_REQUESTED_ASSETS,
+    replace=True,
+    query_end=MCT_ANALYSIS_END_DATE,
 )
-
-if exclusions_b2 or len(frames_b2) != len(U59_ADDITIONS):
-    raise RuntimeError(
-        "COLB, AMS e FOXF precisam estar integralmente disponiveis. "
-        f"exclusoes={json.dumps(exclusions_b2, ensure_ascii=False, default=str)}"
-    )
-
-frames_u59_raw = {
-    **frames_u56,
-    **frames_b2,
-}
-
-if len(frames_u59_raw) != EXPECTED_U59_COUNT:
-    raise RuntimeError(
-        "U59 deveria conter 59 ativos. "
-        f"observado={len(frames_u59_raw)}"
-    )
-
-
-# %% 4 - Oito ativos que transformam U59 em U67
-frames_smart, exclusions_smart, diagnostics_smart, audit_smart = (
-    prepare_model_frames(
-        SMART,
-        assets=U67_ADDITIONS,
-        comparar_snapshot_referencia=False,
-    )
+snapshot_manifest = build_snapshot_manifest(
+    TEMP,
+    raw_files,
+    action_files,
+    credentials=credentials,
+    bar_snapshot_as_of_end=MCT_ANALYSIS_END_DATE,
+    analysis_end_date=MCT_ANALYSIS_END_DATE,
+    assets=U67_REQUESTED_ASSETS,
+    snapshot_name="tcc-mct-u67-parity-20261006",
 )
-
-if exclusions_smart or len(frames_smart) != len(U67_ADDITIONS):
-    raise RuntimeError(
-        "Os oito ativos do checkpoint U67 precisam estar integralmente "
-        "disponiveis. "
-        f"exclusoes={json.dumps(exclusions_smart, ensure_ascii=False, default=str)}"
-    )
-
-frames_u67_raw = {
-    **frames_u59_raw,
-    **frames_smart,
-}
-symbols_u67_requested = sorted(frames_u67_raw)
-
-if len(symbols_u67_requested) != EXPECTED_U67_COUNT:
-    raise RuntimeError(
-        "U67 deveria conter 67 ativos. "
-        f"observado={len(symbols_u67_requested)}"
-    )
+validate_snapshot(TEMP)
 
 print(
-    "[universe] U56=56 U59=59 U67=67 "
-    "u59_additions=COLB,AMS,FOXF "
-    "u67_additions=THO,WDAY,EXR,XEL,SBFG,PAYX,MUX,SXC",
-    flush=True,
-)
-print(
-    "[universe] assets=" + ",".join(symbols_u67_requested),
+    "[snapshot] requested_assets="
+    f"{len(U67_REQUESTED_ASSETS)} "
+    f"sha256={snapshot_manifest.get('snapshot_sha256')}",
     flush=True,
 )
 
 
-# %% 5 - Calendario original U56 e contexto U67
+# %% 2 - Mesmo processamento estrutural observado no MCT
+frames_raw, exclusions, diagnostics, data_audit = prepare_model_frames(
+    TEMP,
+    assets=U67_REQUESTED_ASSETS,
+    comparar_snapshot_referencia=False,
+    # O MCT usa os floats recebidos da Alpaca diretamente em memoria.
+    # Como o TCC persiste CSV antes do treino, usamos o parser round_trip
+    # para recuperar exatamente o float64 serializado com %.17g.
+    csv_float_precision="round_trip",
+)
+
+excluded_symbols = frozenset(
+    str(item.get("symbol") or "").strip().upper()
+    for item in exclusions
+)
+if excluded_symbols != EXPECTED_EXCLUSIONS:
+    raise RuntimeError(
+        "O universo efetivo nao corresponde ao job MCT auditado. "
+        f"esperado={sorted(EXPECTED_EXCLUSIONS)} "
+        f"observado={sorted(excluded_symbols)} "
+        f"exclusoes={json.dumps(exclusions, ensure_ascii=False, default=str)}"
+    )
+if len(frames_raw) != EXPECTED_EFFECTIVE_COUNT:
+    raise RuntimeError(
+        "O job de paridade precisa entregar exatamente 65 ativos ao modelo. "
+        f"observado={len(frames_raw)}"
+    )
+
+effective_assets_requested_order = tuple(
+    symbol
+    for symbol in U67_REQUESTED_ASSETS
+    if symbol in frames_raw
+)
+print(
+    "[universe] requested=67 effective=65 excluded="
+    + ",".join(sorted(excluded_symbols)),
+    flush=True,
+)
+print(
+    "[universe] effective_assets="
+    + ",".join(effective_assets_requested_order),
+    flush=True,
+)
+
+# Hashes calculados com exatamente a mesma canonicalizacao OHLCV do MCT.
+# Eles permitem comparar os 65 ativos sem depender do hash fisico do CSV.
+market_data_hash_rows = []
+for symbol in effective_assets_requested_order:
+    raw_frame = load_raw_bar_file(
+        TEMP.raw_bars / f"{symbol}.csv",
+        float_precision="round_trip",
+    )
+    normalized_frame = frames_raw[symbol]
+    raw_canonical = _canonical_history_frame(raw_frame)
+    normalized_canonical = _canonical_history_frame(normalized_frame)
+    row = {
+        "asset": symbol,
+        "raw_sha256": _history_frame_sha256(raw_frame),
+        "normalized_sha256": _history_frame_sha256(normalized_frame),
+        "raw_rows": int(len(raw_canonical)),
+        "normalized_rows": int(len(normalized_canonical)),
+        "raw_first_timestamp": (
+            pd.Timestamp(raw_canonical.index.min()).isoformat()
+            if len(raw_canonical)
+            else None
+        ),
+        "raw_last_timestamp": (
+            pd.Timestamp(raw_canonical.index.max()).isoformat()
+            if len(raw_canonical)
+            else None
+        ),
+        "normalized_first_timestamp": (
+            pd.Timestamp(normalized_canonical.index.min()).isoformat()
+            if len(normalized_canonical)
+            else None
+        ),
+        "normalized_last_timestamp": (
+            pd.Timestamp(normalized_canonical.index.max()).isoformat()
+            if len(normalized_canonical)
+            else None
+        ),
+    }
+    market_data_hash_rows.append(row)
+    print(
+        f"[hash] {symbol} "
+        f"raw={row['raw_sha256']} "
+        f"normalized={row['normalized_sha256']}",
+        flush=True,
+    )
+
+
+# %% 3 - Mesmo calendario U56 elegivel e mesma configuracao Control
+u56_eligible = tuple(
+    symbol
+    for symbol in tuple(CONFIG.assets)
+    if symbol in frames_raw
+)
+if len(u56_eligible) != 54:
+    raise RuntimeError(
+        "O calendario de paridade deveria usar 54 ativos elegiveis do U56 "
+        f"(U56 sem CLMT/DOC); observado={len(u56_eligible)}"
+    )
+
 config_u56, _ = build_variant_configs(
-    frames_u56,
+    {symbol: frames_raw[symbol] for symbol in u56_eligible},
     CONFIG,
 )
 _, reference_calendar, reference_source = preparar_painel_rotacao(
-    frames_u56,
+    {symbol: frames_raw[symbol] for symbol in u56_eligible},
     config_u56,
 )
 
 config_u67, _ = build_variant_configs(
-    frames_u67_raw,
+    {symbol: frames_raw[symbol] for symbol in effective_assets_requested_order},
     CONFIG,
+)
+config_u67 = config_u67.copiar_modelo(
+    update={
+        "analysis_end_date": MCT_ANALYSIS_END_DATE,
+    }
 )
 
 (
-    frames_u67,
+    frames,
     common_dates,
     calendar_source,
-    symbols_u67,
+    symbols,
     folds,
     all_decision_dates,
     decision_to_fold,
     decision_metadata,
 ) = _construir_contexto_execucao(
-    frames_u67_raw,
+    {
+        symbol: frames_raw[symbol]
+        for symbol in effective_assets_requested_order
+    },
     config_u67,
     calendar_override=reference_calendar,
     calendar_source_label=f"U56_FIXED:{reference_source}",
 )
 
-if len(symbols_u67) != EXPECTED_U67_COUNT:
+if len(symbols) != EXPECTED_EFFECTIVE_COUNT:
     raise RuntimeError(
-        "Contexto modelavel U67 nao contem 67 ativos. "
-        f"observado={len(symbols_u67)}"
+        "O contexto modelavel nao manteve os 65 ativos efetivos. "
+        f"observado={len(symbols)}"
     )
 
-candidate_margins = tuple(
-    float(value)
-    for value in config_u67.rotation_switch_margin_candidates
+print(
+    f"[calendar] reference_source={reference_source} "
+    f"calendar_source={calendar_source} "
+    f"common_dates={len(common_dates)} "
+    f"folds={len(folds)} "
+    f"decision_sessions={len(all_decision_dates)-1}",
+    flush=True,
 )
 
 
-# %% 6 - Benchmark fixo do universo original U56
-benchmark_frames_u56 = {
-    symbol: frames_u67[symbol]
-    for symbol in sorted(frames_u56)
-}
-
-shared_benchmark = _benchmark_pesos_iguais(
-    benchmark_frames_u56,
-    sorted(frames_u56),
+# %% 4 - Mesmo benchmark do MCT: U56 elegivel equal-weight
+benchmark = _benchmark_pesos_iguais(
+    {
+        symbol: frames[symbol]
+        for symbol in u56_eligible
+        if symbol in frames
+    },
+    [
+        symbol
+        for symbol in u56_eligible
+        if symbol in frames
+    ],
     all_decision_dates[1:],
     float(config_u67.initial_capital),
     config_u67,
@@ -262,54 +397,49 @@ shared_benchmark = _benchmark_pesos_iguais(
     aplicar_deslizamento,
 )
 
-BENCHMARK_NAME = (
-    "Fixed U56 equal-weight buy-and-hold on the original reference calendar"
+BENCHMARK_NAME = "Fixed eligible U56 equal-weight buy-and-hold"
+
+
+# %% 5 - Treino, calibracao e politicas identicos ao MCT
+candidate_margins = tuple(
+    float(value)
+    for value in config_u67.rotation_switch_margin_candidates
 )
-
-
-# %% 7 - Treino e calibracao walk-forward
 fold_policies = {}
 fold_margins = []
+fold_calibration_candidates = []
 
 for fold_position, fold in enumerate(folds, start=1):
     fold_id = int(fold["fold_id"])
-
-    train_dates = common_dates[
-        : int(fold["train_end_index"])
-    ]
+    train_dates = common_dates[: int(fold["train_end_index"])]
     calibration_dates = common_dates[
         int(fold["calibration_start_index"]):
         int(fold["calibration_end_index"])
     ]
-    final_fit_dates = common_dates[
-        : int(fold["final_fit_end_index"])
-    ]
-    decision_dates = pd.DatetimeIndex(
-        fold["decision_dates"]
-    )
+    final_fit_dates = common_dates[: int(fold["final_fit_end_index"])]
+    decision_dates = pd.DatetimeIndex(fold["decision_dates"])
 
     print(
         f"[train] fold={fold_id} {fold_position}/{len(folds)} "
-        f"models={len(symbols_u67)} calibration",
+        f"assets={len(symbols)} calibration",
         flush=True,
     )
 
     calibration_models = _ajustar_modelos_lightgbm(
-        frames_u67,
-        symbols_u67,
+        frames,
+        symbols,
         train_dates,
         config_u67,
-        phase=f"reproduction_u67_fold_{fold_id}_calibration",
+        phase=f"mct_parity_fold_{fold_id}_calibration",
         technical_log_callback=lambda message: print(
             f"[technical] {message}",
             flush=True,
         ),
     )
-
     calibration_cache, _ = _precalcular_utilidades_modelo(
         calibration_models,
-        frames_u67,
-        symbols_u67,
+        frames,
+        symbols,
         calibration_dates,
         config_u67,
     )
@@ -318,80 +448,83 @@ for fold_position, fold in enumerate(folds, start=1):
     for margin in candidate_margins:
         policy = _politica_utilidade(
             calibration_models,
-            frames_u67,
-            symbols_u67,
+            frames,
+            symbols,
             config_u67,
             float(margin),
             utility_cache=calibration_cache,
         )
         score = _crescimento_politica_simples(
             policy,
-            frames_u67,
-            symbols_u67,
+            frames,
+            symbols,
             calibration_dates,
             config_u67,
         )
-        candidate_scores.append(
-            (float(margin), float(score))
-        )
+        candidate_scores.append((float(margin), float(score)))
 
     selection = _selecionar_switch_margin_fold(
         config_u67,
         fold_id,
         candidate_scores,
     )
-
-    selected_margin = float(
-        selection["selected_candidate_margin"]
-    )
+    selected_margin = float(selection["selected_candidate_margin"])
     effective_margin = max(
         float(config_u67.rotation_switch_margin),
         selected_margin,
     )
 
+    for candidate_margin, candidate_score in candidate_scores:
+        fold_calibration_candidates.append(
+            {
+                "fold_id": fold_id,
+                "candidate_margin": float(candidate_margin),
+                "calibration_score": float(candidate_score),
+                "selected": bool(
+                    abs(float(candidate_margin) - selected_margin) <= 1e-12
+                ),
+                "selected_margin": selected_margin,
+                "effective_margin": effective_margin,
+            }
+        )
+
     print(
         f"[calibration] fold={fold_id} "
         f"selected_margin={selected_margin:.6f} "
-        f"effective_margin={effective_margin:.6f}",
-        flush=True,
-    )
-
-    print(
-        f"[train] fold={fold_id} models={len(symbols_u67)} final",
+        f"effective_margin={effective_margin:.6f} "
+        f"candidates={candidate_scores}",
         flush=True,
     )
 
     final_models = _ajustar_modelos_lightgbm(
-        frames_u67,
-        symbols_u67,
+        frames,
+        symbols,
         final_fit_dates,
         config_u67,
-        phase=f"reproduction_u67_fold_{fold_id}_final",
+        phase=f"mct_parity_fold_{fold_id}_final",
         technical_log_callback=lambda message: print(
             f"[technical] {message}",
             flush=True,
         ),
     )
-
     decision_cache, _ = _precalcular_utilidades_modelo(
         final_models,
-        frames_u67,
-        symbols_u67,
+        frames,
+        symbols,
         decision_dates,
         config_u67,
     )
 
     fold_policies[fold_id] = _politica_utilidade(
         final_models,
-        frames_u67,
-        symbols_u67,
+        frames,
+        symbols,
         config_u67,
         effective_margin,
         fold_id=fold_id,
         calibrated_switch_margin=selected_margin,
         utility_cache=decision_cache,
     )
-
     fold_margins.append(
         {
             "fold_id": fold_id,
@@ -404,28 +537,28 @@ for fold_position, fold in enumerate(folds, start=1):
     )
 
 
-# %% 8 - Replay U67
+# %% 6 - Replay financeiro
 scheduled_policy = _politica_agendada(
     fold_policies,
     decision_to_fold,
 )
 
 result = _simular_exato(
-    "u67_control_reproduction",
+    "tcc_u67_mct_operational_parity",
     scheduled_policy,
-    frames_u67,
-    symbols_u67,
+    frames,
+    symbols,
     all_decision_dates,
     config_u67,
     calcular_taxas_referencia,
     aplicar_deslizamento,
     decision_metadata=decision_metadata,
-    model_label="U67 Control - reproducao oficial",
+    model_label="TCC U67 v1.21.0 Control - MCT parity",
     method_line=(
-        "- Reproducao congelada do U67: U59 + THO + WDAY + EXR + XEL + "
-        "SBFG + PAYX + MUX + SXC; LightGBM Control; calendario U56 fixo."
+        "- Same U67 scientific engine; fresh Alpaca RAW/SIP; "
+        "same effective MCT universe; same Control settings."
     ),
-    benchmark_override=shared_benchmark,
+    benchmark_override=benchmark,
     benchmark_override_name=BENCHMARK_NAME,
 )
 
@@ -434,63 +567,154 @@ metrics = summarize_metrics(
     folds,
     float(config_u67.initial_capital),
 )
-
 ending_capital = float(metrics["ending_capital"])
-relative_error = (
-    ending_capital / EXPECTED_ENDING_CAPITAL - 1.0
+
+
+# %% 7 - Comparacao direta com o job MCT auditado
+predictions = result.predictions.reset_index().copy()
+predictions["timestamp"] = pd.to_datetime(predictions["timestamp"], utc=True)
+
+same_cutoff = pd.Timestamp(MCT_SAME_CUTOFF_DATE, tz="UTC")
+same_cutoff_rows = predictions.loc[
+    predictions["timestamp"].dt.normalize() == same_cutoff
+]
+if same_cutoff_rows.empty:
+    capital_same_cutoff = None
+else:
+    capital_same_cutoff = float(
+        same_cutoff_rows.iloc[-1]["strategy_equity"]
+    )
+
+final_delta = ending_capital - MCT_ENDING_CAPITAL
+final_ratio = ending_capital / MCT_ENDING_CAPITAL - 1.0
+same_cutoff_delta = (
+    capital_same_cutoff - MCT_CAPITAL_AT_2026_09_17
+    if capital_same_cutoff is not None
+    else None
 )
 
+final_exact = math.isclose(
+    ending_capital,
+    MCT_ENDING_CAPITAL,
+    rel_tol=0.0,
+    abs_tol=PARITY_ABS_TOL,
+)
+same_cutoff_exact = bool(
+    capital_same_cutoff is not None
+    and math.isclose(
+        capital_same_cutoff,
+        MCT_CAPITAL_AT_2026_09_17,
+        rel_tol=0.0,
+        abs_tol=PARITY_ABS_TOL,
+    )
+)
+
+print("=" * 78, flush=True)
+print("[PARITY RESULT]", flush=True)
 print(
-    "[result] "
-    f"capital={ending_capital:,.8f} "
-    f"expected={EXPECTED_ENDING_CAPITAL:,.8f} "
-    f"relative_error={relative_error:+.12e}",
+    f"TCC fresh capital 2026-10-06 = US$ {ending_capital:,.8f}",
     flush=True,
 )
 print(
-    "[result] "
+    f"MCT audited capital 2026-10-06 = US$ {MCT_ENDING_CAPITAL:,.8f}",
+    flush=True,
+)
+print(
+    f"delta_final = US$ {final_delta:+,.8f} "
+    f"ratio={final_ratio:+.12%} exact_to_cent={final_exact}",
+    flush=True,
+)
+if capital_same_cutoff is not None:
+    print(
+        f"TCC fresh capital 2026-09-17 = US$ {capital_same_cutoff:,.8f}",
+        flush=True,
+    )
+    print(
+        "MCT audited capital 2026-09-17 = "
+        f"US$ {MCT_CAPITAL_AT_2026_09_17:,.8f}",
+        flush=True,
+    )
+    print(
+        f"delta_same_cutoff = US$ {same_cutoff_delta:+,.8f} "
+        f"exact_to_cent={same_cutoff_exact}",
+        flush=True,
+    )
+print(
     f"cagr={float(metrics['cagr']):.6%} "
     f"sharpe={float(metrics['sharpe']):.8f} "
     f"maxdd={float(metrics['maximum_drawdown']):.6%} "
     f"worst_fold={float(metrics['worst_fold_return']):.6%}",
     flush=True,
 )
-
-reproduced = math.isclose(
-    ending_capital,
-    EXPECTED_ENDING_CAPITAL,
-    rel_tol=CAPITAL_REL_TOL,
-    abs_tol=CAPITAL_ABS_TOL,
-)
-
-if not reproduced:
-    raise RuntimeError(
-        "A reproducao U67 divergiu do checkpoint de US$ 58.557.157,67. "
-        f"observado={ending_capital:,.8f} "
-        f"esperado={EXPECTED_ENDING_CAPITAL:,.8f}"
-    )
+print("=" * 78, flush=True)
 
 
-# %% 9 - Artefatos finais de reproducao
+# %% 8 - Artefatos de auditoria
+# Limpa completamente a pasta para impedir que pacotes antigos entrem no ZIP.
+if OUT.exists():
+    shutil.rmtree(OUT)
 OUT.mkdir(parents=True, exist_ok=True)
 
+runtime_environment = {
+    "python": sys.version,
+    "platform": platform.platform(),
+    "numpy": np.__version__,
+    "pandas": pd.__version__,
+    "lightgbm": _package_version("lightgbm"),
+    "scikit_learn": _package_version("scikit-learn"),
+    "threadpoolctl": _package_version("threadpoolctl"),
+    "threadpool_runtime": threadpool_info(),
+    "deterministic_execution": bool(config_u67.deterministic_execution),
+    "numeric_thread_limit": int(config_u67.numeric_thread_limit),
+    "lightgbm_n_jobs": (
+        (config_u67.research_model_settings.get("lightgbm") or {}).get(
+            "n_jobs"
+        )
+    ),
+}
+
 pd.DataFrame(
-    {"asset": symbols_u67}
+    {"asset": U67_REQUESTED_ASSETS}
 ).to_csv(
-    OUT / "u67_assets.csv",
+    OUT / "u67_requested_assets.csv",
     index=False,
 )
-
+pd.DataFrame(
+    {"asset": symbols}
+).to_csv(
+    OUT / "u67_effective_assets.csv",
+    index=False,
+)
+pd.DataFrame(exclusions).to_csv(
+    OUT / "u67_runtime_exclusions.csv",
+    index=False,
+)
 pd.DataFrame(fold_margins).to_csv(
     OUT / "u67_fold_margins.csv",
     index=False,
 )
-
-result.predictions.reset_index().to_csv(
+pd.DataFrame(fold_calibration_candidates).to_csv(
+    OUT / "u67_fold_calibration_candidates.csv",
+    index=False,
+)
+pd.DataFrame(market_data_hash_rows).to_csv(
+    OUT / "u67_market_data_hashes.csv",
+    index=False,
+)
+with (
+    OUT / "u67_runtime_environment.json"
+).open("w", encoding="utf-8") as handle:
+    json.dump(
+        runtime_environment,
+        handle,
+        ensure_ascii=False,
+        indent=2,
+        default=str,
+    )
+predictions.to_csv(
     OUT / "u67_predictions.csv",
     index=False,
 )
-
 result.trades.to_csv(
     OUT / "u67_trades.csv",
     index=False,
@@ -499,36 +723,62 @@ result.trades.to_csv(
 payload = {
     "reproduction_version": REPRODUCTION_VERSION,
     "execution_schema": EXECUTION_SCHEMA,
-    "status": "reproduced" if reproduced else "failed",
-    "universe": {
-        "base_u56_count": len(frames_u56),
-        "u59_additions": list(U59_ADDITIONS),
-        "u67_additions": list(U67_ADDITIONS),
-        "u67_count": len(symbols_u67),
-        "assets": list(symbols_u67),
+    "status": "completed",
+    "purpose": "independent_tcc_reproduction_of_mct_strategy_13",
+    "mct_reference": {
+        "job_id": MCT_JOB_ID,
+        "analysis_end_date": MCT_ANALYSIS_END_DATE,
+        "same_cutoff_date": MCT_SAME_CUTOFF_DATE,
+        "ending_capital": MCT_ENDING_CAPITAL,
+        "capital_at_same_cutoff": MCT_CAPITAL_AT_2026_09_17,
+        "snapshot_sha256": MCT_SNAPSHOT_SHA256,
+        "market_data_signature": MCT_MARKET_DATA_SIGNATURE,
     },
-    "snapshots": {
-        "u56": manifest_u56,
-        "b2": manifest_b2,
-        "smart": manifest_smart,
+    "data": {
+        "source": "alpaca",
+        "feed": "sip",
+        "timeframe": "1Day",
+        "adjustment": "raw",
+        "full_refresh": True,
+        "database_used": False,
+        "snapshot": snapshot_manifest,
+        "data_audit": data_audit,
+        "diagnostics": diagnostics,
+        "market_data_hashes": market_data_hash_rows,
+    },
+    "universe": {
+        "requested_count": len(U67_REQUESTED_ASSETS),
+        "requested_assets": list(U67_REQUESTED_ASSETS),
+        "effective_count": len(symbols),
+        "effective_assets": list(symbols),
+        "excluded_assets": exclusions,
     },
     "calendar": {
-        "source": calendar_source,
+        "reference_source": reference_source,
+        "calendar_source": calendar_source,
         "common_dates": len(common_dates),
-        "decision_sessions": len(all_decision_dates),
+        "decision_sessions": len(all_decision_dates) - 1,
     },
     "fold_margins": fold_margins,
-    "expected_ending_capital": EXPECTED_ENDING_CAPITAL,
-    "observed_ending_capital": ending_capital,
-    "relative_error": relative_error,
+    "fold_calibration_candidates": fold_calibration_candidates,
+    "runtime_environment": runtime_environment,
     "metrics": metrics,
-    "runtime_seconds": float(
-        time.perf_counter() - started
-    ),
+    "parity": {
+        "tcc_ending_capital": ending_capital,
+        "mct_ending_capital": MCT_ENDING_CAPITAL,
+        "ending_capital_delta": final_delta,
+        "ending_capital_ratio": final_ratio,
+        "ending_capital_exact_to_cent": final_exact,
+        "tcc_capital_at_2026_09_17": capital_same_cutoff,
+        "mct_capital_at_2026_09_17": MCT_CAPITAL_AT_2026_09_17,
+        "same_cutoff_delta": same_cutoff_delta,
+        "same_cutoff_exact_to_cent": same_cutoff_exact,
+    },
+    "runtime_seconds": float(time.perf_counter() - started),
 }
 
 with (
-    OUT / "reproducao_u67.json"
+    OUT / "reproducao_u67_mct_parity.json"
 ).open(
     "w",
     encoding="utf-8",
@@ -543,24 +793,13 @@ with (
 
 package = criar_pacote_analise(
     OUT,
-    comparison_file="reproducao_u67.json",
+    comparison_file="reproducao_u67_mct_parity.json",
     execution_schema=EXECUTION_SCHEMA,
-    archive_name="pacote_reproducao_u67_58m.zip",
+    archive_name="pacote_reproducao_u67_mct_parity.zip",
 )
 
-print("=" * 78, flush=True)
-print(
-    "[done] U67 REPRODUZIDO COM SUCESSO",
-    flush=True,
-)
-print(
-    f"[done] capital_final=US$ {ending_capital:,.2f}",
-    flush=True,
-)
 print(
     f"[done] package={package}",
     flush=True,
 )
-print("=" * 78, flush=True)
-
 sinal_sonoro_conclusao()
