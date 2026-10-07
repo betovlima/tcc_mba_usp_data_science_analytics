@@ -50,6 +50,34 @@ A regra de CLMT/DOC nesta branch e usada para reproduzir o comportamento
 efetivamente executado no MCT. Esta pesquisa nao redefine, por si so, o
 criterio cientifico geral de exclusao de ativos.
 
+### Auditoria de paridade v1.22.0-dev.2
+
+A primeira execucao fresh-data nao reproduziu o capital do MCT. Em vez de
+alterar margens ou forcar decisoes, a proxima execucao deve localizar a causa.
+
+O runner agora exporta, para cada um dos 65 ativos efetivos, os hashes
+`raw_sha256` e `normalized_sha256` calculados com a mesma canonicalizacao
+OHLCV usada pelo MCT. Tambem exporta todos os scores candidatos da calibracao
+de switch margin por fold e o ambiente numerico/runtime.
+
+Novos artefatos:
+
+- `u67_market_data_hashes.csv`;
+- `u67_fold_calibration_candidates.csv`;
+- `u67_runtime_environment.json`.
+
+A pasta `output/reproducao` e limpa antes de cada pacote para impedir que
+artefatos antigos contaminem o ZIP.
+
+A interpretacao da proxima execucao deve seguir esta ordem:
+
+1. comparar os 65 hashes RAW e normalizados com o job MCT
+   `20261007T095423-60e489c0`;
+2. se houver hashes diferentes, atribuir primeiro a divergencia aos dados;
+3. se os hashes forem iguais, comparar ambiente numerico e scores de
+   calibracao para investigar LightGBM/threads;
+4. nao forcar `switch_margin` para reproduzir capital.
+
 
 ## Baseline preservado
 
