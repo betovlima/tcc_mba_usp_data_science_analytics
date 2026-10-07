@@ -74,7 +74,7 @@ ROOT = Path(__file__).resolve().parent
 TEMP = SnapshotPaths.temporary(ROOT)
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.22.0-dev.2"
+REPRODUCTION_VERSION = "1.22.0-dev.3"
 EXECUTION_SCHEMA = "u67-mct-operational-parity-v1"
 
 U59_ADDITIONS = ("COLB", "AMS", "FOXF")
@@ -176,6 +176,7 @@ print(f"analysis_end={MCT_ANALYSIS_END_DATE}", flush=True)
 print("data_source=ALPACA_FRESH_FULL_HISTORY", flush=True)
 print("feed=SIP adjustment=RAW timeframe=1Day", flush=True)
 print("database=NO", flush=True)
+print("csv_float_precision=round_trip", flush=True)
 print("requested_assets=67 expected_effective_assets=65", flush=True)
 print("expected_runtime_exclusions=CLMT,DOC", flush=True)
 print("=" * 78, flush=True)
@@ -225,6 +226,10 @@ frames_raw, exclusions, diagnostics, data_audit = prepare_model_frames(
     TEMP,
     assets=U67_REQUESTED_ASSETS,
     comparar_snapshot_referencia=False,
+    # O MCT usa os floats recebidos da Alpaca diretamente em memoria.
+    # Como o TCC persiste CSV antes do treino, usamos o parser round_trip
+    # para recuperar exatamente o float64 serializado com %.17g.
+    csv_float_precision="round_trip",
 )
 
 excluded_symbols = frozenset(
@@ -265,7 +270,8 @@ print(
 market_data_hash_rows = []
 for symbol in effective_assets_requested_order:
     raw_frame = load_raw_bar_file(
-        TEMP.raw_bars / f"{symbol}.csv"
+        TEMP.raw_bars / f"{symbol}.csv",
+        float_precision="round_trip",
     )
     normalized_frame = frames_raw[symbol]
     raw_canonical = _canonical_history_frame(raw_frame)
