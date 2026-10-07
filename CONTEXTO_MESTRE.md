@@ -3788,3 +3788,35 @@ Novos artefatos:
 
 A analise continua estritamente diagnostica e ex post. Nenhuma informacao
 futura foi incorporada como feature e nenhuma regra da U67 foi alterada.
+
+
+### Ranking completo score -> retorno futuro — Top Gap v1.2.0-dev.1
+
+A pesquisa passa a capturar o vetor completo de scores LightGBM dos 67 ativos
+em cada data de decisao walk-forward, sem alterar a politica de negociacao.
+
+Para cada data, o ranking causal de scores e comparado ex post com o ranking
+de retornos futuros nos horizontes de 5, 20 e 60 sessoes. O retorno-alvo usa
+o open da sessao de execucao seguinte como inicio e o open apos H sessoes
+como fim. Esse retorno futuro e apenas alvo diagnostico e nunca entra como
+feature.
+
+Metricas principais:
+- IC cross-sectional de Spearman por data entre score e retorno futuro;
+- proporcao de IC positivo;
+- rank e percentil futuro do ativo Top 1 pelo score;
+- frequencia em que o Top 1 por score termina no Top 5 ou Top 10 futuro;
+- sobreposicao Top 5 e Top 10 entre ranking de score e ranking futuro;
+- referencias aleatorias calculadas a partir do tamanho efetivo do universo.
+
+Tambem foi corrigida a instrumentacao de diagnosticos no replay: o dicionario
+policy_decision_diagnostics agora e compartilhado com as politicas e passado
+a _simular_exato. Isso faz os trades preservarem os scores e margens conhecidos
+no instante da decisao, sem mudar a acao escolhida.
+
+Novos artefatos:
+- u67_score_rank_future_detail.csv;
+- u67_score_rank_future_summary.csv.
+
+A main permanece intacta. O checkpoint financeiro de referencia continua
+US$ 58.557.157,67496595.
