@@ -191,7 +191,6 @@ raw_files = download_raw_bars(
     credentials,
     TEMP,
     assets=U67_REQUESTED_ASSETS,
-    replace=True,
     bar_snapshot_as_of_end=MCT_ANALYSIS_END_DATE,
     analysis_end_date=MCT_ANALYSIS_END_DATE,
 )
