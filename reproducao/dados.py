@@ -19,13 +19,7 @@ from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from dotenv import dotenv_values, load_dotenv
 
-from engine.configuracao import (
-    ANALYSIS_END_DATE,
-    ASSETS,
-    EXPERIMENT_VERSION,
-    BAR_SNAPSHOT_AS_OF_END,
-    START_DATE,
-)
+from engine.configuracao import EXPERIMENT_VERSION, START_DATE
 
 CORPORATE_ACTIONS_ENDPOINT = "https://data.alpaca.markets/v1/corporate-actions"
 REQUEST_TYPES = (
@@ -222,10 +216,9 @@ def download_raw_bars(
     credentials: AlpacaCredentials,
     paths: SnapshotPaths,
     *,
-    assets: tuple[str, ...] = ASSETS,
-    replace: bool = False,
-    bar_snapshot_as_of_end: str = BAR_SNAPSHOT_AS_OF_END,
-    analysis_end_date: str = ANALYSIS_END_DATE,
+    assets: tuple[str, ...],
+    bar_snapshot_as_of_end: str,
+    analysis_end_date: str,
 ) -> dict[str, Path]:
     """Baixa SIP/1Day/RAW, um ativo por requisicao, e grava um CSV por ativo."""
     paths.ensure()
@@ -238,7 +231,7 @@ def download_raw_bars(
     api_end = (bar_end + pd.Timedelta(days=1)).to_pydatetime()
 
     print(
-        "[alpaca-bars] loader=10.8.74-download_stock_bars "
+        "[alpaca-bars] loader=alpaca_raw_sip_daily "
         f"assets={len(assets)} feed=sip adjustment=raw timeframe=1Day "
         f"start={START_DATE} bar_asof_end={bar_snapshot_as_of_end} "
         f"analysis_end={analysis_end_date}",
@@ -248,20 +241,6 @@ def download_raw_bars(
     files: dict[str, Path] = {}
     for position, symbol in enumerate(assets, start=1):
         target = paths.raw_bars / f"{symbol}.csv"
-        if target.exists() and not replace:
-            frame = pd.read_csv(target)
-            if frame.empty:
-                raise RuntimeError(f"{symbol}: CSV RAW existente esta vazio.")
-            frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
-            files[symbol] = target
-            print(
-                f"[alpaca-bars] {position}/{len(assets)} reusing {symbol} "
-                f"rows={len(frame)} first={frame['timestamp'].min().date()} "
-                f"last={frame['timestamp'].max().date()}",
-                flush=True,
-            )
-            continue
-
         print(
             f"[alpaca-bars] {position}/{len(assets)} downloading {symbol}...",
             flush=True,
@@ -361,23 +340,13 @@ def download_corporate_actions(
     credentials: AlpacaCredentials,
     paths: SnapshotPaths,
     *,
-    assets: tuple[str, ...] = ASSETS,
+    assets: tuple[str, ...],
+    query_end: str,
     chunk_size: int = 40,
-    replace: bool = False,
-    query_end: str = ANALYSIS_END_DATE,
 ) -> dict[str, Path]:
     """Consulta Corporate Actions e persiste um CSV independente por ativo."""
     paths.ensure()
     targets = {symbol: paths.corporate_actions / f"{symbol}.csv" for symbol in assets}
-    if not replace and all(path.exists() for path in targets.values()):
-        for position, symbol in enumerate(assets, start=1):
-            rows = len(pd.read_csv(targets[symbol]))
-            print(
-                f"[corporate-actions] {position}/{len(assets)} reusing {symbol} rows={rows}",
-                flush=True,
-            )
-        return targets
-
     research_start = date.fromisoformat(START_DATE)
     query_start = (research_start - timedelta(days=366)).isoformat()
     symbols = sorted(set(assets))
@@ -462,10 +431,10 @@ def build_snapshot_manifest(
     raw_files: dict[str, Path],
     action_files: dict[str, Path],
     *,
-    bar_snapshot_as_of_end: str = BAR_SNAPSHOT_AS_OF_END,
-    analysis_end_date: str = ANALYSIS_END_DATE,
-    assets: tuple[str, ...] = ASSETS,
-    snapshot_name: str = "tcc-research-v1",
+    bar_snapshot_as_of_end: str,
+    analysis_end_date: str,
+    assets: tuple[str, ...],
+    snapshot_name: str,
 ) -> dict[str, Any]:
     """Calcula hashes do snapshot; credenciais nunca sao persistidas."""
     file_hashes: dict[str, str] = {}
@@ -518,16 +487,16 @@ def validate_snapshot(paths: SnapshotPaths) -> dict[str, Any]:
     manifest = json.loads(paths.manifest.read_text(encoding="utf-8"))
 
     expected_snapshot_sha = str(manifest.get("snapshot_sha256") or "")
-    schema_version = int(manifest.get("schema_version") or 1)
-    metadata_keys = (
-        {"snapshot_sha256", "credential_source"}
-        if schema_version == 1
-        else {"snapshot_sha256", "created_for_experiment_version"}
-    )
+    if int(manifest.get("schema_version") or 0) != 2:
+        raise RuntimeError("Snapshot manifest schema incompatível.")
+
     identity = {
         key: value
         for key, value in manifest.items()
-        if key not in metadata_keys
+        if key not in {
+            "snapshot_sha256",
+            "created_for_experiment_version",
+        }
     }
     actual_snapshot_sha = _canonical_sha256(identity)
     if not expected_snapshot_sha or actual_snapshot_sha != expected_snapshot_sha:
