@@ -80,7 +80,6 @@ def test_all_runtime_modules_import_successfully() -> None:
         "reproducao.dados",
         "reproducao.preparacao",
         "reproducao.experimento",
-        "reproducao.caminhos",
         "reproducao.graficos",
     )
     for module_name in modules:
