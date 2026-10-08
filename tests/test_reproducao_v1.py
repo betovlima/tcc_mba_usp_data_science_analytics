@@ -547,7 +547,7 @@ def test_backtest_analytics_generation_creates_expected_files(tmp_path) -> None:
     assert (graph_dir / "monthly_return_heatmap_control_excess.svg").exists()
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.22.0-dev.5"
+    assert EXPERIMENT_VERSION == "1.22.0-dev.6"
     forbidden = (
         "series_historicas",
         "tiingo",
