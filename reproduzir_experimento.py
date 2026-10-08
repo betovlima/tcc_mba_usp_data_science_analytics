@@ -137,13 +137,13 @@ def _package_version(name: str) -> str | None:
         return None
 
 
-if len(U67_REQUESTED_ASSETS) != EXPECTED_REQUESTED_COUNT:
+if len(U67_REQUESTED_ASSETS) != U67_EXPECTED_REQUESTED_COUNT:
     raise RuntimeError(
         "Contrato U67 invalido: "
-        f"esperado={EXPECTED_REQUESTED_COUNT} "
+        f"esperado={U67_EXPECTED_REQUESTED_COUNT} "
         f"observado={len(U67_REQUESTED_ASSETS)}"
     )
-if len(set(U67_REQUESTED_ASSETS)) != EXPECTED_REQUESTED_COUNT:
+if len(set(U67_REQUESTED_ASSETS)) != U67_EXPECTED_REQUESTED_COUNT:
     raise RuntimeError("Contrato U67 contem ativos duplicados.")
 
 started = time.perf_counter()
@@ -216,14 +216,14 @@ excluded_symbols = frozenset(
     str(item.get("symbol") or "").strip().upper()
     for item in exclusions
 )
-if excluded_symbols != EXPECTED_EXCLUSIONS:
+if excluded_symbols != U67_EXPECTED_EXCLUSIONS:
     raise RuntimeError(
         "O universo efetivo nao corresponde ao job MCT auditado. "
-        f"esperado={sorted(EXPECTED_EXCLUSIONS)} "
+        f"esperado={sorted(U67_EXPECTED_EXCLUSIONS)} "
         f"observado={sorted(excluded_symbols)} "
         f"exclusoes={json.dumps(exclusions, ensure_ascii=False, default=str)}"
     )
-if len(frames_raw) != EXPECTED_EFFECTIVE_COUNT:
+if len(frames_raw) != U67_EXPECTED_EFFECTIVE_COUNT:
     raise RuntimeError(
         "O job de paridade precisa entregar exatamente 65 ativos ao modelo. "
         f"observado={len(frames_raw)}"
@@ -342,7 +342,7 @@ config_u67 = config_u67.copiar_modelo(
     calendar_source_label=f"U56_FIXED:{reference_source}",
 )
 
-if len(symbols) != EXPECTED_EFFECTIVE_COUNT:
+if len(symbols) != U67_EXPECTED_EFFECTIVE_COUNT:
     raise RuntimeError(
         "O contexto modelavel nao manteve os 65 ativos efetivos. "
         f"observado={len(symbols)}"
