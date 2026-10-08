@@ -3904,3 +3904,49 @@ neste documento; ela nao deve ser reintroduzida no checkpoint oficial.
 Proxima linha de pesquisa: decompor quantitativamente a distancia entre a
 trajetoria U67 e uma referencia de topo por operacao, separando perdas de
 timing de entrada, timing de saida, escolha de ativo e permanencia excessiva.
+
+## 2026-10-08 — refactor final do runtime TCC U67
+
+### Objetivo
+Reduzir o repositório ao código necessário para a reprodução oficial do U67
+Control, removendo pesquisas encerradas, compatibilidades legadas e caminhos
+que não participam mais do runtime atual.
+
+### Branch e versão
+- Branch: `refactor/tcc-final-cleanup-v1`
+- Versão: `1.22.0-dev.4`
+- `main` permanece sem alterações até o merge do PR.
+
+### Remoções
+- `pesquisas/directional_change_lightgbm.py`;
+- `pesquisas/__init__.py`;
+- `tests/test_directional_change_lightgbm.py`;
+- `buscar_ativos.py`;
+- `reproducao/caminhos.py`;
+- `reproducao/reference_10_8_74_raw_snapshot_diagnostics.json`;
+- execução genérica Control vs Soft que não era usada pelo runner atual;
+- configuração e política Soft Horizon Consensus fora do fluxo final;
+- suporte contrafactual de switch margin fora do fluxo final;
+- helpers de snapshots temporários/legados que não eram chamados pelo runner;
+- lógica de reutilização de snapshot no caminho oficial, que agora é
+  explicitamente full-refresh.
+
+### Reorganização
+- `criar_pacote_analise` e `sinal_sonoro_conclusao` foram movidos para
+  `reproducao/artefatos.py`;
+- `reproducao/experimento.py` ficou restrito à configuração Control e ao
+  resumo de métricas;
+- `reproducao/graficos.py` ficou restrito ao U67 Control e foi conectado ao
+  runner oficial;
+- o manifest continua com hashes de integridade porque eles ainda são usados
+  por `validate_snapshot` e pela auditoria do snapshot fresco;
+- `README.md` foi reescrito para refletir o fluxo real de paridade MCT U67.
+
+### Contrato preservado
+A refatoração não altera os parâmetros científicos do LightGBM Control, os
+folds walk-forward, o purge temporal, custos, regras de rotação, universo U67,
+exclusões estruturais CLMT/DOC nem o cutoff auditado de 2026-10-06.
+
+### Validação
+A branch deve passar Ruff e pytest antes de qualquer merge na `main`.
+
