@@ -1,51 +1,50 @@
-# Dados da pesquisa
+# Dados do TCC
 
-A reprodução oficial do TCC usa snapshots congelados e não baixa dados novos.
+A reprodução oficial usa **um único snapshot U67 congelado e versionado**.
 
-## U67 oficial
+Estrutura esperada:
 
-O universo oficial que reproduz aproximadamente **US$ 58,56 milhões** é
-formado por:
-
-- 56 ativos-base em `pesquisa/`;
-- COLB, AMS e FOXF em `pesquisa_expansao_76_b2/`;
-- THO, WDAY, EXR, XEL, SBFG, PAYX, MUX e SXC em
-  `pesquisa_smart_candidates/`.
-
-Estrutura necessária no ambiente de reprodução:
-
-~~~text
+```text
 dados/
-├── pesquisa/
-│   ├── raw_bars/
-│   ├── corporate_actions/
-│   └── manifest.json
-├── pesquisa_expansao_76_b2/
-│   ├── raw_bars/
-│   ├── corporate_actions/
-│   └── manifest.json
-└── pesquisa_smart_candidates/
+└── u67/
     ├── raw_bars/
+    │   └── <ATIVO>.csv
     ├── corporate_actions/
+    │   └── <ATIVO>.csv
     └── manifest.json
-~~~
+```
 
-A normalização de splits é calculada em memória durante a preparação.
+O snapshot contém os 67 ativos solicitados pelo contrato U67. O pipeline recebe
+os 67 e aplica, em tempo de reprodução, as exclusões estruturais previstas para
+CLMT e DOC. O conjunto efetivo entregue ao modelo deve permanecer com 65 ativos.
 
-O repositório mantém versionado o snapshot-base em `dados/pesquisa/`. Os
-snapshots históricos B2 e SMART utilizados nas campanhas de expansão precisam
-estar presentes localmente para executar o checkpoint U67. O runner oficial
-valida os respectivos manifestos e hashes antes do backtest e não faz download
-para substituir esses dados.
+Os CSVs de barras usam Alpaca SIP, timeframe diário e adjustment RAW. Corporate
+Actions são preservados separadamente e a normalização de splits ocorre em
+memória durante a preparação.
 
-Os arquivos de trabalho das pesquisas de assinatura encerradas foram removidos
-da árvore atual. O histórico dos experimentos continua preservado pelo Git e
-pelo `CONTEXTO_MESTRE.md`.
+## Criar ou substituir o snapshot
 
-## Dados temporários
+A coleta de dados foi separada da reprodução científica. Para criar o snapshot
+U67, execute:
 
-O diretório `temporario/` continua ignorado pelo Git e pode ser usado por
-rotinas auxiliares ou novas buscas. Ele não participa da reprodução oficial.
+```bash
+python preparar_snapshot_u67.py
+```
 
-Snapshots congelados não devem ser substituídos por downloads atuais quando o
-objetivo for reproduzir o checkpoint U67.
+Esse script baixa os dados para uma área temporária
+`dados/.u67_build/`, valida o snapshot completo e somente então publica o
+resultado em `dados/u67/`.
+
+Depois da coleta, revise e versione no Git:
+
+```bash
+git add dados/u67
+git commit -m "data: freeze official U67 snapshot"
+```
+
+A reprodução oficial é executada por `reproduzir_experimento.py` e **não
+acessa a Alpaca**. Ela apenas valida e lê `dados/u67/`.
+
+O `manifest.json` registra o universo, datas, contagens e hashes SHA-256 dos
+arquivos. Esses hashes existem para verificar integridade e não participam do
+treinamento do modelo.
