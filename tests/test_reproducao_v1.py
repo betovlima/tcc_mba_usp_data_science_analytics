@@ -1,18 +1,11 @@
 import ast
 import importlib
-import json
-from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from reproducao.dados import (
-    SnapshotPaths,
-    data_final_temporaria_atual,
-    snapshot_cobre_data_final,
-)
+from reproducao.dados import SnapshotPaths
 from reproducao.preparacao import load_raw_bar_file, structural_identity_issue
 from reproducao.graficos import (
     calcular_retornos_mensais,
@@ -24,23 +17,20 @@ from engine.rotacao import (
     _executar_compra,
     _selecionar_ativo_fonte_calendario,
 )
-from engine.modelo_lightgbm import _selecionar_switch_margin_fold
+from engine.modelo_lightgbm import selecionar_switch_margin
 from engine.configuracao import (
     ANALYSIS_END_DATE,
     ASSETS,
     BAR_SNAPSHOT_AS_OF_END,
     CONFIG,
     EXPERIMENT_VERSION,
-    SOFT_HORIZON_CONSENSUS_PENALTY,
-    construir_configuracao_controle,
-    construir_configuracao_soft,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_round_trip_csv_parser_preserves_float64_for_mct_parity(tmp_path) -> None:
+def test_round_trip_csv_parser_preserves_float64_for_reproduction(tmp_path) -> None:
     original = 950.4636963259353
     path = tmp_path / "AAA.csv"
     pd.DataFrame(
@@ -80,7 +70,6 @@ def test_all_runtime_modules_import_successfully() -> None:
         "reproducao.dados",
         "reproducao.preparacao",
         "reproducao.experimento",
-        "reproducao.caminhos",
         "reproducao.graficos",
     )
     for module_name in modules:
@@ -201,9 +190,6 @@ def test_execution_helpers_use_portuguese_names() -> None:
     execution_source = (ROOT / "engine" / "execucao.py").read_text(
         encoding="utf-8"
     )
-    experiment_source = (ROOT / "reproducao" / "experimento.py").read_text(
-        encoding="utf-8"
-    )
 
     for expected in (
         "arredondar_taxa_para_centavo",
@@ -211,7 +197,6 @@ def test_execution_helpers_use_portuguese_names() -> None:
         "aplicar_deslizamento",
     ):
         assert expected in execution_source
-        assert expected in experiment_source or expected == "arredondar_taxa_para_centavo"
 
     for retired in (
         "round_fee_to_cent",
@@ -219,59 +204,15 @@ def test_execution_helpers_use_portuguese_names() -> None:
         "apply_slippage",
     ):
         assert retired not in execution_source
-        assert retired not in experiment_source
 
 
-def test_counterfactual_switch_margin_override_uses_frozen_candidate() -> None:
-    config = SimpleNamespace(
-        research_model_settings={
-            "counterfactual_switch_margin_by_fold": {"1": 0.0}
-        }
+def test_switch_margin_selects_best_calibration_score() -> None:
+    selection = selecionar_switch_margin(
+        [(0.0, 1.0), (0.0025, 2.0), (0.005, 1.5)]
     )
-    selection = _selecionar_switch_margin_fold(
-        config,
-        1,
-        [(0.0, 1.0), (0.01, 2.0)],
-    )
-
-    assert selection["auto_candidate_margin"] == 0.01
-    assert selection["selected_candidate_margin"] == 0.0
-    assert selection["selected_calibration_score"] == 1.0
-    assert selection["selection_source"] == "counterfactual_override"
-
-
-def test_counterfactual_switch_margin_refuses_new_tuning_value() -> None:
-    config = SimpleNamespace(
-        research_model_settings={
-            "counterfactual_switch_margin_by_fold": {"1": 0.0075}
-        }
-    )
-
-    try:
-        _selecionar_switch_margin_fold(
-            config,
-            1,
-            [(0.0, 1.0), (0.01, 2.0)],
-        )
-    except ValueError as exc:
-        message = str(exc)
-    else:
-        raise AssertionError("non-frozen margin should have been refused")
-
-    assert "outside frozen candidates" in message
-
-
-def test_control_and_soft_share_same_lightgbm() -> None:
-    control = construir_configuracao_controle(CONFIG)
-    soft = construir_configuracao_soft(CONFIG)
-
-    assert control.research_model_settings["lightgbm"] == soft.research_model_settings["lightgbm"]
-    assert control.research_model_settings["soft_horizon_consensus"] == {
-        "enabled": False
-    }
-    assert soft.research_model_settings["soft_horizon_consensus"] == {
-        "enabled": True,
-        "penalty_strength": SOFT_HORIZON_CONSENSUS_PENALTY,
+    assert selection == {
+        "selected_candidate_margin": 0.0025,
+        "selected_calibration_score": 2.0,
     }
 
 
@@ -292,76 +233,32 @@ def test_lightgbm_parameters_are_frozen() -> None:
 def test_official_u67_workflow_is_explicitly_sectioned() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(encoding="utf-8")
     assert source.count("# %%") >= 9
-    assert "# %% 1 - Full refresh Alpaca" in source
-    assert "# %% 2 - Mesmo processamento estrutural observado no MCT" in source
+    assert "# %% 1 - Snapshot U67 congelado e versionado" in source
+    assert "# %% 2 - Processamento estrutural do snapshot U67" in source
     assert "# %% 3 - Mesmo calendario U56 elegivel" in source
-    assert "# %% 5 - Treino, calibracao e politicas identicos ao MCT" in source
+    assert "# %% 5 - Treino, calibracao e politica oficial do TCC" in source
     assert "# %% 6 - Replay financeiro" in source
-    assert 'U59_ADDITIONS = ("COLB", "AMS", "FOXF")' in source
-    assert "U67_ADDITIONS = (" in source
-    assert "EXPECTED_REQUESTED_COUNT = 67" in source
-    assert "EXPECTED_EFFECTIVE_COUNT = 65" in source
-    assert 'EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})' in source
-    assert "MCT_ENDING_CAPITAL = 76_927_051.38897176" in source
+    config_source = (ROOT / "engine" / "configuracao.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'U59_ADDITIONS = ("COLB", "AMS", "FOXF")' in config_source
+    assert "U67_ADDITIONS = (" in config_source
+    assert "U67_EXPECTED_REQUESTED_COUNT = 67" in config_source
+    assert "U67_EXPECTED_EFFECTIVE_COUNT = 65" in config_source
+    assert 'U67_EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})' in config_source
+    assert "U67_EXPECTED_ENDING_CAPITAL = 76_927_051.38897176" in source
     assert "_simular_exato(" in source
 
 
 def test_snapshot_layout_is_csv_per_asset() -> None:
-    research = SnapshotPaths.research(ROOT)
-    temporary = SnapshotPaths.temporary(ROOT)
+    snapshot = SnapshotPaths.u67(ROOT)
 
-    assert research.root == ROOT / "dados" / "pesquisa"
-    assert research.raw_bars.name == "raw_bars"
-    assert research.corporate_actions.name == "corporate_actions"
-    assert research.manifest.name == "manifest.json"
-
-    assert temporary.root == (
-        ROOT / "dados" / "temporario" / "reproducao"
-    )
+    assert snapshot.root == ROOT / "dados" / "u67"
+    assert snapshot.raw_bars.name == "raw_bars"
+    assert snapshot.corporate_actions.name == "corporate_actions"
+    assert snapshot.manifest.name == "manifest.json"
 
 
-
-
-def test_temporary_end_date_uses_current_market_date_after_close() -> None:
-    agora = datetime(
-        2026,
-        9,
-        22,
-        23,
-        29,
-        tzinfo=ZoneInfo("America/Asuncion"),
-    )
-    assert data_final_temporaria_atual(agora) == "2026-09-22"
-
-
-def test_temporary_end_date_avoids_incomplete_intraday_bar() -> None:
-    agora = datetime(
-        2026,
-        9,
-        22,
-        15,
-        0,
-        tzinfo=ZoneInfo("America/New_York"),
-    )
-    assert data_final_temporaria_atual(agora) == "2026-09-21"
-
-
-def test_temporary_snapshot_is_refreshed_when_manifest_is_stale(tmp_path) -> None:
-    paths = SnapshotPaths.from_root(tmp_path / "snapshot")
-    paths.ensure()
-    manifest = {
-        "bars": {"bar_snapshot_as_of_end": "2026-09-17"},
-        "corporate_actions": {"query_end": "2026-09-17"},
-    }
-    paths.manifest.write_text(json.dumps(manifest), encoding="utf-8")
-
-    assert not snapshot_cobre_data_final(paths, "2026-09-22")
-
-    manifest["bars"]["bar_snapshot_as_of_end"] = "2026-09-22"
-    manifest["corporate_actions"]["query_end"] = "2026-09-22"
-    paths.manifest.write_text(json.dumps(manifest), encoding="utf-8")
-
-    assert snapshot_cobre_data_final(paths, "2026-09-22")
 
 
 def test_analysis_window_can_end_on_current_temporary_session() -> None:
@@ -426,17 +323,28 @@ def test_analysis_end_date_is_inclusive_for_nyse_utc_timestamp() -> None:
     assert pd.Timestamp("2026-09-23 04:00:00+00:00") not in dates
 
 
-def test_official_reproduction_refreshes_market_data_for_mct_parity() -> None:
+def test_official_reproduction_uses_frozen_u67_snapshot() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(
         encoding="utf-8"
     ).lower()
-    assert "snapshotpaths.temporary(root)" in source
+    assert "snapshotpaths.u67(root)" in source
+    assert "validate_snapshot(data)" in source
+    assert "download_raw_bars" not in source
+    assert "download_corporate_actions" not in source
+    assert "load_alpaca_credentials" not in source
+    assert 'csv_float_precision="round_trip"' in source
+    assert 'u67_analysis_end_date = "2026-10-06"' in source
+
+
+def test_u67_snapshot_preparation_is_separate_from_reproduction() -> None:
+    source = (ROOT / "preparar_snapshot_u67.py").read_text(
+        encoding="utf-8"
+    ).lower()
     assert "download_raw_bars" in source
     assert "download_corporate_actions" in source
     assert "load_alpaca_credentials" in source
-    assert "replace=true" in source
-    assert 'csv_float_precision="round_trip"' in source
-    assert 'mct_analysis_end_date = "2026-10-06"' in source
+    assert "snapshot_end_date = \"2026-10-06\"" in source
+    assert "dados" in source and ".u67_build" in source
 
 def test_capital_rotations_follow_backtest_analytics_semantics() -> None:
     trades = pd.DataFrame(
@@ -625,8 +533,7 @@ def test_backtest_analytics_generation_creates_expected_files(tmp_path) -> None:
     generated = gerar_analises_backtest(
         tmp_path,
         manifest={"snapshot_sha256": "test-snapshot"},
-        control_result=result,
-        soft_result=result,
+        result=result,
     )
 
     graph_dir = tmp_path / "graficos"
@@ -637,19 +544,10 @@ def test_backtest_analytics_generation_creates_expected_files(tmp_path) -> None:
     assert (graph_dir / "capital_rotations_heatmap_control.svg").exists()
     assert (graph_dir / "monthly_realized_pnl_heatmap_control.png").exists()
     assert (graph_dir / "monthly_return_heatmap_control_simulation.png").exists()
-    assert (graph_dir / "monthly_return_heatmap_soft_excess.svg").exists()
-
-def test_engine_contains_soft_horizon_consensus_policy() -> None:
-    source = (ROOT / "engine" / "modelo_lightgbm.py").read_text(
-        encoding="utf-8"
-    )
-    assert "def _politica_consenso_horizontes_soft(" in source
-    assert "weighted_rank_margin_modifier" in source
-    assert "SOFT_CONSENSUS_BLOCK_MARGINAL_SWITCH" in source
-
+    assert (graph_dir / "monthly_return_heatmap_control_excess.svg").exists()
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.2.0-dev.9"
+    assert EXPERIMENT_VERSION == "1.22.0-dev.8"
     forbidden = (
         "series_historicas",
         "tiingo",
@@ -679,6 +577,15 @@ def test_runtime_has_no_retired_model_tokens() -> None:
         source = path.read_text(encoding="utf-8").lower()
         for token in forbidden:
             assert token not in source, f"{token} found in {path.relative_to(ROOT)}"
+
+
+def test_data_preparation_has_no_legacy_reference_file_dependency() -> None:
+    source = (ROOT / "reproducao" / "preparacao.py").read_text(
+        encoding="utf-8"
+    )
+    assert "reference_10_8_74_raw_snapshot_diagnostics.json" not in source
+    assert "REFERENCE_FILE" not in source
+    assert "comparar_snapshot_referencia" not in source
 
 
 def test_snapshot_does_not_persist_derived_normalized_bars() -> None:
@@ -783,27 +690,63 @@ def test_runtime_config_attribute_contract() -> None:
     )
 
 
-def test_research_data_is_versioned_and_temporary_data_is_ignored() -> None:
+def test_u67_data_is_versioned_and_build_area_is_ignored() -> None:
     rules = (ROOT / ".gitignore").read_text(encoding="utf-8")
-    assert "dados/temporario/" in rules
-    assert "dados/reproducao/" in rules
-    assert "!dados/pesquisa/raw_bars/*.csv" in rules
-    assert "!dados/pesquisa/corporate_actions/*.csv" in rules
-    assert "!dados/pesquisa/manifest.json" in rules
+    assert "dados/.u67_build/" in rules
+    assert "!dados/u67/raw_bars/*.csv" in rules
+    assert "!dados/u67/corporate_actions/*.csv" in rules
+    assert "!dados/u67/manifest.json" in rules
+    assert "!dados/pesquisa/" not in rules
 
 
-def test_official_reproduction_uses_mct_u67_parity_contract() -> None:
+def test_official_reproduction_uses_u67_contract() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(
         encoding="utf-8"
     )
-    assert "TEMP = SnapshotPaths.temporary(ROOT)" in source
-    assert 'U59_ADDITIONS = ("COLB", "AMS", "FOXF")' in source
-    assert "U67_ADDITIONS = (" in source
+    config_source = (ROOT / "engine" / "configuracao.py").read_text(
+        encoding="utf-8"
+    )
+    assert "DATA = SnapshotPaths.u67(ROOT)" in source
+    assert 'U59_ADDITIONS = ("COLB", "AMS", "FOXF")' in config_source
+    assert "U67_ADDITIONS = (" in config_source
     for asset in ("THO", "WDAY", "EXR", "XEL", "SBFG", "PAYX", "MUX", "SXC"):
-        assert f'"{asset}"' in source
-    assert "EXPECTED_REQUESTED_COUNT = 67" in source
-    assert "EXPECTED_EFFECTIVE_COUNT = 65" in source
-    assert 'EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})' in source
-    assert 'MCT_JOB_ID = "20261007T095423-60e489c0"' in source
-    assert "MCT_CAPITAL_AT_2026_09_17 = 78_782_538.31270888" in source
-    assert "MCT_ENDING_CAPITAL = 76_927_051.38897176" in source
+        assert f'"{asset}"' in config_source
+    assert "U67_EXPECTED_REQUESTED_COUNT = 67" in config_source
+    assert "U67_EXPECTED_EFFECTIVE_COUNT = 65" in config_source
+    assert 'U67_EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})' in config_source
+    assert "U67_EXPECTED_CAPITAL_AT_CHECKPOINT = 78_782_538.31270888" in source
+    assert "U67_EXPECTED_ENDING_CAPITAL = 76_927_051.38897176" in source
+
+def test_project_has_no_external_system_reference_token() -> None:
+    forbidden = "m" + "ct"
+    ignored_parts = {".git", "__pycache__", ".pytest_cache", "output"}
+
+    for path in ROOT.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in ignored_parts for part in path.parts):
+            continue
+        if path.suffix.lower() not in {
+            ".py",
+            ".md",
+            ".json",
+            ".yml",
+            ".yaml",
+            ".txt",
+        } and path.name != ".gitignore":
+            continue
+
+        relative = path.relative_to(ROOT)
+        assert forbidden not in str(relative).lower(), relative
+        source = path.read_text(encoding="utf-8", errors="ignore").lower()
+        assert forbidden not in source, relative
+
+def test_official_runner_silences_only_pandas4_warning() -> None:
+    source = (ROOT / "reproduzir_experimento.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'getattr(pd.errors, "Pandas4Warning", None)' in source
+    assert 'warnings.filterwarnings(' in source
+    assert '"ignore"' in source
+    assert 'warnings.filterwarnings("ignore")' not in source
+

@@ -28,18 +28,18 @@ env/
 .ipynb_checkpoints/
 
 # Dados
-# Snapshot oficial da pesquisa: versionado no Git.
+# O snapshot oficial U67 e versionado no Git.
 dados/*
 !dados/README.md
-!dados/pesquisa/
-!dados/pesquisa/README.md
-!dados/pesquisa/raw_bars/
-!dados/pesquisa/corporate_actions/
-!dados/pesquisa/manifest.json
+!dados/u67/
+!dados/u67/raw_bars/
+!dados/u67/corporate_actions/
+!dados/u67/manifest.json
+!dados/u67/raw_bars/*.csv
+!dados/u67/corporate_actions/*.csv
 
-# Downloads temporarios e layout legado permanecem locais.
-dados/temporario/
-dados/reproducao/
+# Area temporaria usada somente durante a criacao do snapshot U67.
+dados/.u67_build/
 
 # Resultados locais
 output/
@@ -57,45 +57,11 @@ artifacts/
 *.gz
 *.zip
 
-# Excecao: CSVs oficiais da pesquisa entram no Git.
-!dados/pesquisa/raw_bars/*.csv
-!dados/pesquisa/corporate_actions/*.csv
-
-# Extensao congelada da campanha U76: 20 ativos adicionais.
-!dados/pesquisa_expansao_76/
-!dados/pesquisa_expansao_76/raw_bars/
-!dados/pesquisa_expansao_76/corporate_actions/
-!dados/pesquisa_expansao_76/manifest.json
-!dados/pesquisa_expansao_76/raw_bars/*.csv
-!dados/pesquisa_expansao_76/corporate_actions/*.csv
-
-# Segundo lote aleatorio congelado da pesquisa U56 + 20.
-!dados/pesquisa_expansao_76_b2/
-!dados/pesquisa_expansao_76_b2/raw_bars/
-!dados/pesquisa_expansao_76_b2/corporate_actions/
-!dados/pesquisa_expansao_76_b2/manifest.json
-!dados/pesquisa_expansao_76_b2/raw_bars/*.csv
-!dados/pesquisa_expansao_76_b2/corporate_actions/*.csv
-
-# Terceiro lote aleatorio para validacao da assinatura.
-!dados/pesquisa_expansao_76_b3/
-!dados/pesquisa_expansao_76_b3/raw_bars/
-!dados/pesquisa_expansao_76_b3/corporate_actions/
-!dados/pesquisa_expansao_76_b3/manifest.json
-!dados/pesquisa_expansao_76_b3/raw_bars/*.csv
-!dados/pesquisa_expansao_76_b3/corporate_actions/*.csv
+# Excecao: CSVs oficiais do snapshot U67 entram no Git.
+!dados/u67/raw_bars/*.csv
+!dados/u67/corporate_actions/*.csv
 
 # Sistema operacional
 .DS_Store
 Thumbs.db
 
-
-# Pool congelado da selecao inteligente de candidatos.
-!dados/pesquisa_smart_candidates/
-!dados/pesquisa_smart_candidates/raw_bars/
-!dados/pesquisa_smart_candidates/corporate_actions/
-!dados/pesquisa_smart_candidates/manifest.json
-!dados/pesquisa_smart_candidates/raw_bars/*.csv
-!dados/pesquisa_smart_candidates/corporate_actions/*.csv
-!dados/pesquisa_smart_candidates/*.csv
-!dados/pesquisa_smart_candidates/*.json

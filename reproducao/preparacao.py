@@ -1,7 +1,6 @@
 """Validacao, exclusoes estruturais e normalizacao local de splits."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +10,6 @@ import pandas as pd
 from reproducao.dados import SnapshotPaths
 from engine.configuracao import ASSETS
 
-
-REFERENCE_FILE = Path(__file__).with_name(
-    "reference_10_8_74_raw_snapshot_diagnostics.json"
-)
 
 # Exclusoes estruturais conhecidas e deliberadas. O snapshot permanece
 # congelado; a exclusao acontece apenas no pipeline de modelagem.
@@ -210,7 +205,6 @@ def prepare_model_frames(
     paths: SnapshotPaths,
     *,
     assets: tuple[str, ...] = ASSETS,
-    comparar_snapshot_referencia: bool = True,
     allow_structural_assets: frozenset[str] = frozenset(),
     csv_float_precision: str | None = None,
 ) -> tuple[
@@ -305,78 +299,28 @@ def prepare_model_frames(
             flush=True,
         )
 
-    reference = json.loads(REFERENCE_FILE.read_text(encoding="utf-8"))
-    expected = {
-        row["symbol"]: row
-        for row in reference.get("diagnostics", [])
-    }
-    raw_mismatches: list[str] = []
-    action_mismatches: list[str] = []
-    split_mismatches: list[str] = []
-
-    if comparar_snapshot_referencia:
-        for row in diagnostics:
-            symbol = row["symbol"]
-            if row["excluded"]:
-                continue
-            ref = expected.get(symbol)
-            if ref is None:
-                raw_mismatches.append(symbol)
-                action_mismatches.append(symbol)
-                split_mismatches.append(symbol)
-                continue
-            if int(row["raw_rows"]) != int(ref["raw_rows"]):
-                raw_mismatches.append(symbol)
-            if int(row["corporate_actions"]) != int(ref["corporate_actions"]):
-                action_mismatches.append(symbol)
-            if int(row["splits_applied"]) != int(ref["splits_applied"]):
-                split_mismatches.append(symbol)
-
-    actual_rows = sum(int(row["raw_rows"]) for row in diagnostics if not row["excluded"])
-    reference_rows = int(reference["eligible_total_raw_rows"])
+    actual_rows = sum(
+        int(row["raw_rows"])
+        for row in diagnostics
+        if not row["excluded"]
+    )
+    actual_splits = sum(
+        int(row["splits_applied"])
+        for row in diagnostics
+        if not row["excluded"]
+    )
     audit = {
-        "reference_api_version": reference.get("source_api_version"),
-        "reference_comparison_enabled": bool(comparar_snapshot_referencia),
         "eligible_assets": len(frames),
-        "reference_eligible_assets": int(reference["eligible_assets"]),
         "actual_total_eligible_raw_rows": actual_rows,
-        "reference_total_eligible_raw_rows": reference_rows,
-        "actual_total_splits_applied": sum(
-            int(row["splits_applied"])
-            for row in diagnostics
-            if not row["excluded"]
-        ),
-        "reference_total_splits_applied": int(
-            reference["eligible_total_splits_applied"]
-        ),
-        "raw_row_mismatch_symbols": raw_mismatches,
-        "corporate_action_mismatch_symbols": action_mismatches,
-        "split_mismatch_symbols": split_mismatches,
+        "actual_total_splits_applied": actual_splits,
         "excluded_assets": exclusions,
     }
     print(
         "[data-audit] "
-        f"eligible_rows={actual_rows} reference_rows={reference_rows} "
-        f"reference_comparison={comparar_snapshot_referencia} "
-        f"row_mismatches={len(raw_mismatches)} "
-        f"ca_mismatches={len(action_mismatches)} "
-        f"split_mismatches={len(split_mismatches)}",
+        f"eligible_assets={len(frames)} "
+        f"eligible_rows={actual_rows} "
+        f"splits_applied={actual_splits} "
+        f"excluded_assets={len(exclusions)}",
         flush=True,
     )
-    if raw_mismatches:
-        print(
-            "[data-audit] raw row mismatch symbols=" + ",".join(raw_mismatches),
-            flush=True,
-        )
-    if action_mismatches:
-        print(
-            "[data-audit] corporate-action mismatch symbols="
-            + ",".join(action_mismatches),
-            flush=True,
-        )
-    if split_mismatches:
-        print(
-            "[data-audit] split mismatch symbols=" + ",".join(split_mismatches),
-            flush=True,
-        )
     return frames, exclusions, diagnostics, audit

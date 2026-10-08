@@ -657,19 +657,14 @@ def _salvar_excel(
     path: Path,
     *,
     manifest: dict[str, Any],
-    control: dict[str, pd.DataFrame],
-    soft: dict[str, pd.DataFrame],
-    control_summary: dict[str, Any],
-    soft_summary: dict[str, Any],
+    analytics: dict[str, pd.DataFrame],
+    summary: dict[str, Any],
 ) -> None:
+    """Persiste a analise do U67 Control em uma unica planilha."""
     resumo = pd.DataFrame(
         [
-            {
-                "metric": key,
-                "control": control_summary.get(key),
-                "soft_horizon_consensus": soft_summary.get(key),
-            }
-            for key in control_summary
+            {"metric": key, "control": summary.get(key)}
+            for key in summary
         ]
     )
     metadados = pd.DataFrame(
@@ -687,58 +682,32 @@ def _salvar_excel(
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         metadados.to_excel(writer, sheet_name="Metadados", index=False)
         resumo.to_excel(writer, sheet_name="Resumo", index=False)
-        control["rotacoes"].to_excel(
+        analytics["rotacoes"].to_excel(
             writer,
-            sheet_name="Control Rotacoes",
+            sheet_name="Rotacoes",
             index=False,
         )
-        soft["rotacoes"].to_excel(
+        analytics["rotacoes_mensais"].to_excel(
             writer,
-            sheet_name="Soft Rotacoes",
+            sheet_name="Rotacoes Mensais",
             index=False,
         )
-        control["rotacoes_mensais"].to_excel(
+        analytics["transicoes"].to_excel(
             writer,
-            sheet_name="Control Rotacoes Mensais",
+            sheet_name="Transicoes",
             index=False,
         )
-        soft["rotacoes_mensais"].to_excel(
+        analytics["retornos_mensais"].to_excel(
             writer,
-            sheet_name="Soft Rotacoes Mensais",
+            sheet_name="Retornos Mensais",
             index=False,
         )
-        control["transicoes"].to_excel(
+        analytics["pnl_mensal"].to_excel(
             writer,
-            sheet_name="Control Transicoes",
-            index=False,
-        )
-        soft["transicoes"].to_excel(
-            writer,
-            sheet_name="Soft Transicoes",
-            index=False,
-        )
-        control["retornos_mensais"].to_excel(
-            writer,
-            sheet_name="Control Retornos",
-            index=False,
-        )
-        soft["retornos_mensais"].to_excel(
-            writer,
-            sheet_name="Soft Retornos",
-            index=False,
-        )
-        control["pnl_mensal"].to_excel(
-            writer,
-            sheet_name="Control PnL Mensal",
-            index=False,
-        )
-        soft["pnl_mensal"].to_excel(
-            writer,
-            sheet_name="Soft PnL Mensal",
+            sheet_name="PnL Mensal",
             index=False,
         )
     _formatar_excel(path)
-
 
 def _gerar_variante(
     output_dir: Path,
@@ -854,423 +823,38 @@ def gerar_analises_backtest(
     output_dir: Path,
     *,
     manifest: dict[str, Any],
-    control_result: Any,
-    soft_result: Any,
+    result: Any,
 ) -> dict[str, Path]:
-    """Gera todos os graficos e dados analiticos da reproducao.
-
-    A pasta de graficos e recriada integralmente para impedir mistura entre
-    artefatos de execucoes diferentes.
-    """
+    """Gera dados, graficos e planilha do backtest oficial U67 Control."""
     graficos_dir = output_dir / "graficos"
     if graficos_dir.exists():
         shutil.rmtree(graficos_dir)
     graficos_dir.mkdir(parents=True, exist_ok=True)
 
-    control, control_paths, control_summary = _gerar_variante(
+    analytics, paths, summary = _gerar_variante(
         graficos_dir,
         slug="control",
-        label="Control",
-        result=control_result,
-    )
-    soft, soft_paths, soft_summary = _gerar_variante(
-        graficos_dir,
-        slug="soft",
-        label="Soft Horizon Consensus",
-        result=soft_result,
+        label="U67 Control",
+        result=result,
     )
 
     excel_path = graficos_dir / "backtest_analytics.xlsx"
     _salvar_excel(
         excel_path,
         manifest=manifest,
-        control=control,
-        soft=soft,
-        control_summary=control_summary,
-        soft_summary=soft_summary,
+        analytics=analytics,
+        summary=summary,
     )
 
     print(
         "[analytics] "
-        f"control_rotations={control_summary['total_rotations']} "
-        f"soft_rotations={soft_summary['total_rotations']}",
+        f"rotations={summary['total_rotations']}",
         flush=True,
     )
     print(f"[analytics] dir={graficos_dir}", flush=True)
 
     return {
-        **{f"control_{key}": value for key, value in control_paths.items()},
-        **{f"soft_{key}": value for key, value in soft_paths.items()},
+        **{f"control_{key}": value for key, value in paths.items()},
         "backtest_analytics_xlsx": excel_path,
         "graficos_dir": graficos_dir,
     }
-
-
-def gerar_graficos_pesquisa_financeira(
-    output_dir: Path,
-    *,
-    summary: pd.DataFrame,
-    scenario_results: dict[str, Any],
-    historical_checkpoints: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
-    individual_effects: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
-    added_assets_by_scenario: dict[str, list[str] | tuple[str, ...]] | None = None,
-    search_candidates_path: Path | None = None,
-) -> dict[str, Path]:
-    """Gera graficos cumulativos da linha de pesquisa financeira.
-
-    Diferente de gerar_analises_backtest, que compara Control e Soft,
-    esta funcao acompanha a evolucao dos experimentos de descoberta de ativos.
-    Os CSVs usados nos graficos sao exportados junto dos PNG/SVG.
-    """
-
-    output_dir = Path(output_dir)
-    graficos_dir = output_dir / "graficos_pesquisa"
-    if graficos_dir.exists():
-        shutil.rmtree(graficos_dir)
-    graficos_dir.mkdir(parents=True, exist_ok=True)
-
-    paths: dict[str, Path] = {}
-
-    def save_pair(fig, stem: str) -> None:
-        png = graficos_dir / f"{stem}.png"
-        svg = graficos_dir / f"{stem}.svg"
-        fig.savefig(png, dpi=180, bbox_inches="tight")
-        fig.savefig(svg, bbox_inches="tight")
-        plt.close(fig)
-        paths[f"{stem}_png"] = png
-        paths[f"{stem}_svg"] = svg
-
-    checkpoint_rows = [dict(row) for row in historical_checkpoints]
-    if checkpoint_rows:
-        checkpoints = pd.DataFrame(checkpoint_rows)
-        csv_path = graficos_dir / "evolucao_capital_pesquisa.csv"
-        checkpoints.to_csv(csv_path, index=False)
-        paths["evolucao_capital_pesquisa_csv"] = csv_path
-
-        fig, ax = plt.subplots(figsize=(11, 6.2))
-        x = np.arange(len(checkpoints))
-        values = pd.to_numeric(
-            checkpoints["ending_capital"],
-            errors="coerce",
-        ).to_numpy(dtype=float)
-        bars = ax.bar(x, values)
-        ax.set_xticks(
-            x,
-            checkpoints["label"].astype(str).tolist(),
-            rotation=18,
-            ha="right",
-        )
-        ax.set_ylabel("Capital final (US$)")
-        ax.set_title("Evolucao financeira da pesquisa")
-        ax.grid(axis="y", alpha=0.25)
-        for bar, value in zip(bars, values):
-            if np.isfinite(value):
-                ax.text(
-                    bar.get_x() + bar.get_width() / 2,
-                    value,
-                    f"{value / 1_000_000:.2f}M",
-                    ha="center",
-                    va="bottom",
-                    fontsize=9,
-                )
-        save_pair(fig, "evolucao_capital_pesquisa")
-
-    curve_frames: list[pd.DataFrame] = []
-    baseline_frame: pd.DataFrame | None = None
-    for label, result in scenario_results.items():
-        if result is None:
-            continue
-        predictions = result.predictions.reset_index().copy()
-        if "timestamp" not in predictions.columns:
-            continue
-        predictions["timestamp"] = pd.to_datetime(
-            predictions["timestamp"],
-            utc=True,
-        )
-        predictions["strategy_equity"] = pd.to_numeric(
-            predictions["strategy_equity"],
-            errors="coerce",
-        )
-        frame = predictions[
-            ["timestamp", "strategy_equity"]
-        ].dropna().copy()
-        frame["scenario"] = str(label)
-        curve_frames.append(frame)
-        if str(label) == "U59_WINNER":
-            baseline_frame = frame[
-                ["timestamp", "strategy_equity"]
-            ].rename(columns={"strategy_equity": "u59_equity"})
-
-    if curve_frames:
-        curves = pd.concat(curve_frames, ignore_index=True)
-        csv_path = graficos_dir / "curvas_capital_cenarios.csv"
-        curves.to_csv(csv_path, index=False)
-        paths["curvas_capital_cenarios_csv"] = csv_path
-
-        fig, ax = plt.subplots(figsize=(12.5, 6.8))
-        for label, group in curves.groupby("scenario", sort=False):
-            ax.plot(
-                group["timestamp"],
-                group["strategy_equity"],
-                label=str(label),
-                linewidth=1.7,
-            )
-        ax.set_yscale("log")
-        ax.set_ylabel("Capital (US$, escala log)")
-        ax.set_xlabel("Data")
-        ax.set_title("Curvas de capital da pesquisa")
-        ax.grid(alpha=0.25)
-        ax.legend()
-        save_pair(fig, "curvas_capital_cenarios_log")
-
-    if baseline_frame is not None and len(curve_frames) > 1:
-        advantage_rows: list[pd.DataFrame] = []
-        for frame in curve_frames:
-            label = str(frame["scenario"].iloc[0])
-            if label == "U59_WINNER":
-                continue
-            merged = baseline_frame.merge(
-                frame[["timestamp", "strategy_equity"]],
-                on="timestamp",
-                how="inner",
-            )
-            merged["relative_advantage"] = (
-                merged["strategy_equity"] / merged["u59_equity"] - 1.0
-            )
-            merged["scenario"] = label
-            advantage_rows.append(
-                merged[["timestamp", "scenario", "relative_advantage"]]
-            )
-
-        if advantage_rows:
-            advantage = pd.concat(advantage_rows, ignore_index=True)
-            csv_path = graficos_dir / "vantagem_relativa_vs_u59.csv"
-            advantage.to_csv(csv_path, index=False)
-            paths["vantagem_relativa_vs_u59_csv"] = csv_path
-            fig, ax = plt.subplots(figsize=(12.5, 6.2))
-            for label, group in advantage.groupby("scenario", sort=False):
-                ax.plot(
-                    group["timestamp"],
-                    100.0 * group["relative_advantage"],
-                    label=str(label),
-                    linewidth=1.7,
-                )
-            ax.axhline(0.0, linewidth=1.0)
-            ax.set_ylabel("Vantagem acumulada vs U59 (%)")
-            ax.set_xlabel("Data")
-            ax.set_title("Vantagem relativa dos cenarios contra o U59")
-            ax.grid(alpha=0.25)
-            ax.legend()
-            save_pair(fig, "vantagem_relativa_vs_u59")
-
-    fold_rows: list[dict[str, Any]] = []
-    if not summary.empty and "folds" in summary.columns:
-        for row in summary.to_dict(orient="records"):
-            scenario = str(row.get("scenario") or "")
-            folds = row.get("folds")
-            if not isinstance(folds, (list, tuple)):
-                continue
-            for fold in folds:
-                if not isinstance(fold, dict):
-                    continue
-                fold_rows.append(
-                    {
-                        "scenario": scenario,
-                        "fold_id": int(fold.get("fold_id")),
-                        "strategy_ending_capital": _numero(
-                            fold.get("strategy_ending_capital")
-                        ),
-                        "maximum_drawdown": _numero(
-                            fold.get("maximum_drawdown")
-                        ),
-                    }
-                )
-    if fold_rows:
-        folds_df = pd.DataFrame(fold_rows)
-        csv_path = graficos_dir / "capital_por_fold.csv"
-        folds_df.to_csv(csv_path, index=False)
-        paths["capital_por_fold_csv"] = csv_path
-
-        pivot = folds_df.pivot(
-            index="fold_id",
-            columns="scenario",
-            values="strategy_ending_capital",
-        ).sort_index()
-        fig, ax = plt.subplots(figsize=(11, 6.2))
-        pivot.plot(kind="bar", ax=ax)
-        ax.set_yscale("log")
-        ax.set_ylabel("Capital ao fim do fold (US$, escala log)")
-        ax.set_xlabel("Fold")
-        ax.set_title("Capital acumulado ao fim de cada fold")
-        ax.grid(axis="y", alpha=0.25)
-        ax.legend(title="Cenario")
-        save_pair(fig, "capital_por_fold")
-
-    if individual_effects:
-        effects = pd.DataFrame([dict(row) for row in individual_effects])
-        if {"asset", "capital_pct_vs_u59"}.issubset(effects.columns):
-            effects["capital_pct_vs_u59"] = pd.to_numeric(
-                effects["capital_pct_vs_u59"],
-                errors="coerce",
-            )
-            effects = effects.sort_values(
-                ["capital_pct_vs_u59", "asset"],
-                ascending=[True, True],
-            )
-            csv_path = graficos_dir / "efeito_individual_candidatos.csv"
-            effects.to_csv(csv_path, index=False)
-            paths["efeito_individual_candidatos_csv"] = csv_path
-            fig, ax = plt.subplots(figsize=(11, 8.5))
-            y = np.arange(len(effects))
-            values = 100.0 * effects["capital_pct_vs_u59"].to_numpy(dtype=float)
-            ax.barh(y, values)
-            ax.set_yticks(y, effects["asset"].astype(str).tolist())
-            ax.axvline(0.0, linewidth=1.0)
-            ax.set_xlabel("Efeito individual no capital vs U59 (%)")
-            ax.set_title(
-                "20 candidatos congelados: efeito financeiro individual"
-            )
-            ax.grid(axis="x", alpha=0.25)
-            save_pair(fig, "efeito_individual_candidatos")
-
-    usage_rows: list[dict[str, Any]] = []
-    added_assets_by_scenario = added_assets_by_scenario or {}
-    for label, assets in added_assets_by_scenario.items():
-        result = scenario_results.get(label)
-        if result is None:
-            continue
-        predictions = result.predictions.reset_index().copy()
-        if "selected_asset" not in predictions.columns:
-            continue
-        counts = (
-            predictions["selected_asset"]
-            .astype(str)
-            .str.upper()
-            .value_counts()
-        )
-        for asset in assets:
-            usage_rows.append(
-                {
-                    "scenario": str(label),
-                    "asset": str(asset),
-                    "selected_sessions": int(counts.get(str(asset).upper(), 0)),
-                }
-            )
-    if usage_rows:
-        usage = pd.DataFrame(usage_rows).sort_values(
-            ["selected_sessions", "asset"],
-            ascending=[True, True],
-        )
-        csv_path = graficos_dir / "uso_ativos_adicionados.csv"
-        usage.to_csv(csv_path, index=False)
-        paths["uso_ativos_adicionados_csv"] = csv_path
-        fig, ax = plt.subplots(figsize=(10.5, 6.2))
-        y = np.arange(len(usage))
-        ax.barh(y, usage["selected_sessions"].to_numpy(dtype=float))
-        ax.set_yticks(y, usage["asset"].astype(str).tolist())
-        ax.set_xlabel("Sessoes em que o ativo foi selecionado")
-        ax.set_title("Uso dos novos ativos no replay conjunto")
-        ax.grid(axis="x", alpha=0.25)
-        save_pair(fig, "uso_ativos_adicionados")
-
-    if search_candidates_path is not None:
-        search_candidates_path = Path(search_candidates_path)
-        if search_candidates_path.exists():
-            candidates = pd.read_csv(search_candidates_path)
-            if "signature_class" in candidates.columns:
-                class_counts = (
-                    candidates["signature_class"]
-                    .fillna("missing")
-                    .astype(str)
-                    .value_counts()
-                    .rename_axis("signature_class")
-                    .reset_index(name="count")
-                )
-                csv_path = (
-                    graficos_dir / "assinatura_distribuicao_classes.csv"
-                )
-                class_counts.to_csv(csv_path, index=False)
-                paths["assinatura_distribuicao_classes_csv"] = csv_path
-                fig, ax = plt.subplots(figsize=(10.5, 5.8))
-                ax.bar(
-                    class_counts["signature_class"],
-                    class_counts["count"],
-                )
-                ax.set_ylabel("Candidatos")
-                ax.set_title("Distribuicao das classes da assinatura")
-                ax.tick_params(axis="x", rotation=18)
-                ax.grid(axis="y", alpha=0.25)
-                save_pair(fig, "assinatura_distribuicao_classes")
-
-            scatter_cols = {
-                "candidate_beats_u59_best_share",
-                "abs_score_corr_u59_best",
-                "signature_predicted_positive",
-            }
-            if scatter_cols.issubset(candidates.columns):
-                scatter = candidates.copy()
-                scatter["candidate_beats_u59_best_share"] = pd.to_numeric(
-                    scatter["candidate_beats_u59_best_share"],
-                    errors="coerce",
-                )
-                scatter["abs_score_corr_u59_best"] = pd.to_numeric(
-                    scatter["abs_score_corr_u59_best"],
-                    errors="coerce",
-                )
-                scatter = scatter.dropna(
-                    subset=[
-                        "candidate_beats_u59_best_share",
-                        "abs_score_corr_u59_best",
-                    ]
-                )
-                csv_path = (
-                    graficos_dir / "assinatura_beats_vs_correlacao.csv"
-                )
-                scatter.to_csv(csv_path, index=False)
-                paths["assinatura_beats_vs_correlacao_csv"] = csv_path
-                fig, ax = plt.subplots(figsize=(10.5, 6.4))
-                predicted = (
-                    scatter["signature_predicted_positive"]
-                    .astype(str)
-                    .str.lower()
-                    .isin({"true", "1", "yes"})
-                )
-                ax.scatter(
-                    100.0
-                    * scatter.loc[
-                        ~predicted,
-                        "candidate_beats_u59_best_share",
-                    ],
-                    scatter.loc[
-                        ~predicted,
-                        "abs_score_corr_u59_best",
-                    ],
-                    alpha=0.45,
-                    label="Nao selecionado",
-                )
-                ax.scatter(
-                    100.0
-                    * scatter.loc[
-                        predicted,
-                        "candidate_beats_u59_best_share",
-                    ],
-                    scatter.loc[
-                        predicted,
-                        "abs_score_corr_u59_best",
-                    ],
-                    alpha=0.85,
-                    label="Selective specialist",
-                )
-                ax.set_xlabel("Sessoes acima do melhor U59 (%)")
-                ax.set_ylabel("|correlacao score candidato vs melhor U59|")
-                ax.set_title("Assinatura: seletividade versus correlacao")
-                ax.grid(alpha=0.25)
-                ax.legend()
-                save_pair(fig, "assinatura_beats_vs_correlacao")
-
-    print(
-        f"[research-graphs] dir={graficos_dir} files={len(paths)}",
-        flush=True,
-    )
-    paths["graficos_pesquisa_dir"] = graficos_dir
-    return paths
