@@ -66,6 +66,7 @@ from reproducao.dados import (
     validate_snapshot,
 )
 from reproducao.experimento import build_control_config, summarize_metrics
+from reproducao.graficos import gerar_analises_backtest
 from reproducao.preparacao import load_raw_bar_file, prepare_model_frames
 
 
@@ -786,6 +787,12 @@ with (
         indent=2,
         default=str,
     )
+
+gerar_analises_backtest(
+    OUT,
+    manifest=snapshot_manifest,
+    result=result,
+)
 
 package = criar_pacote_analise(
     OUT,
