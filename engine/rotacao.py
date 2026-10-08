@@ -7,7 +7,6 @@ from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
-from threadpoolctl import threadpool_limits
 
 from .diagnosticos import enriquecer_diagnosticos_operacoes
 
