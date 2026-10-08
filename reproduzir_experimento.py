@@ -42,7 +42,7 @@ from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 from engine.modelo_lightgbm import (
     _ajustar_modelos_lightgbm,
     _construir_contexto_execucao,
-    _selecionar_switch_margin_fold,
+    selecionar_switch_margin,
 )
 from engine.rotacao import (
     _benchmark_pesos_iguais,
@@ -463,11 +463,7 @@ for fold_position, fold in enumerate(folds, start=1):
         )
         candidate_scores.append((float(margin), float(score)))
 
-    selection = _selecionar_switch_margin_fold(
-        config_u67,
-        fold_id,
-        candidate_scores,
-    )
+    selection = selecionar_switch_margin(candidate_scores)
     selected_margin = float(selection["selected_candidate_margin"])
     effective_margin = max(
         float(config_u67.rotation_switch_margin),
