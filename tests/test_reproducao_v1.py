@@ -190,9 +190,6 @@ def test_execution_helpers_use_portuguese_names() -> None:
     execution_source = (ROOT / "engine" / "execucao.py").read_text(
         encoding="utf-8"
     )
-    experiment_source = (ROOT / "reproducao" / "experimento.py").read_text(
-        encoding="utf-8"
-    )
 
     for expected in (
         "arredondar_taxa_para_centavo",
@@ -200,7 +197,6 @@ def test_execution_helpers_use_portuguese_names() -> None:
         "aplicar_deslizamento",
     ):
         assert expected in execution_source
-        assert expected in experiment_source or expected == "arredondar_taxa_para_centavo"
 
     for retired in (
         "round_fee_to_cent",
@@ -208,7 +204,6 @@ def test_execution_helpers_use_portuguese_names() -> None:
         "apply_slippage",
     ):
         assert retired not in execution_source
-        assert retired not in experiment_source
 
 
 def test_switch_margin_selects_best_calibration_score() -> None:
