@@ -145,7 +145,7 @@ pacote_reproducao_u67_mct_parity.zip
 ## Testes e análise estática
 
 ```bash
-python -m ruff check engine reproducao reproduzir_experimento.py tests --select F401,F811,F821,F841
+python -m ruff check engine reproducao preparar_snapshot_u67.py reproduzir_experimento.py tests --select F401,F811,F821,F841
 python -m pytest -q
 ```
 
