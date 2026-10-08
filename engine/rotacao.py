@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import nullcontext
 from dataclasses import dataclass
 import math
 import time
@@ -351,14 +350,6 @@ def _pontuacao_curva_ajustada_risco(curve: pd.Series, config: Any) -> float:
     score = (logs - float(config.rotation_downside_penalty) * downside - float(config.rotation_drawdown_penalty) * aligned).sum()
     return float(score)
 
-def _contexto_threads_numericas(config: Any):
-    
-    
-    
-    if not bool(config.deterministic_execution):
-        return nullcontext()
-    return threadpool_limits(limits=int(config.numeric_thread_limit))
-
 def _precalcular_utilidades_modelo(
     models: dict[str, Any],
     frames: dict[str, pd.DataFrame],
@@ -491,7 +482,7 @@ def _politica_utilidade(
     calibrated_switch_margin: float | None = None,
     utility_cache: dict[pd.Timestamp, np.ndarray] | None = None,
 ) -> Callable[[pd.Timestamp, int, int], tuple[int, float]]:
-    """Single-position Control policy used by both Control and Soft."""
+    """Politica Control de posicao unica usada na reproducao oficial."""
 
     def position_asset(position: int) -> str:
         return "CASH" if position <= 0 else symbols[position - 1]
