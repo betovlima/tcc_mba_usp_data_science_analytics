@@ -337,7 +337,7 @@ def test_official_reproduction_refreshes_market_data_for_mct_parity() -> None:
     assert "download_raw_bars" in source
     assert "download_corporate_actions" in source
     assert "load_alpaca_credentials" in source
-    assert "replace=true" in source
+    assert "temp.clear_generated()" in source
     assert 'csv_float_precision="round_trip"' in source
     assert 'mct_analysis_end_date = "2026-10-06"' in source
 
