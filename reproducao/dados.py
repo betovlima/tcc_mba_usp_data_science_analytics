@@ -71,10 +71,8 @@ class SnapshotPaths:
         )
 
     @classmethod
-    def temporary(cls, project_root: Path) -> "SnapshotPaths":
-        return cls.from_root(
-            project_root / "dados" / "temporario" / "reproducao"
-        )
+    def u67(cls, project_root: Path) -> "SnapshotPaths":
+        return cls.from_root(project_root / "dados" / "u67")
 
     def ensure(self) -> None:
         self.raw_bars.mkdir(parents=True, exist_ok=True)
