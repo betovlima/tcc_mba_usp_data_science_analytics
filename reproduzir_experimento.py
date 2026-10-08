@@ -75,7 +75,7 @@ ROOT = Path(__file__).resolve().parent
 TEMP = SnapshotPaths.temporary(ROOT)
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.22.0-dev.3"
+REPRODUCTION_VERSION = "1.22.0-dev.4"
 EXECUTION_SCHEMA = "u67-mct-operational-parity-v1"
 
 U59_ADDITIONS = ("COLB", "AMS", "FOXF")
