@@ -716,3 +716,28 @@ def test_official_reproduction_uses_u67_contract() -> None:
     assert 'U67_EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})' in config_source
     assert "U67_EXPECTED_CAPITAL_AT_CHECKPOINT = 78_782_538.31270888" in source
     assert "U67_EXPECTED_ENDING_CAPITAL = 76_927_051.38897176" in source
+
+def test_project_has_no_external_system_reference_token() -> None:
+    forbidden = "m" + "ct"
+    ignored_parts = {".git", "__pycache__", ".pytest_cache", "output"}
+
+    for path in ROOT.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in ignored_parts for part in path.parts):
+            continue
+        if path.suffix.lower() not in {
+            ".py",
+            ".md",
+            ".json",
+            ".yml",
+            ".yaml",
+            ".txt",
+        } and path.name != ".gitignore":
+            continue
+
+        relative = path.relative_to(ROOT)
+        assert forbidden not in str(relative).lower(), relative
+        source = path.read_text(encoding="utf-8", errors="ignore").lower()
+        assert forbidden not in source, relative
+
