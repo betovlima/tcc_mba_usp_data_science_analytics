@@ -13,9 +13,6 @@ Executar no TCC exatamente o comportamento observado na Strategy #13 do MCT:
 - usar o mesmo LightGBM Control, folds, purge, custos e regras de rotacao;
 - comparar o resultado com o job MCT auditado.
 
-Esta branch nao altera a main. O checkpoint oficial congelado de
-US$ 58.557.157,67 continua preservado na main.
-
 Execucao no Spyder
 ------------------
 Abra reproduzir_experimento.py, reinicie o kernel e execute com F5.
