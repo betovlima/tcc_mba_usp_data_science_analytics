@@ -24,16 +24,14 @@ from engine.rotacao import (
     _executar_compra,
     _selecionar_ativo_fonte_calendario,
 )
-from engine.modelo_lightgbm import _selecionar_switch_margin_fold
+from engine.modelo_lightgbm import selecionar_switch_margin
 from engine.configuracao import (
     ANALYSIS_END_DATE,
     ASSETS,
     BAR_SNAPSHOT_AS_OF_END,
     CONFIG,
     EXPERIMENT_VERSION,
-    SOFT_HORIZON_CONSENSUS_PENALTY,
     construir_configuracao_controle,
-    construir_configuracao_soft,
 )
 
 
@@ -221,56 +219,13 @@ def test_execution_helpers_use_portuguese_names() -> None:
         assert retired not in experiment_source
 
 
-def test_counterfactual_switch_margin_override_uses_frozen_candidate() -> None:
-    config = SimpleNamespace(
-        research_model_settings={
-            "counterfactual_switch_margin_by_fold": {"1": 0.0}
-        }
+def test_switch_margin_selects_best_calibration_score() -> None:
+    selection = selecionar_switch_margin(
+        [(0.0, 1.0), (0.0025, 2.0), (0.005, 1.5)]
     )
-    selection = _selecionar_switch_margin_fold(
-        config,
-        1,
-        [(0.0, 1.0), (0.01, 2.0)],
-    )
-
-    assert selection["auto_candidate_margin"] == 0.01
-    assert selection["selected_candidate_margin"] == 0.0
-    assert selection["selected_calibration_score"] == 1.0
-    assert selection["selection_source"] == "counterfactual_override"
-
-
-def test_counterfactual_switch_margin_refuses_new_tuning_value() -> None:
-    config = SimpleNamespace(
-        research_model_settings={
-            "counterfactual_switch_margin_by_fold": {"1": 0.0075}
-        }
-    )
-
-    try:
-        _selecionar_switch_margin_fold(
-            config,
-            1,
-            [(0.0, 1.0), (0.01, 2.0)],
-        )
-    except ValueError as exc:
-        message = str(exc)
-    else:
-        raise AssertionError("non-frozen margin should have been refused")
-
-    assert "outside frozen candidates" in message
-
-
-def test_control_and_soft_share_same_lightgbm() -> None:
-    control = construir_configuracao_controle(CONFIG)
-    soft = construir_configuracao_soft(CONFIG)
-
-    assert control.research_model_settings["lightgbm"] == soft.research_model_settings["lightgbm"]
-    assert control.research_model_settings["soft_horizon_consensus"] == {
-        "enabled": False
-    }
-    assert soft.research_model_settings["soft_horizon_consensus"] == {
-        "enabled": True,
-        "penalty_strength": SOFT_HORIZON_CONSENSUS_PENALTY,
+    assert selection == {
+        "selected_candidate_margin": 0.0025,
+        "selected_calibration_score": 2.0,
     }
 
 
@@ -637,15 +592,6 @@ def test_backtest_analytics_generation_creates_expected_files(tmp_path) -> None:
     assert (graph_dir / "monthly_realized_pnl_heatmap_control.png").exists()
     assert (graph_dir / "monthly_return_heatmap_control_simulation.png").exists()
     assert (graph_dir / "monthly_return_heatmap_soft_excess.svg").exists()
-
-def test_engine_contains_soft_horizon_consensus_policy() -> None:
-    source = (ROOT / "engine" / "modelo_lightgbm.py").read_text(
-        encoding="utf-8"
-    )
-    assert "def _politica_consenso_horizontes_soft(" in source
-    assert "weighted_rank_margin_modifier" in source
-    assert "SOFT_CONSENSUS_BLOCK_MARGINAL_SWITCH" in source
-
 
 def test_official_runtime_has_no_historical_references() -> None:
     assert EXPERIMENT_VERSION == "1.2.0-dev.9"
