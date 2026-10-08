@@ -1,16 +1,16 @@
-"""REPRODUCAO DE PARIDADE TCC x MCT U67.
+"""REPRODUCAO OFICIAL DO TCC U67.
 
 Objetivo
 --------
-Executar no TCC exatamente o comportamento observado na Strategy #13 do MCT:
+Reproduzir o experimento final do TCC de forma independente e deterministica:
 
 - carregar o snapshot U67 congelado e versionado no Git;
-- validar os mesmos 67 ativos solicitados pelo MCT;
+- validar os 67 ativos do universo oficial;
 - usar barras 1Day, SIP, RAW e Corporate Actions congelados;
 - normalizar splits;
-- aplicar a mesma politica estrutural que deixou 65 ativos efetivos no job MCT;
-- usar o mesmo LightGBM Control, folds, purge, custos e regras de rotacao;
-- comparar o resultado com o job MCT auditado.
+- aplicar as exclusoes estruturais documentadas, resultando em 65 ativos;
+- executar LightGBM Control, folds temporais, purge, custos e regras de rotacao;
+- validar o resultado contra checkpoints congelados do proprio TCC.
 
 Execucao no Spyder
 ------------------
@@ -65,36 +65,25 @@ from reproducao.graficos import gerar_analises_backtest
 from reproducao.preparacao import load_raw_bar_file, prepare_model_frames
 
 
-# %% 0 - Contrato de paridade com o job MCT auditado
+# %% 0 - Contrato oficial do experimento U67
 ROOT = Path(__file__).resolve().parent
 DATA = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.22.0-dev.6"
-EXECUTION_SCHEMA = "u67-mct-operational-parity-v1"
+REPRODUCTION_VERSION = "1.22.0-dev.7"
+EXECUTION_SCHEMA = "u67-control-reproducao-v1"
 
 
-# O job MCT 20261007T095423-60e489c0 foi auditado com dados ate 2026-10-06.
-# Mantemos a mesma data para que a primeira execucao de paridade seja
-# comparavel operacao por operacao.
-MCT_JOB_ID = "20261007T095423-60e489c0"
-MCT_ANALYSIS_END_DATE = "2026-10-06"
-MCT_SAME_CUTOFF_DATE = "2026-09-17"
-MCT_ENDING_CAPITAL = 76_927_051.38897176
-MCT_CAPITAL_AT_2026_09_17 = 78_782_538.31270888
-MCT_SNAPSHOT_SHA256 = (
-    "3f1159fced345e6ed2888256a135e36a9337398c992ffc2e2b83fe16929d5d81"
-)
-MCT_MARKET_DATA_SIGNATURE = (
-    "a88a2c658e493ca46ba2573a830d69a3ada07dba3f13feefd87bf963bc1591ce"
-)
-
-PARITY_ABS_TOL = 0.01
+U67_ANALYSIS_END_DATE = "2026-10-06"
+U67_CHECKPOINT_DATE = "2026-09-17"
+U67_EXPECTED_ENDING_CAPITAL = 76_927_051.38897176
+U67_EXPECTED_CAPITAL_AT_CHECKPOINT = 78_782_538.31270888
+CHECKPOINT_ABS_TOL = 0.01
 MODEL_DATA_COLUMNS = ("open", "high", "low", "close", "volume")
 
 
 def _canonical_history_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    """Replica a canonicalizacao usada pelo MCT antes do SHA-256."""
+    """Canonicaliza OHLCV antes do SHA-256."""
     canonical = frame[list(MODEL_DATA_COLUMNS)].copy()
     canonical.index = pd.to_datetime(
         canonical.index,
@@ -121,7 +110,7 @@ def _canonical_history_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _history_frame_sha256(frame: pd.DataFrame) -> str:
-    """Replica o hash OHLCV usado no manifest de reproducibilidade do MCT."""
+    """Calcula o hash OHLCV para auditoria reprodutivel."""
     canonical = _canonical_history_frame(frame)
     row_hashes = pd.util.hash_pandas_object(
         canonical,
@@ -149,13 +138,12 @@ if len(set(U67_REQUESTED_ASSETS)) != U67_EXPECTED_REQUESTED_COUNT:
 started = time.perf_counter()
 
 print("=" * 78, flush=True)
-print("TCC MBA USP - PARIDADE COM MCT STRATEGY #13", flush=True)
+print("TCC MBA USP - REPRODUCAO OFICIAL U67", flush=True)
 print(
     f"version={REPRODUCTION_VERSION} schema={EXECUTION_SCHEMA}",
     flush=True,
 )
-print(f"mct_job={MCT_JOB_ID}", flush=True)
-print(f"analysis_end={MCT_ANALYSIS_END_DATE}", flush=True)
+print(f"analysis_end={U67_ANALYSIS_END_DATE}", flush=True)
 print("data_source=FROZEN_GIT_SNAPSHOT", flush=True)
 print("feed=SIP adjustment=RAW timeframe=1Day", flush=True)
 print("database=NO", flush=True)
@@ -182,15 +170,15 @@ snapshot_bar_end = str(
 snapshot_action_end = str(
     (snapshot_manifest.get("corporate_actions") or {}).get("query_end") or ""
 )
-if snapshot_bar_end != MCT_ANALYSIS_END_DATE:
+if snapshot_bar_end != U67_ANALYSIS_END_DATE:
     raise RuntimeError(
         "Snapshot U67 possui cutoff de barras inesperado: "
-        f"esperado={MCT_ANALYSIS_END_DATE} observado={snapshot_bar_end}"
+        f"esperado={U67_ANALYSIS_END_DATE} observado={snapshot_bar_end}"
     )
-if snapshot_action_end != MCT_ANALYSIS_END_DATE:
+if snapshot_action_end != U67_ANALYSIS_END_DATE:
     raise RuntimeError(
         "Snapshot U67 possui cutoff de Corporate Actions inesperado: "
-        f"esperado={MCT_ANALYSIS_END_DATE} observado={snapshot_action_end}"
+        f"esperado={U67_ANALYSIS_END_DATE} observado={snapshot_action_end}"
     )
 
 print(
@@ -201,13 +189,11 @@ print(
 )
 
 
-# %% 2 - Mesmo processamento estrutural observado no MCT
+# %% 2 - Processamento estrutural do snapshot U67
 frames_raw, exclusions, diagnostics, data_audit = prepare_model_frames(
     DATA,
     assets=U67_REQUESTED_ASSETS,
-    # O MCT usa os floats recebidos da Alpaca diretamente em memoria.
-    # Como o TCC persiste CSV antes do treino, usamos o parser round_trip
-    # para recuperar exatamente o float64 serializado com %.17g.
+    # O parser round_trip preserva o float64 serializado com %.17g.
     csv_float_precision="round_trip",
 )
 
@@ -217,7 +203,7 @@ excluded_symbols = frozenset(
 )
 if excluded_symbols != U67_EXPECTED_EXCLUSIONS:
     raise RuntimeError(
-        "O universo efetivo nao corresponde ao job MCT auditado. "
+        "O universo efetivo nao corresponde ao contrato U67. "
         f"esperado={sorted(U67_EXPECTED_EXCLUSIONS)} "
         f"observado={sorted(excluded_symbols)} "
         f"exclusoes={json.dumps(exclusions, ensure_ascii=False, default=str)}"
@@ -244,7 +230,7 @@ print(
     flush=True,
 )
 
-# Hashes calculados com exatamente a mesma canonicalizacao OHLCV do MCT.
+# Hashes calculados com canonicalizacao OHLCV deterministica.
 # Eles permitem comparar os 65 ativos sem depender do hash fisico do CSV.
 market_data_hash_rows = []
 for symbol in effective_assets_requested_order:
@@ -318,7 +304,7 @@ config_u67 = build_control_config(
 )
 config_u67 = config_u67.copiar_modelo(
     update={
-        "analysis_end_date": MCT_ANALYSIS_END_DATE,
+        "analysis_end_date": U67_ANALYSIS_END_DATE,
     }
 )
 
@@ -357,7 +343,7 @@ print(
 )
 
 
-# %% 4 - Mesmo benchmark do MCT: U56 elegivel equal-weight
+# %% 4 - Benchmark: U56 elegivel equal-weight
 benchmark = _benchmark_pesos_iguais(
     {
         symbol: frames[symbol]
@@ -379,7 +365,7 @@ benchmark = _benchmark_pesos_iguais(
 BENCHMARK_NAME = "Fixed eligible U56 equal-weight buy-and-hold"
 
 
-# %% 5 - Treino, calibracao e politicas identicos ao MCT
+# %% 5 - Treino, calibracao e politica oficial do TCC
 candidate_margins = tuple(
     float(value)
     for value in config_u67.rotation_switch_margin_candidates
@@ -409,7 +395,7 @@ for fold_position, fold in enumerate(folds, start=1):
         symbols,
         train_dates,
         config_u67,
-        phase=f"mct_parity_fold_{fold_id}_calibration",
+        phase=f"u67_fold_{fold_id}_calibration",
         technical_log_callback=lambda message: print(
             f"[technical] {message}",
             flush=True,
@@ -476,7 +462,7 @@ for fold_position, fold in enumerate(folds, start=1):
         symbols,
         final_fit_dates,
         config_u67,
-        phase=f"mct_parity_fold_{fold_id}_final",
+        phase=f"u67_fold_{fold_id}_final",
         technical_log_callback=lambda message: print(
             f"[technical] {message}",
             flush=True,
@@ -519,7 +505,7 @@ scheduled_policy = _politica_agendada(
 )
 
 result = _simular_exato(
-    "tcc_u67_mct_operational_parity",
+    "tcc_u67_control",
     scheduled_policy,
     frames,
     symbols,
@@ -528,10 +514,10 @@ result = _simular_exato(
     calcular_taxas_referencia,
     aplicar_deslizamento,
     decision_metadata=decision_metadata,
-    model_label="TCC U67 v1.21.0 Control - MCT parity",
+    model_label="TCC U67 Control",
     method_line=(
-        "- Same U67 scientific engine; fresh Alpaca RAW/SIP; "
-        "same effective MCT universe; same Control settings."
+        "- Snapshot U67 congelado; LightGBM Control; "
+        "validacao temporal walk-forward."
     ),
     benchmark_override=benchmark,
     benchmark_override_name=BENCHMARK_NAME,
@@ -545,11 +531,11 @@ metrics = summarize_metrics(
 ending_capital = float(metrics["ending_capital"])
 
 
-# %% 7 - Comparacao direta com o job MCT auditado
+# %% 7 - Validacao dos checkpoints congelados do TCC
 predictions = result.predictions.reset_index().copy()
 predictions["timestamp"] = pd.to_datetime(predictions["timestamp"], utc=True)
 
-same_cutoff = pd.Timestamp(MCT_SAME_CUTOFF_DATE, tz="UTC")
+same_cutoff = pd.Timestamp(U67_CHECKPOINT_DATE, tz="UTC")
 same_cutoff_rows = predictions.loc[
     predictions["timestamp"].dt.normalize() == same_cutoff
 ]
@@ -560,57 +546,57 @@ else:
         same_cutoff_rows.iloc[-1]["strategy_equity"]
     )
 
-final_delta = ending_capital - MCT_ENDING_CAPITAL
-final_ratio = ending_capital / MCT_ENDING_CAPITAL - 1.0
+final_delta = ending_capital - U67_EXPECTED_ENDING_CAPITAL
+final_ratio = ending_capital / U67_EXPECTED_ENDING_CAPITAL - 1.0
 same_cutoff_delta = (
-    capital_same_cutoff - MCT_CAPITAL_AT_2026_09_17
+    capital_same_cutoff - U67_EXPECTED_CAPITAL_AT_CHECKPOINT
     if capital_same_cutoff is not None
     else None
 )
 
 final_exact = math.isclose(
     ending_capital,
-    MCT_ENDING_CAPITAL,
+    U67_EXPECTED_ENDING_CAPITAL,
     rel_tol=0.0,
-    abs_tol=PARITY_ABS_TOL,
+    abs_tol=CHECKPOINT_ABS_TOL,
 )
 same_cutoff_exact = bool(
     capital_same_cutoff is not None
     and math.isclose(
         capital_same_cutoff,
-        MCT_CAPITAL_AT_2026_09_17,
+        U67_EXPECTED_CAPITAL_AT_CHECKPOINT,
         rel_tol=0.0,
-        abs_tol=PARITY_ABS_TOL,
+        abs_tol=CHECKPOINT_ABS_TOL,
     )
 )
 
 print("=" * 78, flush=True)
-print("[PARITY RESULT]", flush=True)
+print("[TCC REPRODUCTION RESULT]", flush=True)
 print(
-    f"TCC fresh capital 2026-10-06 = US$ {ending_capital:,.8f}",
+    f"TCC capital 2026-10-06 = US$ {ending_capital:,.8f}",
     flush=True,
 )
 print(
-    f"MCT audited capital 2026-10-06 = US$ {MCT_ENDING_CAPITAL:,.8f}",
+    f"Expected TCC checkpoint 2026-10-06 = US$ {U67_EXPECTED_ENDING_CAPITAL:,.8f}",
     flush=True,
 )
 print(
-    f"delta_final = US$ {final_delta:+,.8f} "
+    f"delta_checkpoint = US$ {final_delta:+,.8f} "
     f"ratio={final_ratio:+.12%} exact_to_cent={final_exact}",
     flush=True,
 )
 if capital_same_cutoff is not None:
     print(
-        f"TCC fresh capital 2026-09-17 = US$ {capital_same_cutoff:,.8f}",
+        f"TCC capital 2026-09-17 = US$ {capital_same_cutoff:,.8f}",
         flush=True,
     )
     print(
-        "MCT audited capital 2026-09-17 = "
-        f"US$ {MCT_CAPITAL_AT_2026_09_17:,.8f}",
+        "Expected TCC checkpoint 2026-09-17 = "
+        f"US$ {U67_EXPECTED_CAPITAL_AT_CHECKPOINT:,.8f}",
         flush=True,
     )
     print(
-        f"delta_same_cutoff = US$ {same_cutoff_delta:+,.8f} "
+        f"delta_checkpoint_date = US$ {same_cutoff_delta:+,.8f} "
         f"exact_to_cent={same_cutoff_exact}",
         flush=True,
     )
@@ -699,15 +685,12 @@ payload = {
     "reproduction_version": REPRODUCTION_VERSION,
     "execution_schema": EXECUTION_SCHEMA,
     "status": "completed",
-    "purpose": "independent_tcc_reproduction_of_mct_strategy_13",
-    "mct_reference": {
-        "job_id": MCT_JOB_ID,
-        "analysis_end_date": MCT_ANALYSIS_END_DATE,
-        "same_cutoff_date": MCT_SAME_CUTOFF_DATE,
-        "ending_capital": MCT_ENDING_CAPITAL,
-        "capital_at_same_cutoff": MCT_CAPITAL_AT_2026_09_17,
-        "snapshot_sha256": MCT_SNAPSHOT_SHA256,
-        "market_data_signature": MCT_MARKET_DATA_SIGNATURE,
+    "purpose": "official_tcc_u67_reproduction",
+    "checkpoints": {
+        "analysis_end_date": U67_ANALYSIS_END_DATE,
+        "checkpoint_date": U67_CHECKPOINT_DATE,
+        "expected_ending_capital": U67_EXPECTED_ENDING_CAPITAL,
+        "expected_capital_at_checkpoint": U67_EXPECTED_CAPITAL_AT_CHECKPOINT,
     },
     "data": {
         "source": "alpaca",
@@ -739,22 +722,22 @@ payload = {
     "fold_calibration_candidates": fold_calibration_candidates,
     "runtime_environment": runtime_environment,
     "metrics": metrics,
-    "parity": {
-        "tcc_ending_capital": ending_capital,
-        "mct_ending_capital": MCT_ENDING_CAPITAL,
+    "checkpoint_validation": {
+        "ending_capital": ending_capital,
+        "expected_ending_capital": U67_EXPECTED_ENDING_CAPITAL,
         "ending_capital_delta": final_delta,
         "ending_capital_ratio": final_ratio,
         "ending_capital_exact_to_cent": final_exact,
-        "tcc_capital_at_2026_09_17": capital_same_cutoff,
-        "mct_capital_at_2026_09_17": MCT_CAPITAL_AT_2026_09_17,
-        "same_cutoff_delta": same_cutoff_delta,
-        "same_cutoff_exact_to_cent": same_cutoff_exact,
+        "capital_at_2026_09_17": capital_same_cutoff,
+        "expected_capital_at_2026_09_17": U67_EXPECTED_CAPITAL_AT_CHECKPOINT,
+        "checkpoint_date_delta": same_cutoff_delta,
+        "checkpoint_date_exact_to_cent": same_cutoff_exact,
     },
     "runtime_seconds": float(time.perf_counter() - started),
 }
 
 with (
-    OUT / "reproducao_u67_mct_parity.json"
+    OUT / "reproducao_u67.json"
 ).open(
     "w",
     encoding="utf-8",
@@ -775,9 +758,9 @@ gerar_analises_backtest(
 
 package = criar_pacote_analise(
     OUT,
-    comparison_file="reproducao_u67_mct_parity.json",
+    comparison_file="reproducao_u67.json",
     execution_schema=EXECUTION_SCHEMA,
-    archive_name="pacote_reproducao_u67_mct_parity.zip",
+    archive_name="pacote_reproducao_u67.zip",
 )
 
 print(
