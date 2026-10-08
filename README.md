@@ -1,50 +1,53 @@
 # TCC MBA USP — Rotação de Capital com Machine Learning
 
-Implementação reproduzível do TCC de rotação de capital com LightGBM e
-validação temporal walk-forward.
+Implementação reproduzível do TCC de rotação de capital entre ativos
+financeiros usando LightGBM e validação temporal walk-forward.
 
-A árvore atual foi reduzida ao fluxo necessário para reproduzir e auditar o
-U67 Control. Pesquisas experimentais encerradas continuam disponíveis no
-histórico Git, mas não fazem mais parte do runtime oficial.
+O repositório foi reduzido ao fluxo necessário para reproduzir e auditar o
+experimento final U67 Control. Pesquisas experimentais encerradas permanecem
+disponíveis no histórico Git, mas não fazem parte do runtime oficial.
 
 ## Execução oficial
 
-O único runner principal é:
+O runner principal é:
 
 ```text
 reproduzir_experimento.py
 ```
 
-A reprodução atual:
+A reprodução:
 
 1. carrega o snapshot U67 congelado em `dados/u67/`;
 2. valida os 67 ativos, o cutoff e os hashes de integridade;
 3. usa barras `1Day`, feed `SIP`, ajuste `RAW` e Corporate Actions congelados;
 4. normaliza splits em memória;
-5. remove somente identidades com problema estrutural documentado;
+5. remove apenas identidades com problema estrutural documentado;
 6. preserva o calendário científico derivado do U56 elegível;
 7. executa LightGBM Control com calibração walk-forward e purge temporal;
-8. simula as rotações com o mesmo contrato financeiro;
-9. compara o resultado com o job MCT auditado;
+8. simula as rotações com o contrato financeiro congelado;
+9. valida os resultados contra checkpoints congelados do próprio TCC;
 10. exporta previsões, operações, diagnósticos, gráficos e pacote ZIP.
 
-Não há dependência de MongoDB.
+Não há dependência de banco de dados durante a reprodução.
 
-## Referência de paridade
+## Checkpoints do TCC
 
-O runner está travado para a referência operacional auditada:
+O experimento final usa os seguintes checkpoints de regressão:
 
 ```text
-MCT job: 20261007T095423-60e489c0
 analysis_end: 2026-10-06
 requested assets: 67
 effective assets: 65
 expected exclusions: CLMT, DOC
-MCT ending capital: US$ 76,927,051.38897176
+expected ending capital: US$ 76,927,051.38897176
+checkpoint 2026-09-17: US$ 78,782,538.31270888
 ```
 
-O capital inicial permanece em US$ 10.000. O resultado é um backtest histórico
-e não representa previsão ou garantia de desempenho futuro.
+Esses valores servem para verificar que a execução continua reproduzindo o
+mesmo resultado após mudanças de organização, ambiente ou refatoração.
+
+O capital inicial é de US$ 10.000. O resultado é um backtest histórico e não
+representa previsão ou garantia de desempenho futuro.
 
 ## Dados
 
@@ -91,9 +94,9 @@ treinamento do modelo.
 └── .env.example
 ```
 
-A pasta `pesquisas/`, o antigo `buscar_ativos.py`, o módulo de Directional
-Change e auxiliares de migração legados foram removidos do runtime final.
-O histórico dessas pesquisas continua preservado pelo Git.
+A pasta `pesquisas/`, o antigo runner de busca de ativos, o módulo de
+Directional Change e auxiliares de migração legados foram removidos do runtime
+final. O histórico dessas pesquisas continua preservado pelo Git.
 
 ## Execução
 
@@ -137,9 +140,9 @@ u67_market_data_hashes.csv
 u67_predictions.csv
 u67_trades.csv
 u67_runtime_environment.json
-reproducao_u67_mct_parity.json
+reproducao_u67.json
 graficos/
-pacote_reproducao_u67_mct_parity.zip
+pacote_reproducao_u67.zip
 ```
 
 ## Testes e análise estática
