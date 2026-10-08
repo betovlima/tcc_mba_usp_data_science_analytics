@@ -30,7 +30,7 @@ from engine.configuracao import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_round_trip_csv_parser_preserves_float64_for_mct_parity(tmp_path) -> None:
+def test_round_trip_csv_parser_preserves_float64_for_reproduction(tmp_path) -> None:
     original = 950.4636963259353
     path = tmp_path / "AAA.csv"
     pd.DataFrame(
@@ -234,9 +234,9 @@ def test_official_u67_workflow_is_explicitly_sectioned() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(encoding="utf-8")
     assert source.count("# %%") >= 9
     assert "# %% 1 - Snapshot U67 congelado e versionado" in source
-    assert "# %% 2 - Mesmo processamento estrutural observado no MCT" in source
+    assert "# %% 2 - Processamento estrutural do snapshot U67" in source
     assert "# %% 3 - Mesmo calendario U56 elegivel" in source
-    assert "# %% 5 - Treino, calibracao e politicas identicos ao MCT" in source
+    assert "# %% 5 - Treino, calibracao e politica oficial do TCC" in source
     assert "# %% 6 - Replay financeiro" in source
     config_source = (ROOT / "engine" / "configuracao.py").read_text(
         encoding="utf-8"
@@ -246,7 +246,7 @@ def test_official_u67_workflow_is_explicitly_sectioned() -> None:
     assert "U67_EXPECTED_REQUESTED_COUNT = 67" in config_source
     assert "U67_EXPECTED_EFFECTIVE_COUNT = 65" in config_source
     assert 'U67_EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})' in config_source
-    assert "MCT_ENDING_CAPITAL = 76_927_051.38897176" in source
+    assert "U67_EXPECTED_ENDING_CAPITAL = 76_927_051.38897176" in source
     assert "_simular_exato(" in source
 
 
@@ -333,7 +333,7 @@ def test_official_reproduction_uses_frozen_u67_snapshot() -> None:
     assert "download_corporate_actions" not in source
     assert "load_alpaca_credentials" not in source
     assert 'csv_float_precision="round_trip"' in source
-    assert 'mct_analysis_end_date = "2026-10-06"' in source
+    assert 'u67_analysis_end_date = "2026-10-06"' in source
 
 
 def test_u67_snapshot_preparation_is_separate_from_reproduction() -> None:
@@ -547,7 +547,7 @@ def test_backtest_analytics_generation_creates_expected_files(tmp_path) -> None:
     assert (graph_dir / "monthly_return_heatmap_control_excess.svg").exists()
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.22.0-dev.6"
+    assert EXPERIMENT_VERSION == "1.22.0-dev.7"
     forbidden = (
         "series_historicas",
         "tiingo",
@@ -699,7 +699,7 @@ def test_u67_data_is_versioned_and_build_area_is_ignored() -> None:
     assert "!dados/pesquisa/" not in rules
 
 
-def test_official_reproduction_uses_mct_u67_parity_contract() -> None:
+def test_official_reproduction_uses_u67_contract() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(
         encoding="utf-8"
     )
@@ -714,6 +714,5 @@ def test_official_reproduction_uses_mct_u67_parity_contract() -> None:
     assert "U67_EXPECTED_REQUESTED_COUNT = 67" in config_source
     assert "U67_EXPECTED_EFFECTIVE_COUNT = 65" in config_source
     assert 'U67_EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})' in config_source
-    assert 'MCT_JOB_ID = "20261007T095423-60e489c0"' in source
-    assert "MCT_CAPITAL_AT_2026_09_17 = 78_782_538.31270888" in source
-    assert "MCT_ENDING_CAPITAL = 76_927_051.38897176" in source
+    assert "U67_EXPECTED_CAPITAL_AT_CHECKPOINT = 78_782_538.31270888" in source
+    assert "U67_EXPECTED_ENDING_CAPITAL = 76_927_051.38897176" in source
