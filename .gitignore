@@ -65,13 +65,3 @@ artifacts/
 .DS_Store
 Thumbs.db
 
-
-# Pool congelado da selecao inteligente de candidatos.
-!dados/pesquisa_smart_candidates/
-!dados/pesquisa_smart_candidates/raw_bars/
-!dados/pesquisa_smart_candidates/corporate_actions/
-!dados/pesquisa_smart_candidates/manifest.json
-!dados/pesquisa_smart_candidates/raw_bars/*.csv
-!dados/pesquisa_smart_candidates/corporate_actions/*.csv
-!dados/pesquisa_smart_candidates/*.csv
-!dados/pesquisa_smart_candidates/*.json
