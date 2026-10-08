@@ -4,10 +4,9 @@ Objetivo
 --------
 Executar no TCC exatamente o comportamento observado na Strategy #13 do MCT:
 
-- solicitar os mesmos 67 ativos do U67;
-- baixar novamente TODA a serie historica da Alpaca;
-- usar barras 1Day, SIP, RAW;
-- baixar Corporate Actions;
+- carregar o snapshot U67 congelado e versionado no Git;
+- validar os mesmos 67 ativos solicitados pelo MCT;
+- usar barras 1Day, SIP, RAW e Corporate Actions congelados;
 - normalizar splits;
 - aplicar a mesma politica estrutural que deixou 65 ativos efetivos no job MCT;
 - usar o mesmo LightGBM Control, folds, purge, custos e regras de rotacao;
@@ -34,7 +33,13 @@ import numpy as np
 import pandas as pd
 from threadpoolctl import threadpool_info
 
-from engine.configuracao import CONFIG
+from engine.configuracao import (
+    CONFIG,
+    U67_U67_EXPECTED_EFFECTIVE_COUNT,
+    U67_U67_EXPECTED_EXCLUSIONS,
+    U67_U67_EXPECTED_REQUESTED_COUNT,
+    U67_REQUESTED_ASSETS,
+)
 from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 from engine.modelo_lightgbm import (
     _ajustar_modelos_lightgbm,
@@ -54,14 +59,7 @@ from reproducao.artefatos import (
     criar_pacote_analise,
     sinal_sonoro_conclusao,
 )
-from reproducao.dados import (
-    SnapshotPaths,
-    build_snapshot_manifest,
-    download_corporate_actions,
-    download_raw_bars,
-    load_alpaca_credentials,
-    validate_snapshot,
-)
+from reproducao.dados import SnapshotPaths, validate_snapshot
 from reproducao.experimento import build_control_config, summarize_metrics
 from reproducao.graficos import gerar_analises_backtest
 from reproducao.preparacao import load_raw_bar_file, prepare_model_frames
@@ -69,25 +67,12 @@ from reproducao.preparacao import load_raw_bar_file, prepare_model_frames
 
 # %% 0 - Contrato de paridade com o job MCT auditado
 ROOT = Path(__file__).resolve().parent
-TEMP = SnapshotPaths.temporary(ROOT)
+DATA = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.22.0-dev.4"
+REPRODUCTION_VERSION = "1.22.0-dev.5"
 EXECUTION_SCHEMA = "u67-mct-operational-parity-v1"
 
-U59_ADDITIONS = ("COLB", "AMS", "FOXF")
-U67_ADDITIONS = (
-    "THO", "WDAY", "EXR", "XEL",
-    "SBFG", "PAYX", "MUX", "SXC",
-)
-U67_REQUESTED_ASSETS = (
-    *tuple(CONFIG.assets),
-    *U59_ADDITIONS,
-    *U67_ADDITIONS,
-)
-EXPECTED_REQUESTED_COUNT = 67
-EXPECTED_EFFECTIVE_COUNT = 65
-EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})
 
 # O job MCT 20261007T095423-60e489c0 foi auditado com dados ate 2026-10-06.
 # Mantemos a mesma data para que a primeira execucao de paridade seja
@@ -171,7 +156,7 @@ print(
 )
 print(f"mct_job={MCT_JOB_ID}", flush=True)
 print(f"analysis_end={MCT_ANALYSIS_END_DATE}", flush=True)
-print("data_source=ALPACA_FRESH_FULL_HISTORY", flush=True)
+print("data_source=FROZEN_GIT_SNAPSHOT", flush=True)
 print("feed=SIP adjustment=RAW timeframe=1Day", flush=True)
 print("database=NO", flush=True)
 print("csv_float_precision=round_trip", flush=True)
@@ -180,38 +165,37 @@ print("expected_runtime_exclusions=CLMT,DOC", flush=True)
 print("=" * 78, flush=True)
 
 
-# %% 1 - Full refresh Alpaca dos mesmos 67 ativos solicitados pelo MCT
-credentials = load_alpaca_credentials(ROOT)
-TEMP.clear_generated()
+# %% 1 - Snapshot U67 congelado e versionado
+snapshot_manifest = validate_snapshot(DATA)
 
-raw_files = download_raw_bars(
-    credentials,
-    TEMP,
-    assets=U67_REQUESTED_ASSETS,
-    bar_snapshot_as_of_end=MCT_ANALYSIS_END_DATE,
-    analysis_end_date=MCT_ANALYSIS_END_DATE,
+manifest_assets = tuple(snapshot_manifest.get("assets") or ())
+if manifest_assets != tuple(U67_REQUESTED_ASSETS):
+    raise RuntimeError(
+        "Snapshot U67 possui universo diferente do contrato oficial. "
+        f"esperado={len(U67_REQUESTED_ASSETS)} "
+        f"observado={len(manifest_assets)}"
+    )
+
+snapshot_bar_end = str(
+    (snapshot_manifest.get("bars") or {}).get("bar_snapshot_as_of_end") or ""
 )
-action_files = download_corporate_actions(
-    credentials,
-    TEMP,
-    assets=U67_REQUESTED_ASSETS,
-    replace=True,
-    query_end=MCT_ANALYSIS_END_DATE,
+snapshot_action_end = str(
+    (snapshot_manifest.get("corporate_actions") or {}).get("query_end") or ""
 )
-snapshot_manifest = build_snapshot_manifest(
-    TEMP,
-    raw_files,
-    action_files,
-    bar_snapshot_as_of_end=MCT_ANALYSIS_END_DATE,
-    analysis_end_date=MCT_ANALYSIS_END_DATE,
-    assets=U67_REQUESTED_ASSETS,
-    snapshot_name="tcc-mct-u67-parity-20261006",
-)
-validate_snapshot(TEMP)
+if snapshot_bar_end != MCT_ANALYSIS_END_DATE:
+    raise RuntimeError(
+        "Snapshot U67 possui cutoff de barras inesperado: "
+        f"esperado={MCT_ANALYSIS_END_DATE} observado={snapshot_bar_end}"
+    )
+if snapshot_action_end != MCT_ANALYSIS_END_DATE:
+    raise RuntimeError(
+        "Snapshot U67 possui cutoff de Corporate Actions inesperado: "
+        f"esperado={MCT_ANALYSIS_END_DATE} observado={snapshot_action_end}"
+    )
 
 print(
-    "[snapshot] requested_assets="
-    f"{len(U67_REQUESTED_ASSETS)} "
+    "[snapshot] mode=frozen_git "
+    f"requested_assets={len(U67_REQUESTED_ASSETS)} "
     f"sha256={snapshot_manifest.get('snapshot_sha256')}",
     flush=True,
 )
@@ -219,7 +203,7 @@ print(
 
 # %% 2 - Mesmo processamento estrutural observado no MCT
 frames_raw, exclusions, diagnostics, data_audit = prepare_model_frames(
-    TEMP,
+    DATA,
     assets=U67_REQUESTED_ASSETS,
     comparar_snapshot_referencia=False,
     # O MCT usa os floats recebidos da Alpaca diretamente em memoria.
@@ -266,7 +250,7 @@ print(
 market_data_hash_rows = []
 for symbol in effective_assets_requested_order:
     raw_frame = load_raw_bar_file(
-        TEMP.raw_bars / f"{symbol}.csv",
+        DATA.raw_bars / f"{symbol}.csv",
         float_precision="round_trip",
     )
     normalized_frame = frames_raw[symbol]
@@ -731,7 +715,8 @@ payload = {
         "feed": "sip",
         "timeframe": "1Day",
         "adjustment": "raw",
-        "full_refresh": True,
+        "full_refresh": False,
+        "snapshot_mode": "frozen_git",
         "database_used": False,
         "snapshot": snapshot_manifest,
         "data_audit": data_audit,
