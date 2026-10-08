@@ -18,6 +18,12 @@ data da consolidação: 2026-10-08
 Esta consolidação é documental. Ela não altera parâmetros científicos, dados,
 folds, regras de rotação ou resultados do experimento.
 
+Este MANIFEST substitui a documentação histórica fragmentada que existia em
+arquivos de contexto, checkpoints antigos, notas de mudanças por versão e
+README específico da pasta de dados. A partir desta consolidação, o README fica
+restrito à execução e este arquivo passa a ser a fonte documental única do
+projeto.
+
 ---
 
 ## 2. Objetivo científico
