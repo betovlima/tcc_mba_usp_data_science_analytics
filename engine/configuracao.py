@@ -4,7 +4,7 @@ Este modulo e independente de banco de dados e do Market Cycle Trader em tempo
 de execucao. Os dados entram somente por CSVs locais gerados pela etapa de
 snapshot da Alpaca.
 
-Versao cientifica: 1.22.0-dev.4
+Versao cientifica: 1.22.0-dev.5
 Backend oficial: CPU
 Estrategia oficial: LightGBM Control
 """
@@ -14,7 +14,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-EXPERIMENT_VERSION = "1.22.0-dev.4"
+EXPERIMENT_VERSION = "1.22.0-dev.5"
 START_DATE = "2016-01-01"
 ANALYSIS_END_DATE = "2026-09-17"
 BAR_SNAPSHOT_AS_OF_END = "2026-09-17"
@@ -27,6 +27,17 @@ ASSETS = (
     "BXMT", "PXLW", "KKR", "SCSC", "LKFT", "DNN", "VNCE", "UNFI", "DOC",
     "CLMT", "APD", "MGM", "MAN", "MYE", "YANG", "MKSI", "MCS", "ECC",
 )
+
+
+U59_ADDITIONS = ("COLB", "AMS", "FOXF")
+U67_ADDITIONS = (
+    "THO", "WDAY", "EXR", "XEL",
+    "SBFG", "PAYX", "MUX", "SXC",
+)
+U67_REQUESTED_ASSETS = (*ASSETS, *U59_ADDITIONS, *U67_ADDITIONS)
+U67_EXPECTED_REQUESTED_COUNT = 67
+U67_EXPECTED_EFFECTIVE_COUNT = 65
+U67_EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})
 
 
 
