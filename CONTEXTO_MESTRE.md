@@ -3984,3 +3984,30 @@ A estrutura de código está pronta para o snapshot único U67. O snapshot compl
 ainda precisa ser gerado localmente com `preparar_snapshot_u67.py` e
 versionado em `dados/u67/` antes do merge final da branch.
 
+## 2026-10-08 — correção após remoção da referência 10.8.74
+
+### Sintoma
+`reproduzir_experimento.py` falhava dentro de
+`reproducao/preparacao.py` com `FileNotFoundError` ao tentar abrir
+`reference_10_8_74_raw_snapshot_diagnostics.json`, mesmo com a comparação de
+referência desativada.
+
+### Causa
+O JSON legado havia sido corretamente removido, mas
+`prepare_model_frames()` ainda carregava `REFERENCE_FILE` de forma
+incondicional antes de verificar a flag de comparação.
+
+### Correção
+- removidos `REFERENCE_FILE` e o carregamento do JSON legado;
+- removido o parâmetro `comparar_snapshot_referencia`;
+- a auditoria de preparação agora usa somente métricas do próprio snapshot U67;
+- adicionado teste para impedir a reintrodução dessa dependência.
+
+### Versão
+`1.22.0-dev.6`
+
+### Impacto
+Nenhuma alteração no modelo, folds, custos, política de rotação ou regras de
+exclusão estrutural. A correção elimina apenas uma dependência histórica já
+removida.
+
