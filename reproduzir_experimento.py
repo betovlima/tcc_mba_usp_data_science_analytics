@@ -53,7 +53,7 @@ from engine.rotacao import (
     _simular_exato,
     preparar_painel_rotacao,
 )
-from pesquisas.directional_change_lightgbm import (
+from reproducao.artefatos import (
     criar_pacote_analise,
     sinal_sonoro_conclusao,
 )
