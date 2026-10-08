@@ -17,17 +17,16 @@ reproduzir_experimento.py
 
 A reprodução atual:
 
-1. solicita os 67 ativos do universo U67;
-2. baixa novamente a série diária completa da Alpaca;
-3. usa barras `1Day`, feed `SIP` e ajuste `RAW`;
-4. baixa Corporate Actions;
-5. normaliza splits em memória;
-6. remove somente identidades com problema estrutural documentado;
-7. preserva o calendário científico derivado do U56 elegível;
-8. executa LightGBM Control com calibração walk-forward e purge temporal;
-9. simula as rotações com o mesmo contrato financeiro;
-10. compara o resultado com o job MCT auditado;
-11. exporta previsões, operações, diagnósticos, gráficos e pacote ZIP.
+1. carrega o snapshot U67 congelado em `dados/u67/`;
+2. valida os 67 ativos, o cutoff e os hashes de integridade;
+3. usa barras `1Day`, feed `SIP`, ajuste `RAW` e Corporate Actions congelados;
+4. normaliza splits em memória;
+5. remove somente identidades com problema estrutural documentado;
+6. preserva o calendário científico derivado do U56 elegível;
+7. executa LightGBM Control com calibração walk-forward e purge temporal;
+8. simula as rotações com o mesmo contrato financeiro;
+9. compara o resultado com o job MCT auditado;
+10. exporta previsões, operações, diagnósticos, gráficos e pacote ZIP.
 
 Não há dependência de MongoDB.
 
@@ -49,26 +48,29 @@ e não representa previsão ou garantia de desempenho futuro.
 
 ## Dados
 
-A execução usa uma pasta temporária recriada a cada rodada:
+A reprodução lê somente:
 
 ```text
-dados/temporario/reproducao/
+dados/u67/
 ├── raw_bars/
 ├── corporate_actions/
 └── manifest.json
 ```
 
-As credenciais da Alpaca são lidas de um arquivo `.env` local e nunca são
-gravadas no snapshot ou nos artefatos.
+A coleta foi separada em `preparar_snapshot_u67.py`. Esse script é usado
+somente para criar ou substituir o snapshot congelado e é o único fluxo que
+precisa de credenciais da Alpaca. O `reproduzir_experimento.py` não acessa a
+Alpaca.
 
 O `manifest.json` registra a identidade do snapshot e hashes de integridade
-dos CSVs. Esses hashes são usados para validar os arquivos baixados e não
-participam do treinamento do modelo.
+dos CSVs. Esses hashes são usados para validar os dados e não participam do
+treinamento do modelo.
 
 ## Estrutura do código
 
 ```text
 .
+├── preparar_snapshot_u67.py
 ├── reproduzir_experimento.py
 ├── engine/
 │   ├── configuracao.py
@@ -105,7 +107,8 @@ python reproduzir_experimento.py
 No Spyder, abra `reproduzir_experimento.py`, reinicie o kernel e execute o
 arquivo completo.
 
-Para a execução que baixa dados da Alpaca, configure localmente:
+Somente para criar ou substituir o snapshot com `preparar_snapshot_u67.py`,
+configure localmente:
 
 ```text
 ALPACA_API_KEY=sua_api_key
