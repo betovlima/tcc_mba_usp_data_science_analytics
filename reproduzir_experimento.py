@@ -70,7 +70,7 @@ ROOT = Path(__file__).resolve().parent
 DATA = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.22.0-dev.5"
+REPRODUCTION_VERSION = "1.22.0-dev.6"
 EXECUTION_SCHEMA = "u67-mct-operational-parity-v1"
 
 
@@ -205,7 +205,6 @@ print(
 frames_raw, exclusions, diagnostics, data_audit = prepare_model_frames(
     DATA,
     assets=U67_REQUESTED_ASSETS,
-    comparar_snapshot_referencia=False,
     # O MCT usa os floats recebidos da Alpaca diretamente em memoria.
     # Como o TCC persiste CSV antes do treino, usamos o parser round_trip
     # para recuperar exatamente o float64 serializado com %.17g.
