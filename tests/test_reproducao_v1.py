@@ -579,8 +579,7 @@ def test_backtest_analytics_generation_creates_expected_files(tmp_path) -> None:
     generated = gerar_analises_backtest(
         tmp_path,
         manifest={"snapshot_sha256": "test-snapshot"},
-        control_result=result,
-        soft_result=result,
+        result=result,
     )
 
     graph_dir = tmp_path / "graficos"
@@ -591,7 +590,7 @@ def test_backtest_analytics_generation_creates_expected_files(tmp_path) -> None:
     assert (graph_dir / "capital_rotations_heatmap_control.svg").exists()
     assert (graph_dir / "monthly_realized_pnl_heatmap_control.png").exists()
     assert (graph_dir / "monthly_return_heatmap_control_simulation.png").exists()
-    assert (graph_dir / "monthly_return_heatmap_soft_excess.svg").exists()
+    assert (graph_dir / "monthly_return_heatmap_control_excess.svg").exists()
 
 def test_official_runtime_has_no_historical_references() -> None:
     assert EXPERIMENT_VERSION == "1.2.0-dev.9"
