@@ -579,6 +579,15 @@ def test_runtime_has_no_retired_model_tokens() -> None:
             assert token not in source, f"{token} found in {path.relative_to(ROOT)}"
 
 
+def test_data_preparation_has_no_legacy_reference_file_dependency() -> None:
+    source = (ROOT / "reproducao" / "preparacao.py").read_text(
+        encoding="utf-8"
+    )
+    assert "reference_10_8_74_raw_snapshot_diagnostics.json" not in source
+    assert "REFERENCE_FILE" not in source
+    assert "comparar_snapshot_referencia" not in source
+
+
 def test_snapshot_does_not_persist_derived_normalized_bars() -> None:
     data_source = (ROOT / "reproducao" / "dados.py").read_text(encoding="utf-8")
     preparation_source = (ROOT / "reproducao" / "preparacao.py").read_text(
