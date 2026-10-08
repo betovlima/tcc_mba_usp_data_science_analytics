@@ -35,9 +35,9 @@ from threadpoolctl import threadpool_info
 
 from engine.configuracao import (
     CONFIG,
-    U67_U67_EXPECTED_EFFECTIVE_COUNT,
-    U67_U67_EXPECTED_EXCLUSIONS,
-    U67_U67_EXPECTED_REQUESTED_COUNT,
+    U67_EXPECTED_EFFECTIVE_COUNT,
+    U67_EXPECTED_EXCLUSIONS,
+    U67_EXPECTED_REQUESTED_COUNT,
     U67_REQUESTED_ASSETS,
 )
 from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
