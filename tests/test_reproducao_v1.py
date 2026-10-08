@@ -233,29 +233,30 @@ def test_lightgbm_parameters_are_frozen() -> None:
 def test_official_u67_workflow_is_explicitly_sectioned() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(encoding="utf-8")
     assert source.count("# %%") >= 9
-    assert "# %% 1 - Full refresh Alpaca" in source
+    assert "# %% 1 - Snapshot U67 congelado e versionado" in source
     assert "# %% 2 - Mesmo processamento estrutural observado no MCT" in source
     assert "# %% 3 - Mesmo calendario U56 elegivel" in source
     assert "# %% 5 - Treino, calibracao e politicas identicos ao MCT" in source
     assert "# %% 6 - Replay financeiro" in source
-    assert 'U59_ADDITIONS = ("COLB", "AMS", "FOXF")' in source
-    assert "U67_ADDITIONS = (" in source
-    assert "EXPECTED_REQUESTED_COUNT = 67" in source
-    assert "EXPECTED_EFFECTIVE_COUNT = 65" in source
-    assert 'EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})' in source
+    config_source = (ROOT / "engine" / "configuracao.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'U59_ADDITIONS = ("COLB", "AMS", "FOXF")' in config_source
+    assert "U67_ADDITIONS = (" in config_source
+    assert "U67_EXPECTED_REQUESTED_COUNT = 67" in config_source
+    assert "U67_EXPECTED_EFFECTIVE_COUNT = 65" in config_source
+    assert 'U67_EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})' in config_source
     assert "MCT_ENDING_CAPITAL = 76_927_051.38897176" in source
     assert "_simular_exato(" in source
 
 
 def test_snapshot_layout_is_csv_per_asset() -> None:
-    temporary = SnapshotPaths.temporary(ROOT)
+    snapshot = SnapshotPaths.u67(ROOT)
 
-    assert temporary.root == (
-        ROOT / "dados" / "temporario" / "reproducao"
-    )
-    assert temporary.raw_bars.name == "raw_bars"
-    assert temporary.corporate_actions.name == "corporate_actions"
-    assert temporary.manifest.name == "manifest.json"
+    assert snapshot.root == ROOT / "dados" / "u67"
+    assert snapshot.raw_bars.name == "raw_bars"
+    assert snapshot.corporate_actions.name == "corporate_actions"
+    assert snapshot.manifest.name == "manifest.json"
 
 
 
@@ -322,17 +323,28 @@ def test_analysis_end_date_is_inclusive_for_nyse_utc_timestamp() -> None:
     assert pd.Timestamp("2026-09-23 04:00:00+00:00") not in dates
 
 
-def test_official_reproduction_refreshes_market_data_for_mct_parity() -> None:
+def test_official_reproduction_uses_frozen_u67_snapshot() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(
         encoding="utf-8"
     ).lower()
-    assert "snapshotpaths.temporary(root)" in source
+    assert "snapshotpaths.u67(root)" in source
+    assert "validate_snapshot(data)" in source
+    assert "download_raw_bars" not in source
+    assert "download_corporate_actions" not in source
+    assert "load_alpaca_credentials" not in source
+    assert 'csv_float_precision="round_trip"' in source
+    assert 'mct_analysis_end_date = "2026-10-06"' in source
+
+
+def test_u67_snapshot_preparation_is_separate_from_reproduction() -> None:
+    source = (ROOT / "preparar_snapshot_u67.py").read_text(
+        encoding="utf-8"
+    ).lower()
     assert "download_raw_bars" in source
     assert "download_corporate_actions" in source
     assert "load_alpaca_credentials" in source
-    assert "temp.clear_generated()" in source
-    assert 'csv_float_precision="round_trip"' in source
-    assert 'mct_analysis_end_date = "2026-10-06"' in source
+    assert "snapshot_end_date = \"2026-10-06\"" in source
+    assert "dados" in source and ".u67_build" in source
 
 def test_capital_rotations_follow_backtest_analytics_semantics() -> None:
     trades = pd.DataFrame(
@@ -535,7 +547,7 @@ def test_backtest_analytics_generation_creates_expected_files(tmp_path) -> None:
     assert (graph_dir / "monthly_return_heatmap_control_excess.svg").exists()
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.22.0-dev.4"
+    assert EXPERIMENT_VERSION == "1.22.0-dev.5"
     forbidden = (
         "series_historicas",
         "tiingo",
@@ -669,27 +681,30 @@ def test_runtime_config_attribute_contract() -> None:
     )
 
 
-def test_research_data_is_versioned_and_temporary_data_is_ignored() -> None:
+def test_u67_data_is_versioned_and_build_area_is_ignored() -> None:
     rules = (ROOT / ".gitignore").read_text(encoding="utf-8")
-    assert "dados/temporario/" in rules
-    assert "dados/reproducao/" in rules
-    assert "!dados/pesquisa/raw_bars/*.csv" in rules
-    assert "!dados/pesquisa/corporate_actions/*.csv" in rules
-    assert "!dados/pesquisa/manifest.json" in rules
+    assert "dados/.u67_build/" in rules
+    assert "!dados/u67/raw_bars/*.csv" in rules
+    assert "!dados/u67/corporate_actions/*.csv" in rules
+    assert "!dados/u67/manifest.json" in rules
+    assert "!dados/pesquisa/" not in rules
 
 
 def test_official_reproduction_uses_mct_u67_parity_contract() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(
         encoding="utf-8"
     )
-    assert "TEMP = SnapshotPaths.temporary(ROOT)" in source
-    assert 'U59_ADDITIONS = ("COLB", "AMS", "FOXF")' in source
-    assert "U67_ADDITIONS = (" in source
+    config_source = (ROOT / "engine" / "configuracao.py").read_text(
+        encoding="utf-8"
+    )
+    assert "DATA = SnapshotPaths.u67(ROOT)" in source
+    assert 'U59_ADDITIONS = ("COLB", "AMS", "FOXF")' in config_source
+    assert "U67_ADDITIONS = (" in config_source
     for asset in ("THO", "WDAY", "EXR", "XEL", "SBFG", "PAYX", "MUX", "SXC"):
-        assert f'"{asset}"' in source
-    assert "EXPECTED_REQUESTED_COUNT = 67" in source
-    assert "EXPECTED_EFFECTIVE_COUNT = 65" in source
-    assert 'EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})' in source
+        assert f'"{asset}"' in config_source
+    assert "U67_EXPECTED_REQUESTED_COUNT = 67" in config_source
+    assert "U67_EXPECTED_EFFECTIVE_COUNT = 65" in config_source
+    assert 'U67_EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})' in config_source
     assert 'MCT_JOB_ID = "20261007T095423-60e489c0"' in source
     assert "MCT_CAPITAL_AT_2026_09_17 = 78_782_538.31270888" in source
     assert "MCT_ENDING_CAPITAL = 76_927_051.38897176" in source
