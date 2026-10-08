@@ -3950,3 +3950,37 @@ exclusões estruturais CLMT/DOC nem o cutoff auditado de 2026-10-06.
 ### Validação
 A branch deve passar Ruff e pytest antes de qualquer merge na `main`.
 
+## 2026-10-08 — refatoração da camada de dados U67
+
+### Versão
+- `1.22.0-dev.5`
+- Branch: `refactor/tcc-final-cleanup-v1`
+
+### Decisão
+A reprodução oficial deixou de baixar dados da Alpaca. O TCC passa a ter dois
+fluxos explicitamente separados:
+
+1. `preparar_snapshot_u67.py`: aquisição controlada dos 67 ativos e Corporate
+   Actions, validação do manifest e publicação local em `dados/u67/`;
+2. `reproduzir_experimento.py`: reprodução científica somente a partir do
+   snapshot congelado e versionado em `dados/u67/`.
+
+### Limpeza
+- removido o snapshot legado `dados/pesquisa/`, que continha apenas o U56;
+- removidas do `.gitignore` as exceções históricas de
+  `pesquisa_expansao_76`, B2/B3 e `pesquisa_smart_candidates`;
+- o contrato U67 foi centralizado em `engine/configuracao.py`;
+- `SnapshotPaths` agora expõe `u67()` em vez do layout temporário usado pela
+  reprodução anterior;
+- a área `dados/.u67_build/` é temporária e ignorada pelo Git.
+
+### Contrato
+O snapshot oficial deve conter 67 ativos solicitados, com cutoff 2026-10-06.
+CLMT e DOC permanecem no snapshot de entrada e são excluídos estruturalmente
+pelo pipeline, resultando em 65 ativos efetivos.
+
+### Estado
+A estrutura de código está pronta para o snapshot único U67. O snapshot completo
+ainda precisa ser gerado localmente com `preparar_snapshot_u67.py` e
+versionado em `dados/u67/` antes do merge final da branch.
+
