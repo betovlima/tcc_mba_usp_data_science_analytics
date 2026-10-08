@@ -5,7 +5,7 @@
 O projeto contém somente o fluxo necessário para preparar, reproduzir, auditar
 e documentar o experimento final do TCC.
 
-Versão atual: `1.22.0-dev.7`
+Versão atual: `1.22.0-dev.8`
 
 Branch ativa de refatoração:
 
@@ -225,3 +225,13 @@ O resultado passou a ser validado apenas contra checkpoints congelados do
 próprio TCC.
 
 Versão: `1.22.0-dev.7`.
+
+## 2026-10-08 — supressão seletiva de Pandas4Warning
+
+O runner oficial passou a ocultar somente `Pandas4Warning`, quando essa classe
+estiver disponível na versão instalada do pandas.
+
+A supressão é seletiva: outros warnings continuam visíveis no log.
+
+Versão: `1.22.0-dev.8`.
+
