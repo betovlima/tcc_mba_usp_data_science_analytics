@@ -547,7 +547,7 @@ def test_backtest_analytics_generation_creates_expected_files(tmp_path) -> None:
     assert (graph_dir / "monthly_return_heatmap_control_excess.svg").exists()
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.22.0-dev.7"
+    assert EXPERIMENT_VERSION == "1.22.0-dev.8"
     forbidden = (
         "series_historicas",
         "tiingo",
@@ -740,4 +740,13 @@ def test_project_has_no_external_system_reference_token() -> None:
         assert forbidden not in str(relative).lower(), relative
         source = path.read_text(encoding="utf-8", errors="ignore").lower()
         assert forbidden not in source, relative
+
+def test_official_runner_silences_only_pandas4_warning() -> None:
+    source = (ROOT / "reproduzir_experimento.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'getattr(pd.errors, "Pandas4Warning", None)' in source
+    assert 'warnings.filterwarnings(' in source
+    assert '"ignore"' in source
+    assert 'warnings.filterwarnings("ignore")' not in source
 
