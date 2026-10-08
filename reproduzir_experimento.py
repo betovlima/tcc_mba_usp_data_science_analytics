@@ -65,7 +65,7 @@ from reproducao.dados import (
     load_alpaca_credentials,
     validate_snapshot,
 )
-from reproducao.experimento import build_variant_configs, summarize_metrics
+from reproducao.experimento import build_control_config, summarize_metrics
 from reproducao.preparacao import load_raw_bar_file, prepare_model_frames
 
 
@@ -324,7 +324,7 @@ if len(u56_eligible) != 54:
         f"(U56 sem CLMT/DOC); observado={len(u56_eligible)}"
     )
 
-config_u56, _ = build_variant_configs(
+config_u56 = build_control_config(
     {symbol: frames_raw[symbol] for symbol in u56_eligible},
     CONFIG,
 )
@@ -333,7 +333,7 @@ _, reference_calendar, reference_source = preparar_painel_rotacao(
     config_u56,
 )
 
-config_u67, _ = build_variant_configs(
+config_u67 = build_control_config(
     {symbol: frames_raw[symbol] for symbol in effective_assets_requested_order},
     CONFIG,
 )
