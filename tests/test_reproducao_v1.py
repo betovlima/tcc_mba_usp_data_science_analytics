@@ -1,6 +1,5 @@
 import ast
 import importlib
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,7 +24,6 @@ from engine.configuracao import (
     BAR_SNAPSHOT_AS_OF_END,
     CONFIG,
     EXPERIMENT_VERSION,
-    construir_configuracao_controle,
 )
 
 
