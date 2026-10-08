@@ -28,10 +28,18 @@ import platform
 import shutil
 import sys
 import time
+import warnings
 
 import numpy as np
 import pandas as pd
 from threadpoolctl import threadpool_info
+
+_PANDAS4_WARNING = getattr(pd.errors, "Pandas4Warning", None)
+if _PANDAS4_WARNING is not None:
+    warnings.filterwarnings(
+        "ignore",
+        category=_PANDAS4_WARNING,
+    )
 
 from engine.configuracao import (
     CONFIG,
@@ -70,7 +78,7 @@ ROOT = Path(__file__).resolve().parent
 DATA = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.22.0-dev.7"
+REPRODUCTION_VERSION = "1.22.0-dev.8"
 EXECUTION_SCHEMA = "u67-control-reproducao-v1"
 
 
