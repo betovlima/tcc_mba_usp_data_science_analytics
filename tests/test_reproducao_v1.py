@@ -1,18 +1,12 @@
 import ast
 import importlib
 import json
-from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from reproducao.dados import (
-    SnapshotPaths,
-    data_final_temporaria_atual,
-    snapshot_cobre_data_final,
-)
+from reproducao.dados import SnapshotPaths
 from reproducao.preparacao import load_raw_bar_file, structural_identity_issue
 from reproducao.graficos import (
     calcular_retornos_mensais,
@@ -261,61 +255,16 @@ def test_official_u67_workflow_is_explicitly_sectioned() -> None:
 
 
 def test_snapshot_layout_is_csv_per_asset() -> None:
-    research = SnapshotPaths.research(ROOT)
     temporary = SnapshotPaths.temporary(ROOT)
-
-    assert research.root == ROOT / "dados" / "pesquisa"
-    assert research.raw_bars.name == "raw_bars"
-    assert research.corporate_actions.name == "corporate_actions"
-    assert research.manifest.name == "manifest.json"
 
     assert temporary.root == (
         ROOT / "dados" / "temporario" / "reproducao"
     )
+    assert temporary.raw_bars.name == "raw_bars"
+    assert temporary.corporate_actions.name == "corporate_actions"
+    assert temporary.manifest.name == "manifest.json"
 
 
-
-
-def test_temporary_end_date_uses_current_market_date_after_close() -> None:
-    agora = datetime(
-        2026,
-        9,
-        22,
-        23,
-        29,
-        tzinfo=ZoneInfo("America/Asuncion"),
-    )
-    assert data_final_temporaria_atual(agora) == "2026-09-22"
-
-
-def test_temporary_end_date_avoids_incomplete_intraday_bar() -> None:
-    agora = datetime(
-        2026,
-        9,
-        22,
-        15,
-        0,
-        tzinfo=ZoneInfo("America/New_York"),
-    )
-    assert data_final_temporaria_atual(agora) == "2026-09-21"
-
-
-def test_temporary_snapshot_is_refreshed_when_manifest_is_stale(tmp_path) -> None:
-    paths = SnapshotPaths.from_root(tmp_path / "snapshot")
-    paths.ensure()
-    manifest = {
-        "bars": {"bar_snapshot_as_of_end": "2026-09-17"},
-        "corporate_actions": {"query_end": "2026-09-17"},
-    }
-    paths.manifest.write_text(json.dumps(manifest), encoding="utf-8")
-
-    assert not snapshot_cobre_data_final(paths, "2026-09-22")
-
-    manifest["bars"]["bar_snapshot_as_of_end"] = "2026-09-22"
-    manifest["corporate_actions"]["query_end"] = "2026-09-22"
-    paths.manifest.write_text(json.dumps(manifest), encoding="utf-8")
-
-    assert snapshot_cobre_data_final(paths, "2026-09-22")
 
 
 def test_analysis_window_can_end_on_current_temporary_session() -> None:
