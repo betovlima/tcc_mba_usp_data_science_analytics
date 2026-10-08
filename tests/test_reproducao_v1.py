@@ -435,7 +435,7 @@ def test_active_paths_no_longer_use_v1_suffix() -> None:
         ROOT / "reproducao" / "dados.py",
         ROOT / ".gitignore",
         ROOT / "README.md",
-        ROOT / "dados" / "README.md",
+        ROOT / "MANIFEST.md",
     ]
     for path in active_files:
         source = path.read_text(encoding="utf-8")
@@ -718,7 +718,7 @@ def test_official_reproduction_uses_u67_contract() -> None:
     assert "U67_EXPECTED_ENDING_CAPITAL = 76_927_051.38897176" in source
 
 def test_project_has_no_external_system_reference_token() -> None:
-    forbidden = "m" + "ct"
+    forbidden_tokens = ("m" + "ct", "market " + "cycle trader")
     ignored_parts = {".git", "__pycache__", ".pytest_cache", "output"}
 
     for path in ROOT.rglob("*"):
@@ -737,9 +737,10 @@ def test_project_has_no_external_system_reference_token() -> None:
             continue
 
         relative = path.relative_to(ROOT)
-        assert forbidden not in str(relative).lower(), relative
         source = path.read_text(encoding="utf-8", errors="ignore").lower()
-        assert forbidden not in source, relative
+        for forbidden in forbidden_tokens:
+            assert forbidden not in str(relative).lower(), relative
+            assert forbidden not in source, relative
 
 def test_official_runner_silences_only_pandas4_warning() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(

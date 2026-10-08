@@ -30,7 +30,6 @@ env/
 # Dados
 # O snapshot oficial U67 e versionado no Git.
 dados/*
-!dados/README.md
 !dados/u67/
 !dados/u67/raw_bars/
 !dados/u67/corporate_actions/
