@@ -6,7 +6,7 @@ snapshot da Alpaca.
 
 Versao cientifica: 1.2.0-dev.9
 Backend oficial: CPU
-Comparacao experimental: Control vs Soft Horizon Consensus
+Estrategia oficial: LightGBM Control
 """
 from __future__ import annotations
 
@@ -28,7 +28,6 @@ ASSETS = (
     "CLMT", "APD", "MGM", "MAN", "MYE", "YANG", "MKSI", "MCS", "ECC",
 )
 
-SOFT_HORIZON_CONSENSUS_PENALTY = 1.0
 
 
 def _configuracoes_lightgbm() -> dict[str, Any]:
@@ -117,32 +116,16 @@ def construir_configuracao_controle(
     *,
     assets: tuple[str, ...] | list[str] | None = None,
 ) -> StandaloneBacktestConfig:
-    """Control = LightGBM + politica-base, sem consenso Soft."""
+    """Cria a configuracao LightGBM Control para o universo informado."""
     settings = deepcopy(base.research_model_settings)
     lightgbm = deepcopy(settings.get("lightgbm") or {})
     lightgbm["early_stopping_enabled"] = False
     settings["lightgbm"] = lightgbm
-    settings["soft_horizon_consensus"] = {"enabled": False}
     update: dict[str, Any] = {"research_model_settings": settings}
     if assets is not None:
         update["assets"] = tuple(assets)
     return base.copiar_modelo(update=update)
 
-
-def construir_configuracao_soft(
-    base: StandaloneBacktestConfig,
-    *,
-    assets: tuple[str, ...] | list[str] | None = None,
-    penalty_strength: float = SOFT_HORIZON_CONSENSUS_PENALTY,
-) -> StandaloneBacktestConfig:
-    """Soft = mesmo Control + modificador continuo multi-horizonte."""
-    control = construir_configuracao_controle(base, assets=assets)
-    settings = deepcopy(control.research_model_settings)
-    settings["soft_horizon_consensus"] = {
-        "enabled": True,
-        "penalty_strength": float(penalty_strength),
-    }
-    return control.copiar_modelo(update={"research_model_settings": settings})
 
 
 CONFIG = StandaloneBacktestConfig()
