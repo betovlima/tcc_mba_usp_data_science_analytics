@@ -4,19 +4,21 @@
 
 Este arquivo consolida em um único lugar o histórico técnico, as decisões
 metodológicas, a arquitetura final, os resultados, as refatorações, os testes e
-a avaliação crítica do projeto até o estado científico atualmente consolidado
-na `main`.
+a avaliação crítica do projeto no contrato científico descrito abaixo.
 
 Baseline científico documentado:
 
 ```text
-versão: 1.22.0-dev.8
-main de referência: 4655e2ea54ba870d23ebf67ffb0bb3f30bb2180f
-data da consolidação: 2026-10-08
+versão: 1.22.0-dev.9
+main de referência para a correção: 262e5388354f258de2480151a0b9f1b9ff147db7
+branch de trabalho: fix/u67-buy-hold-same-universe
+data da atualização: 2026-10-09
 ```
 
-Esta consolidação é documental. Ela não altera parâmetros científicos, dados,
-folds, regras de rotação ou resultados do experimento.
+Esta revisão corrige a compra e manutenção para utilizar os mesmos ativos
+efetivos da rotação. Os dados, parâmetros do modelo, folds e regras da estratégia
+foram preservados. A referência financeira foi recalculada; a validação por
+replay das decisões registradas está detalhada na seção 20.
 
 Este MANIFEST substitui a documentação histórica fragmentada que existia em
 arquivos de contexto, checkpoints antigos, notas de mudanças por versão e
@@ -28,8 +30,11 @@ projeto.
 
 ## 2. Objetivo científico
 
-O projeto avalia uma estratégia de rotação de capital entre ativos financeiros
-usando aprendizado de máquina supervisionado com LightGBM.
+O projeto avalia o crescimento do capital e o risco de uma estratégia de rotação
+orientada por utilidade ajustada ao risco, estimada por regressão supervisionada.
+A pesquisa utiliza um universo fixo de ativos. Sua única referência financeira
+é compra e manutenção com alocação inicial igualitária no mesmo conjunto de
+ativos, com o mesmo capital inicial, datas e funções de custos.
 
 O objetivo da implementação final é permitir uma reprodução independente do
 experimento usando:
@@ -163,7 +168,9 @@ do treinamento.
 
 ## 6. Universo U67
 
-O universo oficial de entrada contém 67 ativos.
+O universo fixo de entrada contém os 67 símbolos informados pelo autor. A lista
+completa é definida por `ASSETS`; `U67_REQUESTED_ASSETS` aponta para essa mesma
+lista, sem divisões entre conjuntos anteriores, candidatos e referência.
 
 A configuração é centralizada em:
 
@@ -185,6 +192,19 @@ ativos solicitados: 67
 ativos efetivos: 65
 exclusões estruturais esperadas: 2
 ```
+
+Os mesmos 65 ativos efetivos são utilizados pela rotação e por compra e
+manutenção. A referência distribui inicialmente 1/65 do capital por ativo,
+desconta as taxas de compra, mantém as quantidades sem rebalanceamento e
+liquida todas as posições no fechamento final. Um preço ausente, não positivo
+ou não finito interrompe o cálculo, em vez de reduzir silenciosamente seu
+universo. Os ativos efetivamente comprados pela rotação podem ser um subconjunto
+do universo estudado; isso não altera a composição da referência.
+
+O calendário é selecionado diretamente entre os históricos do universo efetivo.
+No snapshot auditado, a fonte continua sendo AAPL, com 2.506 datas preparadas e
+1.560 sessões de execução. Os limites dos três folds permanecem idênticos aos
+registrados na execução v1.22.0-dev.8.
 
 A regra metodológica adotada ao longo do projeto é conservadora: quando um ativo
 apresenta problema estrutural de identidade, continuidade histórica ou
@@ -513,13 +533,12 @@ indexada algumas horas depois de `00:00 UTC`.
 
 Na versão final, a janela voltou a ser congelada para fins de reprodução.
 
-### 14.7 Expansão do universo
+### 14.7 Consolidação do universo fixo
 
-A pesquisa avançou por checkpoints intermediários, incluindo U59 e depois U67.
-
-Esses checkpoints foram úteis para testar a estabilidade do motor e o impacto
-do universo, mas foram posteriormente substituídos pelo contrato final U67
-consolidado no código atual.
+As versões intermediárias de preparação foram substituídas pelo contrato final
+U67. Elas integram o histórico de desenvolvimento. Os resultados apresentados
+para responder ao objetivo científico utilizam o universo fixo final e a
+comparação entre rotação e compra e manutenção nesse mesmo conjunto.
 
 ### 14.8 Investigação de precisão numérica
 
@@ -655,10 +674,9 @@ gráficos são exportados.
 US$ 10 mil para dezenas de milhões exigem interpretação cautelosa. O resultado
 é histórico e não deve ser apresentado como expectativa de desempenho futuro.
 
-**Risco de seleção de universo.** O U67 foi alcançado depois de várias etapas de
-pesquisa e expansão do universo. Isso pode introduzir viés de seleção ou
-data-snooping quando o desempenho final é interpretado fora do contexto do
-processo de pesquisa.
+**Seleção retrospectiva da amostra.** O universo é fixo para este estudo. Sua
+definição não foi validada prospectivamente antes da janela de avaliação. A
+generalização para outros ativos e períodos exige investigação adicional.
 
 **Custos potencialmente otimistas.** A configuração final usa
 `slippage_bps=0` e `commission_rate=0`. Existem taxas regulatórias, mas a
@@ -763,7 +781,7 @@ uma decisão metodológica explícita.
 O estado científico descrito por este documento é:
 
 ```text
-versão científica        = 1.22.0-dev.8
+versão científica        = 1.22.0-dev.9
 universo solicitado      = 67
 universo efetivo         = 65
 modelo                   = LightGBM Control
@@ -774,8 +792,68 @@ CAGR                     = 322.775261%
 Sharpe                   = 2.56904268
 Max Drawdown             = -30.358970%
 Worst Fold               = 282.589554%
-Ruff                     = aprovado
-pytest                   = 34 aprovados
+compra e manutenção      = mesmos 65 ativos efetivos
+capital final referência = US$ 33,295.28176973073
+Ruff local               = aprovado
+pytest local             = 44 aprovados
 ```
 
-A versão científica não foi alterada por esta consolidação documental.
+A versão foi incrementada porque a referência financeira foi corrigida.
+
+---
+
+## 20. Comparação no mesmo universo fixo
+
+A revisão de 9 de outubro de 2026 removeu do fluxo oficial a construção de um
+universo separado para compra e manutenção e a injeção de um benchmark externo
+no replay. O motor calcula a referência com os mesmos `frames`, `symbols` e
+datas da estratégia. O JSON registra `benchmark_assets`,
+`benchmark_asset_count` e `benchmark_same_universe`. O CSV
+`u67_buy_hold_assets.csv` registra os ativos e seus pesos iniciais.
+
+### 20.1 Verificação executada
+
+Utilizaram-se `u67.zip` e `pacote_reproducao_u67.zip` fornecidos pelo autor.
+Conferiram-se a identidade do snapshot e seus 134 hashes. Prepararam-se os 65
+ativos com o parser round-trip e recalculou-se compra e manutenção com as
+funções oficiais de taxas e deslizamento.
+
+As decisões diárias registradas em `u67_predictions.csv` foram reaplicadas no
+motor financeiro. O replay manteve as 674 operações, os limites dos três folds,
+as 1.560 sessões e toda a curva de capital da estratégia, com diferença máxima
+absoluta de US$ 0,00. Os dois checkpoints foram preservados até o centavo.
+Esta validação não repetiu o treinamento dos modelos; verifica o calendário,
+a referência e a contabilidade das decisões já registradas.
+
+### 20.2 Referência recalculada
+
+```text
+ativos de compra e manutenção = mesmos 65 ativos efetivos
+peso inicial por ativo       = 1/65, antes das taxas de compra
+capital inicial              = US$ 10,000.00
+capital final                = US$ 33,295.28176973073
+retorno acumulado            = 232.952818%
+CAGR                         = 21.384775%
+Sharpe                       = 1.04791659
+drawdown máximo              = -27.494624%
+retorno no fold 1             = 45.511891%
+retorno no fold 2             = 44.277723%
+retorno no fold 3             = 58.593334%
+```
+
+Esses valores foram produzidos pelo recálculo da referência. O pacote histórico
+v1.22.0-dev.8 permanece como evidência das decisões da rotação; sua antiga curva
+de compra e manutenção foi substituída na comparação científica desta revisão.
+
+### 20.3 Validação do código
+
+Ruff passou nas regras F401, F811, F821 e F841. A suíte local passou com 44
+casos, incluindo alocação igualitária com taxas, liquidação final e interrupção
+quando um ativo tem preços ausentes ou inválidos. Um teste de replay também
+verificou que a referência inclui todo o universo declarado, mesmo quando a
+rotação compra apenas um dos ativos.
+
+As limitações de execução e elegibilidade futura já identificadas não foram
+alteradas por esta correção. O resultado histórico não demonstra desempenho
+prospectivo nem isola a contribuição individual dos componentes da utilidade.
+

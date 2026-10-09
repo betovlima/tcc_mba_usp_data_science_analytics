@@ -763,26 +763,30 @@ def _benchmark_pesos_iguais(frames: dict[str, pd.DataFrame], symbols: list[str],
         return pd.Series(dtype=float)
     first = execution_dates[0]
     last = execution_dates[-1]
-    benchmark_symbols: list[str] = []
+    if not symbols or len(set(symbols)) != len(symbols):
+        raise ValueError('The fixed benchmark universe must be nonempty and contain unique assets.')
     for symbol in symbols:
+        if symbol not in frames:
+            raise ValueError(f'{symbol}: missing prices in the fixed benchmark universe.')
         frame = frames[symbol]
         window = frame.reindex(execution_dates)
         first_open = float(window.iloc[0].get('open', float('nan')))
         closes = pd.to_numeric(window['close'], errors='coerce')
-        if (
+        if not (
             np.isfinite(first_open)
             and first_open > 0
-            and closes.notna().all()
+            and np.isfinite(closes.to_numpy(dtype=float)).all()
             and (closes > 0).all()
         ):
-            benchmark_symbols.append(symbol)
-    if not benchmark_symbols:
-        raise ValueError('No asset has complete prices for the benchmark execution window.')
+            raise ValueError(
+                f'{symbol}: incomplete or invalid prices for the fixed benchmark execution window; '
+                'assets cannot be silently removed from the comparison.'
+            )
 
-    capital_per_asset = float(initial_capital) / len(benchmark_symbols)
+    capital_per_asset = float(initial_capital) / len(symbols)
     quantities: dict[str, float] = {}
     residual = 0.0
-    for symbol in benchmark_symbols:
+    for symbol in symbols:
         buy_price = float(slippage(float(frames[symbol].loc[first, 'open']), 'BUY', config))
         quantity = capital_per_asset / buy_price
         for _ in range(20):
@@ -872,7 +876,7 @@ def _precalcular_diagnosticos_regime_mercado(
         }
     return output
 
-def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tuple[int, float]], frames: dict[str, pd.DataFrame], symbols: list[str], decision_dates: pd.DatetimeIndex, config: Any, fee_calculator: Callable, slippage: Callable, decision_metadata: dict[pd.Timestamp, dict[str, Any]] | None=None, policy_decision_diagnostics: dict[pd.Timestamp, dict[str, Any]] | None=None, trade_callback: Callable[[dict[str, Any]], None] | None=None, *, model_label: str='LightGBM Utility', method_line: str | None=None, simulation_progress_callback: Callable[[float, str], None] | None = None, benchmark_override: pd.Series | None = None, benchmark_override_name: str | None = None) -> RotationRunResult:
+def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tuple[int, float]], frames: dict[str, pd.DataFrame], symbols: list[str], decision_dates: pd.DatetimeIndex, config: Any, fee_calculator: Callable, slippage: Callable, decision_metadata: dict[pd.Timestamp, dict[str, Any]] | None=None, policy_decision_diagnostics: dict[pd.Timestamp, dict[str, Any]] | None=None, trade_callback: Callable[[dict[str, Any]], None] | None=None, *, model_label: str='LightGBM Utility', method_line: str | None=None, simulation_progress_callback: Callable[[float, str], None] | None = None) -> RotationRunResult:
     if len(decision_dates) < 2:
         raise ValueError('The final-test interval is too short.')
 
@@ -890,37 +894,16 @@ def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tupl
     execution_dates = decision_dates[1:]
     simulation_progress(0.01, "OOS benchmark")
     phase_started = time.perf_counter()
-    if benchmark_override is None:
-        benchmark = _benchmark_pesos_iguais(
-            frames,
-            symbols,
-            execution_dates,
-            float(config.initial_capital),
-            config,
-            fee_calculator,
-            slippage,
-        )
-        benchmark_name = (
-            "Equal-weight buy-and-hold across continuously available assets"
-        )
-    else:
-        benchmark = pd.Series(
-            benchmark_override,
-            dtype=float,
-        ).reindex(execution_dates)
-        if (
-            benchmark.isna().any()
-            or not np.isfinite(benchmark.to_numpy(dtype=float)).all()
-            or (benchmark <= 0.0).any()
-        ):
-            raise ValueError(
-                "Fixed benchmark override does not cover the complete "
-                "execution window with positive finite values."
-            )
-        benchmark_name = str(
-            benchmark_override_name
-            or "Fixed external buy-and-hold benchmark"
-        )
+    benchmark = _benchmark_pesos_iguais(
+        frames,
+        symbols,
+        execution_dates,
+        float(config.initial_capital),
+        config,
+        fee_calculator,
+        slippage,
+    )
+    benchmark_name = "Equal-weight buy-and-hold on the same fixed asset universe"
     simulation_timing["benchmark_seconds"] = time.perf_counter() - phase_started
 
     simulation_progress(0.08, "OOS market-regime diagnostics")
@@ -1249,6 +1232,9 @@ def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tupl
         "decision_horizons": list(config.rotation_target_horizons),
         "overnight_positions_allowed": True,
         "benchmark_name": benchmark_name,
+        "benchmark_assets": list(symbols),
+        "benchmark_asset_count": len(symbols),
+        "benchmark_same_universe": True,
         "walk_forward_enabled": True,
         "walk_forward_purge_days": int(config.rotation_purge_days),
         "walk_forward_calibration_days": int(
@@ -1502,4 +1488,5 @@ def _desempenho_folds(predictions: pd.DataFrame, folds: list[dict[str, Any]], in
             'sessions': int(len(subset)),
         })
     return output
+
 
