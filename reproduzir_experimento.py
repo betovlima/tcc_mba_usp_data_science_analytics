@@ -10,6 +10,7 @@ Reproduzir o experimento final do TCC de forma independente e deterministica:
 - normalizar splits;
 - aplicar as exclusoes estruturais documentadas, resultando em 65 ativos;
 - executar LightGBM Control, folds temporais, purge, custos e regras de rotacao;
+- comparar a rotacao com compra e manutencao nos mesmos 65 ativos efetivos;
 - validar o resultado contra checkpoints congelados do proprio TCC.
 
 Execucao no Spyder
@@ -55,13 +56,11 @@ from engine.modelo_lightgbm import (
     selecionar_switch_margin,
 )
 from engine.rotacao import (
-    _benchmark_pesos_iguais,
     _crescimento_politica_simples,
     _politica_agendada,
     _politica_utilidade,
     _precalcular_utilidades_modelo,
     _simular_exato,
-    preparar_painel_rotacao,
 )
 from reproducao.artefatos import (
     criar_pacote_analise,
@@ -78,8 +77,8 @@ ROOT = Path(__file__).resolve().parent
 DATA = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.22.0-dev.8"
-EXECUTION_SCHEMA = "u67-control-reproducao-v1"
+REPRODUCTION_VERSION = "1.22.0-dev.9"
+EXECUTION_SCHEMA = "u67-control-reproducao-v2"
 
 
 U67_ANALYSIS_END_DATE = "2026-10-06"
@@ -285,27 +284,7 @@ for symbol in effective_assets_requested_order:
     )
 
 
-# %% 3 - Mesmo calendario U56 elegivel e mesma configuracao Control
-u56_eligible = tuple(
-    symbol
-    for symbol in tuple(CONFIG.assets)
-    if symbol in frames_raw
-)
-if len(u56_eligible) != 54:
-    raise RuntimeError(
-        "O calendario de paridade deveria usar 54 ativos elegiveis do U56 "
-        f"(U56 sem CLMT/DOC); observado={len(u56_eligible)}"
-    )
-
-config_u56 = build_control_config(
-    {symbol: frames_raw[symbol] for symbol in u56_eligible},
-    CONFIG,
-)
-_, reference_calendar, reference_source = preparar_painel_rotacao(
-    {symbol: frames_raw[symbol] for symbol in u56_eligible},
-    config_u56,
-)
-
+# %% 3 - Calendario e configuracao do universo fixo U67
 config_u67 = build_control_config(
     {symbol: frames_raw[symbol] for symbol in effective_assets_requested_order},
     CONFIG,
@@ -331,8 +310,6 @@ config_u67 = config_u67.copiar_modelo(
         for symbol in effective_assets_requested_order
     },
     config_u67,
-    calendar_override=reference_calendar,
-    calendar_source_label=f"U56_FIXED:{reference_source}",
 )
 
 if len(symbols) != U67_EXPECTED_EFFECTIVE_COUNT:
@@ -342,8 +319,7 @@ if len(symbols) != U67_EXPECTED_EFFECTIVE_COUNT:
     )
 
 print(
-    f"[calendar] reference_source={reference_source} "
-    f"calendar_source={calendar_source} "
+    f"[calendar] calendar_source={calendar_source} "
     f"common_dates={len(common_dates)} "
     f"folds={len(folds)} "
     f"decision_sessions={len(all_decision_dates)-1}",
@@ -351,26 +327,14 @@ print(
 )
 
 
-# %% 4 - Benchmark: U56 elegivel equal-weight
-benchmark = _benchmark_pesos_iguais(
-    {
-        symbol: frames[symbol]
-        for symbol in u56_eligible
-        if symbol in frames
-    },
-    [
-        symbol
-        for symbol in u56_eligible
-        if symbol in frames
-    ],
-    all_decision_dates[1:],
-    float(config_u67.initial_capital),
-    config_u67,
-    calcular_taxas_referencia,
-    aplicar_deslizamento,
+# %% 4 - Comparacao: compra e manutencao no mesmo universo fixo
+# O replay financeiro calcula a referencia com frames, symbols e datas
+# identicos aos da rotacao. Nao ha benchmark externo ou subconjunto de ativos.
+print(
+    f"[benchmark] same_universe=true assets={len(symbols)} "
+    f"initial_weight={1.0 / len(symbols):.12f}",
+    flush=True,
 )
-
-BENCHMARK_NAME = "Fixed eligible U56 equal-weight buy-and-hold"
 
 
 # %% 5 - Treino, calibracao e politica oficial do TCC
@@ -527,8 +491,6 @@ result = _simular_exato(
         "- Snapshot U67 congelado; LightGBM Control; "
         "validacao temporal walk-forward."
     ),
-    benchmark_override=benchmark,
-    benchmark_override_name=BENCHMARK_NAME,
 )
 
 metrics = summarize_metrics(
@@ -536,6 +498,7 @@ metrics = summarize_metrics(
     folds,
     float(config_u67.initial_capital),
 )
+metrics["calendar_source_asset"] = calendar_source
 ending_capital = float(metrics["ending_capital"])
 
 
@@ -654,6 +617,15 @@ pd.DataFrame(
     OUT / "u67_effective_assets.csv",
     index=False,
 )
+pd.DataFrame(
+    {
+        "asset": metrics["benchmark_assets"],
+        "initial_weight": 1.0 / metrics["benchmark_asset_count"],
+    }
+).to_csv(
+    OUT / "u67_buy_hold_assets.csv",
+    index=False,
+)
 pd.DataFrame(exclusions).to_csv(
     OUT / "u67_runtime_exclusions.csv",
     index=False,
@@ -721,7 +693,6 @@ payload = {
         "excluded_assets": exclusions,
     },
     "calendar": {
-        "reference_source": reference_source,
         "calendar_source": calendar_source,
         "common_dates": len(common_dates),
         "decision_sessions": len(all_decision_dates) - 1,
@@ -776,3 +747,4 @@ print(
     flush=True,
 )
 sinal_sonoro_conclusao()
+
