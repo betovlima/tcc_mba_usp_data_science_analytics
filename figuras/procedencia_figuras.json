@@ -1,7 +1,6 @@
 {
   "natureza": "Derivações descritivas dos registros preservados; nenhum modelo foi reajustado.",
   "execucao_cientifica_commit": "3f8d1b1a2784721201938071471e91fd4282f628",
-  "snapshot_sha256": "e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575",
   "fontes": {
     "evidencias/series_financeiras_v1.22.0-dev.10.csv": "f9e873cc33e91e006817ac31781261d4ef440745d8b7cf82208026186a29b9b9",
     "evidencias/eligibilidade_v1.22.0-dev.10.json": "7279bec3c0f2263ee85e9fef3f617ee86b7836efca16af6bbabe29728c7e1c28"
