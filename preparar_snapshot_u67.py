@@ -78,7 +78,6 @@ validated = validate_snapshot(TARGET)
 print(
     "[snapshot-u67] ready "
     f"assets={len(validated.get('assets') or [])} "
-    f"sha256={validated.get('snapshot_sha256')} "
     f"path={TARGET.root}",
     flush=True,
 )
