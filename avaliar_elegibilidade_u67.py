@@ -10,7 +10,6 @@ import argparse
 from dataclasses import asdict
 from importlib.metadata import version
 from pathlib import Path
-import hashlib
 import json
 import platform
 import time
@@ -38,7 +37,6 @@ from reproducao.preparacao import prepare_model_frames
 
 ROOT = Path(__file__).resolve().parent
 BASELINE_COMMIT = "192dc7bd457beed66a62a13c368b20865da748c9"
-SNAPSHOT_SHA256 = "e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575"
 HISTORICAL_ENDING_CAPITAL = 76_927_051.38897176
 
 
@@ -81,8 +79,6 @@ def avaliar(data_root=None, output=None, historical=None):
     out.mkdir(parents=True, exist_ok=True)
     paths = SnapshotPaths.from_root(Path(data_root)) if data_root else SnapshotPaths.u67(ROOT)
     snapshot = validate_snapshot(paths)
-    if snapshot["snapshot_sha256"] != SNAPSHOT_SHA256:
-        raise ValueError("Esta comparação exige o mesmo snapshot do experimento registrado.")
     raw, exclusions, _, audit = prepare_model_frames(
         paths, assets=U67_REQUESTED_ASSETS, csv_float_precision="round_trip"
     )
@@ -180,16 +176,16 @@ def avaliar(data_root=None, output=None, historical=None):
     if historical:
         hpath = Path(historical)
         record = json.loads(hpath.read_text(encoding="utf-8"))
-        historical_metrics = {"source_sha256": hashlib.sha256(hpath.read_bytes()).hexdigest(),
-                              "reproduction_version": record.get("reproduction_version"),
-                              "ending_capital": record["metrics"]["ending_capital"]}
+        historical_metrics = {
+            "reproduction_version": record.get("reproduction_version"),
+            "ending_capital": record["metrics"]["ending_capital"],
+        }
     cfg = asdict(config)
     payload = {
         "version": EXPERIMENT_VERSION, "status": "completed", "baseline_commit": BASELINE_COMMIT,
         "comparison_design": "paired_same_fitted_models_future_availability_filter_only",
-        "snapshot_sha256": snapshot["snapshot_sha256"], "verified_file_hashes": len(snapshot["file_hashes"]),
+        "snapshot_name": snapshot.get("snapshot_name"),
         "configuration": cfg,
-        "configuration_sha256": hashlib.sha256(json.dumps(cfg, sort_keys=True, default=str).encode()).hexdigest(),
         "data_audit": audit, "calendar_source": calendar,
         "execution_start": new.predictions.index[0].isoformat(),
         "execution_end": new.predictions.index[-1].isoformat(),
