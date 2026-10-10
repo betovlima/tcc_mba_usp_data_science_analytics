@@ -1025,3 +1025,72 @@ de teste com sua escala e número de observações, distinguindo-os das
 importâncias calculadas no ajuste. A revisão deve preservar as limitações
 econômicas e a interpretação da política completa frente a compra e
 manutenção, sem atribuir causalidade individual aos seus componentes.
+
+---
+
+## 22. Procedência dos hiperparâmetros (conferência documental de 2026-10-10)
+
+O arquivo original e57d19fd-37d6-4be0-b54a-08e81f9b2892.zip, recuperado nos
+anexos históricos, contém o manifesto e os CSVs da campanha
+20260813T170641-tune-27cdfc7d. Ela foi concluída em 13 de agosto de 2026:
+20 configurações além do controle, todas concluídas, semente 42, seis
+propostas iniciais por hipercubo latino e 14 propostas adaptativas.
+O modelo probabilístico registrado foi
+gaussian_process_adaptive_trust_region_cei_v2.
+
+Os oito domínios foram: 220–380 árvores; taxa de aprendizado 0,020–0,050;
+profundidade 2–4; 4–12 folhas, limitadas pela profundidade; 15–30 observações
+mínimas por folha; proporção de atributos 0,75–0,95; regularização L1
+0–0,50 e L2 1–4. Os outros parâmetros do modelo foram conservados do controle.
+
+Processos gaussianos estimaram capital final, Sharpe, drawdown máximo e
+retorno do pior fold. A aquisição combinou melhoria esperada de capital
+sujeita às condições de risco, exploração da incerteza e probabilidade de
+satisfazer as condições. O registro do candidato selecionado identifica
+2.048 propostas na aquisição, 512 cenários de Monte Carlo e peso de
+exploração 0,15. A atualização do incumbente exigia ao menos 3% de melhoria
+no capital, tolerância absoluta 0,05 no Sharpe, 0,03 no drawdown e retorno
+positivo no pior fold. O ranking final ordenava as configurações com
+todos os folds positivos pela pontuação acumulada de retornos
+logarítmicos penalizados por perdas e aumentos de drawdown, com desempate
+por capital final e Sharpe.
+
+O candidato 18 foi o primeiro no ranking e satisfez as condições de
+atualização. Seu vetor completo de 16 opções coincide exatamente com
+engine/configuracao.py. Esta conferência não executou novo treinamento
+nem modificou resultados do experimento dev.10.
+
+A configuração de origem, recuperada em
+extrema_backtest.strategy_profiles.json, tem o mesmo hash
+fac52b7e8ba25a916b5570a69de29a2fc970ffb1166868aa8de26330dba9dc67
+registrado na campanha. Ela documenta a composição exploratória então
+configurada, recorte iniciado em 2016-01-01, barras diárias, Alpaca/SIP
+e ajuste all. A campanha fixou o corte em 2026-08-11 e registrou a
+assinatura de dados
+d4fc5bf5460e01d4a76208f5931c21abefa98657ad9785fd8a67fb408a828e0c
+em todas as 21 configurações. A identificação dessa composição serve
+à procedência dos parâmetros. O experimento do TCC conserva sua lista
+fixa e compra e manutenção como única referência financeira.
+
+As métricas usadas na seleção cobriram 2020-07-22 a 2026-08-11, com três
+folds cronológicos. O registro conserva retornos por fold, mas não todas
+as datas de fronteira do treinamento e da calibração. A base original
+congelada também não foi recuperada: os outros backtests examinados
+possuem assinatura diferente e não devem preencher essa lacuna.
+É necessário recuperar o snapshot original e os limites exatos das
+janelas para repetir a campanha integralmente. O commit da execução
+original pode ser conferido no log do job, se disponível.
+
+A seleção foi exploratória e consultou resultados em período que se
+sobrepõe à avaliação atual. A manutenção posterior dos hiperparâmetros
+e a validação cronológica do ajuste não demonstram independência da
+avaliação em relação a essa seleção. A calibração da margem no
+experimento dev.10 continua sendo uma busca em grade por fold, distinta
+da otimização bayesiana dos hiperparâmetros.
+
+evidencias/selecao_hiperparametros_20260813.json registra as fontes e seus
+hashes, o contrato de dados, os domínios, a configuração selecionada, a
+conferência com o código atual e as pendências específicas. A referência
+ao código do período é uma verificação de implementação, não prova do
+commit exato da campanha. A versão científica permanece dev.10; esta
+alteração é documental e permanece na branch de trabalho.
