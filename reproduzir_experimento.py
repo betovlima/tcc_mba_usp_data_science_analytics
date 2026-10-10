@@ -348,6 +348,7 @@ fold_policies = {}
 fold_margins = []
 fold_calibration_candidates = []
 fold_predictive_diagnostics = []
+decision_diagnostics: dict[pd.Timestamp, dict[str, object]] = {}
 
 for fold_position, fold in enumerate(folds, start=1):
     fold_id = int(fold["fold_id"])
@@ -461,6 +462,7 @@ for fold_position, fold in enumerate(folds, start=1):
         symbols,
         config_u67,
         effective_margin,
+        decision_diagnostics=decision_diagnostics,
         fold_id=fold_id,
         calibrated_switch_margin=selected_margin,
         utility_cache=decision_cache,
@@ -493,6 +495,7 @@ result = _simular_exato(
     calcular_taxas_referencia,
     aplicar_deslizamento,
     decision_metadata=decision_metadata,
+    policy_decision_diagnostics=decision_diagnostics,
     model_label="TCC U67 Control",
     method_line=(
         "- Snapshot U67 congelado; LightGBM Control; "
