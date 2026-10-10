@@ -1094,3 +1094,55 @@ conferência com o código atual e as pendências específicas. A referência
 ao código do período é uma verificação de implementação, não prova do
 commit exato da campanha. A versão científica permanece dev.10; esta
 alteração é documental e permanece na branch de trabalho.
+
+---
+
+## 23. Técnicas de Data Science e figuras do TCC (2026-10-10)
+
+A revisão do texto detalhou a unidade ativo-sessão, a engenharia dos 52
+atributos, a construção do alvo contínuo, a regressão por árvores com
+boosting de gradiente, a perda quadrática e a função dos controles de
+complexidade. Também explicou o uso do hipercubo latino e dos processos
+gaussianos na campanha histórica, a calibração da margem por grade, o
+reajuste antes do teste e a separação cronológica dos rótulos.
+
+gerar_figuras_tcc.py produz sete figuras: fluxo dos dados, janelas
+temporais, capital em escala logarítmica, drawdown, retornos por ano,
+MAE/RMSE no teste e participação dos oito grupos de atributos no ganho
+dos ajustes finais. As duas curvas existentes foram reapresentadas e
+cinco figuras foram acrescentadas. O Word preserva dez tabelas e inclui
+cinco gráficos nativos editáveis com suas planilhas incorporadas.
+
+evidencias/series_financeiras_v1.22.0-dev.10.csv conserva as 1.560 datas,
+as duas curvas financeiras e a identificação do fold, extraídas de
+output/reproducao/u67_predictions.csv. Seu SHA-256 é
+f9e873cc33e91e006817ac31781261d4ef440745d8b7cf82208026186a29b9b9.
+Os erros e os ganhos provêm de evidencias/eligibilidade_v1.22.0-dev.10.json.
+figuras/procedencia_figuras.json identifica essas fontes, a execução
+científica 3f8d1b1a2784721201938071471e91fd4282f628 e os hashes das imagens.
+
+Os retornos por ano usam o capital da última sessão de cada intervalo
+dividido pelo capital do encerramento anterior, menos um; a primeira
+base é US$ 10.000. Os anos 2020 e 2026 são parciais e não foram
+anualizados. A composição dos fatores anuais reproduz o capital final.
+O ganho de cada grupo é a soma dos ganhos normalizados de seus atributos
+em cada modelo, seguida da média simples entre os 65 modelos finais do
+fold. A soma dos oito grupos é um. Trata-se de ganho no treinamento,
+sem atribuição causal ao retorno ou medição de importância no teste.
+Os grupos têm quantidades diferentes de atributos.
+
+Verificaram-se a igualdade exata das colunas exportadas com o registro
+financeiro, a contagem das sessões, a correspondência dos capitais
+finais, os três folds e as somas dos ganhos. Duas gerações sucessivas
+preservaram os bytes dos 18 arquivos derivados. A análise estática de
+gerar_figuras_tcc.py passou. As 29 páginas do Word foram conferidas após
+renderização, inclusive equações, legendas e tabelas.
+
+Esta revisão não executou novo treinamento ou backtest, não modificou
+o motor financeiro e não constitui uma nova rodada dos 80 testes
+registrados na execução corrigida. A versão científica permanece
+v1.22.0-dev.10, o universo da pesquisa continua fixo e compra e
+manutenção permanece a única referência financeira. A pendência sobre
+o snapshot e as fronteiras da campanha de hiperparâmetros foi preservada.
+As alterações continuam em fix/u67-eligibilidade-sem-futuro; a main
+permanece no commit 262e5388354f258de2480151a0b9f1b9ff147db7.
