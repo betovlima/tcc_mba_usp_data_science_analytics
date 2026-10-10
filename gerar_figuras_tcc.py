@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 import json
 from pathlib import Path
 
@@ -30,10 +29,6 @@ GROUPS = [
     ("Aceleração e expansão", 46, 49),
     ("Volume", 49, 52),
 ]
-
-
-def digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def pt(value: float, decimals: int = 0) -> str:
@@ -149,7 +144,7 @@ def timeline(folds: list[dict]) -> None:
 def main() -> None:
     OUT.mkdir(exist_ok=True)
     plt.rcParams.update({"font.family": "Nimbus Sans", "font.size": 11,
-                         "svg.fonttype": "path", "svg.hashsalt": "tcc-u67-dev10",
+                         "svg.fonttype": "path",
                          "axes.labelsize": 11})
     curve_path = ROOT / "evidencias/series_financeiras_v1.22.0-dev.10.csv"
     evidence_path = ROOT / "evidencias/eligibilidade_v1.22.0-dev.10.json"
@@ -258,12 +253,14 @@ def main() -> None:
     provenance = {
         "natureza": "Derivações descritivas dos registros preservados; nenhum modelo foi reajustado.",
         "execucao_cientifica_commit": "3f8d1b1a2784721201938071471e91fd4282f628",
-        "snapshot_sha256": evidence["snapshot_sha256"],
-        "fontes": {str(p.relative_to(ROOT)): digest(p) for p in [curve_path, evidence_path]},
+        "fontes": [
+            str(curve_path.relative_to(ROOT)),
+            str(evidence_path.relative_to(ROOT)),
+        ],
         "retornos_anuais": "Capital final de cada ano / capital da última sessão do ano anterior - 1; primeiro intervalo começa em US$ 10.000; 2020 e 2026 parciais; sem anualização.",
         "importancias": "Soma dos ganhos normalizados de atributos do grupo em cada modelo; média simples entre 65 modelos finais em cada fold. Soma dos oito grupos igual a um.",
         "limite_importancias": "Ganhos do treinamento; não são efeitos causais nem importâncias medidas no teste. Grupos têm números diferentes de atributos.",
-        "figuras": {p.name: digest(p) for p in sorted(OUT.glob("figura_*"))},
+        "figuras": [p.name for p in sorted(OUT.glob("figura_*"))],
     }
     (OUT/"procedencia_figuras.json").write_text(json.dumps(provenance, ensure_ascii=False, indent=2)+"\n")
     print(f"Sete figuras e três tabelas de dados verificadas em {OUT}.")

@@ -22,7 +22,6 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
-import hashlib
 import json
 import math
 import platform
@@ -70,7 +69,7 @@ from reproducao.artefatos import (
 from reproducao.dados import SnapshotPaths, validate_snapshot
 from reproducao.experimento import build_control_config, summarize_metrics
 from reproducao.graficos import gerar_analises_backtest
-from reproducao.preparacao import load_raw_bar_file, prepare_model_frames
+from reproducao.preparacao import prepare_model_frames
 
 
 # %% 0 - Contrato oficial do experimento U67
@@ -78,8 +77,8 @@ ROOT = Path(__file__).resolve().parent
 DATA = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.22.1"
-EXECUTION_SCHEMA = "u67-control-reproducao-v2"
+REPRODUCTION_VERSION = "1.22.2"
+EXECUTION_SCHEMA = "u67-control-reproducao-v3"
 
 
 U67_ANALYSIS_END_DATE = "2026-10-06"
@@ -87,46 +86,6 @@ U67_CHECKPOINT_DATE = "2026-09-17"
 U67_EXPECTED_ENDING_CAPITAL = 76_927_051.38897176
 U67_EXPECTED_CAPITAL_AT_CHECKPOINT = 78_782_538.31270888
 CHECKPOINT_ABS_TOL = 0.01
-MODEL_DATA_COLUMNS = ("open", "high", "low", "close", "volume")
-
-
-def _canonical_history_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    """Canonicaliza OHLCV antes do SHA-256."""
-    canonical = frame[list(MODEL_DATA_COLUMNS)].copy()
-    canonical.index = pd.to_datetime(
-        canonical.index,
-        utc=True,
-        errors="coerce",
-    )
-    canonical = canonical.loc[~canonical.index.isna()]
-    canonical = canonical[
-        ~canonical.index.duplicated(keep="last")
-    ].sort_index()
-    try:
-        canonical.index = canonical.index.as_unit("ns")
-    except AttributeError:
-        canonical.index = pd.DatetimeIndex(
-            canonical.index.to_numpy(dtype="datetime64[ns]"),
-            tz="UTC",
-        )
-    for column in MODEL_DATA_COLUMNS:
-        canonical[column] = pd.to_numeric(
-            canonical[column],
-            errors="coerce",
-        ).astype(np.float64, copy=False)
-    return canonical
-
-
-def _history_frame_sha256(frame: pd.DataFrame) -> str:
-    """Calcula o hash OHLCV para auditoria reprodutivel."""
-    canonical = _canonical_history_frame(frame)
-    row_hashes = pd.util.hash_pandas_object(
-        canonical,
-        index=True,
-    ).to_numpy(dtype=np.uint64, copy=False)
-    return hashlib.sha256(row_hashes.tobytes()).hexdigest()
-
-
 def _package_version(name: str) -> str | None:
     try:
         return package_version(name)
@@ -192,7 +151,7 @@ if snapshot_action_end != U67_ANALYSIS_END_DATE:
 print(
     "[snapshot] mode=frozen_git "
     f"requested_assets={len(U67_REQUESTED_ASSETS)} "
-    f"sha256={snapshot_manifest.get('snapshot_sha256')}",
+    f"name={snapshot_manifest.get('snapshot_name')}",
     flush=True,
 )
 
@@ -237,53 +196,6 @@ print(
     + ",".join(effective_assets_requested_order),
     flush=True,
 )
-
-# Hashes calculados com canonicalizacao OHLCV deterministica.
-# Eles permitem comparar os 65 ativos sem depender do hash fisico do CSV.
-market_data_hash_rows = []
-for symbol in effective_assets_requested_order:
-    raw_frame = load_raw_bar_file(
-        DATA.raw_bars / f"{symbol}.csv",
-        float_precision="round_trip",
-    )
-    normalized_frame = frames_raw[symbol]
-    raw_canonical = _canonical_history_frame(raw_frame)
-    normalized_canonical = _canonical_history_frame(normalized_frame)
-    row = {
-        "asset": symbol,
-        "raw_sha256": _history_frame_sha256(raw_frame),
-        "normalized_sha256": _history_frame_sha256(normalized_frame),
-        "raw_rows": int(len(raw_canonical)),
-        "normalized_rows": int(len(normalized_canonical)),
-        "raw_first_timestamp": (
-            pd.Timestamp(raw_canonical.index.min()).isoformat()
-            if len(raw_canonical)
-            else None
-        ),
-        "raw_last_timestamp": (
-            pd.Timestamp(raw_canonical.index.max()).isoformat()
-            if len(raw_canonical)
-            else None
-        ),
-        "normalized_first_timestamp": (
-            pd.Timestamp(normalized_canonical.index.min()).isoformat()
-            if len(normalized_canonical)
-            else None
-        ),
-        "normalized_last_timestamp": (
-            pd.Timestamp(normalized_canonical.index.max()).isoformat()
-            if len(normalized_canonical)
-            else None
-        ),
-    }
-    market_data_hash_rows.append(row)
-    print(
-        f"[hash] {symbol} "
-        f"raw={row['raw_sha256']} "
-        f"normalized={row['normalized_sha256']}",
-        flush=True,
-    )
-
 
 # %% 3 - Calendario e configuracao do universo fixo U67
 config_u67 = build_control_config(
@@ -648,10 +560,6 @@ pd.DataFrame(fold_calibration_candidates).to_csv(
     OUT / "u67_fold_calibration_candidates.csv",
     index=False,
 )
-pd.DataFrame(market_data_hash_rows).to_csv(
-    OUT / "u67_market_data_hashes.csv",
-    index=False,
-)
 with (
     OUT / "u67_runtime_environment.json"
 ).open("w", encoding="utf-8") as handle:
@@ -693,7 +601,6 @@ payload = {
         "snapshot": snapshot_manifest,
         "data_audit": data_audit,
         "diagnostics": diagnostics,
-        "market_data_hashes": market_data_hash_rows,
     },
     "universe": {
         "requested_count": len(U67_REQUESTED_ASSETS),
@@ -741,7 +648,6 @@ with (
 
 gerar_analises_backtest(
     OUT,
-    manifest=snapshot_manifest,
     result=result,
 )
 

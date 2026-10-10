@@ -656,7 +656,6 @@ def _formatar_excel(path: Path) -> None:
 def _salvar_excel(
     path: Path,
     *,
-    manifest: dict[str, Any],
     analytics: dict[str, pd.DataFrame],
     summary: dict[str, Any],
 ) -> None:
@@ -670,10 +669,6 @@ def _salvar_excel(
     metadados = pd.DataFrame(
         [
             {"field": "experiment_version", "value": EXPERIMENT_VERSION},
-            {
-                "field": "snapshot_sha256",
-                "value": manifest.get("snapshot_sha256"),
-            },
             {"field": "database_access", "value": False},
             {"field": "source", "value": "Backtest Analytics local"},
         ]
@@ -822,7 +817,6 @@ def _gerar_variante(
 def gerar_analises_backtest(
     output_dir: Path,
     *,
-    manifest: dict[str, Any],
     result: Any,
 ) -> dict[str, Path]:
     """Gera dados, graficos e planilha do backtest oficial U67 Control."""
@@ -841,7 +835,6 @@ def gerar_analises_backtest(
     excel_path = graficos_dir / "backtest_analytics.xlsx"
     _salvar_excel(
         excel_path,
-        manifest=manifest,
         analytics=analytics,
         summary=summary,
     )

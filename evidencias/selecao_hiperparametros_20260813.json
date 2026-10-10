@@ -3,11 +3,7 @@
   "recovered_on": "2026-10-10",
   "sources": {
     "campaign_archive": "e57d19fd-37d6-4be0-b54a-08e81f9b2892.zip",
-    "campaign_archive_sha256": "9d8d54412ef3938a4fb54ee25b9c707c955c644ded446b783f108c1453cf1e38",
-    "campaign_manifest_sha256": "672005bb2f7cfd2e34db4901423c56b48285009742642015fa51d42016dce26a",
-    "origin_configuration_archive": "extrema_backtest.strategy_profiles.json",
-    "origin_configuration_archive_sha256": "c3d893988c1f8c05ac8d2b7ff20e229d8a2d813105600b92f10a9dd726764e8c",
-    "origin_configuration_hash_matches_campaign": true
+    "origin_configuration_archive": "extrema_backtest.strategy_profiles.json"
   },
   "campaign": {
     "run_id": "20260813T170641-tune-27cdfc7d",
@@ -27,9 +23,6 @@
     "validation": "chronological_walk_forward",
     "selection_metric": "risk_adjusted_compound_score",
     "eligibility_gate": "all_walk_forward_folds_positive",
-    "strategy_configuration_hash": "fac52b7e8ba25a916b5570a69de29a2fc970ffb1166868aa8de26330dba9dc67",
-    "execution_context_hash": "d0b8783e3920739c9c3bdd8f96c6876330f4f5dbbbfc1940ceccf7a3e14838f3",
-    "expected_market_data_signature_sha256": "d4fc5bf5460e01d4a76208f5931c21abefa98657ad9785fd8a67fb408a828e0c",
     "market_data_snapshot_id": "d4fc5bf5460e01d4a76208f5931c21abefa98657ad9785fd8a67fb408a828e0c",
     "market_data_cutoff_date": "2026-08-11"
   },
@@ -81,15 +74,15 @@
       {
         "name": "reg_alpha",
         "type": "number",
-        "min": 0.0,
+        "min": 0,
         "max": 0.5,
         "precision": 6
       },
       {
         "name": "reg_lambda",
         "type": "number",
-        "min": 1.0,
-        "max": 4.0,
+        "min": 1,
+        "max": 4,
         "precision": 6
       }
     ],
@@ -99,7 +92,7 @@
       "min_capital_improvement": 0.03,
       "sharpe_tolerance": 0.05,
       "drawdown_tolerance": 0.03,
-      "min_worst_fold_return": 0.0,
+      "min_worst_fold_return": 0,
       "candidate_pool_size": 2048,
       "exploration_weight": 0.15,
       "probability_model": "gaussian_process_adaptive_trust_region_cei_v2",
@@ -124,7 +117,7 @@
       "max_depth": 3,
       "num_leaves": 6,
       "min_child_samples": 18,
-      "min_child_weight": 5.0,
+      "min_child_weight": 5,
       "subsample": 0.85,
       "subsample_freq": 0,
       "colsample_bytree": 0.88067,
@@ -136,7 +129,6 @@
       "seed_step": 1000,
       "random_state": 42
     },
-    "settings_hash": "c127f2d420c8ad21a13e1cdc11b9cdb4de9a603de8e679f746027cd2bc7238a4",
     "rank": 1,
     "champion_gate_passed": true,
     "all_three_fold_returns_positive": true,
@@ -202,7 +194,7 @@
         "capital": 897047.0550933334,
         "sharpe": 1.79946267471341,
         "maximum_drawdown": -0.3491181840498436,
-        "worst_fold_return": 0.0,
+        "worst_fold_return": 0,
         "baseline_capital": 870919.4709644013
       },
       "interpretation": "research_surrogate_probability_not_future_profit_probability"
@@ -210,7 +202,6 @@
     "exactly_matches_current_experiment_settings": true
   },
   "selection_data_contract": {
-    "origin_configuration_hash": "fac52b7e8ba25a916b5570a69de29a2fc970ffb1166868aa8de26330dba9dc67",
     "configured_assets": [
       "NVDA",
       "AAPL",
@@ -276,7 +267,7 @@
     "hyperparameters_fixed_after_exploratory_selection": true,
     "margin_calibration_method": "grid",
     "margin_candidates": [
-      0.0,
+      0,
       0.0025,
       0.005,
       0.01

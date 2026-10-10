@@ -3,7 +3,7 @@
 Este modulo e independente de banco de dados em tempo de execucao. Os dados
 entram somente por CSVs locais gerados pela etapa de snapshot da Alpaca.
 
-Versao cientifica: 1.22.1
+Versao cientifica: 1.22.2
 Backend oficial: CPU
 Estrategia oficial: LightGBM Control
 """
@@ -13,7 +13,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-EXPERIMENT_VERSION = "1.22.1"
+EXPERIMENT_VERSION = "1.22.2"
 START_DATE = "2016-01-01"
 ANALYSIS_END_DATE = "2026-09-17"
 BAR_SNAPSHOT_AS_OF_END = "2026-09-17"

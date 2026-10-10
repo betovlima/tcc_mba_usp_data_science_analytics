@@ -6,17 +6,20 @@ Este arquivo consolida em um único lugar o histórico técnico, as decisões
 metodológicas, a arquitetura final, os resultados, as refatorações, os testes e
 a avaliação crítica do projeto no contrato científico descrito abaixo.
 
-Release e baseline científico documentados:
+Release científica de referência e versão atual do projeto:
 
 ```text
-versão: 1.22.1
-tag: v1.22.1
-branch de entrega: main
-branch integrada: fix/u67-eligibilidade-sem-futuro
-main anterior à integração: 262e5388354f258de2480151a0b9f1b9ff147db7
+baseline científico: 1.22.1
+versão atual: 1.22.2
+tag do baseline: v1.22.1
 execução científica validada: 3f8d1b1a2784721201938071471e91fd4282f628 (dev.10)
 data da atualização: 2026-10-10
 ```
+
+A versão 1.22.2 não altera dados, parâmetros, folds, decisões, operações ou
+resultados científicos. Ela remove uma camada auxiliar de identificação de
+arquivos que havia sido adicionada por conveniência técnica e não fazia parte
+dos objetivos nem das necessidades metodológicas definidas para a pesquisa.
 
 Esta release integra à `main` a remoção da consulta aos preços da sessão
 seguinte na seleção de candidatos e a correção de compra e manutenção no
@@ -113,9 +116,8 @@ Ele:
 3. baixa Corporate Actions;
 4. grava primeiro em `dados/.u67_build/`;
 5. cria o manifesto;
-6. calcula hashes de integridade;
-7. valida o conjunto;
-8. publica o snapshot em `dados/u67/`.
+6. valida a estrutura e a presença dos arquivos esperados;
+7. publica o snapshot em `dados/u67/`.
 
 A área `dados/.u67_build/` é temporária e não deve ser versionada.
 
@@ -169,9 +171,9 @@ numéricas provocadas pela serialização e releitura de `float64`. O parser
 round-trip preservou os valores de ponto flutuante necessários para reproduzir
 os checkpoints monetários exatamente.
 
-O manifesto registra identidade, datas, arquivos e hashes SHA-256. Os hashes
-servem para integridade e auditoria; não são features do modelo e não participam
-do treinamento.
+O manifesto registra o contrato de coleta, as datas, o universo, as contagens de
+barras e as contagens de eventos corporativos. Sua função é descrever o snapshot
+utilizado pela reprodução e verificar se a estrutura esperada está disponível.
 
 ---
 
@@ -384,7 +386,6 @@ u67_effective_assets.csv
 u67_runtime_exclusions.csv
 u67_fold_margins.csv
 u67_fold_calibration_candidates.csv
-u67_market_data_hashes.csv
 u67_predictions.csv
 u67_trades.csv
 u67_runtime_environment.json
@@ -675,8 +676,8 @@ manuais difíceis de reproduzir.
 **Redução de complexidade.** O runtime final contém apenas o caminho Control que
 é realmente utilizado.
 
-**Auditoria.** Predições, operações, margens por fold, hashes, ambiente e
-gráficos são exportados.
+**Auditoria.** Predições, operações, margens por fold, ambiente e gráficos são
+exportados.
 
 **CI.** Ruff e pytest são executados automaticamente sobre a árvore científica.
 
@@ -706,10 +707,9 @@ identidade bit a bit entre todos os sistemas operacionais e bibliotecas não é
 formalmente garantida.
 
 **Dados incluídos na release.** A `main` de origem não continha os CSVs.
-Esta revisão inclui os 134 CSVs e o manifesto original, preservando seus bytes
-e hashes. `.gitattributes` impede a conversão automática das quebras de linha
-do snapshot entre sistemas operacionais. A inclusão resolve a ausência do
-snapshot na release; não elimina as demais limitações metodológicas.
+Esta revisão inclui os 134 CSVs e o manifesto original do snapshot. A inclusão
+resolve a ausência do conjunto de dados na release; não elimina as demais
+limitações metodológicas.
 
 **Elegibilidade corrigida.** O código anterior consultava a abertura e o
 fechamento seguintes para decidir se o ativo poderia receber uma previsão.
@@ -834,8 +834,8 @@ datas da estratégia. O JSON registra `benchmark_assets`,
 ### 20.1 Verificação executada
 
 Utilizaram-se `u67.zip` e `pacote_reproducao_u67.zip` fornecidos pelo autor.
-Conferiram-se a identidade do snapshot e seus 134 hashes. Prepararam-se os 65
-ativos com o parser round-trip e recalculou-se compra e manutenção com as
+Conferiram-se o universo, as datas e a estrutura do snapshot. Prepararam-se os
+65 ativos com o parser round-trip e recalculou-se compra e manutenção com as
 funções oficiais de taxas e deslizamento.
 
 As decisões diárias registradas em `u67_predictions.csv` foram reaplicadas no
@@ -918,7 +918,8 @@ da contagem de decisões e dos erros preditivos.
 
 Preservaram-se o cutoff de 6 de outubro de 2026, o parser round-trip, as
 exclusões estruturais DOC/CLMT, os três folds, os parâmetros, os custos e os
-US$ 10 mil iniciais. Conferiram-se os 134 hashes e a identidade do snapshot:
+US$ 10 mil iniciais. O snapshot utilizado manteve o mesmo universo e o mesmo
+contrato de dados da execução registrada:
 
 ```text
 e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575
@@ -985,17 +986,15 @@ contivesse esses resultados.
 ### 21.5 Evidências e validação
 
 A branch inclui o snapshot original: 134 CSVs e `manifest.json`, totalizando
-21.789.973 bytes. O manifesto do snapshot conserva a identificação de sua
-geração histórica; a versão do código passou para dev.10. Os arquivos de
-dados têm conversão de quebras de linha desativada no Git, para conservar os
-hashes em clones feitos em diferentes sistemas.
+21.789.973 bytes. O manifesto conserva o contrato de coleta e a identificação
+da geração histórica; a versão do código passou para dev.10.
 
 A análise estática passou nas regras F401, F811, F821 e F841. A suíte local
 passou com 80 casos. Os testes verificam que alterar apenas a abertura ou o
 fechamento futuros não muda os escores ou o ativo escolhido, que uma previsão
 funciona sem a linha seguinte, que preços inválidos são tratados na execução
-e que os diagnósticos de teste excluem rótulos incompletos. Um teste também
-valida a identidade e todos os hashes do snapshot incluído.
+e que os diagnósticos de teste excluem rótulos incompletos. Um teste adicional
+valida a estrutura do snapshot incluído e a presença das séries esperadas.
 
 O fluxo oficial também foi executado por completo, incluindo novo treinamento,
 simulação, gráficos, planilha e pacote de reprodução. Seus dois checkpoints
@@ -1071,16 +1070,12 @@ engine/configuracao.py. Esta conferência não executou novo treinamento
 nem modificou resultados do experimento dev.10.
 
 A configuração de origem, recuperada em
-extrema_backtest.strategy_profiles.json, tem o mesmo hash
-fac52b7e8ba25a916b5570a69de29a2fc970ffb1166868aa8de26330dba9dc67
-registrado na campanha. Ela documenta a composição exploratória então
-configurada, recorte iniciado em 2016-01-01, barras diárias, Alpaca/SIP
-e ajuste all. A campanha fixou o corte em 2026-08-11 e registrou a
-assinatura de dados
-d4fc5bf5460e01d4a76208f5931c21abefa98657ad9785fd8a67fb408a828e0c
-em todas as 21 configurações. A identificação dessa composição serve
-à procedência dos parâmetros. O experimento do TCC conserva sua lista
-fixa e compra e manutenção como única referência financeira.
+`extrema_backtest.strategy_profiles.json`, documenta a composição exploratória
+então configurada, o recorte iniciado em 2016-01-01, barras diárias,
+Alpaca/SIP e ajuste `all`. A campanha fixou o corte em 2026-08-11 e
+registrou esses parâmetros nas configurações avaliadas. Esse registro serve
+à procedência da seleção dos hiperparâmetros. O experimento do TCC conserva
+sua lista fixa e compra e manutenção como única referência financeira.
 
 As métricas usadas na seleção cobriram 2020-07-22 a 2026-08-11, com três
 folds cronológicos. O registro conserva retornos por fold, mas não todas
@@ -1098,12 +1093,11 @@ avaliação em relação a essa seleção. A calibração da margem no
 experimento dev.10 continua sendo uma busca em grade por fold, distinta
 da otimização bayesiana dos hiperparâmetros.
 
-evidencias/selecao_hiperparametros_20260813.json registra as fontes e seus
-hashes, o contrato de dados, os domínios, a configuração selecionada, a
-conferência com o código atual e as pendências específicas. A referência
-ao código do período é uma verificação de implementação, não prova do
-commit exato da campanha. A versão científica permanece dev.10; esta
-alteração é documental e permanece na branch de trabalho.
+`evidencias/selecao_hiperparametros_20260813.json` registra as fontes
+disponíveis, o contrato de dados, os domínios, a configuração selecionada, a
+conferência com o código atual e as pendências específicas. A referência ao
+código do período é uma verificação de implementação, não prova do commit exato
+da campanha. A execução científica permanece dev.10.
 
 ---
 
@@ -1123,13 +1117,12 @@ dos ajustes finais. As duas curvas existentes foram reapresentadas e
 cinco figuras foram acrescentadas. O Word preserva dez tabelas e inclui
 cinco gráficos nativos editáveis com suas planilhas incorporadas.
 
-evidencias/series_financeiras_v1.22.0-dev.10.csv conserva as 1.560 datas,
+`evidencias/series_financeiras_v1.22.0-dev.10.csv` conserva as 1.560 datas,
 as duas curvas financeiras e a identificação do fold, extraídas de
-output/reproducao/u67_predictions.csv. Seu SHA-256 é
-f9e873cc33e91e006817ac31781261d4ef440745d8b7cf82208026186a29b9b9.
-Os erros e os ganhos provêm de evidencias/eligibilidade_v1.22.0-dev.10.json.
-figuras/procedencia_figuras.json identifica essas fontes, a execução
-científica 3f8d1b1a2784721201938071471e91fd4282f628 e os hashes das imagens.
+`output/reproducao/u67_predictions.csv`. Os erros e os ganhos provêm de
+`evidencias/eligibilidade_v1.22.0-dev.10.json`.
+`figuras/procedencia_figuras.json` identifica essas fontes e a execução
+científica 3f8d1b1a2784721201938071471e91fd4282f628.
 
 Os retornos por ano usam o capital da última sessão de cada intervalo
 dividido pelo capital do encerramento anterior, menos um; a primeira
@@ -1190,10 +1183,10 @@ das figuras, em `e2b1699`. A versão 1.22.1 consolida essas alterações:
 
 - elegibilidade definida com informações disponíveis na sessão da decisão;
 - compra e manutenção recalculada no mesmo universo fixo da rotação;
-- snapshot original incluído, com identidade e 134 hashes conferidos;
+- snapshot original incluído e descrito pelo manifesto;
 - MAE e RMSE fora da amostra por fold e ganhos dos atributos no ajuste;
 - registro documental da seleção histórica dos hiperparâmetros;
-- sete figuras reproduzíveis, tabelas derivadas e hashes de procedência.
+- sete figuras reproduzíveis e tabelas derivadas.
 
 Os hiperparâmetros, a função de utilidade, os atributos, as regras financeiras
 e os dados não foram modificados nesta preparação de release. A atualização
@@ -1274,12 +1267,31 @@ preservadas, sem novo treinamento.
 
 A campanha histórica tem parâmetros, domínios, critérios e períodos de
 avaliação recuperados. Continuam ausentes o snapshot original da campanha e
-as fronteiras completas de treinamento e calibração. O hash recuperado não
-autoriza substituir essa base por outro backtest. A sobreposição entre
-seleção exploratória e período avaliado deve continuar explícita.
+as fronteiras completas de treinamento e calibração. Esses registros não
+autorizam substituir a base histórica da campanha por outro backtest. A
+sobreposição entre seleção exploratória e período avaliado deve continuar
+explícita.
 
 A próxima etapa científica é medir a sensibilidade a custos e condições de
 execução, incluindo liquidez e participação no volume, com desenho e dados
 documentados antes de apresentar resultados. A contribuição individual dos
 componentes da utilidade também permanece sem experimentos de isolamento.
 Não transformar essas pendências em resultados já disponíveis.
+
+## 25. 2026-10-10 — versão 1.22.2 — simplificação da auditoria de arquivos
+
+A revisão removeu do runtime, dos testes, dos artefatos e da documentação uma
+camada auxiliar que identificava arquivos e séries por códigos derivados de
+seu conteúdo. Essa camada havia sido adicionada como conveniência técnica,
+mas não foi requisito definido pelo autor nem componente necessário para
+responder à pergunta de pesquisa.
+
+O snapshot continua congelado e versionado em `dados/u67/`. O manifesto
+mantém apenas informações diretamente úteis ao experimento: origem,
+parâmetros da coleta, datas, universo e contagens. A reprodução continua
+validando a presença dos arquivos esperados, o universo, as exclusões
+estruturais, as janelas, os checkpoints e os resultados científicos.
+
+A alteração não modifica o conjunto de dados, a preparação das séries, os
+52 atributos, os modelos, os hiperparâmetros, os folds, a política de
+rotação, os custos, as 674 operações nem os resultados financeiros.
