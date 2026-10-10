@@ -1,0 +1,2 @@
+acquiree_cusip,acquiree_rate,acquiree_symbol,acquirer_cusip,acquirer_rate,acquirer_symbol,action_type,effective_date,id,process_date,source_array
+983919101,1,XLNX,007903107,1.7234,AMD,stock_merger,2022-02-14,15459aa5-b297-4e33-9624-c9d59b75ba46,2022-02-14,stock_mergers

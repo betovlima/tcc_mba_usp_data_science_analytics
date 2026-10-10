@@ -1,0 +1,2 @@
+action_type,cusip,ex_date,id,new_rate,old_rate,payable_date,process_date,record_date,source_array,symbol
+forward_split,64110L106,2025-11-17,d5660152-ba1c-46fd-a525-bb47cf96c0a8,10,1,2025-11-14,2025-11-17,2025-11-10,forward_splits,NFLX
