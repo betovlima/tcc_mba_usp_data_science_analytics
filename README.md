@@ -99,3 +99,42 @@ otimização bayesiana que selecionou os hiperparâmetros.
 
 A documentação técnica, histórica e a avaliação completa do projeto estão em
 `MANIFEST.md`.
+
+
+## 6. Audite decisões com ativos reais
+
+Na branch `research/real-asset-decision-audit-v1`, a reprodução gera também
+uma auditoria descritiva com movimentos reais do snapshot U67. Os exemplos são
+selecionados por uma regra definida sem consultar o resultado da operação: a
+primeira posição concluída, em ordem cronológica, de TSLA, NVDA e VNCE. SPY é
+mantido como comparador nas mesmas janelas, ainda que não seja o ativo
+selecionado pela política.
+
+Execute normalmente:
+
+```bash
+python reproduzir_experimento.py
+```
+
+Os arquivos adicionais ficam em:
+
+```text
+output/reproducao/auditoria_ativos_reais/
+├── casos_ativos_reais.csv
+├── movimentos_ativos_reais.csv
+├── auditoria_ativos_reais.json
+├── auditoria_ativos_reais.md
+└── caso_*_movimentos_reais.{png,svg}
+```
+
+Cada janela inclui cinco sessões anteriores à decisão de entrada, a execução
+na abertura seguinte, a permanência da posição, a saída e três sessões
+posteriores. Os preços de TSLA, NVDA, VNCE e SPY são normalizados para 100 no
+fechamento da sessão da decisão de entrada. As observações posteriores são
+marcadas explicitamente como indisponíveis na decisão e servem apenas para
+descrever o que ocorreu depois.
+
+Esta auditoria não altera o modelo, os parâmetros, a política de rotação, os
+custos ou o capital oficial. A versão científica congelada continua sendo
+v1.22.1; a identificação `1.22.2-dev.1` pertence somente à extensão de
+reprodução e auditoria desta branch.

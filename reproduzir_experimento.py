@@ -67,6 +67,7 @@ from reproducao.artefatos import (
     criar_pacote_analise,
     sinal_sonoro_conclusao,
 )
+from reproducao.auditoria_ativos_reais import gerar_auditoria_ativos_reais
 from reproducao.dados import SnapshotPaths, validate_snapshot
 from reproducao.experimento import build_control_config, summarize_metrics
 from reproducao.graficos import gerar_analises_backtest
@@ -78,8 +79,8 @@ ROOT = Path(__file__).resolve().parent
 DATA = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.22.1"
-EXECUTION_SCHEMA = "u67-control-reproducao-v2"
+REPRODUCTION_VERSION = "1.22.2-dev.1"
+EXECUTION_SCHEMA = "u67-control-reproducao-v3"
 
 
 U67_ANALYSIS_END_DATE = "2026-10-06"
@@ -347,6 +348,7 @@ fold_policies = {}
 fold_margins = []
 fold_calibration_candidates = []
 fold_predictive_diagnostics = []
+decision_diagnostics: dict[pd.Timestamp, dict[str, object]] = {}
 
 for fold_position, fold in enumerate(folds, start=1):
     fold_id = int(fold["fold_id"])
@@ -460,6 +462,7 @@ for fold_position, fold in enumerate(folds, start=1):
         symbols,
         config_u67,
         effective_margin,
+        decision_diagnostics=decision_diagnostics,
         fold_id=fold_id,
         calibrated_switch_margin=selected_margin,
         utility_cache=decision_cache,
@@ -492,6 +495,7 @@ result = _simular_exato(
     calcular_taxas_referencia,
     aplicar_deslizamento,
     decision_metadata=decision_metadata,
+    policy_decision_diagnostics=decision_diagnostics,
     model_label="TCC U67 Control",
     method_line=(
         "- Snapshot U67 congelado; LightGBM Control; "
@@ -671,6 +675,13 @@ result.trades.to_csv(
     index=False,
 )
 
+real_asset_audit = gerar_auditoria_ativos_reais(
+    OUT / "auditoria_ativos_reais",
+    trades=result.trades,
+    frames=frames,
+    common_dates=common_dates,
+)
+
 payload = {
     "reproduction_version": REPRODUCTION_VERSION,
     "execution_schema": EXECUTION_SCHEMA,
@@ -710,6 +721,7 @@ payload = {
     "fold_margins": fold_margins,
     "fold_calibration_candidates": fold_calibration_candidates,
     "runtime_environment": runtime_environment,
+    "real_asset_audit": real_asset_audit,
     "metrics": metrics,
     "checkpoint_validation": {
         "ending_capital": ending_capital,

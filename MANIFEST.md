@@ -1283,3 +1283,99 @@ execução, incluindo liquidez e participação no volume, com desenho e dados
 documentados antes de apresentar resultados. A contribuição individual dos
 componentes da utilidade também permanece sem experimentos de isolamento.
 Não transformar essas pendências em resultados já disponíveis.
+
+
+---
+
+## 25. Auditoria descritiva com ativos reais (branch de pesquisa)
+
+### 25.1 Objetivo e separação do experimento oficial
+
+A branch `research/real-asset-decision-audit-v1` acrescenta uma camada de
+auditoria para substituir exemplos hipotéticos por decisões e movimentos que
+já pertencem ao snapshot congelado U67. A mudança é de observabilidade e
+documentação: não altera o treinamento, os hiperparâmetros, a função de
+utilidade, a margem de troca, o universo efetivo, os custos ou o simulador
+financeiro.
+
+A versão científica consolidada permanece `v1.22.1`. Para distinguir uma
+nova execução que também produza os artefatos desta auditoria,
+`reproduzir_experimento.py` identifica a extensão como
+`1.22.2-dev.1`, com schema `u67-control-reproducao-v3`.
+
+### 25.2 Casos escolhidos sem consultar o resultado
+
+Os ativos de caso são TSLA, NVDA e VNCE. SPY é usado como comparador nas
+mesmas janelas. A escolha de uma operação específica não é feita pela maior
+rentabilidade, maior PnL, maior erro ou maior custo de oportunidade. Para cada
+ativo de caso, o procedimento seleciona a primeira posição concluída em ordem
+cronológica no registro oficial de operações.
+
+Essa regra evita escolher retrospectivamente um exemplo apenas porque ele
+produziu uma narrativa favorável ou desfavorável. O resultado da própria
+operação é exibido depois da seleção, como dado descritivo.
+
+### 25.3 Informações reconstruídas
+
+Para cada caso são preservados:
+
+- sessão da decisão de entrada e abertura da execução;
+- sessão da decisão de saída e abertura da execução;
+- preço de entrada e saída, duração, retorno e PnL realizado;
+- fold temporal;
+- escores e primeiras posições do ranking registrados na entrada, quando
+  disponíveis;
+- escore do ativo mantido, melhor alternativa e distância entre escores na
+  decisão de saída;
+- barras OHLCV reais de TSLA, NVDA, VNCE e SPY na mesma janela.
+
+A janela começa cinco sessões antes da decisão de entrada e termina três
+sessões depois da saída. Para permitir comparação visual entre ativos com
+preços nominais diferentes, o fechamento de cada série é normalizado para
+100 na sessão da decisão de entrada.
+
+O campo `available_at_entry_decision` distingue os dados que já existiam
+na decisão dos movimentos posteriores. Barras futuras são mantidas no
+relatório somente para reconstruir o desfecho; não são tratadas como
+informação disponível para a política.
+
+### 25.4 Artefatos
+
+Uma reprodução completa passa a gravar em
+`output/reproducao/auditoria_ativos_reais/`:
+
+```text
+casos_ativos_reais.csv
+movimentos_ativos_reais.csv
+auditoria_ativos_reais.json
+auditoria_ativos_reais.md
+caso_*_movimentos_reais.png
+caso_*_movimentos_reais.svg
+```
+
+O JSON registra explicitamente
+`outcome_used_to_select_cases=false` e
+`hypothetical_asset_used=false`.
+
+### 25.5 Validação da implementação
+
+A implementação foi adicionada em
+`reproducao/auditoria_ativos_reais.py` e integrada ao final do replay
+oficial, depois da construção de `result.trades`. Portanto, ela consome os
+mesmos frames preparados e o mesmo calendário usados pelo experimento, sem
+participar das decisões.
+
+Foram acrescentados testes que verificam que uma operação posterior com
+retorno muito maior não substitui a primeira operação cronológica escolhida,
+que SPY aparece na comparação mesmo sem ser o ativo operado, que todas as
+séries assumem base 100 na sessão de decisão e que observações posteriores
+são marcadas como indisponíveis naquele instante. O workflow
+`reproduction-tests` aprovou o commit
+`44ec6e50210a82e8df53c2a77a8b6a001b84f186`.
+
+O treinamento e o replay completos não foram repetidos nesta alteração de
+código. Por isso, datas e valores dos três casos não devem ser copiados para
+o texto acadêmico até que `reproduzir_experimento.py` seja executado nesta
+branch e gere os artefatos acima. Essa pendência é de execução, não de
+autorização. Após a execução, o texto do TCC deve usar diretamente os valores
+gerados, sem preenchimento manual ou estimativas.

@@ -38,6 +38,39 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+
+  real_asset_audit:
+    needs: tests
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/research/real-asset-decision-audit-v1'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run full U67 reproduction with real-asset audit
+        run: python reproduzir_experimento.py
+
+      - name: Upload real-asset audit evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-asset-audit-u67
+          path: |
+            output/reproducao/auditoria_ativos_reais/
+            output/reproducao/u67_trades.csv
+            output/reproducao/u67_predictions.csv
+            output/reproducao/reproducao_u67.json
+          if-no-files-found: error
+          retention-days: 14
+
   tag_release:
     needs: tests
     if: >-
