@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from reproducao.auditoria_ativos_reais import (
+    construir_comparacao_janelas,
     construir_movimentos_casos,
     gerar_auditoria_ativos_reais,
     selecionar_casos_cronologicos,
@@ -188,6 +189,32 @@ def test_movimentos_incluem_spy_sem_operacao_e_marcam_futuro() -> None:
     assert not future["available_at_entry_decision"].any()
 
 
+
+
+def test_comparacao_usa_mesma_janela_open_to_open() -> None:
+    frames, _ = _frames()
+    cases = selecionar_casos_cronologicos(
+        _trades(),
+        case_assets=("TSLA",),
+    )
+
+    comparison = construir_comparacao_janelas(
+        cases,
+        frames=frames,
+        focus_assets=("TSLA", "NVDA", "VNCE", "SPY"),
+    )
+
+    assert set(comparison["asset"]) == {"TSLA", "NVDA", "VNCE", "SPY"}
+    selected = comparison.loc[comparison["asset"] == "TSLA"].iloc[0]
+    expected = (
+        frames["TSLA"].loc[_ts("2020-01-07"), "open"]
+        / frames["TSLA"].loc[_ts("2020-01-03"), "open"]
+        - 1.0
+    )
+    assert selected["gross_open_to_open_return"] == expected
+    assert selected["is_selected_asset"]
+
+
 def test_gerador_exporta_casos_reais_sem_ativo_hipotetico(tmp_path) -> None:
     frames, dates = _frames()
     metadata = gerar_auditoria_ativos_reais(
@@ -206,5 +233,6 @@ def test_gerador_exporta_casos_reais_sem_ativo_hipotetico(tmp_path) -> None:
     assert metadata["hypothetical_asset_used"] is False
     assert (tmp_path / "casos_ativos_reais.csv").exists()
     assert (tmp_path / "movimentos_ativos_reais.csv").exists()
+    assert (tmp_path / "comparacao_janela_ativos_reais.csv").exists()
     assert (tmp_path / "auditoria_ativos_reais.md").exists()
     assert len(metadata["files"]["figures"]) == 4
