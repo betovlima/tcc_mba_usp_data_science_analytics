@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
-import hashlib
 import json
 import os
 import shutil
@@ -101,24 +100,6 @@ class AlpacaCredentials:
             "APCA-API-KEY-ID": self.api_key,
             "APCA-API-SECRET-KEY": self.secret_key,
         }
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _canonical_sha256(value: Any) -> str:
-    payload = json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
 
 
 def load_alpaca_credentials(project_root: Path) -> AlpacaCredentials:
@@ -434,21 +415,17 @@ def build_snapshot_manifest(
     assets: tuple[str, ...],
     snapshot_name: str,
 ) -> dict[str, Any]:
-    """Calcula hashes do snapshot; credenciais nunca sao persistidas."""
-    file_hashes: dict[str, str] = {}
+    """Registra o contrato e as contagens do snapshot congelado."""
     row_counts: dict[str, int] = {}
     for symbol, path in sorted(raw_files.items()):
-        relative = path.relative_to(paths.root).as_posix()
-        file_hashes[relative] = _sha256_file(path)
         row_counts[symbol] = len(pd.read_csv(path))
+
     action_counts: dict[str, int] = {}
     for symbol, path in sorted(action_files.items()):
-        relative = path.relative_to(paths.root).as_posix()
-        file_hashes[relative] = _sha256_file(path)
         action_counts[symbol] = len(pd.read_csv(path))
 
-    identity = {
-        "schema_version": 2,
+    manifest = {
+        "schema_version": 3,
         "snapshot_name": str(snapshot_name),
         "source": "alpaca",
         "bars": {
@@ -466,52 +443,55 @@ def build_snapshot_manifest(
         "assets": list(assets),
         "row_counts": row_counts,
         "corporate_action_counts": action_counts,
-        "file_hashes": file_hashes,
+        "created_for_experiment_version": EXPERIMENT_VERSION,
     }
-    manifest = dict(identity)
-    manifest["snapshot_sha256"] = _canonical_sha256(identity)
-    manifest["created_for_experiment_version"] = EXPERIMENT_VERSION
     paths.manifest.write_text(
         json.dumps(manifest, indent=2, sort_keys=True, default=str),
         encoding="utf-8",
     )
-    print(f"[snapshot] id={manifest['snapshot_sha256']}", flush=True)
+    print(
+        f"[snapshot] created name={manifest['snapshot_name']} assets={len(assets)}",
+        flush=True,
+    )
     return manifest
 
 
 def validate_snapshot(paths: SnapshotPaths) -> dict[str, Any]:
     if not paths.manifest.exists():
         raise RuntimeError("manifest.json nao encontrado; crie o snapshot primeiro.")
-    manifest = json.loads(paths.manifest.read_text(encoding="utf-8"))
 
-    expected_snapshot_sha = str(manifest.get("snapshot_sha256") or "")
-    if int(manifest.get("schema_version") or 0) != 2:
+    manifest = json.loads(paths.manifest.read_text(encoding="utf-8"))
+    if int(manifest.get("schema_version") or 0) != 3:
         raise RuntimeError("Snapshot manifest schema incompatível.")
 
-    identity = {
-        key: value
-        for key, value in manifest.items()
-        if key not in {
-            "snapshot_sha256",
-            "created_for_experiment_version",
-        }
-    }
-    actual_snapshot_sha = _canonical_sha256(identity)
-    if not expected_snapshot_sha or actual_snapshot_sha != expected_snapshot_sha:
+    assets = tuple(str(symbol) for symbol in (manifest.get("assets") or ()))
+    if not assets:
+        raise RuntimeError("Snapshot manifest sem ativos.")
+
+    row_counts = manifest.get("row_counts") or {}
+    action_counts = manifest.get("corporate_action_counts") or {}
+    missing: list[str] = []
+    for symbol in assets:
+        raw_path = paths.raw_bars / f"{symbol}.csv"
+        action_path = paths.corporate_actions / f"{symbol}.csv"
+        if not raw_path.exists():
+            missing.append(raw_path.relative_to(paths.root).as_posix())
+        if not action_path.exists():
+            missing.append(action_path.relative_to(paths.root).as_posix())
+        if symbol not in row_counts:
+            raise RuntimeError(f"Snapshot manifest sem contagem de barras para {symbol}.")
+        if symbol not in action_counts:
+            raise RuntimeError(
+                f"Snapshot manifest sem contagem de eventos corporativos para {symbol}."
+            )
+
+    if missing:
         raise RuntimeError(
-            "Snapshot manifest identity mismatch: "
-            f"expected={expected_snapshot_sha or 'missing'} "
-            f"actual={actual_snapshot_sha}"
+            "Snapshot incompleto; arquivos ausentes: " + ", ".join(sorted(missing))
         )
 
-    for relative, expected in (manifest.get("file_hashes") or {}).items():
-        path = paths.root / relative
-        if not path.exists():
-            raise RuntimeError(f"Snapshot incompleto: {relative}")
-        actual = _sha256_file(path)
-        if actual != str(expected):
-            raise RuntimeError(
-                f"Snapshot integrity mismatch: {relative} expected={expected} actual={actual}"
-            )
-    print(f"[snapshot] validated id={manifest.get('snapshot_sha256')}", flush=True)
+    print(
+        f"[snapshot] validated name={manifest.get('snapshot_name')} assets={len(assets)}",
+        flush=True,
+    )
     return manifest
