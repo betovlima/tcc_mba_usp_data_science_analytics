@@ -78,7 +78,7 @@ ROOT = Path(__file__).resolve().parent
 DATA = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "reproducao"
 
-REPRODUCTION_VERSION = "1.22.0-dev.10"
+REPRODUCTION_VERSION = "1.22.1"
 EXECUTION_SCHEMA = "u67-control-reproducao-v2"
 
 

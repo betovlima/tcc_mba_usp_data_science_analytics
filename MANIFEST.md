@@ -6,21 +6,26 @@ Este arquivo consolida em um único lugar o histórico técnico, as decisões
 metodológicas, a arquitetura final, os resultados, as refatorações, os testes e
 a avaliação crítica do projeto no contrato científico descrito abaixo.
 
-Baseline científico documentado:
+Release e baseline científico documentados:
 
 ```text
-versão: 1.22.0-dev.10
-main de referência para a correção: 262e5388354f258de2480151a0b9f1b9ff147db7
-branch de trabalho: fix/u67-eligibilidade-sem-futuro
+versão: 1.22.1
+tag: v1.22.1
+branch de entrega: main
+branch integrada: fix/u67-eligibilidade-sem-futuro
+main anterior à integração: 262e5388354f258de2480151a0b9f1b9ff147db7
+execução científica validada: 3f8d1b1a2784721201938071471e91fd4282f628 (dev.10)
 data da atualização: 2026-10-10
 ```
 
-Esta revisão remove da seleção de candidatos a consulta aos preços da sessão
-seguinte. Incorpora também a correção de compra e manutenção já validada na
-branch `fix/u67-buy-hold-same-universe`, pois essa revisão ainda não estava na
-`main`. A seção 20 preserva sua validação histórica. A seção 21 documenta a
-medição da elegibilidade, os diagnósticos de teste e os dados congelados
-incluídos nesta branch. A `main` não foi alterada.
+Esta release integra à `main` a remoção da consulta aos preços da sessão
+seguinte na seleção de candidatos e a correção de compra e manutenção no
+mesmo universo fixo. Inclui os dados congelados, os diagnósticos de teste,
+a procedência recuperada dos hiperparâmetros e as sete figuras do TCC.
+As seções 20 a 23 preservam as verificações realizadas antes da integração;
+a seção 24 registra a entrega autorizada em 2026-10-10 e a memória para
+continuidade. As menções à `main` preservada nas seções históricas referem-se
+ao estado anterior a esta release.
 
 Este MANIFEST substitui a documentação histórica fragmentada que existia em
 arquivos de contexto, checkpoints antigos, notas de mudanças por versão e
@@ -65,6 +70,7 @@ O runtime científico foi reduzido ao seguinte núcleo:
 ├── preparar_snapshot_u67.py
 ├── reproduzir_experimento.py
 ├── avaliar_elegibilidade_u67.py
+├── gerar_figuras_tcc.py
 ├── engine/
 │   ├── configuracao.py
 │   ├── diagnosticos.py
@@ -600,7 +606,7 @@ outros warnings visíveis.
 
 O workflow oficial usa Python 3.12.
 
-Na execução da `main` correspondente ao baseline deste manifesto:
+Na execução histórica da `main` anterior à correção de elegibilidade:
 
 ```text
 Ruff: sucesso
@@ -626,7 +632,7 @@ ruff          = 0.16.10
 O CI executa:
 
 ```bash
-python -m ruff check engine reproducao preparar_snapshot_u67.py reproduzir_experimento.py avaliar_elegibilidade_u67.py tests --select F401,F811,F821,F841
+python -m ruff check engine reproducao preparar_snapshot_u67.py reproduzir_experimento.py avaliar_elegibilidade_u67.py gerar_figuras_tcc.py tests --select F401,F811,F821,F841
 python -m pytest -q
 ```
 
@@ -643,6 +649,9 @@ Entre as proteções adicionadas ao longo do projeto estão:
 - isolamento do snapshot;
 - prevenção de referências históricas removidas;
 - supressão seletiva de warnings.
+
+A validação da release v1.22.1 está registrada na seção 24; o ambiente e os
+34 testes acima pertencem à execução histórica, não à suíte atual.
 
 ---
 
@@ -696,11 +705,11 @@ ambiente validado, mas a configuração ainda permite paralelismo do LightGBM
 identidade bit a bit entre todos os sistemas operacionais e bibliotecas não é
 formalmente garantida.
 
-**Dados disponíveis nesta branch.** A `main` de origem não continha os CSVs.
+**Dados incluídos na release.** A `main` de origem não continha os CSVs.
 Esta revisão inclui os 134 CSVs e o manifesto original, preservando seus bytes
 e hashes. `.gitattributes` impede a conversão automática das quebras de linha
 do snapshot entre sistemas operacionais. A inclusão resolve a ausência do
-snapshot nesta branch; não elimina as demais limitações metodológicas.
+snapshot na release; não elimina as demais limitações metodológicas.
 
 **Elegibilidade corrigida.** O código anterior consultava a abertura e o
 fechamento seguintes para decidir se o ativo poderia receber uma previsão.
@@ -726,7 +735,7 @@ snapshot congelado
 + CI automatizado
 ```
 
-O snapshot está incluído nesta branch. As próximas verificações científicas
+O snapshot está incluído na release. As próximas verificações científicas
 devem se concentrar na execução econômica e na interpretação dos resultados,
 considerando a seleção retrospectiva da amostra e os custos assumidos.
 
@@ -790,7 +799,7 @@ uma decisão metodológica explícita.
 O estado científico descrito por este documento é:
 
 ```text
-versão científica        = 1.22.0-dev.10
+versão científica        = 1.22.1
 universo solicitado      = 67
 universo efetivo         = 65
 modelo                   = LightGBM Control
@@ -804,11 +813,12 @@ Worst Fold               = 282.589554%
 compra e manutenção      = mesmos 65 ativos efetivos
 capital final referência = US$ 33,295.28176973073
 Ruff local               = aprovado
-pytest local             = ver seção 21
+pytest local             = ver seção 24
 ```
 
 A versão dev.9 corrigiu a referência financeira. A versão dev.10 corrige a
-elegibilidade e registra diagnósticos fora da amostra.
+elegibilidade e registra diagnósticos fora da amostra. A release v1.22.1
+consolida esse protocolo na main, sem modificar parâmetros ou resultados.
 
 ---
 
@@ -1146,3 +1156,130 @@ manutenção permanece a única referência financeira. A pendência sobre
 o snapshot e as fronteiras da campanha de hiperparâmetros foi preservada.
 As alterações continuam em fix/u67-eligibilidade-sem-futuro; a main
 permanece no commit 262e5388354f258de2480151a0b9f1b9ff147db7.
+
+---
+
+## 24. Release v1.22.1 e memória de continuidade (2026-10-10)
+
+### 24.1 Entrega e autorização
+
+Em 2026-10-10, o autor solicitou explicitamente integrar a branch
+`fix/u67-eligibilidade-sem-futuro` à `main`, criar uma tag e atualizar os
+arquivos Markdown de contexto. Essa autorização substitui, para esta entrega,
+a orientação anterior de preservar a `main` enquanto a revisão estava em
+andamento. A tag escolhida foi `v1.22.1`, pois `v1.22.0` já existia.
+
+A referência imutável da entrega é
+[v1.22.1](https://github.com/betovlima/tcc_mba_usp_data_science_analytics/tree/v1.22.1).
+O merge conserva os commits científicos e documentais da branch. A tag
+anotada identifica o commit de integração na `main`; o workflow só a cria
+após Ruff e pytest aprovarem esse commit. O job de publicação está restrito
+ao push na `main` com o título desta release e recusa substituir uma tag
+existente que aponte para outro commit.
+
+Este MANIFEST continua sendo a memória técnica e metodológica única.
+`README.md` conserva as instruções de execução e aponta para esta seção.
+Não criar arquivos de contexto paralelos que possam divergir destas decisões.
+
+### 24.2 Conteúdo consolidado e proveniência
+
+O núcleo científico foi validado no commit
+`3f8d1b1a2784721201938071471e91fd4282f628`, versão dev.10. A procedência dos
+hiperparâmetros foi documentada em `04e28b9`, e a revisão de Data Science e
+das figuras, em `e2b1699`. A versão 1.22.1 consolida essas alterações:
+
+- elegibilidade definida com informações disponíveis na sessão da decisão;
+- compra e manutenção recalculada no mesmo universo fixo da rotação;
+- snapshot original incluído, com identidade e 134 hashes conferidos;
+- MAE e RMSE fora da amostra por fold e ganhos dos atributos no ajuste;
+- registro documental da seleção histórica dos hiperparâmetros;
+- sete figuras reproduzíveis, tabelas derivadas e hashes de procedência.
+
+Os hiperparâmetros, a função de utilidade, os atributos, as regras financeiras
+e os dados não foram modificados nesta preparação de release. A atualização
+dos identificadores em `engine/configuracao.py` e `reproduzir_experimento.py`
+passa a identificar novas execuções como 1.22.1. Os arquivos de evidência
+dev.10 e o manifesto original dos dados mantêm os nomes e versões da execução
+que efetivamente os produziu; não devem ser renomeados como se fossem novos
+experimentos.
+
+Os resultados preservados são US$ 76.927.051,38897176 na rotação,
+US$ 33.295,28176973073 em compra e manutenção, 674 operações e 1.560 sessões.
+A correção de elegibilidade produziu diferença máxima de US$ 0,00 na curva
+deste snapshot. Isso mede o efeito da correção neste registro, sem atribuir
+contribuição causal isolada aos componentes da política.
+
+### 24.3 Critério da sugestão inicial de ativos
+
+A consulta ao histórico em 2026-10-10 recuperou mensagens do assistente de
+2026-07-26 às 04:23:40 e 04:38:54 UTC. O registro mais antigo encontrado
+apresentou AAPL como alvo e sugeriu SPY, QQQ, MSFT, AMZN, GOOGL, META e NVDA
+como ativos considerados líquidos para ampliar a base de aprendizado e
+fornecer contexto. Uma mensagem às 04:44:38 UTC explicou a ampliação da
+amostra e o uso de séries relacionadas no aprendizado daquela etapa.
+
+Esse é um critério qualitativo recuperado de uma recomendação exploratória.
+Não foi encontrado nesses registros um ranking de volume, corte mínimo de
+liquidez, base quantitativa de seleção ou justificativa individual completa.
+Portanto, não afirmar que a lista foi formada pelos ativos mais negociados
+do mercado nem que houve um filtro estatístico de liquidez documentado.
+
+O histórico também registra a lista de dez ativos confirmada pelo autor em
+2026-07-30: NVDA, AAPL, MSFT, AMZN, GOOGL, META, TSLA, AMD, JPM e SPY.
+Esse registro confirma a lista usada naquela etapa; não documenta, sozinho,
+os critérios originais de cada inclusão. A primeira recomendação recuperada,
+a lista operacional posterior e a lista fixa atual pertencem a etapas
+distintas e não devem ser tratadas como uma única seleção datada.
+
+O autor informou que, depois das sugestões iniciais, foram realizados testes
+de força bruta para buscar inclusões. Os registros posteriores recuperados
+tratam de contribuição dos candidatos no backtest. Essa história explica a
+formação exploratória da amostra; não constitui uma comparação científica
+entre universos nem uma seleção prospectiva comprovada. A pesquisa final
+usa a lista fixa informada pelo autor e compara somente rotação e compra e
+manutenção nesse mesmo conjunto, observadas as exclusões estruturais já
+documentadas. No texto acadêmico, explicar o procedimento sem citar o nome
+da aplicação usada na exploração.
+
+### 24.4 Validação desta entrega
+
+Em Python 3.12.14, a análise estática passou nas regras F401, F811, F821 e
+F841, incluindo `gerar_figuras_tcc.py`. A suíte existente passou com
+**80 testes**, incluindo a identidade do snapshot. Houve um aviso de
+depreciação de `websockets.legacy`, sem falha dos testes.
+
+`gerar_figuras_tcc.py` foi executado novamente: as verificações de capital,
+composição dos retornos e ganhos normalizados passaram, e os 18 arquivos
+derivados conservaram exatamente os mesmos bytes. A estrutura do YAML do CI,
+a condição de publicação da tag e a sintaxe Bash desse job foram conferidas.
+O workflow passou a executar também em pull requests para a `main`.
+
+Nesta entrega não se repetiu o treinamento completo. Sua execução e os
+checkpoints permanecem documentados na seção 21. Uma aprovação de CI não deve
+ser descrita como novo backtest ou nova validação financeira integral.
+
+### 24.5 Decisões que devem orientar a próxima sessão
+
+Manter a pesquisa no universo fixo informado pelo autor, com compra e
+manutenção como única referência financeira. No resumo, descrever a
+formulação matemática, deixando a biblioteca de implementação para a
+metodologia. Não inventar resultados, referências ou critérios de seleção;
+priorizar autores brasileiros quando houver fonte adequada e verificável.
+
+A reprodução ajusta os modelos com hiperparâmetros fixos, calibra a margem
+por grade em cada fold, simula as duas políticas e exporta os diagnósticos.
+Não repete a campanha bayesiana histórica. As sete figuras desta revisão são
+geradas separadamente por `gerar_figuras_tcc.py`, a partir das evidências
+preservadas, sem novo treinamento.
+
+A campanha histórica tem parâmetros, domínios, critérios e períodos de
+avaliação recuperados. Continuam ausentes o snapshot original da campanha e
+as fronteiras completas de treinamento e calibração. O hash recuperado não
+autoriza substituir essa base por outro backtest. A sobreposição entre
+seleção exploratória e período avaliado deve continuar explícita.
+
+A próxima etapa científica é medir a sensibilidade a custos e condições de
+execução, incluindo liquidez e participação no volume, com desenho e dados
+documentados antes de apresentar resultados. A contribuição individual dos
+componentes da utilidade também permanece sem experimentos de isolamento.
+Não transformar essas pendências em resultados já disponíveis.
