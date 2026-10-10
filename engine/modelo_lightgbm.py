@@ -169,6 +169,55 @@ def _diagnosticos_ajuste_modelo_lightgbm(
         "feature_importance_gain": importance,
     }
 
+def diagnosticos_fora_amostra(
+    models: dict[str, Any],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    decision_dates: pd.DatetimeIndex,
+    utility_cache: dict[pd.Timestamp, np.ndarray],
+    *,
+    fold_id: int,
+    target_column: str = "forward_risk_adjusted_utility",
+) -> dict[str, Any]:
+    """Avalia previsões de teste; exclui rótulos futuros ainda incompletos.
+
+    As importâncias por ganho pertencem ao ajuste final de cada modelo. Elas
+    não são importâncias calculadas no teste nem estimativas de causalidade.
+    """
+    dates = pd.DatetimeIndex(decision_dates)
+    by_asset = {}
+    rows = 0
+    absolute_error_sum = 0.0
+    squared_error_sum = 0.0
+    for column, symbol in enumerate(symbols, start=1):
+        if symbol not in models:
+            continue
+        actual = frames[symbol].reindex(dates)[target_column].to_numpy(dtype=float)
+        predicted = np.asarray([utility_cache[pd.Timestamp(t)][column] for t in dates])
+        errors = _diagnosticos_erro_regressao(actual, predicted)
+        by_asset[symbol] = {
+            **errors,
+            "final_fit_feature_importance_gain": dict(
+                getattr(models[symbol], "_fit_diagnostics", {}).get("feature_importance_gain") or {}
+            ),
+        }
+        rows += int(errors["rows"])
+        absolute_error_sum += float(errors["absolute_error_sum"])
+        squared_error_sum += float(errors["squared_error_sum"])
+    return {
+        "fold_id": int(fold_id),
+        "target": target_column,
+        "evaluation": "out_of_sample_decision_sessions",
+        "decision_start": dates[0].isoformat() if len(dates) else None,
+        "decision_end": dates[-1].isoformat() if len(dates) else None,
+        "rows": rows,
+        "absolute_error_sum": absolute_error_sum,
+        "squared_error_sum": squared_error_sum,
+        "mae": absolute_error_sum / rows if rows else None,
+        "rmse": math.sqrt(squared_error_sum / rows) if rows else None,
+        "by_asset": by_asset,
+    }
+
 def _ajustar_modelos_lightgbm(
     frames: dict[str, pd.DataFrame],
     symbols: list[str],
@@ -255,4 +304,3 @@ def _ajustar_modelos_lightgbm(
         f"duration_seconds={time.perf_counter() - started:.3f}"
     )
     return fitted
-

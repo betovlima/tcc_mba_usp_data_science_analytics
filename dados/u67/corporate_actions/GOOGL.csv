@@ -1,0 +1,12 @@
+action_type,cusip,due_bill_redemption_date,ex_date,foreign,id,new_rate,old_rate,payable_date,process_date,rate,record_date,source_array,special,symbol
+cash_dividend,02079K305,,2024-06-10,False,70f0f8a2-267f-4287-81c9-5276a8910bbf,,,2024-06-17,2024-06-17,0.2,2024-06-10,cash_dividends,False,GOOGL
+cash_dividend,02079K305,,2024-09-09,False,e91986a1-2e20-4354-8025-1a677f01547e,,,2024-09-16,2024-09-16,0.2,2024-09-09,cash_dividends,False,GOOGL
+cash_dividend,02079K305,,2024-12-09,False,e71ec181-598b-4461-8814-346ec7605d94,,,2024-12-16,2024-12-16,0.2,2024-12-09,cash_dividends,False,GOOGL
+cash_dividend,02079K305,,2025-03-10,False,74e02dbb-0ad8-4703-82e0-424cd137a521,,,2025-03-17,2025-03-17,0.2,2025-03-10,cash_dividends,False,GOOGL
+cash_dividend,02079K305,,2025-06-09,False,ca54d2ff-204d-4042-924a-810aa5e2dafb,,,2025-06-16,2025-06-16,0.21,2025-06-09,cash_dividends,False,GOOGL
+cash_dividend,02079K305,,2025-09-08,False,83f19fa3-55fe-4c0e-aecd-885930f106df,,,2025-09-15,2025-09-15,0.21,2025-09-08,cash_dividends,False,GOOGL
+cash_dividend,02079K305,,2025-12-08,False,6a51dba3-bc23-42f7-bd15-46c6ec7d04cf,,,2025-12-15,2025-12-15,0.21,2025-12-08,cash_dividends,False,GOOGL
+cash_dividend,02079K305,,2026-03-09,False,996b2e5c-55e3-4533-8d93-cd7b94fa15c4,,,2026-03-16,2026-03-16,0.21,2026-03-09,cash_dividends,False,GOOGL
+cash_dividend,02079K305,,2026-06-08,False,438edd71-2be7-4884-b139-b42fc79fd1b8,,,2026-06-15,2026-06-15,0.22,2026-06-08,cash_dividends,False,GOOGL
+cash_dividend,02079K305,,2026-09-04,False,77c1a261-a233-4a16-94c7-31815e8155f9,,,2026-09-14,2026-09-14,0.22,2026-09-04,cash_dividends,False,GOOGL
+forward_split,02079K305,2022-07-19,2022-07-18,,9fde6185-2545-454f-a181-7a81d7c94c0d,20.0,1.0,2022-07-15,2022-07-18,,2022-07-01,forward_splits,,GOOGL
