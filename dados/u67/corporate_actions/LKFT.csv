@@ -1,0 +1,2 @@
+action_type,id,new_cusip,new_symbol,old_cusip,old_symbol,process_date,source_array
+name_change,535f3963-4c9e-4ce5-991e-013714082c21,36315X101,LKFT,36315X101,GLPG,2026-05-08,name_changes

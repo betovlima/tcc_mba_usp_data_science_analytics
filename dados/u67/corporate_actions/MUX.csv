@@ -1,0 +1,10 @@
+acquiree_cusip,acquiree_rate,acquiree_symbol,acquirer_cusip,acquirer_rate,acquirer_symbol,action_type,cusip,effective_date,ex_date,foreign,id,new_cusip,new_rate,old_cusip,old_rate,payable_date,process_date,rate,record_date,source_array,special,symbol
+,,,,,,cash_dividend,,,2016-02-01,False,9635d8d9-48e3-4d11-bf8b-42a02bd42aa4,,,,,,2016-02-01,0.005,,cash_dividends,False,MUX
+,,,,,,cash_dividend,,,2016-08-22,False,32163796-243a-46d6-a1a6-b4d6fccc8ddc,,,,,,2016-08-22,0.005,,cash_dividends,False,MUX
+,,,,,,cash_dividend,,,2017-02-01,False,b24fb17b-4065-40d6-a23f-b04d8ba322a5,,,,,,2017-02-01,0.005,,cash_dividends,False,MUX
+,,,,,,cash_dividend,,,2017-08-10,False,629a8eec-8f6b-4e5a-b7c4-5dcb2a2dba75,,,,,,2017-08-10,0.005,,cash_dividends,False,MUX
+,,,,,,cash_dividend,,,2018-02-01,False,02ad777e-c1fb-46d6-ae7b-d43b47fc9d8f,,,,,,2018-02-01,0.005,,cash_dividends,False,MUX
+,,,,,,cash_dividend,,,2018-08-24,False,916835d9-5515-4dc7-b5ae-c6a26753dce1,,,,,,2018-08-24,0.005,,cash_dividends,False,MUX
+,,,,,,cash_dividend,,,2019-03-07,False,4dcc461a-bc55-40fd-95db-64d0e9cc3dc1,,,,,,2019-03-07,0.005,,cash_dividends,False,MUX
+,,,,,,reverse_split,,,2022-07-28,,29947e8d-152c-4e20-8e88-9c68f1fb32b1,58039P305,1.0,58039P107,10.0,2022-07-28,2022-07-28,,2022-07-28,reverse_splits,,MUX
+38110W106,1.0,GOLXF,58039P305,0.003876,MUX,stock_merger,,2026-04-30,,,b2a6df45-ba00-425c-9eb7-9b450bde2888,,,,,2026-05-04,2026-05-04,,,stock_mergers,,

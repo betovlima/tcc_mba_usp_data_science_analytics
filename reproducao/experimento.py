@@ -74,6 +74,9 @@ def summarize_metrics(
             result.metrics.get("buy_hold_maximum_drawdown") or 0.0
         ),
         "benchmark_name": result.metrics.get("benchmark_name"),
+        "benchmark_assets": list(result.metrics.get("benchmark_assets") or []),
+        "benchmark_asset_count": result.metrics.get("benchmark_asset_count"),
+        "benchmark_same_universe": result.metrics.get("benchmark_same_universe"),
         "calendar_source_asset": result.metrics.get(
             "calendar_source_asset"
         ),

@@ -308,22 +308,30 @@ def _custo_troca_proporcional(config: Any, from_position: int, to_position: int)
     sides = int(from_position != 0) + int(to_position != 0)
     return min(0.25, one_side * sides)
 
+def _preco_execucao(frames: dict[str, pd.DataFrame], symbol: str, timestamp: pd.Timestamp, column: str) -> float:
+    """Lê um preço para execução/contabilidade, depois de definida a ação."""
+    try:
+        price = float(frames[symbol].loc[timestamp, column])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f'{symbol}: missing {column} price at execution {timestamp}.') from exc
+    if not np.isfinite(price) or price <= 0:
+        raise ValueError(f'{symbol}: invalid {column} price at execution {timestamp}.')
+    return price
+
 def _retorno_log_transicao_treinamento(frames: dict[str, pd.DataFrame], symbols: list[str], date_now: pd.Timestamp, date_next: pd.Timestamp, from_position: int, to_position: int, config: Any) -> float:
     gross = 1.0
     if from_position > 0:
         symbol = symbols[from_position - 1]
-        close_now = float(frames[symbol].loc[date_now, 'close'])
-        open_next = float(frames[symbol].loc[date_next, 'open'])
-        if close_now > 0:
-            gross *= open_next / close_now
+        close_now = _preco_execucao(frames, symbol, date_now, 'close')
+        open_next = _preco_execucao(frames, symbol, date_next, 'open')
+        gross *= open_next / close_now
     cost = _custo_troca_proporcional(config, from_position, to_position)
     gross *= max(1e-08, 1.0 - cost)
     if to_position > 0:
         symbol = symbols[to_position - 1]
-        open_next = float(frames[symbol].loc[date_next, 'open'])
-        close_next = float(frames[symbol].loc[date_next, 'close'])
-        if open_next > 0:
-            gross *= close_next / open_next
+        open_next = _preco_execucao(frames, symbol, date_next, 'open')
+        close_next = _preco_execucao(frames, symbol, date_next, 'close')
+        gross *= close_next / open_next
     return float(np.log(max(gross, 1e-12)))
 
 def _recompensa_ajustada_risco(log_return: float, wealth_before: float, peak_before: float, config: Any) -> tuple[float, float, float]:
@@ -374,31 +382,15 @@ def _precalcular_utilidades_modelo(
             continue
 
         locations = frame.index.get_indexer(dates)
-        candidate_rows = np.flatnonzero(
-            (locations >= 0) & (locations + 1 < len(frame.index))
-        )
+        candidate_rows = np.flatnonzero(locations >= 0)
         if len(candidate_rows) == 0:
             continue
 
         positions = locations[candidate_rows]
         features = frame.iloc[positions][ROTATION_FEATURES]
-        feature_ok = ~features.isna().any(axis=1).to_numpy()
-        next_rows = frame.iloc[positions + 1]
-        next_open = pd.to_numeric(
-            next_rows["open"],
-            errors="coerce",
-        ).to_numpy(dtype=np.float64)
-        next_close = pd.to_numeric(
-            next_rows["close"],
-            errors="coerce",
-        ).to_numpy(dtype=np.float64)
-        market_ok = (
-            np.isfinite(next_open)
-            & (next_open > 0.0)
-            & np.isfinite(next_close)
-            & (next_close > 0.0)
-        )
-        valid_mask = feature_ok & market_ok
+        # Somente os atributos conhecidos na sessão de decisão definem a
+        # elegibilidade. Preços futuros pertencem à execução/contabilidade.
+        valid_mask = np.isfinite(features.to_numpy(dtype=np.float64)).all(axis=1)
         if not np.any(valid_mask):
             continue
 
@@ -424,6 +416,7 @@ def _precalcular_utilidades_modelo(
         "cache_predict_calls": int(predict_calls),
         "cache_predicted_rows": int(predicted_rows),
         "cache_mode": "batched_lightgbm_prediction",
+        "eligibility_information": "decision_session_features_only",
     }
 
 def _utilidades_modelo(
@@ -444,24 +437,13 @@ def _utilidades_modelo(
     values = [0.0]
     for symbol in symbols:
         model = models.get(symbol)
-        frame = frames[symbol]
-        if model is None or timestamp not in frame.index:
+        frame = frames.get(symbol)
+        if model is None or frame is None or timestamp not in frame.index:
             values.append(float('-inf'))
             continue
 
         row = frame.loc[[timestamp], ROTATION_FEATURES]
-        if row.empty or row.isna().any(axis=None):
-            values.append(float('-inf'))
-            continue
-
-        location = frame.index.get_loc(timestamp)
-        if not isinstance(location, (int, np.integer)) or location + 1 >= len(frame.index):
-            values.append(float('-inf'))
-            continue
-        next_row = frame.iloc[int(location) + 1]
-        next_open = float(next_row.get('open', float('nan')))
-        next_close = float(next_row.get('close', float('nan')))
-        if not (np.isfinite(next_open) and next_open > 0 and np.isfinite(next_close) and next_close > 0):
+        if row.empty or not np.isfinite(row.to_numpy(dtype=np.float64)).all():
             values.append(float('-inf'))
             continue
 
@@ -747,6 +729,8 @@ def _crescimento_politica_simples(policy: Callable[[pd.Timestamp, int, int], tup
 
 def _executar_compra(cash: float, price: float, config: Any, fee_calculator: Callable, slippage: Callable) -> tuple[float, float, dict[str, float]]:
     execution_price = float(slippage(price, 'BUY', config))
+    if not np.isfinite(execution_price) or execution_price <= 0:
+        raise ValueError('BUY requires a finite positive execution price.')
     quantity = cash / execution_price
     for _ in range(25):
         fees = fee_calculator('BUY', quantity, execution_price, config)
@@ -763,26 +747,30 @@ def _benchmark_pesos_iguais(frames: dict[str, pd.DataFrame], symbols: list[str],
         return pd.Series(dtype=float)
     first = execution_dates[0]
     last = execution_dates[-1]
-    benchmark_symbols: list[str] = []
+    if not symbols or len(set(symbols)) != len(symbols):
+        raise ValueError('The fixed benchmark universe must be nonempty and contain unique assets.')
     for symbol in symbols:
+        if symbol not in frames:
+            raise ValueError(f'{symbol}: missing prices in the fixed benchmark universe.')
         frame = frames[symbol]
         window = frame.reindex(execution_dates)
         first_open = float(window.iloc[0].get('open', float('nan')))
         closes = pd.to_numeric(window['close'], errors='coerce')
-        if (
+        if not (
             np.isfinite(first_open)
             and first_open > 0
-            and closes.notna().all()
+            and np.isfinite(closes.to_numpy(dtype=float)).all()
             and (closes > 0).all()
         ):
-            benchmark_symbols.append(symbol)
-    if not benchmark_symbols:
-        raise ValueError('No asset has complete prices for the benchmark execution window.')
+            raise ValueError(
+                f'{symbol}: incomplete or invalid prices for the fixed benchmark execution window; '
+                'assets cannot be silently removed from the comparison.'
+            )
 
-    capital_per_asset = float(initial_capital) / len(benchmark_symbols)
+    capital_per_asset = float(initial_capital) / len(symbols)
     quantities: dict[str, float] = {}
     residual = 0.0
-    for symbol in benchmark_symbols:
+    for symbol in symbols:
         buy_price = float(slippage(float(frames[symbol].loc[first, 'open']), 'BUY', config))
         quantity = capital_per_asset / buy_price
         for _ in range(20):
@@ -872,7 +860,7 @@ def _precalcular_diagnosticos_regime_mercado(
         }
     return output
 
-def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tuple[int, float]], frames: dict[str, pd.DataFrame], symbols: list[str], decision_dates: pd.DatetimeIndex, config: Any, fee_calculator: Callable, slippage: Callable, decision_metadata: dict[pd.Timestamp, dict[str, Any]] | None=None, policy_decision_diagnostics: dict[pd.Timestamp, dict[str, Any]] | None=None, trade_callback: Callable[[dict[str, Any]], None] | None=None, *, model_label: str='LightGBM Utility', method_line: str | None=None, simulation_progress_callback: Callable[[float, str], None] | None = None, benchmark_override: pd.Series | None = None, benchmark_override_name: str | None = None) -> RotationRunResult:
+def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tuple[int, float]], frames: dict[str, pd.DataFrame], symbols: list[str], decision_dates: pd.DatetimeIndex, config: Any, fee_calculator: Callable, slippage: Callable, decision_metadata: dict[pd.Timestamp, dict[str, Any]] | None=None, policy_decision_diagnostics: dict[pd.Timestamp, dict[str, Any]] | None=None, trade_callback: Callable[[dict[str, Any]], None] | None=None, *, model_label: str='LightGBM Utility', method_line: str | None=None, simulation_progress_callback: Callable[[float, str], None] | None = None) -> RotationRunResult:
     if len(decision_dates) < 2:
         raise ValueError('The final-test interval is too short.')
 
@@ -890,37 +878,16 @@ def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tupl
     execution_dates = decision_dates[1:]
     simulation_progress(0.01, "OOS benchmark")
     phase_started = time.perf_counter()
-    if benchmark_override is None:
-        benchmark = _benchmark_pesos_iguais(
-            frames,
-            symbols,
-            execution_dates,
-            float(config.initial_capital),
-            config,
-            fee_calculator,
-            slippage,
-        )
-        benchmark_name = (
-            "Equal-weight buy-and-hold across continuously available assets"
-        )
-    else:
-        benchmark = pd.Series(
-            benchmark_override,
-            dtype=float,
-        ).reindex(execution_dates)
-        if (
-            benchmark.isna().any()
-            or not np.isfinite(benchmark.to_numpy(dtype=float)).all()
-            or (benchmark <= 0.0).any()
-        ):
-            raise ValueError(
-                "Fixed benchmark override does not cover the complete "
-                "execution window with positive finite values."
-            )
-        benchmark_name = str(
-            benchmark_override_name
-            or "Fixed external buy-and-hold benchmark"
-        )
+    benchmark = _benchmark_pesos_iguais(
+        frames,
+        symbols,
+        execution_dates,
+        float(config.initial_capital),
+        config,
+        fee_calculator,
+        slippage,
+    )
+    benchmark_name = "Equal-weight buy-and-hold on the same fixed asset universe"
     simulation_timing["benchmark_seconds"] = time.perf_counter() - phase_started
 
     simulation_progress(0.08, "OOS market-regime diagnostics")
@@ -1126,7 +1093,7 @@ def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tupl
                 decision_trade_fields[diagnostic_key] = decision_diag.get(diagnostic_key)
             if position > 0:
                 symbol = symbols[position - 1]
-                price = float(slippage(float(frames[symbol].loc[execution_date, 'open']), 'SELL', config))
+                price = float(slippage(_preco_execucao(frames, symbol, execution_date, 'open'), 'SELL', config))
                 fees = fee_calculator('SELL', quantity, price, config)
                 gross = quantity * price
                 realized = quantity * (price - entry_price) - float(fees['total_fee'])
@@ -1147,7 +1114,7 @@ def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tupl
             position = target_position
             if position > 0:
                 symbol = symbols[position - 1]
-                raw_price = float(frames[symbol].loc[execution_date, 'open'])
+                raw_price = _preco_execucao(frames, symbol, execution_date, 'open')
                 quantity, price, fees = _executar_compra(cash, raw_price, config, fee_calculator, slippage)
                 gross = quantity * price
                 cash -= gross + float(fees['total_fee'])
@@ -1177,7 +1144,7 @@ def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tupl
                 trade_callback({**trade, 'backend': backend, 'model': model_label})
         if position > 0:
             symbol = symbols[position - 1]
-            close_price = float(frames[symbol].loc[execution_date, 'close'])
+            close_price = _preco_execucao(frames, symbol, execution_date, 'close')
             equity = cash + quantity * close_price
             selected_asset = symbol
         else:
@@ -1200,7 +1167,7 @@ def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tupl
     if position > 0 and prediction_rows:
         final_date = execution_dates[-1]
         symbol = symbols[position - 1]
-        price = float(slippage(float(frames[symbol].loc[final_date, 'close']), 'SELL', config))
+        price = float(slippage(_preco_execucao(frames, symbol, final_date, 'close'), 'SELL', config))
         fees = fee_calculator('SELL', quantity, price, config)
         gross = quantity * price
         realized = quantity * (price - entry_price) - float(fees['total_fee'])
@@ -1249,6 +1216,10 @@ def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tupl
         "decision_horizons": list(config.rotation_target_horizons),
         "overnight_positions_allowed": True,
         "benchmark_name": benchmark_name,
+        "benchmark_assets": list(symbols),
+        "benchmark_asset_count": len(symbols),
+        "benchmark_same_universe": True,
+        "eligibility_information": "decision_session_features_only",
         "walk_forward_enabled": True,
         "walk_forward_purge_days": int(config.rotation_purge_days),
         "walk_forward_calibration_days": int(
@@ -1502,4 +1473,3 @@ def _desempenho_folds(predictions: pd.DataFrame, folds: list[dict[str, Any]], in
             'sessions': int(len(subset)),
         })
     return output
-

@@ -24,6 +24,7 @@ from engine.configuracao import (
     BAR_SNAPSHOT_AS_OF_END,
     CONFIG,
     EXPERIMENT_VERSION,
+    U67_REQUESTED_ASSETS,
 )
 
 
@@ -94,7 +95,8 @@ def test_official_reproduction_has_no_database_dependency() -> None:
 
 
 def test_frozen_universe_and_dates_match_cpu_reference() -> None:
-    assert len(ASSETS) == 56
+    assert len(ASSETS) == 67
+    assert U67_REQUESTED_ASSETS == ASSETS == CONFIG.assets
     assert "DOC" in ASSETS
     assert "CLMT" in ASSETS
     assert ANALYSIS_END_DATE == "2026-09-17"
@@ -161,6 +163,7 @@ def test_asset_universe_has_no_manual_reference_or_candidate_split() -> None:
             ROOT / "engine" / "rotacao.py",
             ROOT / "engine" / "modelo_lightgbm.py",
             ROOT / "reproducao" / "experimento.py",
+            ROOT / "reproduzir_experimento.py",
         ]
     )
     forbidden = (
@@ -169,6 +172,9 @@ def test_asset_universe_has_no_manual_reference_or_candidate_split() -> None:
         "calendar_anchor_assets",
         "research_reference_assets",
         "research_candidate_assets",
+        "u56_eligible",
+        "U56_FIXED",
+        "benchmark_override",
     )
     for token in forbidden:
         assert token not in config_source
@@ -235,14 +241,13 @@ def test_official_u67_workflow_is_explicitly_sectioned() -> None:
     assert source.count("# %%") >= 9
     assert "# %% 1 - Snapshot U67 congelado e versionado" in source
     assert "# %% 2 - Processamento estrutural do snapshot U67" in source
-    assert "# %% 3 - Mesmo calendario U56 elegivel" in source
+    assert "# %% 3 - Calendario e configuracao do universo fixo U67" in source
     assert "# %% 5 - Treino, calibracao e politica oficial do TCC" in source
     assert "# %% 6 - Replay financeiro" in source
     config_source = (ROOT / "engine" / "configuracao.py").read_text(
         encoding="utf-8"
     )
-    assert 'U59_ADDITIONS = ("COLB", "AMS", "FOXF")' in config_source
-    assert "U67_ADDITIONS = (" in config_source
+    assert "U67_REQUESTED_ASSETS = ASSETS" in config_source
     assert "U67_EXPECTED_REQUESTED_COUNT = 67" in config_source
     assert "U67_EXPECTED_EFFECTIVE_COUNT = 65" in config_source
     assert 'U67_EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})' in config_source
@@ -547,7 +552,7 @@ def test_backtest_analytics_generation_creates_expected_files(tmp_path) -> None:
     assert (graph_dir / "monthly_return_heatmap_control_excess.svg").exists()
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.22.0-dev.8"
+    assert EXPERIMENT_VERSION == "1.22.1"
     forbidden = (
         "series_historicas",
         "tiingo",
@@ -707,8 +712,7 @@ def test_official_reproduction_uses_u67_contract() -> None:
         encoding="utf-8"
     )
     assert "DATA = SnapshotPaths.u67(ROOT)" in source
-    assert 'U59_ADDITIONS = ("COLB", "AMS", "FOXF")' in config_source
-    assert "U67_ADDITIONS = (" in config_source
+    assert "U67_REQUESTED_ASSETS = ASSETS" in config_source
     for asset in ("THO", "WDAY", "EXR", "XEL", "SBFG", "PAYX", "MUX", "SXC"):
         assert f'"{asset}"' in config_source
     assert "U67_EXPECTED_REQUESTED_COUNT = 67" in config_source
@@ -750,4 +754,3 @@ def test_official_runner_silences_only_pandas4_warning() -> None:
     assert 'warnings.filterwarnings(' in source
     assert '"ignore"' in source
     assert 'warnings.filterwarnings("ignore")' not in source
-
