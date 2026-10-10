@@ -330,6 +330,72 @@ def construir_movimentos_casos(
     return pd.DataFrame(rows)
 
 
+def construir_comparacao_janelas(
+    cases: pd.DataFrame,
+    *,
+    frames: dict[str, pd.DataFrame],
+    focus_assets: tuple[str, ...] = DEFAULT_FOCUS_ASSETS,
+) -> pd.DataFrame:
+    """Compara o retorno bruto open-to-open na mesma janela de cada caso."""
+
+    rows: list[dict[str, Any]] = []
+    focus = tuple(str(asset).strip().upper() for asset in focus_assets)
+
+    for case in cases.to_dict(orient="records"):
+        entry = _timestamp_utc(case["entry_execution_timestamp"])
+        exit_execution = _timestamp_utc(case["exit_execution_timestamp"])
+        if entry is None or exit_execution is None:
+            continue
+
+        selected_return = _number(case.get("position_return"))
+        for asset in focus:
+            frame = frames.get(asset)
+            if frame is None or frame.empty:
+                continue
+            local = frame.copy()
+            local.index = pd.to_datetime(
+                local.index,
+                utc=True,
+                errors="coerce",
+            )
+            local = local.sort_index()
+            if entry not in local.index or exit_execution not in local.index:
+                continue
+
+            entry_open = _number(local.loc[entry].get("open"))
+            exit_open = _number(local.loc[exit_execution].get("open"))
+            if (
+                entry_open is None
+                or exit_open is None
+                or entry_open <= 0
+                or exit_open <= 0
+            ):
+                continue
+
+            gross_return = exit_open / entry_open - 1.0
+            rows.append(
+                {
+                    "case_id": case["case_id"],
+                    "selected_asset": case["asset"],
+                    "asset": asset,
+                    "is_selected_asset": bool(asset == case["asset"]),
+                    "entry_execution_timestamp": entry,
+                    "exit_execution_timestamp": exit_execution,
+                    "entry_open": entry_open,
+                    "exit_open": exit_open,
+                    "gross_open_to_open_return": gross_return,
+                    "selected_position_return": selected_return,
+                    "gross_return_minus_selected": (
+                        gross_return - selected_return
+                        if selected_return is not None
+                        else None
+                    ),
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
 def _plot_case(
     output_dir: Path,
     *,
@@ -399,6 +465,7 @@ def _write_markdown(
     path: Path,
     *,
     cases: pd.DataFrame,
+    comparison: pd.DataFrame,
     focus_assets: tuple[str, ...],
 ) -> None:
     lines = [
@@ -443,6 +510,71 @@ def _write_markdown(
                     if _number(row.get("walk_forward_fold")) is not None
                     else ""
                 ),
+            )
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Ranking registrado nas decisoes",
+            "",
+            "| Caso | Ativo escolhido | Top 1 na entrada | Top 2 na entrada | "
+            "Top 3 na entrada | Melhor ativo na saida | Gap melhor-atual |",
+            "| --- | --- | --- | --- | --- | --- | ---: |",
+        ]
+    )
+    for row in cases.to_dict(orient="records"):
+        def ranked(asset_key: str, score_key: str) -> str:
+            asset_name = _text(row.get(asset_key))
+            score = _number(row.get(score_key))
+            if asset_name is None:
+                return ""
+            return (
+                f"{asset_name} ({score:.6f})"
+                if score is not None
+                else asset_name
+            )
+
+        gap = _number(row.get("exit_best_vs_current_gap"))
+        lines.append(
+            "| {case_id} | {asset} | {top1} | {top2} | {top3} | "
+            "{best_exit} | {gap} |".format(
+                case_id=row["case_id"],
+                asset=row["asset"],
+                top1=ranked("entry_top_1_asset", "entry_top_1_score"),
+                top2=ranked("entry_top_2_asset", "entry_top_2_score"),
+                top3=ranked("entry_top_3_asset", "entry_top_3_score"),
+                best_exit=ranked("exit_best_asset", "exit_best_score"),
+                gap="" if gap is None else f"{gap:.6f}",
+            )
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Movimento dos mesmos ativos na janela executada",
+            "",
+            (
+                "A tabela seguinte calcula, para TSLA, NVDA, VNCE e SPY, o "
+                "retorno bruto entre a abertura da entrada e a abertura da "
+                "saida do caso. E uma comparacao ex post da mesma janela, "
+                "sem taxas e sem afirmar que os outros ativos poderiam ter "
+                "sido escolhidos com conhecimento do desfecho."
+            ),
+            "",
+            "| Caso | Ativo | Selecionado | Retorno bruto na mesma janela | "
+            "Diferenca para o selecionado |",
+            "| --- | --- | --- | ---: | ---: |",
+        ]
+    )
+    for row in comparison.to_dict(orient="records"):
+        lines.append(
+            "| {case_id} | {asset} | {selected} | {ret} | {delta} |".format(
+                case_id=row["case_id"],
+                asset=row["asset"],
+                selected="sim" if bool(row["is_selected_asset"]) else "nao",
+                ret=_format_pct(row.get("gross_open_to_open_return")),
+                delta=_format_pct(row.get("gross_return_minus_selected")),
             )
         )
 
@@ -510,9 +642,15 @@ def gerar_auditoria_ativos_reais(
         sessions_before=sessions_before,
         sessions_after=sessions_after,
     )
+    comparison = construir_comparacao_janelas(
+        cases,
+        frames=frames,
+        focus_assets=focus_assets,
+    )
 
     cases_csv = output_dir / "casos_ativos_reais.csv"
     movements_csv = output_dir / "movimentos_ativos_reais.csv"
+    comparison_csv = output_dir / "comparacao_janela_ativos_reais.csv"
     report_md = output_dir / "auditoria_ativos_reais.md"
     metadata_json = output_dir / "auditoria_ativos_reais.json"
 
@@ -531,6 +669,15 @@ def gerar_auditoria_ativos_reais(
         movements_export["timestamp"] = movements_export["timestamp"].map(_iso)
     movements_export.to_csv(movements_csv, index=False)
 
+    comparison_export = comparison.copy()
+    for column in (
+        "entry_execution_timestamp",
+        "exit_execution_timestamp",
+    ):
+        if column in comparison_export:
+            comparison_export[column] = comparison_export[column].map(_iso)
+    comparison_export.to_csv(comparison_csv, index=False)
+
     figure_files: list[str] = []
     for case in cases.to_dict(orient="records"):
         figure_files.extend(
@@ -545,6 +692,7 @@ def gerar_auditoria_ativos_reais(
     _write_markdown(
         report_md,
         cases=cases,
+        comparison=comparison,
         focus_assets=focus_assets,
     )
 
@@ -558,12 +706,14 @@ def gerar_auditoria_ativos_reais(
         "sessions_after_exit_execution": int(sessions_after),
         "case_count": int(len(cases)),
         "movement_rows": int(len(movements)),
+        "comparison_rows": int(len(comparison)),
         "uses_same_prepared_frames_as_official_replay": True,
         "outcome_used_to_select_cases": False,
         "hypothetical_asset_used": False,
         "files": {
             "cases": cases_csv.name,
             "movements": movements_csv.name,
+            "same_window_comparison": comparison_csv.name,
             "report": report_md.name,
             "figures": figure_files,
         },
