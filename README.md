@@ -27,7 +27,8 @@ dados/u67/
 ```
 
 A release inclui o snapshot congelado em `dados/u67/`. Vá direto para a
-execução; os hashes são conferidos antes do treinamento.
+execução; o manifesto e a presença dos arquivos do snapshot são validados
+antes do treinamento.
 
 Se o snapshot ainda não existir, crie um arquivo `.env` local com:
 
