@@ -48,7 +48,7 @@ SEARCH_SUMMARY_FILE = SOURCE / "candidate_cluster_search.json"
 OUT = SOURCE / "continuity_audit"
 ACTIONS = SnapshotPaths.from_root(OUT)
 
-SCRIPT_VERSION = "candidate-cluster-continuity-audit-v1.0.4"
+SCRIPT_VERSION = "candidate-cluster-continuity-audit-v1.0.5"
 EXPECTED_BRANCH = "research/universe-clustering-visualization-v1"
 
 KNOWN_RESEARCH_STRUCTURAL_EXCLUSIONS = {
@@ -70,6 +70,17 @@ IDENTITY_SENSITIVE_ACTIONS = {
     "redemption",
     "name_change",
     "worthless_removal",
+}
+
+# Eventos revisados documentalmente em que o provedor usa uma categoria
+# sensível, mas a identidade econômica do ativo principal permanece.
+KNOWN_CONTINUITY_PRESERVED_EVENTS = {
+    "GME": {
+        "action_type": "spin_off",
+        "new_symbol": "GME.WS",
+        "process_date": "2025-10-07",
+        "reason": "warrant_distribution_parent_continuity_preserved",
+    },
 }
 
 
@@ -99,6 +110,26 @@ def _clean(value):
     except (TypeError, ValueError):
         pass
     return value
+
+
+def _known_continuity_preserved_event(
+    symbol: str,
+    action: dict,
+) -> bool:
+    expected = KNOWN_CONTINUITY_PRESERVED_EVENTS.get(
+        symbol.strip().upper()
+    )
+    if expected is None:
+        return False
+
+    return (
+        str(action.get("action_type") or "")
+        == str(expected.get("action_type") or "")
+        and str(action.get("new_symbol") or "").strip().upper()
+        == str(expected.get("new_symbol") or "").strip().upper()
+        and str(action.get("process_date") or "")
+        == str(expected.get("process_date") or "")
+    )
 
 
 def _candidate_is_acquirer_only(
@@ -239,6 +270,11 @@ def main() -> None:
             in IDENTITY_SENSITIVE_ACTIONS
         ]
 
+        preserved_distribution = [
+            action
+            for action in sensitive
+            if _known_continuity_preserved_event(symbol, action)
+        ]
         acquirer_only = [
             action
             for action in sensitive
@@ -248,6 +284,7 @@ def main() -> None:
             action
             for action in sensitive
             if not _candidate_is_acquirer_only(symbol, action)
+            and not _known_continuity_preserved_event(symbol, action)
         ]
 
         if known_reason:
@@ -262,6 +299,11 @@ def main() -> None:
         elif unresolved_sensitive:
             status = "review_required"
             reason = "identity_sensitive_corporate_action"
+        elif preserved_distribution:
+            status = "eligible_for_next_stage"
+            reason = str(
+                KNOWN_CONTINUITY_PRESERVED_EVENTS[symbol]["reason"]
+            )
         elif acquirer_only:
             status = "eligible_for_next_stage"
             reason = "candidate_is_acquirer_continuity_preserved"
@@ -289,6 +331,9 @@ def main() -> None:
                 "corporate_actions": len(actions),
                 "identity_sensitive_actions": len(sensitive),
                 "acquirer_side_actions": len(acquirer_only),
+                "preserved_distribution_actions": len(
+                    preserved_distribution
+                ),
                 "unresolved_sensitive_actions": len(unresolved_sensitive),
                 "status": status,
                 "reason": reason,
