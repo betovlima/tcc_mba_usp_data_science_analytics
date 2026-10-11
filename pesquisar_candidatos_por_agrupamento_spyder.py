@@ -70,7 +70,7 @@ U67 = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "candidate_cluster_search"
 CACHE = OUT / "cache_bars"
 
-SCRIPT_VERSION = "candidate-cluster-search-v1.0.5"
+SCRIPT_VERSION = "candidate-cluster-search-v1.0.6"
 EXPECTED_BRANCH = "research/universe-clustering-visualization-v1"
 
 ALLOWED_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
@@ -170,6 +170,70 @@ def _save_figure(fig: plt.Figure, name: str) -> None:
         plt.close(fig)
 
 
+def _clear_generated_outputs() -> None:
+    """Remove resultados da execução anterior, preservando apenas cache_bars."""
+    OUT.mkdir(parents=True, exist_ok=True)
+    protected = CACHE.resolve()
+
+    for path in OUT.iterdir():
+        if path.resolve() == protected:
+            continue
+        if path.is_dir():
+            import shutil
+            shutil.rmtree(path)
+        else:
+            path.unlink(missing_ok=True)
+
+
+def _shortlist_fingerprint(frame: pd.DataFrame) -> str:
+    assets = tuple(frame["asset"].astype(str))
+    payload = "\n".join(assets).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _validate_shortlist(
+    shortlist: pd.DataFrame,
+    projected: pd.DataFrame,
+) -> None:
+    assets = set(shortlist["asset"].astype(str))
+    projected_assets = set(projected["asset"].astype(str))
+    if not assets.issubset(projected_assets):
+        missing = sorted(assets - projected_assets)
+        raise RuntimeError(
+            "Shortlist contém ativos ausentes da projeção atual: "
+            + ",".join(missing)
+        )
+
+    if len(shortlist) != SIMILAR_COUNT + COMPLEMENTARY_COUNT:
+        raise RuntimeError(
+            "Shortlist incompleta: "
+            f"observado={len(shortlist)} "
+            f"esperado={SIMILAR_COUNT + COMPLEMENTARY_COUNT}"
+        )
+
+    warnings = shortlist.loc[
+        shortlist["instrument_warning"].fillna("").ne(""),
+        ["asset", "instrument_warning"],
+    ]
+    if not warnings.empty:
+        raise RuntimeError(
+            "Shortlist contém instrumentos que exigem revisão: "
+            + "; ".join(
+                f"{row.asset}:{row.instrument_warning}"
+                for row in warnings.itertuples(index=False)
+            )
+        )
+
+    forbidden = sorted(
+        assets.intersection(KNOWN_RESEARCH_STRUCTURAL_EXCLUSIONS)
+    )
+    if forbidden:
+        raise RuntimeError(
+            "Shortlist contém exclusões estruturais conhecidas: "
+            + ",".join(forbidden)
+        )
+
+
 def _load_catalog(credentials) -> list[dict]:
     errors = []
     for endpoint in (
@@ -212,7 +276,7 @@ def _instrument_warning(name: str) -> str:
         (r"\bRIGHTS?\b", "rights"),
         (r"\bETNS?\b", "etn"),
         (
-            r"\bOPERATING PARTNERSHIP\b|\bOP,\s*L\.P\.\b",
+            r"\bOPERATING PARTNERSHIP\b|\bOP,\s*L\.P\.",
             "operating_partnership_unit",
         ),
     )
@@ -904,6 +968,7 @@ def main() -> None:
             f"Branch incorreta: esperado={EXPECTED_BRANCH} observado={branch}"
         )
 
+    _clear_generated_outputs()
     OUT.mkdir(parents=True, exist_ok=True)
     manifest = validate_snapshot(U67)
     start_date = str((manifest.get("bars") or {}).get("start") or "2016-01-01")
@@ -1037,6 +1102,8 @@ def main() -> None:
     )
 
     shortlist = _shortlist(projected)
+    _validate_shortlist(shortlist, projected)
+    shortlist_fingerprint = _shortlist_fingerprint(shortlist)
 
     quality.to_csv(
         OUT / "cluster_quality_u67.csv",
@@ -1095,6 +1162,8 @@ def main() -> None:
         "complementary_count": int(
             (shortlist["search_role"] == "complementar").sum()
         ),
+        "shortlist_assets": list(shortlist["asset"].astype(str)),
+        "shortlist_fingerprint": shortlist_fingerprint,
         "reference_complementary_low": float(
             projected["reference_complementary_low"].iloc[0]
         ),
