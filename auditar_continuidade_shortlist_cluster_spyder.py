@@ -47,7 +47,7 @@ SHORTLIST_FILE = SOURCE / "candidatos_cluster_shortlist.csv"
 OUT = SOURCE / "continuity_audit"
 ACTIONS = SnapshotPaths.from_root(OUT)
 
-SCRIPT_VERSION = "candidate-cluster-continuity-audit-v1.0.2"
+SCRIPT_VERSION = "candidate-cluster-continuity-audit-v1.0.3"
 EXPECTED_BRANCH = "research/universe-clustering-visualization-v1"
 
 KNOWN_RESEARCH_STRUCTURAL_EXCLUSIONS = {
@@ -57,6 +57,8 @@ KNOWN_RESEARCH_STRUCTURAL_EXCLUSIONS = {
     "BLOX": "historical_series_discontinuity",
     "VISN": "historical_identity_transition",
     "COR": "historical_identity_transition",
+    "STRR": "historical_stock_merger_into_HSON",
+    "TVRD": "reverse_merger_change_of_control_CARA_to_TVRD",
 }
 
 IDENTITY_SENSITIVE_ACTIONS = {
