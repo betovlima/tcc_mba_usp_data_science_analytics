@@ -70,11 +70,23 @@ U67 = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "candidate_cluster_search"
 CACHE = OUT / "cache_bars"
 
-SCRIPT_VERSION = "candidate-cluster-search-v1.0.2"
+SCRIPT_VERSION = "candidate-cluster-search-v1.0.3"
 EXPECTED_BRANCH = "research/universe-clustering-visualization-v1"
 
 ALLOWED_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
 SYMBOL_RE = re.compile(r"^[A-Z]{1,5}$")
+
+# Exclusões estruturais já identificadas em campanhas anteriores da própria
+# pesquisa. Elas não entram novamente na shortlist. O motivo permanece
+# documentado e não é "corrigido" por concatenação ou bridge de séries.
+KNOWN_RESEARCH_STRUCTURAL_EXCLUSIONS = {
+    "FLG": "historical_identity_transition",
+    "LBTYA": "historical_identity_transition",
+    "DCOY": "historical_identity_transition",
+    "BLOX": "historical_series_discontinuity",
+    "VISN": "historical_identity_transition",
+    "COR": "historical_identity_transition",
+}
 
 # Busca inicial controlada. Use None somente se quiser varrer todo o catálogo.
 CANDIDATE_POOL_SIZE: int | None = 500
@@ -205,7 +217,10 @@ def _instrument_warning(name: str) -> str:
 
 
 def _eligible_catalog(catalog: list[dict]) -> pd.DataFrame:
-    excluded = set(U67_REQUESTED_ASSETS)
+    excluded = (
+        set(U67_REQUESTED_ASSETS)
+        | set(KNOWN_RESEARCH_STRUCTURAL_EXCLUSIONS)
+    )
     rows = []
     seen = set()
 
@@ -707,6 +722,7 @@ def _plot_map(
     explained: tuple[float, float],
 ) -> None:
     fig, ax = plt.subplots(figsize=(13.5, 8.5))
+    fig.subplots_adjust(top=0.88)
 
     for cluster_id in sorted(reference_xy["cluster"].unique()):
         part = reference_xy.loc[
@@ -755,12 +771,14 @@ def _plot_map(
     ax.set_ylabel(
         f"Componente 2 ({100 * explained[1]:.1f}% da variação do U67)"
     )
-    ax.set_title(
-        "Candidatos projetados no espaço comportamental do U67"
+    fig.suptitle(
+        "Candidatos projetados no espaço comportamental do U67",
+        y=0.97,
+        fontsize=15,
     )
     ax.text(
         0.0,
-        1.01,
+        1.015,
         (
             "A referência, a escala e a PCA são ajustadas somente no U67. "
             "Os candidatos não alteram o mapa de referência."
@@ -771,7 +789,7 @@ def _plot_map(
     )
     ax.legend(frameon=False, fontsize=9)
     ax.grid(alpha=0.15)
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
     _save_figure(fig, "01_mapa_candidatos_u67")
 
 
@@ -1060,6 +1078,9 @@ def main() -> None:
         "candidate_frames_downloaded_or_cached": len(raw_frames),
         "candidate_bar_response_share": len(raw_frames) / max(len(catalog), 1),
         "candidate_feature_valid": len(candidates),
+        "known_research_structural_exclusions": (
+            KNOWN_RESEARCH_STRUCTURAL_EXCLUSIONS
+        ),
         "selected_k": selected_k,
         "pca_explained_pc1_pc2": list(explained),
         "similar_count": int(
