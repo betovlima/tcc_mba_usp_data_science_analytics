@@ -728,3 +728,79 @@ O runner:
 6. aborta se surgir qualquer exclusão estrutural nova;
 7. não executa backtest nem consulta capital;
 8. reutiliza o snapshot existente em execuções posteriores.
+
+
+## Snapshot congelado dos 24 candidatos — dados.zip
+
+O pacote `dados.zip` confirmou a conclusão da etapa de dados dos candidatos.
+
+Resultado:
+
+- version: `cluster-candidate-snapshot-v1.0.0`;
+- status: `candidate_snapshot_ready`;
+- 24/24 candidatos preparados;
+- 64.920 linhas RAW elegíveis no total;
+- 2.705 sessões por candidato;
+- 10 splits normalizados;
+- 0 exclusões estruturais;
+- cutoff: 2026-10-06;
+- contrato: Alpaca SIP, 1Day, RAW + Corporate Actions;
+- análise financeira executada nesta etapa: não;
+- backtest executado nesta etapa: não.
+
+A partir deste ponto não há justificativa metodológica para continuar criando
+novas etapas de seleção ou limpeza antes de testar a hipótese central.
+
+### Teste decisivo de substituição
+
+Foi criado:
+
+```text
+pesquisar_substituicoes_cluster_spyder.py
+```
+
+A unidade do experimento é:
+
+```text
+(candidato congelado, incumbente U67, data de decisão)
+```
+
+Um evento primário só existe quando o candidato poderia efetivamente alterar a
+decisão da política: o incumbente não é caixa, a guarda de permanência mínima
+foi satisfeita, o candidato supera o melhor score do U67, supera a margem de
+troca relativa ao incumbente e está acima do limiar de caixa.
+
+O alvo primário compara a utilidade futura realizada do candidato com a
+utilidade futura realizada da ação que a política U67 escolheria na mesma data.
+Assim, o teste mede o custo de oportunidade imediato da substituição e não
+apenas se o candidato teria sido melhor que o ativo anteriormente mantido.
+
+A validação não permite divisão aleatória de linhas. Cada previsão de teste:
+
+1. ocorre em fold temporal posterior ao conjunto de treinamento;
+2. pertence a um grupo de candidatos ausente do treino correspondente.
+
+Foi fixado um classificador logístico regularizado, sem busca de
+hiperparâmetros, e um conjunto de atributos definido antes de observar os
+resultados.
+
+Regra pré-declarada para considerar a hipótese suportada:
+
+- pelo menos 200 eventos válidos;
+- pelo menos 8 candidatos com eventos;
+- AUC fora de tempo e fora do candidato >= 0,60;
+- limite inferior de 95% do bootstrap por data > 0,50;
+- limite inferior de 95% do bootstrap por candidato > 0,50.
+
+Se essa regra falhar, a decisão registrada pelo runner será:
+
+```text
+NOT_SUPPORTED_STOP_CLUSTER_LINE
+```
+
+Nesse caso não se deve escolher novo K, nova PCA, nova shortlist ou novos
+limiares a partir do resultado. A linha de pesquisa por agrupamento é encerrada.
+
+Se a regra for satisfeita, a única etapa seguinte permitida é um replay
+financeiro congelado, executado uma vez para verificar se a relação local de
+substituição se traduz em capital.
