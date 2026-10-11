@@ -443,3 +443,49 @@ Próxima execução:
 2. executar a auditoria de continuidade;
 3. somente se a nova shortlist estiver sem exclusões/revisões pendentes,
    congelar a lista para a análise de eventos de substituição.
+
+
+## Auditoria final da shortlist v1.0.4 — pacote candidate_cluster_search(4)
+
+A auditoria passou a apontar a fonte exata da shortlist e confirmou que o
+arquivo analisado corresponde à lista nova de 24 candidatos, fingerprint:
+
+```text
+f343a02844a78704f0817d24cdd5e2df6a216b5e4237b1bc1dacebd4e80ade88
+```
+
+Resultado automático:
+
+- 24 candidatos auditados;
+- 23 elegíveis;
+- 0 excluídos pelo conhecimento local já codificado;
+- 1 em `review_required`: TVRD.
+
+O Corporate Action de TVRD registrou em 16 abr. 2025:
+
+- mudança de símbolo CARA -> TVRD;
+- mudança de CUSIP 140755208 -> 140755307;
+- reverse split 1-for-3.
+
+A consulta documental externa mostrou que esse evento não foi apenas uma troca
+de nome/ticker. O Nasdaq registrou business combination e change of control de
+Cara Therapeutics com Tvardi Therapeutics. Após o fechamento, o negócio
+conduzido pela companhia combinada passou a ser principalmente o negócio da
+Legacy Tvardi. Portanto, a série CARA/TVRD não deve ser usada como uma única
+continuidade econômica para esta pesquisa.
+
+Decisão:
+
+- TVRD passa a ser exclusão estrutural conhecida;
+- o candidato não avança para a etapa de substituição;
+- a busca deve preencher novamente a 12ª posição complementar;
+- unidades de operating partnership também passam a ser sinalizadas antes da
+  shortlist, evitando que instrumentos como ESBA sejam promovidos
+  automaticamente sem revisão de compatibilidade com o universo.
+
+Versões:
+
+- candidate-cluster-search-v1.0.5;
+- candidate-cluster-continuity-audit-v1.0.3.
+
+Nenhum resultado de capital foi consultado para tomar essa decisão.
