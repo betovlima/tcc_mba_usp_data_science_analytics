@@ -70,7 +70,7 @@ U67 = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "candidate_cluster_search"
 CACHE = OUT / "cache_bars"
 
-SCRIPT_VERSION = "candidate-cluster-search-v1.0.1"
+SCRIPT_VERSION = "candidate-cluster-search-v1.0.2"
 EXPECTED_BRANCH = "research/universe-clustering-visualization-v1"
 
 ALLOWED_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
@@ -776,6 +776,26 @@ def _plot_map(
 
 
 def _plot_novelty(projected: pd.DataFrame, shortlist: pd.DataFrame) -> None:
+    """Mostra a distribuição e a faixa complementar derivada do próprio U67."""
+    if projected.empty:
+        raise RuntimeError("Nenhum candidato projetado para o gráfico de distância.")
+
+    low_values = pd.to_numeric(
+        projected["reference_complementary_low"],
+        errors="coerce",
+    ).dropna()
+    high_values = pd.to_numeric(
+        projected["reference_complementary_high"],
+        errors="coerce",
+    ).dropna()
+    if low_values.empty or high_values.empty:
+        raise RuntimeError(
+            "Limites complementares derivados do U67 ausentes no projected."
+        )
+
+    complementary_low = float(low_values.iloc[0])
+    complementary_high = float(high_values.iloc[0])
+
     fig, ax = plt.subplots(figsize=(9.5, 5.2))
     ax.hist(
         projected["novelty_ratio"],
@@ -783,16 +803,16 @@ def _plot_novelty(projected: pd.DataFrame, shortlist: pd.DataFrame) -> None:
         alpha=0.65,
     )
     ax.axvline(
-        COMPLEMENTARY_MIN_RATIO,
+        complementary_low,
         linestyle="--",
         linewidth=1,
-        label="início faixa complementar",
+        label=f"início da faixa complementar ({complementary_low:.2f})",
     )
     ax.axvline(
-        COMPLEMENTARY_MAX_RATIO,
+        complementary_high,
         linestyle="--",
         linewidth=1,
-        label="limite de suporte",
+        label=f"limite de suporte ({complementary_high:.2f})",
     )
     ax.set_xlabel(
         "Distância ao ativo U67 mais próximo / distância típica entre ativos do U67"
