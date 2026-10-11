@@ -651,3 +651,38 @@ congelar_shortlist_cluster_spyder.py
 
 Somente após o congelamento a pesquisa deve construir o conjunto temporal de
 eventos de substituição `(candidato, ativo mantido, data da decisão)`.
+
+
+## Confirmação do pacote candidate_cluster_search(8)
+
+O pacote recebido confirmou, sem pendências, a shortlist produzida pela busca
+v1.0.6 e auditada pela continuidade v1.0.5.
+
+Resultado observado nos artefatos:
+
+- 24 candidatos na shortlist;
+- 24 classificados como `eligible_for_next_stage`;
+- 0 em `review_required`;
+- 0 excluídos;
+- lista e ordem da shortlist coincidem entre busca e auditoria;
+- a auditoria reconheceu SNPS e SYK como aquisições em que o candidato é o
+  acquirer e, portanto, preserva a continuidade;
+- GME foi reconhecido como distribuição separada de warrants, preservando a
+  continuidade da ação ordinária.
+
+Shortlist confirmada:
+
+Semelhantes:
+EIX, INGR, LXP, VOOG, RLI, SNPS, MLPA, SYK, THQ, GATX, DMO, TAP.
+
+Complementares:
+REFR, VTVT, FUSB, MHH, XNET, EBS, RCMT, ULE, MIN, VHC, UPLD, GME.
+
+O ZIP recebido não contém os artefatos de
+`dados/cluster_candidate_search/`, portanto ele confirma a auditoria, mas não
+permite afirmar que o runner `congelar_shortlist_cluster_spyder.py` já tenha
+sido executado.
+
+Próximo passo operacional: executar o congelamento formal da shortlist antes de
+qualquer construção de eventos de substituição ou abertura de resultados
+financeiros.
