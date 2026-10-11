@@ -599,3 +599,55 @@ Ele somente congela a shortlist quando:
 - fingerprint e ordem dos ativos coincidem.
 
 O congelamento ocorre antes de qualquer resultado financeiro da nova shortlist.
+
+
+## Pacote candidate_cluster_search(7) — auditoria concluída
+
+A execução v1.0.6 da busca e a auditoria v1.0.5 ficaram finalmente alinhadas
+na mesma shortlist e no mesmo conjunto de artefatos.
+
+Identificador da shortlist:
+
+```text
+a6eca6ae6f7eb22ccebb9dcd5c10210887d7828b996c6913ebbcb3204298bf2f
+```
+
+Resultado final da auditoria:
+
+- shortlist: 24 candidatos;
+- elegíveis para a próxima etapa: 24;
+- review_required: 0;
+- excluded: 0;
+- resultados financeiros usados na seleção: não;
+- backtest executado antes da seleção: não.
+
+Semelhantes:
+
+```text
+EIX, INGR, LXP, VOOG, RLI, SNPS, MLPA, SYK, THQ, GATX, DMO, TAP
+```
+
+Complementares:
+
+```text
+REFR, VTVT, FUSB, MHH, XNET, EBS, RCMT, ULE, MIN, VHC, UPLD, GME
+```
+
+Casos sensíveis resolvidos:
+
+- SNPS: candidato é o acquirer; continuidade preservada;
+- SYK: candidato é o acquirer; continuidade preservada;
+- GME: distribuição separada de warrants GME.WS; continuidade da ação GME
+  preservada.
+
+A etapa de descoberta por agrupamento está, portanto, encerrada e pronta para
+congelamento formal antes de qualquer análise financeira dos 24 candidatos.
+
+Próximo runner:
+
+```text
+congelar_shortlist_cluster_spyder.py
+```
+
+Somente após o congelamento a pesquisa deve construir o conjunto temporal de
+eventos de substituição `(candidato, ativo mantido, data da decisão)`.
