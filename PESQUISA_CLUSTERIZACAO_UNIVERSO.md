@@ -804,3 +804,110 @@ limiares a partir do resultado. A linha de pesquisa por agrupamento é encerrada
 Se a regra for satisfeita, a única etapa seguinte permitida é um replay
 financeiro congelado, executado uma vez para verificar se a relação local de
 substituição se traduz em capital.
+
+
+## Resultado do teste decisivo de substituição — output(5)
+
+O experimento pré-declarado `cluster-substitution-test-v1.0.0` foi concluído
+com o mesmo conjunto congelado de 24 candidatos e sem backtest de capital dos
+candidatos.
+
+### Amostra
+
+- candidatos congelados: 24;
+- candidatos com pelo menos um evento acionável: 12;
+- linhas de score candidato-data: 37.440;
+- eventos acionáveis: 1.141;
+- eventos com alvo futuro válido: 1.114;
+- previsões estritamente fora de tempo e fora do grupo do candidato: 763.
+
+A amostra satisfez a regra prévia de tamanho mínimo:
+
+- mínimo de eventos: 200;
+- mínimo de candidatos com eventos: 8.
+
+Logo, a decisão negativa não decorre de amostra insuficiente.
+
+### Validação da hipótese
+
+Modelo usando somente score/gaps:
+
+- AUC: 0,437728;
+- average precision: 0,319962;
+- Brier score: 0,317491.
+
+Modelo contextual completo:
+
+- AUC: 0,488700;
+- average precision: 0,358617;
+- Brier score: 0,349768.
+
+Bootstrap em blocos por data de decisão:
+
+- mediana AUC: 0,489638;
+- IC95%: [0,448825; 0,528150].
+
+Bootstrap em blocos por candidato:
+
+- mediana AUC: 0,490548;
+- IC95%: [0,403638; 0,655319].
+
+A regra pré-declarada exigia AUC >= 0,60 e limite inferior dos dois
+bootstraps acima de 0,50. Nenhum desses requisitos foi atingido.
+
+Decisão científica registrada pelo próprio runner:
+
+```text
+NOT_SUPPORTED_STOP_CLUSTER_LINE
+```
+
+A hipótese de que os atributos contextuais disponíveis na sessão distinguem,
+de forma generalizável, boas e más substituições para esta shortlist não
+recebeu suporte.
+
+### Instabilidade temporal observada
+
+A falha não foi apenas pequena diferença em relação ao limiar. O modelo
+contextual mudou de comportamento entre os folds de teste:
+
+- fold 2: AUC aproximadamente 0,572;
+- fold 3: AUC aproximadamente 0,369.
+
+No fold 3, a frequência real de eventos positivos aumentou para cerca de
+61,45%, enquanto a probabilidade média prevista ficou em cerca de 17,71%.
+Isso caracteriza forte perda de calibração/generalização temporal.
+
+### Resultado descritivo por tipo de candidato
+
+Nos 1.114 eventos com alvo válido:
+
+- complementares: 1.038 eventos, 9 candidatos, 32,95% positivos,
+  mediana da diferença de utilidade = -0,169672;
+- semelhantes: 76 eventos, 3 candidatos, 65,79% positivos,
+  mediana da diferença de utilidade = +0,078320.
+
+Esse contraste não deve ser usado para criar uma nova regra ou shortlist.
+Dos 76 eventos dos candidatos semelhantes, 73 pertencem a SNPS. Portanto, o
+resultado não demonstra uma propriedade geral dos candidatos semelhantes.
+
+Entre os candidatos complementares, a maioria apresentou mediana negativa de
+utilidade futura relativa à decisão U67. Isso fornece evidência descritiva
+contra a ideia de que ocupar uma região comportamental menos representada seja,
+por si só, uma vantagem para a rotação.
+
+### Encerramento da linha
+
+A regra de parada pré-declarada deve ser obedecida:
+
+- não testar novo K;
+- não refazer PCA;
+- não redefinir faixa de complementaridade;
+- não substituir candidatos a partir destes resultados;
+- não ajustar limiares ou modelo até produzir um resultado favorável;
+- não executar replay financeiro dos 24 candidatos, pois a condição prévia
+  para esse replay não foi satisfeita.
+
+A pesquisa por agrupamento produziu uma conclusão negativa útil: a estrutura
+geométrica encontrada nos 52 atributos existe, mas não demonstrou capacidade
+de prever, fora do tempo e fora do candidato, quando um novo ativo deveria
+substituir a decisão do U67.
