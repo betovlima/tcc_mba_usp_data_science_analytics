@@ -480,7 +480,6 @@ def _fit_and_score(
             config_u67,
         )
 
-        fold_diag: dict[pd.Timestamp, dict] = {}
         selected_margin = margins[fold_id]["selected_margin"]
         effective_margin = margins[fold_id]["effective_margin"]
         fold_policies[fold_id] = _politica_utilidade(
@@ -489,13 +488,11 @@ def _fit_and_score(
             u67_symbols,
             config_u67,
             effective_margin,
-            decision_diagnostics=fold_diag,
+            decision_diagnostics=decision_diagnostics,
             fold_id=fold_id,
             calibrated_switch_margin=selected_margin,
             utility_cache=u67_cache,
         )
-        # O dicionário é preenchido no replay da política.
-        decision_diagnostics.update(fold_diag)
 
         candidate_models = _ajustar_modelos_lightgbm(
             candidate_frames,
@@ -517,15 +514,12 @@ def _fit_and_score(
         )
         candidate_cache_by_fold[fold_id] = candidate_cache
 
-        # A closure da política mantém fold_diag; precisamos guardar a mesma
-        # referência para consolidar depois do replay.
-        fold_policies[fold_id]._cluster_diag = fold_diag  # type: ignore[attr-defined]
-
     return fold_policies, decision_diagnostics, candidate_cache_by_fold
 
 
 def _replay_u67_with_diagnostics(
     fold_policies: dict[int, object],
+    decision_diagnostics: dict[pd.Timestamp, dict],
     decision_to_fold: dict[pd.Timestamp, int],
     frames_u67: dict[str, pd.DataFrame],
     u67_symbols: list[str],
@@ -537,12 +531,6 @@ def _replay_u67_with_diagnostics(
         fold_policies,
         decision_to_fold,
     )
-
-    merged_diag: dict[pd.Timestamp, dict] = {}
-    for policy in fold_policies.values():
-        merged_diag.update(
-            getattr(policy, "_cluster_diag", {})
-        )
 
     decision_metadata = {}
     for fold in folds:
@@ -563,7 +551,7 @@ def _replay_u67_with_diagnostics(
         calcular_taxas_referencia,
         aplicar_deslizamento,
         decision_metadata=decision_metadata,
-        policy_decision_diagnostics=merged_diag,
+        policy_decision_diagnostics=decision_diagnostics,
         model_label="TCC U67 Control reference",
         method_line=(
             "- Replay apenas para reconstruir o estado/incumbente de cada "
@@ -1368,7 +1356,7 @@ def main() -> None:
 
     (
         fold_policies,
-        _diag_placeholder,
+        decision_diagnostics,
         candidate_cache_by_fold,
     ) = _fit_and_score(
         frames_u67,
@@ -1384,6 +1372,7 @@ def main() -> None:
 
     reference_result, baseline = _replay_u67_with_diagnostics(
         fold_policies,
+        decision_diagnostics,
         decision_to_fold,
         frames_u67,
         u67_symbols,
