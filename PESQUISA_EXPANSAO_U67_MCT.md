@@ -167,3 +167,70 @@ inaceitável das métricas de risco.
 
 A decisão final será baseada no resultado conjunto do universo expandido, não
 na soma dos deltas marginais individuais.
+
+
+## Implementação v1.0.0
+
+A execução desta pesquisa está concentrada em `pesquisar_expansao_u67_spyder.py`.
+O arquivo foi desenhado para execução completa pelo Spyder com F5 e não altera
+o snapshot oficial `dados/u67`.
+
+O fluxo implementado é:
+
+1. validar e reproduzir o U67 congelado antes de qualquer busca;
+2. consultar o catálogo ativo US Equity da Alpaca e construir uma amostra
+   externa determinística;
+3. executar uma triagem rápida de mercado e ordenar os candidatos com
+   Learning-to-Rank LightGBM LambdaMART inspirado na Busca de Ativos do MCT;
+4. baixar, somente para os candidatos que chegam ao replay, barras SIP/1Day/RAW
+   e Corporate Actions em cache local separado;
+5. rejeitar séries com quebra de identidade ou continuidade, sem reconstrução,
+   bridge ou correção manual;
+6. executar U67 + 1 ativo contra o mesmo calendário, folds, custos e regras do
+   baseline;
+7. formar o conjunto provisório dos candidatos com delta de capital positivo;
+8. executar U67 + todos os positivos;
+9. quando o conjunto completo não melhora o capital, construir de forma
+   gulosa um subconjunto dos positivos individuais, sempre preservando todo o
+   U67 original.
+
+### Reuso exato do baseline
+
+Os modelos LightGBM do U67 são treinados uma vez por fold e seus caches de
+utilidade são reutilizados nos cenários marginais. Como a implementação oficial
+ajusta um regressor independente por ativo, cada cenário treina somente o
+modelo do novo ativo e combina seu cache com os caches do U67. A
+`switch_margin` continua sendo recalibrada para cada universo testado.
+
+A comparação usa explicitamente o calendário do U67 como
+`calendar_override`. Assim, a entrada de um ativo não pode alterar os folds ou
+as sessões de decisão da pesquisa.
+
+### Busca externa
+
+A v1.0.0 usa uma amostra determinística de até 500 símbolos externos elegíveis
+do catálogo ativo da Alpaca. A triagem exige os critérios registrados nesta
+pesquisa e usa dados recentes somente para o ranking. Os dados que entram no
+replay financeiro são baixados novamente no formato RAW e normalizados pelo
+mesmo pipeline de Corporate Actions e splits usado pelo U67.
+
+Por padrão, os 24 candidatos mais bem ranqueados que passam pela triagem rápida
+seguem para a validação completa. Esses limites são parâmetros operacionais da
+primeira campanha e ficam registrados no artefato final.
+
+### Integridade e limitações
+
+O catálogo de descoberta contém ações atualmente ativas. Portanto, a pesquisa
+registra explicitamente que o viés de sobrevivência do universo externo não foi
+eliminado por completo. O ranking também é tratado como exploratório, pois foi
+treinado com o histórico congelado completo do U67 para priorizar a busca.
+
+Não foi criado um corte automático de Sharpe ou MaxDD, pois não existe nesta
+pesquisa uma definição numérica prévia de "deterioração inaceitável". A
+aprovação econômica automática da primeira rodada exige delta positivo de
+capital; as métricas de risco são preservadas integralmente para a decisão
+posterior.
+
+Além das saídas originalmente previstas, a execução grava
+`scenario_fold_calibration.csv`, contendo a calibração de margem de cada
+cenário, e gera `pacote_analise_u67_asset_expansion.zip` ao final.

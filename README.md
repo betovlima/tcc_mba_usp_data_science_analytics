@@ -99,3 +99,35 @@ otimização bayesiana que selecionou os hiperparâmetros.
 
 A documentação técnica, histórica e a avaliação completa do projeto estão em
 `MANIFEST.md`.
+
+
+## 6. Pesquisa de expansão incremental U67+n
+
+A pesquisa que mantém o U67 fixo e testa somente a adição de novos ativos está
+em:
+
+```text
+pesquisar_expansao_u67_spyder.py
+```
+
+Ela exige as credenciais locais da Alpaca no arquivo `.env`, mas não recria nem
+altera `dados/u67`. Os dados dos candidatos são mantidos em cache local
+ignorado pelo Git.
+
+No terminal:
+
+```bash
+python pesquisar_expansao_u67_spyder.py
+```
+
+No Spyder, abra `pesquisar_expansao_u67_spyder.py`, reinicie o kernel e execute
+o arquivo completo com F5.
+
+Os resultados ficam em:
+
+```text
+output/u67_mct_asset_expansion/
+```
+
+O desenho e as limitações da campanha estão documentados em
+`PESQUISA_EXPANSAO_U67_MCT.md`.
