@@ -62,7 +62,7 @@ ROOT = Path(__file__).resolve().parent
 DATA = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "universe_clustering"
 
-SCRIPT_VERSION = "universe-clustering-visualization-v1.1.0"
+SCRIPT_VERSION = "universe-clustering-visualization-v1.1.1"
 
 # A primeira versão encontrou somente U56 e U67 porque procurava alterações
 # literais de ASSETS em engine/configuracao.py. O histórico preservado da
@@ -88,6 +88,13 @@ SELECTED_STAGE_IDS: list[int] | None = None
 
 SAVE_TABLES = True
 SAVE_FIGURES = True
+
+# Todos os ativos representados recebem rótulo no mapa. A lista lateral por
+# grupo funciona como conferência adicional quando vários rótulos ficam muito
+# próximos na projeção bidimensional.
+LABEL_ALL_ASSETS = True
+LABEL_FONT_SIZE = 7.5
+SHOW_GROUP_MEMBER_LIST = True
 
 # Ativos que recebem rótulo no gráfico quando estiverem presentes.
 HIGHLIGHT_ASSETS = {
@@ -563,7 +570,9 @@ def plot_stage_map(
         added = current - previous_assets
         removed = previous_assets - current
 
-    fig, ax = plt.subplots(figsize=(9.2, 6.4))
+    fig, ax = plt.subplots(figsize=(13.8, 8.8))
+    if SHOW_GROUP_MEMBER_LIST:
+        fig.subplots_adjust(left=0.08, right=0.74, bottom=0.10, top=0.86)
 
     for group_id in sorted(part["group"].unique()):
         group = part.loc[part["group"] == group_id]
@@ -575,21 +584,85 @@ def plot_stage_map(
             label=f"Grupo {group_id}",
         )
 
-    for row in part.itertuples(index=False):
+    # Rótulos completos. A versão anterior mostrava somente HIGHLIGHT_ASSETS
+    # e ativos recém-incluídos; por isso alguns nomes não apareciam.
+    offset_cycle = (
+        (5, 5), (5, -10), (-5, 5), (-5, -10),
+        (10, 0), (-10, 0), (0, 10), (0, -13),
+    )
+    labeled_assets: set[str] = set()
+    for label_index, row in enumerate(
+        part.sort_values(["group", "asset"]).itertuples(index=False)
+    ):
         should_label = (
-            row.asset in HIGHLIGHT_ASSETS
+            LABEL_ALL_ASSETS
+            or row.asset in HIGHLIGHT_ASSETS
             or row.asset in added
         )
         if not should_label:
             continue
 
         prefix = "+ " if row.asset in added and previous_assets is not None else ""
+        dx, dy = offset_cycle[label_index % len(offset_cycle)]
+        is_added = row.asset in added and previous_assets is not None
         ax.annotate(
             prefix + row.asset,
             (row.pc1, row.pc2),
-            xytext=(4, 4),
+            xytext=(dx, dy),
             textcoords="offset points",
-            fontsize=8,
+            fontsize=LABEL_FONT_SIZE,
+            fontweight="bold" if is_added else "normal",
+            ha="left" if dx >= 0 else "right",
+            va="bottom" if dy >= 0 else "top",
+            arrowprops={
+                "arrowstyle": "-",
+                "linewidth": 0.35,
+                "alpha": 0.35,
+            },
+            bbox={
+                "boxstyle": "round,pad=0.12",
+                "facecolor": "white",
+                "edgecolor": "none",
+                "alpha": 0.72,
+            },
+            zorder=4,
+        )
+        labeled_assets.add(row.asset)
+
+    if LABEL_ALL_ASSETS and labeled_assets != current:
+        missing = sorted(current - labeled_assets)
+        raise RuntimeError(
+            "Nem todos os ativos foram rotulados: " + ",".join(missing)
+        )
+
+    if SHOW_GROUP_MEMBER_LIST:
+        group_blocks = []
+        for group_id in sorted(part["group"].unique()):
+            members = sorted(
+                part.loc[part["group"] == group_id, "asset"].astype(str)
+            )
+            wrapped = textwrap.fill(
+                ", ".join(members),
+                width=34,
+                subsequent_indent="",
+            )
+            group_blocks.append(
+                f"Grupo {int(group_id)} ({len(members)} ativos)\n{wrapped}"
+            )
+        fig.text(
+            0.77,
+            0.84,
+            "\n\n".join(group_blocks),
+            ha="left",
+            va="top",
+            fontsize=8.2,
+            family="monospace",
+            bbox={
+                "boxstyle": "round,pad=0.5",
+                "facecolor": "white",
+                "edgecolor": "0.75",
+                "alpha": 0.95,
+            },
         )
 
     ax.axhline(0, linewidth=0.7, alpha=0.25)
@@ -617,7 +690,8 @@ def plot_stage_map(
         loc="best",
     )
     ax.grid(alpha=0.16)
-    fig.tight_layout()
+    if not SHOW_GROUP_MEMBER_LIST:
+        fig.tight_layout()
 
     if SAVE_FIGURES:
         OUT.mkdir(parents=True, exist_ok=True)
