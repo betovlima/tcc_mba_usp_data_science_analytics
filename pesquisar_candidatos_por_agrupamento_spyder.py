@@ -70,7 +70,7 @@ U67 = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "candidate_cluster_search"
 CACHE = OUT / "cache_bars"
 
-SCRIPT_VERSION = "candidate-cluster-search-v1.0.4"
+SCRIPT_VERSION = "candidate-cluster-search-v1.0.5"
 EXPECTED_BRANCH = "research/universe-clustering-visualization-v1"
 
 ALLOWED_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
@@ -87,6 +87,7 @@ KNOWN_RESEARCH_STRUCTURAL_EXCLUSIONS = {
     "VISN": "historical_identity_transition",
     "COR": "historical_identity_transition",
     "STRR": "historical_stock_merger_into_HSON",
+    "TVRD": "reverse_merger_change_of_control_CARA_to_TVRD",
 }
 
 # Busca inicial controlada. Use None somente se quiser varrer todo o catálogo.
@@ -210,6 +211,10 @@ def _instrument_warning(name: str) -> str:
         (r"\bSENIOR NOTES?\b", "senior_notes"),
         (r"\bRIGHTS?\b", "rights"),
         (r"\bETNS?\b", "etn"),
+        (
+            r"\bOPERATING PARTNERSHIP\b|\bOP,\s*L\.P\.\b",
+            "operating_partnership_unit",
+        ),
     )
     for pattern, label in patterns:
         if re.search(pattern, text):
