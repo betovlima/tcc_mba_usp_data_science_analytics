@@ -265,3 +265,51 @@ Somente depois dessa avaliação poderá ser definido um teste financeiro
 congelado. O objetivo é evitar repetir a falha das tentativas anteriores, nas
 quais semelhança de comportamento ou baixo risco individual não garantiram
 melhoria conjunta do capital.
+
+
+## Primeira execução da busca por candidatos — diagnóstico v1.0.0
+
+Pacote analisado: `candidate_cluster_search.zip`.
+
+A execução não deve ser interpretada como shortlist válida porque revelou um
+problema de aquisição de barras.
+
+Resultados observados:
+
+- catálogo determinístico: 500 candidatos;
+- candidatos com alguma barra disponível no cache/retorno: 105;
+- classificados como `no_bars`: 395;
+- candidatos que passaram a exigência de histórico: 21;
+- candidatos com 52 atributos válidos: 21;
+- U67 representado por 65 ativos, com DOC e CLMT excluídos;
+- PCA PC1+PC2: aproximadamente 72,22% da variação;
+- K=2 escolhido para o U67, silhouette aproximado 0,4637;
+- distribuição dos grupos U67: 58 e 7 ativos.
+
+A presença entre os falsos `no_bars` de tickers conhecidos com histórico
+longo, como IBB, LKQ e SYK, mostrou que a baixa cobertura não era um resultado
+econômico. A causa era a solicitação multi-símbolo de aproximadamente dez anos
+de barras com limite agregado, que podia retornar somente uma parte dos
+símbolos do lote.
+
+Consequência: a shortlist produzida nessa execução, incluindo BSX, COP, AXGN,
+CLF, AKBA, DBVT e outros, é apenas artefato diagnóstico e não deve avançar para
+validação financeira ou de substituição.
+
+### Correção v1.0.1
+
+O runner passa a:
+
+1. reutilizar o cache existente;
+2. baixar cada ticker faltante individualmente;
+3. exigir cobertura de resposta de pelo menos 90% do catálogo antes de
+   interpretar qualquer shortlist;
+4. abortar se a cobertura continuar incompleta;
+5. sinalizar warrants, units, preferred, senior notes, rights e ETNs para que
+   não entrem automaticamente na shortlist;
+6. derivar a faixa de candidatos complementares da própria distribuição de
+   distâncias entre vizinhos do U67, usando P75 a P95, em vez de premiar
+   candidatos simplesmente muito afastados.
+
+Nenhum resultado financeiro foi usado para fazer essas correções. O próximo
+passo é repetir somente `pesquisar_candidatos_por_agrupamento_spyder.py`.
