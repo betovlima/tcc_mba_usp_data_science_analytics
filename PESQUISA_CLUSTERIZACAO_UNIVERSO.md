@@ -313,3 +313,82 @@ O runner passa a:
 
 Nenhum resultado financeiro foi usado para fazer essas correções. O próximo
 passo é repetir somente `pesquisar_candidatos_por_agrupamento_spyder.py`.
+
+
+## Resultado da busca por candidatos — pacote v1.0.2
+
+Pacote analisado: `candidate_cluster_search(1).zip`.
+
+A correção do download resolveu o problema de cobertura:
+
+- catálogo amostrado: 500;
+- séries obtidas ou reutilizadas: 499;
+- cobertura de barras: 99,80%;
+- candidato sem barras: VGTX;
+- candidatos com histórico suficiente e 52 atributos válidos: 166;
+- candidatos rejeitados por histórico/continuidade temporal: 334.
+
+A maior parte das rejeições ocorreu por início tardio da série, o que é
+compatível com a exigência de uma janela longa comparável à do U67.
+
+Referência U67:
+
+- 67 ativos documentados;
+- 65 representados após DOC e CLMT;
+- K=2 escolhido;
+- silhouette=0,463660;
+- PC1=50,47% e PC2=21,75%;
+- PC1+PC2=72,22% da variação do U67.
+
+Distribuição do U67:
+
+- grupo 1: 58 ativos;
+- grupo 2: 7 ativos: AMS, FOXF, LKFT, MUX, PXLW, VNCE e YANG.
+
+Faixa complementar derivada da própria geometria do U67:
+
+- limite inferior: 1,2194166770;
+- limite superior: 2,2569697026.
+
+Shortlist produzida:
+
+Semelhantes:
+EIX, INGR, LXP, VOOG, RLI, SNPS, MLPA, SYK, THQ, GATX, DMO e TAP.
+
+Complementares:
+REFR, VTVT, FUSB, MHH, STRR, XNET, EBS, RCMT, ULE, MIN, VISN e VHC.
+
+Interpretação importante:
+
+- os 12 semelhantes ficaram todos no grupo 1;
+- oito dos 12 complementares ficaram no grupo 2;
+- os candidatos semelhantes apresentaram novelty_ratio entre aproximadamente
+  0,42 e 0,75;
+- os complementares selecionados ficaram aproximadamente entre 1,64 e 1,84,
+  dentro da faixa de suporte definida pelo U67;
+- o resultado não usa capital, P&L ou backtest.
+
+### Bloqueio antes da validação de substituição
+
+VISN apareceu entre os complementares, mas já havia sido rejeitado em campanha
+anterior por transição estrutural de identidade. Por isso a shortlist v1.0.2
+não deve avançar diretamente para backtest.
+
+A versão v1.0.3 passa a excluir previamente símbolos com problemas estruturais
+já identificados pela própria pesquisa e corrige também a sobreposição de
+título do gráfico PCA.
+
+Foi criado o runner:
+
+```text
+auditar_continuidade_shortlist_cluster_spyder.py
+```
+
+Ele consulta Corporate Actions somente para a shortlist, registra todos os
+eventos sensíveis à identidade e classifica cada ativo como:
+
+- `eligible_for_next_stage`;
+- `review_required`;
+- `excluded`.
+
+Nenhum teste financeiro será executado antes dessa auditoria.
