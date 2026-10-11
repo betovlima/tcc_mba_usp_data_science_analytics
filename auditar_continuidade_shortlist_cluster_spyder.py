@@ -46,7 +46,7 @@ SHORTLIST_FILE = SOURCE / "candidatos_cluster_shortlist.csv"
 OUT = SOURCE / "continuity_audit"
 ACTIONS = SnapshotPaths.from_root(OUT)
 
-SCRIPT_VERSION = "candidate-cluster-continuity-audit-v1.0.0"
+SCRIPT_VERSION = "candidate-cluster-continuity-audit-v1.0.1"
 EXPECTED_BRANCH = "research/universe-clustering-visualization-v1"
 
 KNOWN_RESEARCH_STRUCTURAL_EXCLUSIONS = {
@@ -90,6 +90,39 @@ def _clean(value):
     except (TypeError, ValueError):
         pass
     return value
+
+
+def _candidate_is_acquirer_only(
+    symbol: str,
+    action: dict,
+) -> bool:
+    """True quando a ação registra o candidato como entidade sobrevivente.
+
+    Aquisições em que o candidato é o acquirer não quebram, por si só, a
+    continuidade histórica do próprio candidato. O alvo adquirido pode mudar,
+    mas a identidade do instrumento avaliado continua sendo a do acquirer.
+    """
+    action_type = str(action.get("action_type") or "")
+    if action_type not in {
+        "stock_merger",
+        "stock_and_cash_merger",
+        "cash_merger",
+    }:
+        return False
+
+    normalized = symbol.strip().upper()
+    acquirer = str(
+        action.get("acquirer_symbol") or ""
+    ).strip().upper()
+    acquiree = str(
+        action.get("acquiree_symbol") or ""
+    ).strip().upper()
+
+    return (
+        acquirer == normalized
+        and acquiree
+        and acquiree != normalized
+    )
 
 
 def main() -> None:
@@ -164,6 +197,17 @@ def main() -> None:
             in IDENTITY_SENSITIVE_ACTIONS
         ]
 
+        acquirer_only = [
+            action
+            for action in sensitive
+            if _candidate_is_acquirer_only(symbol, action)
+        ]
+        unresolved_sensitive = [
+            action
+            for action in sensitive
+            if not _candidate_is_acquirer_only(symbol, action)
+        ]
+
         if known_reason:
             status = "excluded"
             reason = known_reason
@@ -173,9 +217,12 @@ def main() -> None:
                 detected.get("reason")
                 or "structural_identity_change"
             )
-        elif sensitive:
+        elif unresolved_sensitive:
             status = "review_required"
             reason = "identity_sensitive_corporate_action"
+        elif acquirer_only:
+            status = "eligible_for_next_stage"
+            reason = "candidate_is_acquirer_continuity_preserved"
         else:
             status = "eligible_for_next_stage"
             reason = ""
@@ -199,6 +246,8 @@ def main() -> None:
                 ),
                 "corporate_actions": len(actions),
                 "identity_sensitive_actions": len(sensitive),
+                "acquirer_side_actions": len(acquirer_only),
+                "unresolved_sensitive_actions": len(unresolved_sensitive),
                 "status": status,
                 "reason": reason,
                 "known_historical_exclusion": bool(known_reason),
