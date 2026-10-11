@@ -997,7 +997,8 @@ def _train_candidate_caches(
         decision_cache, _ = _precalcular_utilidades_modelo(
             final_model,
             one_frame,
-            [symbol],            state.decision_dates,
+            [symbol],
+            state.decision_dates,
             config,
         )
         output[state.fold_id] = CandidateFoldCache(
