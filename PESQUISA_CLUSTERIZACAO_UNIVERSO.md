@@ -162,3 +162,106 @@ Ainda não há evidência suficiente nesta branch para afirmar que U56 foi o
 universo primordial de toda a pesquisa. Essa questão deve permanecer aberta até
 que as composições anteriores sejam recuperadas de artefatos ou commits mais
 antigos.
+
+
+## Fase 2 — busca de novos candidatos por agrupamento
+
+Após revisar as tentativas históricas de assinatura e clusterização, esta
+branch passa a testar a clusterização apenas como filtro de descoberta.
+
+Motivação: a clusterização anterior encontrou grupos comportamentais estáveis,
+mas não separou de forma suficiente candidatos que aumentavam o capital dos
+que prejudicavam a estratégia. O problema principal apareceu na interação com
+o incumbente e na dependência de caminho. Por isso, o novo desenho não usa o
+cluster como decisão de inclusão.
+
+Novo runner:
+
+```text
+pesquisar_candidatos_por_agrupamento_spyder.py
+```
+
+### Pergunta desta etapa
+
+É possível localizar ativos externos ao U67 que:
+
+1. apresentem comportamento semelhante a regiões já representadas no universo;
+2. ocupem regiões próximas, porém pouco representadas;
+3. possam depois ser avaliados em eventos de substituição contra o ativo
+   atualmente mantido?
+
+### Referência
+
+A referência é o U67 atual após preparação estrutural. Os 52 atributos já
+utilizados pelo experimento são resumidos por ativo. O escalonamento, a PCA e o
+K-Means são ajustados somente nos ativos da referência.
+
+Os candidatos externos são projetados nesse espaço sem reajustar a referência.
+Isso evita que a própria amostra de candidatos mova os eixos ou os grupos usados
+para defini-los.
+
+### Busca inicial
+
+Na primeira execução o runner:
+
+- consulta o catálogo Alpaca;
+- remove os símbolos já presentes no U67;
+- mantém ações/ETFs negociáveis e margináveis das bolsas aceitas;
+- ordena o catálogo por chave determinística;
+- avalia inicialmente até 500 candidatos;
+- baixa barras diárias SIP ajustadas por split;
+- mantém cache local em `output/candidate_cluster_search/cache_bars/`;
+- exige histórico longo e sem grandes lacunas;
+- calcula os mesmos 52 atributos;
+- projeta os candidatos no espaço comportamental do U67.
+
+O limite de 500 controla o custo da primeira experiência. Ele não significa que
+esses 500 sejam os melhores ativos do mercado.
+
+### Dois tipos de candidatos
+
+**Semelhantes**: os mais próximos de algum ativo já presente no U67.
+
+**Complementares**: candidatos mais afastados do vizinho U67 mais próximo, mas
+ainda dentro de uma faixa de suporte definida para evitar selecionar apenas
+outliers extremos.
+
+A distância é medida no espaço padronizado dos 52 atributos. O valor
+`novelty_ratio` compara a distância do candidato ao seu vizinho U67 com a
+distância típica entre os próprios ativos do U67.
+
+### Saídas
+
+```text
+output/candidate_cluster_search/
+├── candidate_catalog_sample.csv
+├── candidate_history_quality.csv
+├── candidate_feature_summary.csv
+├── cluster_quality_u67.csv
+├── u67_cluster_reference.csv
+├── candidate_projection.csv
+├── candidatos_cluster_shortlist.csv
+├── candidate_cluster_search.json
+├── 01_mapa_candidatos_u67.png
+├── 02_distribuicao_distancia_comportamental.png
+└── 03_shortlist_cluster_search.png
+```
+
+Os gráficos também são publicados no painel Plots do Spyder.
+
+### Regra científica
+
+Nenhum resultado de capital, P&L ou backtest participa da seleção desta fase.
+A shortlist não deve ser incorporada automaticamente ao universo.
+
+A próxima etapa, caso a shortlist seja tecnicamente coerente, será medir a
+qualidade de substituição na unidade:
+
+```text
+(candidato, ativo atualmente mantido, data da decisão)
+```
+
+Somente depois dessa avaliação poderá ser definido um teste financeiro
+congelado. O objetivo é evitar repetir a falha das tentativas anteriores, nas
+quais semelhança de comportamento ou baixo risco individual não garantiram
+melhoria conjunta do capital.
