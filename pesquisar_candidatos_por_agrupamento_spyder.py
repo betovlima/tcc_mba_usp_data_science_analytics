@@ -70,7 +70,7 @@ U67 = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "candidate_cluster_search"
 CACHE = OUT / "cache_bars"
 
-SCRIPT_VERSION = "candidate-cluster-search-v1.0.3"
+SCRIPT_VERSION = "candidate-cluster-search-v1.0.4"
 EXPECTED_BRANCH = "research/universe-clustering-visualization-v1"
 
 ALLOWED_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
@@ -86,6 +86,7 @@ KNOWN_RESEARCH_STRUCTURAL_EXCLUSIONS = {
     "BLOX": "historical_series_discontinuity",
     "VISN": "historical_identity_transition",
     "COR": "historical_identity_transition",
+    "STRR": "historical_stock_merger_into_HSON",
 }
 
 # Busca inicial controlada. Use None somente se quiser varrer todo o catálogo.
