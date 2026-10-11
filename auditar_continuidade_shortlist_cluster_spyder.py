@@ -25,6 +25,7 @@ Abra este arquivo e execute com F5.
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 import json
 
 import pandas as pd
@@ -46,7 +47,7 @@ SHORTLIST_FILE = SOURCE / "candidatos_cluster_shortlist.csv"
 OUT = SOURCE / "continuity_audit"
 ACTIONS = SnapshotPaths.from_root(OUT)
 
-SCRIPT_VERSION = "candidate-cluster-continuity-audit-v1.0.1"
+SCRIPT_VERSION = "candidate-cluster-continuity-audit-v1.0.2"
 EXPECTED_BRANCH = "research/universe-clustering-visualization-v1"
 
 KNOWN_RESEARCH_STRUCTURAL_EXCLUSIONS = {
@@ -81,6 +82,11 @@ def _git(args: list[str]) -> str:
         encoding="utf-8",
     )
     return process.stdout.strip()
+
+
+def _shortlist_fingerprint(assets: tuple[str, ...]) -> str:
+    payload = "\n".join(assets).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _clean(value):
@@ -159,6 +165,7 @@ def main() -> None:
         .str.upper()
     )
     assets = tuple(shortlist["asset"].drop_duplicates())
+    shortlist_fingerprint = _shortlist_fingerprint(assets)
 
     OUT.mkdir(parents=True, exist_ok=True)
     ACTIONS.ensure()
@@ -283,6 +290,9 @@ def main() -> None:
 
     summary = {
         "script_version": SCRIPT_VERSION,
+        "source_shortlist_file": str(SHORTLIST_FILE.relative_to(ROOT)),
+        "source_shortlist_assets": list(assets),
+        "source_shortlist_fingerprint": shortlist_fingerprint,
         "shortlist_count": int(len(audit)),
         "eligible_for_next_stage": int(
             audit["status"].eq("eligible_for_next_stage").sum()
@@ -311,6 +321,12 @@ def main() -> None:
 
     print("\nResumo:")
     print(json.dumps(summary, indent=2, ensure_ascii=False))
+    print(
+        "\n[fonte] shortlist_fingerprint="
+        + shortlist_fingerprint
+        + " assets="
+        + ",".join(assets)
+    )
 
     print("\nAuditoria:")
     print(
