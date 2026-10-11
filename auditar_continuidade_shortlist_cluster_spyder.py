@@ -44,10 +44,11 @@ from reproducao.preparacao import (
 ROOT = Path(__file__).resolve().parent
 SOURCE = ROOT / "output" / "candidate_cluster_search"
 SHORTLIST_FILE = SOURCE / "candidatos_cluster_shortlist.csv"
+SEARCH_SUMMARY_FILE = SOURCE / "candidate_cluster_search.json"
 OUT = SOURCE / "continuity_audit"
 ACTIONS = SnapshotPaths.from_root(OUT)
 
-SCRIPT_VERSION = "candidate-cluster-continuity-audit-v1.0.3"
+SCRIPT_VERSION = "candidate-cluster-continuity-audit-v1.0.4"
 EXPECTED_BRANCH = "research/universe-clustering-visualization-v1"
 
 KNOWN_RESEARCH_STRUCTURAL_EXCLUSIONS = {
@@ -168,6 +169,38 @@ def main() -> None:
     )
     assets = tuple(shortlist["asset"].drop_duplicates())
     shortlist_fingerprint = _shortlist_fingerprint(assets)
+
+    if not SEARCH_SUMMARY_FILE.exists():
+        raise RuntimeError(
+            "Resumo da busca ausente. Execute novamente "
+            "pesquisar_candidatos_por_agrupamento_spyder.py."
+        )
+
+    search_summary = json.loads(
+        SEARCH_SUMMARY_FILE.read_text(encoding="utf-8")
+    )
+    expected_fingerprint = str(
+        search_summary.get("shortlist_fingerprint") or ""
+    )
+    expected_assets = tuple(
+        str(symbol)
+        for symbol in (search_summary.get("shortlist_assets") or [])
+    )
+    if not expected_fingerprint or not expected_assets:
+        raise RuntimeError(
+            "A busca não registrou fingerprint/lista da shortlist. "
+            "Atualize e execute a versão v1.0.6 ou posterior."
+        )
+    if expected_fingerprint != shortlist_fingerprint:
+        raise RuntimeError(
+            "Shortlist e resumo da busca pertencem a execuções diferentes. "
+            f"esperado={expected_fingerprint} "
+            f"observado={shortlist_fingerprint}"
+        )
+    if expected_assets != assets:
+        raise RuntimeError(
+            "A ordem/lista dos ativos não coincide com o resumo da busca."
+        )
 
     OUT.mkdir(parents=True, exist_ok=True)
     ACTIONS.ensure()
@@ -292,6 +325,8 @@ def main() -> None:
 
     summary = {
         "script_version": SCRIPT_VERSION,
+        "source_search_version": search_summary.get("script_version"),
+        "source_search_commit": search_summary.get("commit"),
         "source_shortlist_file": str(SHORTLIST_FILE.relative_to(ROOT)),
         "source_shortlist_assets": list(assets),
         "source_shortlist_fingerprint": shortlist_fingerprint,
