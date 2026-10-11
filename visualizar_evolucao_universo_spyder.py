@@ -62,7 +62,8 @@ ROOT = Path(__file__).resolve().parent
 DATA = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "universe_clustering"
 
-SCRIPT_VERSION = "universe-clustering-visualization-v1.1.2"
+SCRIPT_VERSION = "universe-clustering-visualization-v1.1.3"
+EXPECTED_BRANCH = "research/universe-clustering-visualization-v1"
 
 # A primeira versão encontrou somente U56 e U67 porque procurava alterações
 # literais de ASSETS em engine/configuracao.py. O histórico preservado da
@@ -763,14 +764,47 @@ def plot_stage_map(
 
 # %% 4 - Execução
 def main() -> None:
-    clean_old_figures()
+    try:
+        current_branch = _git(["branch", "--show-current"]).strip()
+        current_commit = _git(["rev-parse", "--short", "HEAD"]).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        current_branch = "sem-git"
+        current_commit = "sem-git"
 
     print("=" * 78)
     print("TCC - EVOLUÇÃO DO UNIVERSO E AGRUPAMENTO POR SEMELHANÇA")
     print(f"version={SCRIPT_VERSION}")
+    print(f"arquivo={Path(__file__).resolve()}")
+    print(f"root={ROOT}")
+    print(f"branch={current_branch}")
+    print(f"commit={current_commit}")
+    print(f"output={OUT}")
     print("modo=EXPLORATORIO_SEM_TREINO_SEM_BACKTEST")
     print("saida_principal=SPYDER_PLOTS")
     print("=" * 78)
+
+    if current_branch not in (EXPECTED_BRANCH, "sem-git"):
+        raise RuntimeError(
+            "Branch incorreta para esta visualização. "
+            f"esperado={EXPECTED_BRANCH} observado={current_branch}. "
+            "Abra o projeto correto no Spyder antes de executar."
+        )
+
+    clean_old_figures()
+    OUT.mkdir(parents=True, exist_ok=True)
+    (OUT / "VERSAO_EXECUTADA.txt").write_text(
+        "\n".join(
+            [
+                f"version={SCRIPT_VERSION}",
+                f"arquivo={Path(__file__).resolve()}",
+                f"root={ROOT}",
+                f"branch={current_branch}",
+                f"commit={current_commit}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     git_stages = discover_universe_stages()
     git_table = stage_table(git_stages)
