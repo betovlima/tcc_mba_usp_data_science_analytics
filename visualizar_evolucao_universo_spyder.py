@@ -62,7 +62,7 @@ ROOT = Path(__file__).resolve().parent
 DATA = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "universe_clustering"
 
-SCRIPT_VERSION = "universe-clustering-visualization-v1.1.1"
+SCRIPT_VERSION = "universe-clustering-visualization-v1.1.2"
 
 # A primeira versão encontrou somente U56 e U67 porque procurava alterações
 # literais de ASSETS em engine/configuracao.py. O histórico preservado da
@@ -88,6 +88,7 @@ SELECTED_STAGE_IDS: list[int] | None = None
 
 SAVE_TABLES = True
 SAVE_FIGURES = True
+CLEAN_OLD_FIGURES = True
 
 # Todos os ativos representados recebem rótulo no mapa. A lista lateral por
 # grupo funciona como conferência adicional quando vários rótulos ficam muito
@@ -522,6 +523,30 @@ def embed_and_cluster(
 
 
 # %% 3 - Seleção e gráficos das etapas
+def clean_old_figures() -> None:
+    """Remove imagens antigas desta análise para evitar confusão com versões anteriores."""
+    if not CLEAN_OLD_FIGURES:
+        return
+    OUT.mkdir(parents=True, exist_ok=True)
+    patterns = (
+        "etapa_*_agrupamento.png",
+        "etapa_*_agrupamento.svg",
+        "*_U*_agrupamento.png",
+        "*_U*_agrupamento.svg",
+        "01_evolucao_tamanho_universo.png",
+        "01_evolucao_tamanho_universo.svg",
+        "02_escolha_quantidade_grupos.png",
+        "02_escolha_quantidade_grupos.svg",
+    )
+    removed = []
+    for pattern in patterns:
+        for path in OUT.glob(pattern):
+            path.unlink(missing_ok=True)
+            removed.append(path.name)
+    if removed:
+        print("\n[limpeza] figuras antigas removidas: " + ", ".join(sorted(removed)))
+
+
 def choose_stages(
     stages: list[UniverseStage],
     available_by_stage: dict[int, tuple[str, ...]],
@@ -649,10 +674,19 @@ def plot_stage_map(
             group_blocks.append(
                 f"Grupo {int(group_id)} ({len(members)} ativos)\n{wrapped}"
             )
+        help_text = (
+            "COMO LER\n"
+            "Cada ponto = um ativo\n"
+            "Mais perto = perfil mais parecido\n"
+            "Mais longe = perfil mais diferente\n"
+            "Grupos = padrões semelhantes nos 52 atributos\n"
+            "A PCA apenas comprime as 52 medidas em 2 eixos\n"
+            "O K-Means define os grupos usando as 52 medidas, não só o desenho 2D."
+        )
         fig.text(
             0.77,
             0.84,
-            "\n\n".join(group_blocks),
+            help_text + "\n\n" + "\n\n".join(group_blocks),
             ha="left",
             va="top",
             fontsize=8.2,
@@ -670,8 +704,12 @@ def plot_stage_map(
 
     explained_1 = 100 * pca_explained[0]
     explained_2 = 100 * pca_explained[1]
-    ax.set_xlabel(f"Eixo de semelhança 1 ({explained_1:.1f}% da variação)")
-    ax.set_ylabel(f"Eixo de semelhança 2 ({explained_2:.1f}% da variação)")
+    ax.set_xlabel(
+        f"Componente 1 ({explained_1:.1f}% da variação dos 52 atributos)"
+    )
+    ax.set_ylabel(
+        f"Componente 2 ({explained_2:.1f}% da variação dos 52 atributos)"
+    )
 
     change_text = ""
     if previous_assets is not None:
@@ -680,9 +718,22 @@ def plot_stage_map(
         change_text = f"\nIncluídos: {added_text} | Removidos: {removed_text}"
 
     ax.set_title(
-        f"U{len(stage.assets)}: agrupamento por semelhança "
+        f"U{len(stage.assets)}: similaridade do comportamento histórico dos ativos "
         f"({len(current)} representados de {len(stage.assets)} documentados)"
         f"{change_text}"
+    )
+    ax.text(
+        0.0,
+        1.01,
+        (
+            "Pontos próximos = perfis semelhantes nos 52 atributos de retorno, "
+            "volatilidade, tendência, extremos e volume. "
+            "Não representa valorização, preço ou retorno acumulado."
+        ),
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=8.6,
     )
     ax.legend(
         title="Grupos exploratórios",
@@ -701,12 +752,19 @@ def plot_stage_map(
             bbox_inches="tight",
         )
 
+    print(
+        f"[mapa U{len(stage.assets)}] pontos={len(current)} "
+        f"rótulos={len(labeled_assets)} "
+        f"todos_rotulados={labeled_assets == current}"
+    )
     plt.show()
     return current
 
 
 # %% 4 - Execução
 def main() -> None:
+    clean_old_figures()
+
     print("=" * 78)
     print("TCC - EVOLUÇÃO DO UNIVERSO E AGRUPAMENTO POR SEMELHANÇA")
     print(f"version={SCRIPT_VERSION}")
