@@ -489,3 +489,47 @@ Versões:
 - candidate-cluster-continuity-audit-v1.0.3.
 
 Nenhum resultado de capital foi consultado para tomar essa decisão.
+
+
+## Diagnóstico do pacote candidate_cluster_search(5)
+
+O pacote revelou uma inconsistência de proveniência entre os artefatos da mesma
+pasta.
+
+Arquivos atuais da busca:
+
+- `candidate_cluster_search.json`: v1.0.5;
+- `candidate_projection.csv`: 162 candidatos válidos;
+- TVRD não aparece no catálogo nem na projeção atual;
+- ESBA aparece na projeção atual como próximo candidato complementar.
+
+Entretanto:
+
+- `candidatos_cluster_shortlist.csv` ainda contém TVRD;
+- a pasta `continuity_audit` ainda corresponde à shortlist anterior;
+- o audit é v1.0.2 e mantém TVRD em review_required.
+
+Portanto, a pasta combinou resultados de execuções diferentes e não pode ser
+usada para congelar a shortlist.
+
+A análise da projeção atual mostra que, sem TVRD, ESBA seria o próximo
+complementar. ESBA é `EMPIRE STATE REALTY OP, L.P. SERIES ES`, uma unidade de
+operating partnership, e não deve ser promovida automaticamente como se fosse
+uma ação ordinária comparável sem revisão de instrumento.
+
+Correções v1.0.6 / audit v1.0.4:
+
+1. a busca limpa todos os resultados antigos antes de rodar, preservando apenas
+   `cache_bars`;
+2. a regra de instrumento passa a reconhecer `OP, L.P.` como
+   `operating_partnership_unit`;
+3. a shortlist é validada como subconjunto da projeção corrente;
+4. a busca aborta se a shortlist contiver exclusão estrutural ou instrumento
+   sinalizado;
+5. a busca grava lista e fingerprint exatos da shortlist no JSON;
+6. a auditoria exige que o fingerprint e a ordem dos ativos coincidam com o
+   JSON da busca antes de consultar Corporate Actions.
+
+Com ESBA sinalizado, o próximo candidato complementar pela geometria atual é
+GME, sujeito à nova execução e à auditoria de continuidade. Nenhum resultado
+financeiro foi usado nessa substituição.
