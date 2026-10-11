@@ -126,8 +126,8 @@ o arquivo completo com F5.
 Os resultados ficam em:
 
 ```text
-output/u67_mct_asset_expansion/
+output/u67_asset_expansion/
 ```
 
 O desenho e as limitações da campanha estão documentados em
-`PESQUISA_EXPANSAO_U67_MCT.md`.
+`PESQUISA_EXPANSAO_U67.md`.

@@ -1,4 +1,4 @@
-# Pesquisa de expansão do universo U67 inspirada na Busca de Ativos do MCT
+# Pesquisa de expansão do universo U67 inspirada na Busca de Ativos do sistema operacional
 
 ## Objetivo
 
@@ -19,9 +19,9 @@ Existem ativos externos ao U67 que, quando adicionados ao universo atual,
 aumentam o capital final da Strategy sem depender apenas de um ranking
 preditivo?
 
-## Princípio recuperado do MCT
+## Princípio recuperado do sistema operacional
 
-A Busca de Ativos do MCT mostrou que ranking preditivo e contribuição econômica
+A Busca de Ativos do sistema operacional mostrou que ranking preditivo e contribuição econômica
 não são equivalentes. O ranking deve ser usado apenas para reduzir o espaço de
 busca; a inclusão deve ser decidida pela contribuição do candidato quando
 rodado dentro da Strategy.
@@ -84,7 +84,7 @@ inclusão financeira.
 ## Ranking
 
 A primeira versão reproduzirá a ideia central do Learning-to-Rank da Busca de
-Ativos do MCT para priorizar os candidatos de maior interesse. O ranking não é
+Ativos do sistema operacional para priorizar os candidatos de maior interesse. O ranking não é
 um gate econômico.
 
 Um candidato bem ranqueado pode ser rejeitado se o replay marginal piorar o
@@ -145,7 +145,7 @@ O objetivo é aumentar o capital preservando robustez.
 ## Saídas previstas
 
 ```text
-output/u67_mct_asset_expansion/
+output/u67_asset_expansion/
     candidate_catalog.csv
     candidate_screening.csv
     candidate_rank.csv
@@ -169,7 +169,7 @@ A decisão final será baseada no resultado conjunto do universo expandido, não
 na soma dos deltas marginais individuais.
 
 
-## Implementação v1.0.0
+## Implementação v1.0.1
 
 A execução desta pesquisa está concentrada em `pesquisar_expansao_u67_spyder.py`.
 O arquivo foi desenhado para execução completa pelo Spyder com F5 e não altera
@@ -181,7 +181,7 @@ O fluxo implementado é:
 2. consultar o catálogo ativo US Equity da Alpaca e construir uma amostra
    externa determinística;
 3. executar uma triagem rápida de mercado e ordenar os candidatos com
-   Learning-to-Rank LightGBM LambdaMART inspirado na Busca de Ativos do MCT;
+   Learning-to-Rank LightGBM LambdaMART inspirado na Busca de Ativos do sistema operacional;
 4. baixar, somente para os candidatos que chegam ao replay, barras SIP/1Day/RAW
    e Corporate Actions em cache local separado;
 5. rejeitar séries com quebra de identidade ou continuidade, sem reconstrução,

@@ -1,4 +1,4 @@
-"""Pesquisa incremental U67+n inspirada na Busca de Ativos do MCT.
+"""Pesquisa incremental U67+n inspirada em uma busca de ativos operacional.
 
 Objetivo
 --------
@@ -62,13 +62,13 @@ from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 from engine.modelo_lightgbm import (
     _ajustar_modelos_lightgbm,
     _construir_contexto_execucao,
-    _precalcular_utilidades_modelo,
     selecionar_switch_margin,
 )
 from engine.rotacao import (
     ROTATION_FEATURES,
     _crescimento_politica_simples,
     _politica_agendada,
+    _precalcular_utilidades_modelo,
     _politica_utilidade,
     _simular_exato,
     construir_quadro_rotacao,
@@ -98,15 +98,15 @@ BASE_DATA = SnapshotPaths.u67(ROOT)
 CACHE_ROOT = ROOT / "dados" / ".u67_expansion_cache"
 FAST_CACHE = CACHE_ROOT / "fast_split_20261006"
 FULL_DATA = SnapshotPaths.from_root(CACHE_ROOT / "full_raw_20261006")
-OUT = ROOT / "output" / "u67_mct_asset_expansion"
+OUT = ROOT / "output" / "u67_asset_expansion"
 
-SCRIPT_VERSION = "u67-mct-asset-expansion-v1.0.0"
-EXECUTION_SCHEMA = "u67-mct-asset-expansion-v1"
+SCRIPT_VERSION = "u67-asset-expansion-v1.0.1"
+EXECUTION_SCHEMA = "u67-asset-expansion-v1"
 ANALYSIS_END_DATE = "2026-10-06"
 EXPECTED_U67_ENDING_CAPITAL = 76_927_051.38897176
 BASELINE_ABS_TOL = 0.01
 
-CATALOG_SAMPLE_SEED = "u67-mct-asset-expansion-v1"
+CATALOG_SAMPLE_SEED = "u67-asset-expansion-v1"
 CANDIDATE_SCAN_BUDGET = 500
 RANKED_REPLAY_LIMIT = 24
 FAST_HISTORY_DAYS = 900
@@ -212,8 +212,8 @@ def _numeric_delta(candidate: Any, baseline: Any) -> float | None:
     return float(left - right)
 
 
-# %% 1 - Learning-to-Rank recuperado da Busca de Ativos do MCT
-# A arquitetura abaixo replica a ideia central do Asset Discovery maduro do MCT:
+# %% 1 - Learning-to-Rank adaptado da busca de ativos operacional
+# A arquitetura abaixo replica a ideia central da busca de ativos operacional:
 # LambdaMART, atributos de retorno/risco/liquidez e validacao cronologica purgada.
 def _ranker_clean_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if frame is None or frame.empty:
@@ -407,7 +407,7 @@ def _train_ranker(frames: dict[str, pd.DataFrame], seed: int) -> tuple[LGBMRanke
     diagnostics = {
         "family": "lightgbm_lambdamart",
         "objective": "lambdarank",
-        "source": "MCT Asset Discovery architecture adapted to frozen U67 research",
+        "source": "operational asset-discovery architecture adapted to frozen U67 research",
         "target_horizon_sessions": RANKER_TARGET_HORIZON,
         "features": list(RANKER_FEATURE_COLUMNS),
         "validation_method": "purged_expanding_walk_forward",
