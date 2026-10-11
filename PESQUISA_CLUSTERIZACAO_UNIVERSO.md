@@ -533,3 +533,69 @@ Correções v1.0.6 / audit v1.0.4:
 Com ESBA sinalizado, o próximo candidato complementar pela geometria atual é
 GME, sujeito à nova execução e à auditoria de continuidade. Nenhum resultado
 financeiro foi usado nessa substituição.
+
+
+## Pacote candidate_cluster_search(6) — shortlist tecnicamente fechada
+
+A busca v1.0.6 produziu uma shortlist coerente e vinculada à auditoria pelo
+fingerprint:
+
+```text
+a6eca6ae6f7eb22ccebb9dcd5c10210887d7828b996c6913ebbcb3204298bf2f
+```
+
+Resumo da busca:
+
+- catálogo amostrado: 500;
+- séries obtidas/reutilizadas: 499;
+- cobertura: 99,80%;
+- candidatos com histórico suficiente e 52 atributos: 162;
+- U67 representado por 65 ativos;
+- K=2;
+- silhouette=0,463660;
+- PC1+PC2=72,2225% da variação do U67.
+
+Shortlist:
+
+Semelhantes:
+EIX, INGR, LXP, VOOG, RLI, SNPS, MLPA, SYK, THQ, GATX, DMO, TAP.
+
+Complementares:
+REFR, VTVT, FUSB, MHH, XNET, EBS, RCMT, ULE, MIN, VHC, UPLD, GME.
+
+A auditoria v1.0.4 confirmou 23 elegíveis e manteve somente GME em
+`review_required` por um evento classificado pelo provedor como `spin_off`
+em outubro de 2025.
+
+A revisão documental mostrou que o evento de GME foi uma distribuição especial
+de warrants aos acionistas: um warrant para cada dez ações de GME. O ativo GME
+permaneceu sendo a ação ordinária da mesma companhia; o novo instrumento
+GME.WS foi distribuído separadamente. Portanto, o evento não representa quebra
+de continuidade econômica do ticker GME para o objetivo desta pesquisa.
+
+A auditoria v1.0.5 passa a reconhecer especificamente esse evento como:
+
+```text
+warrant_distribution_parent_continuity_preserved
+```
+
+Com essa correção metodológica, a expectativa é 24/24 candidatos elegíveis,
+sem exclusão ou revisão pendente.
+
+Foi criado o runner:
+
+```text
+congelar_shortlist_cluster_spyder.py
+```
+
+Ele somente congela a shortlist quando:
+
+- busca = candidate-cluster-search-v1.0.6;
+- auditoria = candidate-cluster-continuity-audit-v1.0.5;
+- 24 candidatos;
+- 24 elegíveis;
+- 0 review_required;
+- 0 excluded;
+- fingerprint e ordem dos ativos coincidem.
+
+O congelamento ocorre antes de qualquer resultado financeiro da nova shortlist.
