@@ -910,3 +910,188 @@ Esse desenho reproduz a ideia econômica que historicamente funcionou no MCT,
 mas remove justamente a fragilidade mais importante do protocolo
 `positive_full_history_strategy_capital`: selecionar e validar repetidamente
 no mesmo histórico.
+
+
+---
+
+## 19. Adendo após recuperação dos artefatos primários do MCT
+
+A reconstrução inicial acima foi confrontada com JSONs históricos das campanhas
+reais do Market Cycle Trader preservados na biblioteca do projeto. Esses
+artefatos permitem corrigir uma simplificação importante: a evolução do número
+de ativos NÃO foi uma única sequência monotônica. Houve Strategies paralelas,
+testes, rollbacks e recomposições do universo.
+
+### 19.1 Campanha real de 25/08/2026 partindo do U25
+
+Uma campanha preservada partiu exatamente do U25 e executou Marginal Capital
+Replay em oito candidatos:
+
+```text
+RARE, CBL, CCS, PTCT, SCCO, ITW, NXST, NBTB
+```
+
+Baseline:
+
+```text
+capital = US$ 1.067.794,9987
+CAGR = 115,63%
+Sharpe = 1,9449
+MaxDD = -31,45%
+switches = 260
+worst fold = +98,06%
+```
+
+Resultados econômicos marginais:
+
+```text
+CCS   +0,65895%   marginal_rank=1
+CBL   +0,35521%   marginal_rank=2
+ITW    0,00000%   marginal_rank=3
+NBTB   0,00000%   marginal_rank=4
+SCCO  -2,19762%   marginal_rank=5
+PTCT -14,09692%   marginal_rank=6
+NXST -31,61311%   marginal_rank=7
+RARE -32,21420%   marginal_rank=8
+```
+
+Esse artefato é especialmente relevante porque o ranking preditivo não
+coincidiu com a contribuição econômica. RARE era o primeiro colocado do ranker
+e acabou sendo o pior no replay marginal. CCS era apenas o terceiro do ranking
+preditivo e terminou como o melhor candidato econômico.
+
+Conclusão: na fase historicamente bem-sucedida da Busca de Ativos, o
+Learning-to-Rank servia para reduzir/ordenar a busca, mas a contribuição para a
+Strategy precisava ser medida economicamente.
+
+### 19.2 Strategies paralelas confirmadas
+
+Também foram recuperadas campanhas contemporâneas que não pertencem à linhagem
+final do U56.
+
+Uma Strategy #7 chegou a 31 ativos adicionando ao U25:
+
+```text
+TQQQ, EWY, GAP, BB, ALK, ATI, SQQQ
+```
+
+Outra Strategy #8 tinha 27 ativos:
+
+```text
+U25 + AGI + TQQQ
+```
+
+e testou:
+
+```text
+VSAT, LB, CB, IJH
+```
+
+Essas composições não sobreviveram até o U56 final. Portanto, a sequência
+histórica não pode ser escrita como se cada novo número de ativos fosse uma
+versão cumulativa única.
+
+### 19.3 Linha causal de 40 e 42 ativos
+
+A Strategy #22 revision 14 teve 40 ativos. Em relação ao U25, os quinze extras
+registrados foram:
+
+```text
+DDS, CNQ, VRTS, XSD, CXW, ENS, CORT, CCK, CEF, GKOS,
+RACE, TX, UNF, BXMT, CNX
+```
+
+Uma Strategy #24 posterior chegou a 42 com:
+
+```text
+U40 + HL + BOX
+```
+
+Campanhas causais executadas sobre esse U42 chegaram a reter zero candidatos
+em algumas rodadas.
+
+Essa linha U40/U42 é diferente da Strategy #10 que posteriormente consolidou o
+U44/U56. Em particular, CNX/HL/BOX não aparecem no U56 final, enquanto
+PXLW/KKR/SCSC/LKFT/DNN aparecem.
+
+### 19.4 Protocolo causal realmente implementado no MCT
+
+Os artefatos confirmam que o MCT chegou a implementar separação temporal
+explícita:
+
+```text
+método: historical_selection_then_validation_then_certification
+
+selection cutoff: 2025-08-27
+validation:       2025-08-28 a 2026-02-27
+certification:    2026-03-02 a 2026-08-28
+
+holdout total: 252 sessões
+validation:    126 sessões
+certification: 126 sessões
+```
+
+O artefato registrou:
+
+```text
+historical_gain_used_for_selection = false
+promotion_uses_holdout_only = true
+promotion_uses_certification_only = true
+survivorship_bias_fully_eliminated = false
+```
+
+Esse protocolo foi tecnicamente mais rigoroso, mas produziu campanhas com
+poucos ou nenhum candidato promovível. Em seguida, o projeto restaurou a
+política de contribuição positiva no histórico completo.
+
+Essa decisão histórica é central para o próximo experimento: não é suficiente
+"recriar a validação causal" exatamente como antes. É necessário entender se a
+busca marginal que elevou o capital no histórico completo tinha sinal fora da
+amostra ou se parte do ganho vinha da reutilização do mesmo histórico durante
+seleção.
+
+### 19.5 Campanha preditiva de 92 candidatos no U56
+
+Foi recuperada a lista integral de uma campanha posterior que partiu do U56.
+Ela aprovou integridade preditiva para 92 candidatos, mas registrou
+explicitamente que nenhum replay econômico de histórico completo foi executado
+naquela etapa.
+
+Isso confirma a distinção entre:
+
+```text
+predictive candidate
+!=
+economic contributor
+```
+
+A campanha seguinte que promoveu um subconjunto preditivo sem uma proteção
+econômica equivalente chegou a expandir o universo e produzir forte deterioração
+do capital. Esse episódio foi uma das razões para o retorno posterior ao gate
+econômico da Strategy completa.
+
+### 19.6 Conclusão corrigida da reconstrução
+
+A formação histórica do universo atual deve ser entendida em três camadas:
+
+```text
+Camada A — universo base
+U10 -> U20 -> U24 -> U25
+
+Camada B — pesquisa/Asset Discovery do MCT
+múltiplas Strategies e campanhas:
+U25 -> alternativas U27/U31/...
+        -> U32/U36
+        -> linha U40/U42
+        -> recomposição Strategy #10
+        -> U44 -> ... -> U56
+
+Camada C — pesquisas posteriores
+U56 + COLB + AMS + FOXF = U59
+U59 + THO + WDAY + EXR + XEL + SBFG + PAYX + MUX + SXC = U67
+```
+
+Assim, o número 67 não é a saída de um único algoritmo de busca. É o resultado
+acumulado de seleção manual inicial, campanhas de Asset Discovery com várias
+políticas, recomposições/rollbacks e duas campanhas de pesquisa posteriores ao
+U56.
