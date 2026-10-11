@@ -70,7 +70,7 @@ U67 = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "candidate_cluster_search"
 CACHE = OUT / "cache_bars"
 
-SCRIPT_VERSION = "candidate-cluster-search-v1.0.0"
+SCRIPT_VERSION = "candidate-cluster-search-v1.0.1"
 EXPECTED_BRANCH = "research/universe-clustering-visualization-v1"
 
 ALLOWED_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
@@ -89,18 +89,23 @@ MAX_HISTORY_GAP_DAYS = 10.0
 MAX_START_DELAY_DAYS = 60
 MAX_END_DELAY_DAYS = 10
 
-DOWNLOAD_CHUNK_SIZE = 40
+# Download individual é intencional. Uma requisição multi-símbolo com limite
+# agregado pode retornar somente parte dos tickers quando se pedem ~10 anos
+# de barras diárias. A primeira execução v1.0.0 revelou exatamente esse
+# problema: 395/500 candidatos apareceram falsamente como "no_bars".
+ALPACA_REQUEST_SLEEP_SECONDS = 0.35
+MIN_BAR_RESPONSE_SHARE = 0.90
 K_VALUES = tuple(range(2, 7))
 
 # Shortlist. O resultado continua exploratório e NÃO entra automaticamente no U67.
 SIMILAR_COUNT = 12
 COMPLEMENTARY_COUNT = 12
 
-# "Complementar" não significa outlier extremo.
-# A distância ao ativo U67 mais próximo é dividida pela distância típica entre
-# vizinhos do próprio U67. Valores muito altos são tratados como fora de suporte.
-COMPLEMENTARY_MIN_RATIO = 1.10
-COMPLEMENTARY_MAX_RATIO = 2.50
+# Os limites da faixa complementar passam a ser derivados somente da geometria
+# interna do U67: acima do percentil 75 da distância entre vizinhos do U67 e
+# abaixo do percentil 95. Assim não escolhemos outliers só porque estão longe.
+REFERENCE_COMPLEMENTARY_LOW_QUANTILE = 0.75
+REFERENCE_COMPLEMENTARY_HIGH_QUANTILE = 0.95
 
 SAVE_FIGURES = True
 SHOW_PLOTS = True
@@ -178,6 +183,27 @@ def _load_catalog(credentials) -> list[dict]:
     raise RuntimeError("Falha ao carregar catálogo Alpaca: " + " | ".join(errors))
 
 
+def _instrument_warning(name: str) -> str:
+    """Sinaliza instrumentos que exigem revisão antes da shortlist.
+
+    Não exclui da projeção. Apenas impede que uma classe claramente diferente
+    seja promovida automaticamente como candidato de shortlist.
+    """
+    text = str(name or "").upper()
+    patterns = (
+        (r"\bWARRANTS?\b", "warrant"),
+        (r"\bUNITS?\b", "unit"),
+        (r"\bPREFERRED\b", "preferred"),
+        (r"\bSENIOR NOTES?\b", "senior_notes"),
+        (r"\bRIGHTS?\b", "rights"),
+        (r"\bETNS?\b", "etn"),
+    )
+    for pattern, label in patterns:
+        if re.search(pattern, text):
+            return label
+    return ""
+
+
 def _eligible_catalog(catalog: list[dict]) -> pd.DataFrame:
     excluded = set(U67_REQUESTED_ASSETS)
     rows = []
@@ -207,6 +233,9 @@ def _eligible_catalog(catalog: list[dict]) -> pd.DataFrame:
                 "name": str(item.get("name") or ""),
                 "exchange": exchange,
                 "fractionable": bool(item.get("fractionable", False)),
+                "instrument_warning": _instrument_warning(
+                    str(item.get("name") or "")
+                ),
                 "stable_key": _stable_key(symbol),
             }
         )
@@ -256,10 +285,17 @@ def _download_candidate_frames(
     start_date: str,
     end_date: str,
 ) -> dict[str, pd.DataFrame]:
+    """Carrega cache e baixa cada símbolo ausente de forma independente.
+
+    O download individual evita uma falha observada na v1.0.0: ao solicitar
+    dezenas de símbolos com ~10 anos de barras e limit=10_000, a resposta
+    multi-símbolo podia conter apenas parte do lote. Os símbolos ausentes eram
+    então classificados incorretamente como "no_bars".
+    """
     CACHE.mkdir(parents=True, exist_ok=True)
 
     frames: dict[str, pd.DataFrame] = {}
-    missing = []
+    missing: list[str] = []
 
     for symbol in candidates["asset"].astype(str):
         cached = _read_cached_candidate(symbol)
@@ -269,7 +305,7 @@ def _download_candidate_frames(
             missing.append(symbol)
 
     print(
-        f"[cache] reutilizados={len(frames)} baixar={len(missing)}",
+        f"[cache] reutilizados={len(frames)} baixar_individualmente={len(missing)}",
         flush=True,
     )
     if not missing:
@@ -279,20 +315,21 @@ def _download_candidate_frames(
         api_key=credentials.api_key,
         secret_key=credentials.secret_key,
     )
-
     start = pd.Timestamp(start_date, tz="UTC").to_pydatetime()
     api_end = (
         pd.Timestamp(end_date, tz="UTC") + pd.Timedelta(days=1)
     ).to_pydatetime()
 
-    for offset in range(0, len(missing), DOWNLOAD_CHUNK_SIZE):
-        symbols = missing[offset : offset + DOWNLOAD_CHUNK_SIZE]
+    failures: list[str] = []
+
+    for position, symbol in enumerate(missing, start=1):
+        normalized = pd.DataFrame()
         last_error = None
 
         for attempt in range(1, 5):
             try:
                 request = StockBarsRequest(
-                    symbol_or_symbols=symbols,
+                    symbol_or_symbols=symbol,
                     timeframe=TimeFrame.Day,
                     start=start,
                     end=api_end,
@@ -301,52 +338,55 @@ def _download_candidate_frames(
                     limit=10_000,
                 )
                 raw = client.get_stock_bars(request).df
-                for symbol in symbols:
-                    try:
-                        normalized = _normalize_alpaca_frame(raw, symbol)
-                    except Exception:
-                        normalized = pd.DataFrame()
-
-                    if normalized.empty:
-                        continue
-
-                    target = _candidate_cache_path(symbol)
-                    normalized.to_csv(
-                        target,
-                        index=False,
-                        float_format="%.17g",
-                    )
-
-                    prepared = normalized.set_index("timestamp")
-                    prepared.index = pd.to_datetime(
-                        prepared.index,
-                        utc=True,
-                    )
-                    frames[symbol] = prepared[
-                        ["open", "high", "low", "close", "volume"]
-                    ].astype(float)
+                normalized = _normalize_alpaca_frame(raw, symbol)
                 last_error = None
                 break
             except Exception as exc:
                 last_error = exc
-                wait = 2 ** (attempt - 1)
+                wait = min(2 ** (attempt - 1), 8)
                 print(
-                    f"[alpaca] retry chunk={offset // DOWNLOAD_CHUNK_SIZE + 1} "
-                    f"attempt={attempt}/4 wait={wait}s error={exc}",
+                    f"[alpaca] {symbol} retry={attempt}/4 "
+                    f"wait={wait}s error={exc}",
                     flush=True,
                 )
                 time.sleep(wait)
 
         if last_error is not None:
+            failures.append(symbol)
+        elif not normalized.empty:
+            target = _candidate_cache_path(symbol)
+            normalized.to_csv(
+                target,
+                index=False,
+                float_format="%.17g",
+            )
+            prepared = normalized.set_index("timestamp")
+            prepared.index = pd.to_datetime(prepared.index, utc=True)
+            frames[symbol] = prepared[
+                ["open", "high", "low", "close", "volume"]
+            ].astype(float)
+
+        if position % 20 == 0 or position == len(missing):
             print(
-                f"[alpaca] chunk falhou: {symbols} error={last_error}",
+                f"[alpaca] individuais={position}/{len(missing)} "
+                f"com_barras={len(frames)} falhas_http={len(failures)}",
                 flush=True,
             )
 
-        print(
-            f"[alpaca] processados={min(offset + len(symbols), len(missing))}/"
-            f"{len(missing)} disponíveis={len(frames)}",
-            flush=True,
+        if ALPACA_REQUEST_SLEEP_SECONDS > 0:
+            time.sleep(ALPACA_REQUEST_SLEEP_SECONDS)
+
+    response_share = len(frames) / max(len(candidates), 1)
+    print(
+        f"[alpaca] cobertura_de_resposta={response_share:.2%}",
+        flush=True,
+    )
+    if response_share < MIN_BAR_RESPONSE_SHARE:
+        raise RuntimeError(
+            "Cobertura de barras abaixo do mínimo esperado. "
+            f"recebidos={len(frames)}/{len(candidates)} "
+            f"share={response_share:.2%} mínimo={MIN_BAR_RESPONSE_SHARE:.2%}. "
+            "Não interpretar a shortlist; verificar acesso Alpaca/cache."
         )
 
     return frames
@@ -491,7 +531,10 @@ def _select_k(reference_scaled: np.ndarray) -> tuple[int, pd.DataFrame]:
     return int(best["k"]), quality
 
 
-def _nearest_neighbor_scale(reference_scaled: np.ndarray) -> float:
+def _reference_neighbor_distribution(
+    reference_scaled: np.ndarray,
+) -> tuple[float, np.ndarray]:
+    """Retorna distância mediana e razões internas de vizinhança do U67."""
     diff = (
         reference_scaled[:, None, :]
         - reference_scaled[None, :, :]
@@ -499,7 +542,10 @@ def _nearest_neighbor_scale(reference_scaled: np.ndarray) -> float:
     distances = np.linalg.norm(diff, axis=2)
     np.fill_diagonal(distances, np.inf)
     nearest = distances.min(axis=1)
-    return float(np.median(nearest))
+    median = float(np.median(nearest))
+    if not np.isfinite(median) or median <= 0:
+        raise RuntimeError("Escala de vizinhança U67 inválida.")
+    return median, nearest / median
 
 
 # %% 3 - Projeção dos candidatos no espaço do U67
@@ -546,9 +592,21 @@ def _project_candidates(
         nearest_index,
     ]
 
-    typical_nn = _nearest_neighbor_scale(reference_scaled)
-    if not np.isfinite(typical_nn) or typical_nn <= 0:
-        raise RuntimeError("Escala de vizinhança U67 inválida.")
+    typical_nn, reference_nn_ratios = _reference_neighbor_distribution(
+        reference_scaled
+    )
+    complementary_low = float(
+        np.quantile(
+            reference_nn_ratios,
+            REFERENCE_COMPLEMENTARY_LOW_QUANTILE,
+        )
+    )
+    complementary_high = float(
+        np.quantile(
+            reference_nn_ratios,
+            REFERENCE_COMPLEMENTARY_HIGH_QUANTILE,
+        )
+    )
 
     centroid_distance = np.linalg.norm(
         candidate_scaled
@@ -562,6 +620,8 @@ def _project_candidates(
     out["nearest_u67_distance"] = nearest_distance
     out["novelty_ratio"] = nearest_distance / typical_nn
     out["cluster_centroid_distance"] = centroid_distance
+    out["reference_complementary_low"] = complementary_low
+    out["reference_complementary_high"] = complementary_high
     out["pc1"] = candidate_xy[:, 0]
     out["pc2"] = candidate_xy[:, 1]
 
@@ -582,8 +642,19 @@ def _project_candidates(
 
 
 def _shortlist(projected: pd.DataFrame) -> pd.DataFrame:
+    """Seleciona candidatos sem usar resultados financeiros.
+
+    Semelhantes = menores distâncias ao U67.
+    Complementares = região entre P75 e P95 da própria distância de vizinhança
+    observada dentro do U67. Isso procura diversidade ainda compatível com o
+    suporte da referência, em vez de premiar outliers extremos.
+    """
+    clean = projected.loc[
+        projected["instrument_warning"].fillna("").eq("")
+    ].copy()
+
     similar = (
-        projected.sort_values(
+        clean.sort_values(
             ["novelty_ratio", "cluster_centroid_distance", "asset"],
             ascending=[True, True, True],
         )
@@ -592,18 +663,28 @@ def _shortlist(projected: pd.DataFrame) -> pd.DataFrame:
     )
     similar["search_role"] = "semelhante"
 
-    complementary = projected.loc[
-        projected["novelty_ratio"].between(
-            COMPLEMENTARY_MIN_RATIO,
-            COMPLEMENTARY_MAX_RATIO,
+    low = float(clean["reference_complementary_low"].iloc[0])
+    high = float(clean["reference_complementary_high"].iloc[0])
+    target = (low + high) / 2.0
+
+    complementary = clean.loc[
+        clean["novelty_ratio"].between(
+            low,
+            high,
             inclusive="both",
         )
     ].copy()
-
+    complementary["distance_to_complementary_center"] = (
+        complementary["novelty_ratio"] - target
+    ).abs()
     complementary = (
         complementary.sort_values(
-            ["novelty_ratio", "cluster_centroid_distance", "asset"],
-            ascending=[False, True, True],
+            [
+                "distance_to_complementary_center",
+                "cluster_centroid_distance",
+                "asset",
+            ],
+            ascending=[True, True, True],
         )
         .head(COMPLEMENTARY_COUNT)
         .copy()
@@ -896,7 +977,13 @@ def main() -> None:
     )
 
     metadata = catalog[
-        ["asset", "name", "exchange", "fractionable"]
+        [
+            "asset",
+            "name",
+            "exchange",
+            "fractionable",
+            "instrument_warning",
+        ]
     ]
     projected = projected.merge(
         metadata,
@@ -951,6 +1038,7 @@ def main() -> None:
         "reference_structural_exclusions": sorted(excluded),
         "candidate_catalog_sample": len(catalog),
         "candidate_frames_downloaded_or_cached": len(raw_frames),
+        "candidate_bar_response_share": len(raw_frames) / max(len(catalog), 1),
         "candidate_feature_valid": len(candidates),
         "selected_k": selected_k,
         "pca_explained_pc1_pc2": list(explained),
@@ -959,6 +1047,12 @@ def main() -> None:
         ),
         "complementary_count": int(
             (shortlist["search_role"] == "complementar").sum()
+        ),
+        "reference_complementary_low": float(
+            projected["reference_complementary_low"].iloc[0]
+        ),
+        "reference_complementary_high": float(
+            projected["reference_complementary_high"].iloc[0]
         ),
         "financial_outcomes_used_for_selection": False,
         "backtest_executed": False,
