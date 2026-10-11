@@ -392,3 +392,54 @@ eventos sensíveis à identidade e classifica cada ativo como:
 - `excluded`.
 
 Nenhum teste financeiro será executado antes dessa auditoria.
+
+
+## Auditoria de continuidade da shortlist — pacote candidate_cluster_search(2)
+
+A auditoria da shortlist v1.0.2 produziu:
+
+- 24 candidatos avaliados;
+- 20 classificados automaticamente como elegíveis;
+- 2 excluídos;
+- 2 inicialmente enviados para revisão.
+
+Exclusões:
+
+- STRR: o registro de Corporate Actions contém stock merger em 22 ago. 2025,
+  com STRR como acquiree e HSON como acquirer. A série não deve ser tratada
+  como continuidade simples do mesmo instrumento;
+- VISN: já constava no histórico da pesquisa como transição de identidade e
+  permanece excluído.
+
+Casos inicialmente em revisão:
+
+- SNPS: stock-and-cash merger em 18 jul. 2025 em que ANSS é acquiree e SNPS é
+  acquirer. O candidato SNPS é a entidade sobrevivente; o evento, isoladamente,
+  não quebra a continuidade histórica do instrumento SNPS;
+- SYK: cash merger em 11 nov. 2020 em que WMGI é acquiree e SYK é acquirer.
+  Também é aquisição feita pelo próprio candidato, não substituição de SYK por
+  outra entidade.
+
+A regra da auditoria foi refinada para distinguir fusões em que o candidato é
+o acquiree, que podem quebrar sua continuidade, de aquisições em que o
+candidato é o acquirer e permanece como instrumento avaliado.
+
+Após essa revisão, SNPS e SYK podem avançar para a próxima etapa. O conjunto
+da execução v1.0.2 fica, portanto, com 22 candidatos tecnicamente aceitáveis e
+2 exclusões estruturais. Como a shortlist precisa ser refeita sem STRR e VISN,
+ela ainda não deve ser congelada para teste financeiro.
+
+Correções:
+
+- candidate-cluster-search v1.0.4 inclui STRR entre exclusões estruturais já
+  conhecidas e mantém VISN excluído;
+- candidate-cluster-continuity-audit v1.0.1 reconhece aquisições em que o
+  candidato é o acquirer como continuidade preservada, quando não há outro
+  evento estrutural não resolvido.
+
+Próxima execução:
+
+1. executar novamente a busca por agrupamento, que reutiliza o cache;
+2. executar a auditoria de continuidade;
+3. somente se a nova shortlist estiver sem exclusões/revisões pendentes,
+   congelar a lista para a análise de eventos de substituição.
