@@ -114,3 +114,51 @@ SAVE_FIGURES = True
 Executar a branch no Spyder e conferir a tabela e a primeira figura de evolução.
 Somente depois dessa conferência devem ser escolhidas as etapas que entrarão nos
 gráficos finais e no texto do trabalho.
+
+
+## Revisão após a primeira execução
+
+A primeira execução local produziu apenas duas composições ao procurar mudanças
+literais de `ASSETS` em `engine/configuracao.py`:
+
+- U56;
+- U67.
+
+Essa descoberta era incompleta como narrativa histórica. A documentação
+preservada da pesquisa registra explicitamente a sequência:
+
+```text
+U56
+  + COLB, AMS, FOXF
+= U59
+  + THO, WDAY, EXR, XEL, SBFG, PAYX, MUX, SXC
+= U67
+```
+
+A versão 1.1.0 do script passou a usar essa sequência documentada nos gráficos,
+mantendo a leitura automática do histórico Git apenas como auditoria.
+
+A mesma documentação registra outros universos de sensibilidade ou campanhas
+diagnósticas, como U54/U55/U56 e expansões aleatórias U76/U79. Esses cenários
+não são misturados à linha principal U56 -> U59 -> U67 porque tinham finalidade
+experimental diferente.
+
+Também foi corrigida uma ambiguidade da primeira figura: U56 e U67 são
+quantidades documentadas do universo, enquanto os mapas atuais conseguem
+representar 54 e 65 ativos, respectivamente, porque DOC e CLMT são excluídos
+pela preparação estrutural da versão final. Na sequência U56 -> U59 -> U67,
+os mapas passam a exibir:
+
+- U56: 56 documentados, 54 representados;
+- U59: 59 documentados, 57 representados;
+- U67: 67 documentados, 65 representados.
+
+Por fim, a quantidade de grupos deixou de ser fixada arbitrariamente em quatro.
+O script testa K=2..6 e seleciona a quantidade de grupos com maior índice
+silhouette, gravando a tabela de qualidade e mostrando o gráfico de seleção no
+Spyder.
+
+Ainda não há evidência suficiente nesta branch para afirmar que U56 foi o
+universo primordial de toda a pesquisa. Essa questão deve permanecer aberta até
+que as composições anteriores sejam recuperadas de artefatos ou commits mais
+antigos.
