@@ -686,3 +686,45 @@ sido executado.
 Próximo passo operacional: executar o congelamento formal da shortlist antes de
 qualquer construção de eventos de substituição ou abertura de resultados
 financeiros.
+
+
+## Congelamento formal da shortlist concluído
+
+A execução de `congelar_shortlist_cluster_spyder.py` concluiu com sucesso:
+
+- version: `cluster-shortlist-freeze-v1.0.0`;
+- count: 24;
+- `financial_outcomes_used_for_selection=False`;
+- `backtest_executed_before_freeze=False`;
+- a seleção foi marcada como bloqueada antes de qualquer avaliação financeira.
+
+Shortlist congelada:
+
+Semelhantes:
+EIX, INGR, LXP, VOOG, RLI, SNPS, MLPA, SYK, THQ, GATX, DMO, TAP.
+
+Complementares:
+REFR, VTVT, FUSB, MHH, XNET, EBS, RCMT, ULE, MIN, VHC, UPLD, GME.
+
+### Próxima etapa: congelar os dados dos candidatos
+
+Antes de construir eventos `(candidato, incumbente, data)`, os dados dos 24
+candidatos devem ser congelados com o mesmo contrato do U67: Alpaca SIP,
+1Day, RAW, Corporate Actions e o mesmo cutoff temporal.
+
+Foi criado:
+
+```text
+construir_snapshot_shortlist_cluster_spyder.py
+```
+
+O runner:
+
+1. exige a shortlist formalmente congelada;
+2. lê o cutoff diretamente do snapshot U67;
+3. baixa RAW e Corporate Actions dos 24 candidatos;
+4. cria snapshot em `dados/cluster_candidate_search/snapshot`;
+5. valida a preparação dos 24 ativos;
+6. aborta se surgir qualquer exclusão estrutural nova;
+7. não executa backtest nem consulta capital;
+8. reutiliza o snapshot existente em execuções posteriores.
