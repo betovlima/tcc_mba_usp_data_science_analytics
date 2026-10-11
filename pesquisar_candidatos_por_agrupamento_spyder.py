@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 from pathlib import Path
 import re
 import time
@@ -507,7 +506,13 @@ def _nearest_neighbor_scale(reference_scaled: np.ndarray) -> float:
 def _project_candidates(
     reference: pd.DataFrame,
     candidates: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame, int, tuple[float, float]]:
+) -> tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    int,
+    tuple[float, float],
+    pd.DataFrame,
+]:
     scaler = StandardScaler()
     reference_scaled = scaler.fit_transform(
         reference[ROTATION_FEATURES]
