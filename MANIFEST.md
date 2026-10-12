@@ -1456,3 +1456,28 @@ Esta seção é a memória técnica da pesquisa exploratória pós-release. As
 alterações concretas continuam versionadas na mesma branch de pesquisa; a
 `main` e a tag `v1.22.1` permanecem referências imutáveis da entrega
 acadêmica consolidada.
+
+
+### 25.7 Hotfix de serialização v1.4.1
+
+Na primeira execução completa da v1.4.0, os cálculos da validação de decisão
+foram concluídos, mas a escrita de
+`pesquisa_u67_decision_validation.json` falhou porque um campo diagnóstico
+continha `NaN` e o serializador estava configurado com `allow_nan=False`.
+
+O problema é exclusivamente de artefato. Não há evidência de falha no treino,
+replay, checkpoints, ranking, DSR, PBO ou seleção temporal anterior ao ponto de
+serialização.
+
+A v1.4.1 introduz conversão recursiva de valores não finitos para `null`.
+Também inclui `finalizar_u67_decision_validation_spyder.py`, que finaliza uma
+execução v1.4.0 já calculada a partir dos arquivos existentes, sem repetir os
+backtests. O recovery exige os artefatos intermediários, confere os 180
+subconjuntos e os checkpoints de US$ 290.727.954,41339606 e
+US$ 587.165.941,1330212, recompõe os hashes dos candidatos e então cria o JSON
+e o pacote ZIP final.
+
+A orientação para a execução afetada é preservar
+`output/u67_decision_validation/`, atualizar a branch e executar somente o
+script de finalização. Rodar novamente o runner principal apagaria esse output
+no início e repetiria desnecessariamente a campanha.
