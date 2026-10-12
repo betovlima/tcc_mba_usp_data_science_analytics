@@ -49,7 +49,7 @@ from pesquisar_expansao_u67_spyder import (
 )
 
 ROOT = Path(__file__).resolve().parent
-OUT = ROOT / "output" / "persistencia_horizontes_u77"
+OUT = ROOT / "output" / "persistencia_horizontes_u77_v103"
 VERSION = "horizon-persistence-oos-v1.0.3"
 CONFIDENCE_MULTIPLIERS = (0.0, 0.5, 1.0)
 ANCHOR_BLEND = 0.5
@@ -1063,7 +1063,7 @@ def main() -> dict[str, Any]:
         "export_to_operational": False,
     }
     write_json(OUT / "experiment.json", payload)
-    package_path = OUT / "pacote_persistencia_horizontes_u77.zip"
+    package_path = OUT / "pacote_persistencia_horizontes_u77_v103.zip"
     with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for artifact in sorted(OUT.iterdir()):
             if artifact.is_file() and artifact != package_path:
