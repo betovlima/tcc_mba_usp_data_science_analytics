@@ -65,7 +65,7 @@ def sha256_file(path: Path) -> str:
 
 def safe_json(value: Any) -> Any:
     if isinstance(value, (np.integer, np.floating)):
-        return value.item()
+        return safe_json(value.item())
     if isinstance(value, (pd.Timestamp,)):
         return value.isoformat()
     if isinstance(value, dict):
@@ -481,8 +481,11 @@ def main() -> dict[str, Any]:
             safe_final_dates = common_dates[
                 :max(0, int(folds[state.fold_id - 1]["final_fit_end_index"]) - int(h))
             ]
+            # The training label at date t uses observations until t+h.
+            # Purge that tail before the first calibration observation.
+            safe_train_dates = state.train_dates[:-int(h)]
             cal_models = _ajustar_modelos_lightgbm(
-                frames, symbols, state.train_dates, configuration,
+                frames, symbols, safe_train_dates, configuration,
                 phase=f"horizon_{h}_fold_{state.fold_id}_cal",
                 target_column=target_column,
             )
@@ -517,6 +520,7 @@ def main() -> dict[str, Any]:
                 "matured_calibration_errors": samples,
                 "absolute_error_p75": error,
                 "calibration_models": len(cal_models),
+                "calibration_training_end": safe_train_dates[-1].isoformat(),
                 "oos_models": len(final_models),
                 "final_training_end": safe_final_dates[-1].isoformat(),
             })
