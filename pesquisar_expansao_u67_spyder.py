@@ -2381,6 +2381,991 @@ def _run_assurance_validation(
     return payload
 
 
+
+def _daily_returns(result: Any) -> pd.Series:
+    equity = pd.to_numeric(
+        result.predictions["strategy_equity"],
+        errors="coerce",
+    ).astype(float)
+    returns = equity.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+    returns.name = "strategy_return"
+    return returns
+
+
+def _daily_sharpe(values: Any) -> float:
+    array = np.asarray(values, dtype=np.float64)
+    array = array[np.isfinite(array)]
+    if len(array) < 2:
+        return float("nan")
+    std = float(np.std(array, ddof=1))
+    if not np.isfinite(std) or std <= 0.0:
+        return float("nan")
+    return float(np.mean(array) / std)
+
+
+def _safe_rank_correlation(left: np.ndarray, right: np.ndarray) -> float | None:
+    if len(left) < 3 or len(right) != len(left):
+        return None
+    left_rank = pd.Series(left).rank(method="average").to_numpy(dtype=float)
+    right_rank = pd.Series(right).rank(method="average").to_numpy(dtype=float)
+    if float(np.std(left_rank)) <= 0.0 or float(np.std(right_rank)) <= 0.0:
+        return None
+    value = float(np.corrcoef(left_rank, right_rank)[0, 1])
+    return value if np.isfinite(value) else None
+
+
+def _rank_diagnostic_sessions(
+    *,
+    scope: str,
+    symbols: list[str],
+    states: list[BaselineFoldState],
+    baseline_symbols: list[str],
+    baseline_frames: dict[str, pd.DataFrame],
+    candidate_frames: dict[str, pd.DataFrame],
+    candidate_fold_caches: dict[str, dict[int, CandidateFoldCache]],
+    strategy_result: Any | None = None,
+) -> pd.DataFrame:
+    """Avalia ranking previsto versus utility realizada, sem usar futuro na decisao."""
+    baseline_position = {
+        symbol: index + 1
+        for index, symbol in enumerate(baseline_symbols)
+    }
+    rows: list[dict[str, Any]] = []
+    strategy_predictions = (
+        strategy_result.predictions
+        if strategy_result is not None
+        else pd.DataFrame()
+    )
+
+    for state in states:
+        for timestamp in state.decision_dates:
+            date = pd.Timestamp(timestamp)
+            predicted: list[float] = []
+            realized: list[float] = []
+            valid_symbols: list[str] = []
+            for symbol in symbols:
+                if symbol in baseline_position:
+                    values = state.decision_cache.get(date)
+                    score = (
+                        float(values[baseline_position[symbol]])
+                        if values is not None
+                        else float("nan")
+                    )
+                    frame = baseline_frames[symbol]
+                else:
+                    fold_cache = candidate_fold_caches.get(symbol, {}).get(
+                        state.fold_id
+                    )
+                    values = (
+                        fold_cache.decision_cache.get(date)
+                        if fold_cache is not None
+                        else None
+                    )
+                    score = (
+                        float(values[1])
+                        if values is not None and len(values) >= 2
+                        else float("nan")
+                    )
+                    frame = candidate_frames[symbol]
+                try:
+                    target = float(
+                        frame.loc[date, "forward_risk_adjusted_utility"]
+                    )
+                except (KeyError, TypeError, ValueError):
+                    target = float("nan")
+                if np.isfinite(score) and np.isfinite(target):
+                    predicted.append(score)
+                    realized.append(target)
+                    valid_symbols.append(symbol)
+
+            if len(valid_symbols) < 3:
+                continue
+
+            pred = np.asarray(predicted, dtype=np.float64)
+            actual = np.asarray(realized, dtype=np.float64)
+            n = len(valid_symbols)
+            predicted_order = sorted(
+                range(n),
+                key=lambda idx: (-float(pred[idx]), valid_symbols[idx]),
+            )
+            actual_order = sorted(
+                range(n),
+                key=lambda idx: (-float(actual[idx]), valid_symbols[idx]),
+            )
+            predicted_top1_index = predicted_order[0]
+            predicted_top1 = valid_symbols[predicted_top1_index]
+            actual_top1 = valid_symbols[actual_order[0]]
+            actual_rank_pct = (
+                pd.Series(actual)
+                .rank(method="average", pct=True)
+                .to_numpy(dtype=float)
+            )
+            relevance = (
+                pd.Series(actual)
+                .rank(method="average")
+                .to_numpy(dtype=float)
+                - 1.0
+            )
+            top3_n = min(3, n)
+            top5_n = min(5, n)
+            actual_top3 = set(actual_order[:top3_n])
+            actual_top5 = set(actual_order[:top5_n])
+            predicted_top3 = set(predicted_order[:top3_n])
+            ndcg5 = float(
+                ndcg_score(
+                    relevance.reshape(1, -1),
+                    pred.reshape(1, -1),
+                    k=top5_n,
+                )
+            )
+            ndcg10 = float(
+                ndcg_score(
+                    relevance.reshape(1, -1),
+                    pred.reshape(1, -1),
+                    k=min(10, n),
+                )
+            )
+            top1_actual = float(actual[predicted_top1_index])
+            oracle_actual = float(actual[actual_order[0]])
+            sign_accuracy = float(
+                np.mean((pred > 0.0) == (actual > 0.0))
+            )
+
+            selected_asset = None
+            selected_realized_utility = None
+            selected_actual_percentile = None
+            selected_in_actual_top5 = None
+            selected_equals_predicted_top1 = None
+            if (
+                strategy_result is not None
+                and date in strategy_predictions.index
+                and "selected_asset" in strategy_predictions
+            ):
+                raw_selected = strategy_predictions.loc[date, "selected_asset"]
+                selected_asset = str(raw_selected)
+                if selected_asset in valid_symbols:
+                    selected_index = valid_symbols.index(selected_asset)
+                    selected_realized_utility = float(actual[selected_index])
+                    selected_actual_percentile = float(
+                        actual_rank_pct[selected_index]
+                    )
+                    selected_in_actual_top5 = bool(
+                        selected_index in actual_top5
+                    )
+                    selected_equals_predicted_top1 = bool(
+                        selected_asset == predicted_top1
+                    )
+
+            rows.append(
+                {
+                    "scope": scope,
+                    "fold_id": state.fold_id,
+                    "timestamp": date,
+                    "valid_assets": n,
+                    "spearman_ic": _safe_rank_correlation(pred, actual),
+                    "ndcg_at_5": ndcg5,
+                    "ndcg_at_10": ndcg10,
+                    "sign_accuracy": sign_accuracy,
+                    "predicted_top1": predicted_top1,
+                    "realized_top1": actual_top1,
+                    "top1_exact_hit": bool(
+                        predicted_top1_index == actual_order[0]
+                    ),
+                    "top1_in_realized_top3": bool(
+                        predicted_top1_index in actual_top3
+                    ),
+                    "top1_in_realized_top5": bool(
+                        predicted_top1_index in actual_top5
+                    ),
+                    "top1_realized_percentile": float(
+                        actual_rank_pct[predicted_top1_index]
+                    ),
+                    "top3_overlap_rate": float(
+                        len(predicted_top3 & actual_top3) / top3_n
+                    ),
+                    "top1_realized_utility": top1_actual,
+                    "oracle_realized_utility": oracle_actual,
+                    "top1_regret": float(oracle_actual - top1_actual),
+                    "strategy_selected_asset": selected_asset,
+                    "strategy_selected_realized_utility": (
+                        selected_realized_utility
+                    ),
+                    "strategy_selected_realized_percentile": (
+                        selected_actual_percentile
+                    ),
+                    "strategy_selected_in_realized_top5": (
+                        selected_in_actual_top5
+                    ),
+                    "strategy_selected_equals_predicted_top1": (
+                        selected_equals_predicted_top1
+                    ),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _rank_diagnostic_summary(sessions: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    numeric = (
+        "spearman_ic",
+        "ndcg_at_5",
+        "ndcg_at_10",
+        "sign_accuracy",
+        "top1_exact_hit",
+        "top1_in_realized_top3",
+        "top1_in_realized_top5",
+        "top1_realized_percentile",
+        "top3_overlap_rate",
+        "top1_regret",
+        "strategy_selected_realized_percentile",
+        "strategy_selected_in_realized_top5",
+        "strategy_selected_equals_predicted_top1",
+    )
+    for scope, scope_frame in sessions.groupby("scope", sort=False):
+        groups: list[tuple[str, pd.DataFrame]] = [("ALL", scope_frame)]
+        groups.extend(
+            (
+                str(int(fold_id)),
+                fold_frame,
+            )
+            for fold_id, fold_frame in scope_frame.groupby(
+                "fold_id",
+                sort=True,
+            )
+        )
+        for fold_label, frame in groups:
+            row: dict[str, Any] = {
+                "scope": scope,
+                "fold_id": fold_label,
+                "sessions": int(len(frame)),
+                "median_valid_assets": float(
+                    frame["valid_assets"].median()
+                ),
+            }
+            for column in numeric:
+                if column not in frame:
+                    continue
+                values = pd.to_numeric(
+                    frame[column],
+                    errors="coerce",
+                )
+                row[f"{column}_mean"] = (
+                    float(values.mean())
+                    if values.notna().any()
+                    else None
+                )
+                row[f"{column}_median"] = (
+                    float(values.median())
+                    if values.notna().any()
+                    else None
+                )
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _normal_inv_cdf(probability: float) -> float:
+    bounded = min(max(float(probability), 1e-12), 1.0 - 1e-12)
+    return float(NormalDist().inv_cdf(bounded))
+
+
+def _effective_trial_count(returns_matrix: pd.DataFrame) -> float:
+    matrix = returns_matrix.to_numpy(dtype=np.float64)
+    if matrix.shape[1] <= 1:
+        return 1.0
+    corr = np.corrcoef(matrix, rowvar=False)
+    corr = np.nan_to_num(corr, nan=0.0, posinf=0.0, neginf=0.0)
+    np.fill_diagonal(corr, 1.0)
+    eigenvalues = np.linalg.eigvalsh(corr)
+    eigenvalues = np.clip(eigenvalues, 0.0, None)
+    total = float(eigenvalues.sum())
+    squared = float(np.square(eigenvalues).sum())
+    if total <= 0.0 or squared <= 0.0:
+        return 1.0
+    return float((total * total) / squared)
+
+
+def _expected_max_sharpe(
+    trial_sharpes_daily: np.ndarray,
+    n_trials: float,
+) -> float:
+    values = np.asarray(trial_sharpes_daily, dtype=np.float64)
+    values = values[np.isfinite(values)]
+    if len(values) < 2:
+        return 0.0
+    variance = float(np.var(values, ddof=1))
+    if variance <= 0.0 or n_trials <= 1.0:
+        return 0.0
+    gamma = 0.5772156649015329
+    n = max(float(n_trials), 1.000001)
+    first = _normal_inv_cdf(1.0 - 1.0 / n)
+    second = _normal_inv_cdf(1.0 - 1.0 / (n * math.e))
+    return float(
+        math.sqrt(variance)
+        * ((1.0 - gamma) * first + gamma * second)
+    )
+
+
+def _deflated_sharpe_ratio(
+    selected_returns: pd.Series,
+    trial_sharpes_daily: np.ndarray,
+    n_trials: float,
+) -> dict[str, Any]:
+    values = pd.to_numeric(
+        selected_returns,
+        errors="coerce",
+    ).dropna().astype(float)
+    sr = _daily_sharpe(values.to_numpy(dtype=np.float64))
+    if not np.isfinite(sr) or len(values) < 3:
+        return {
+            "observations": int(len(values)),
+            "n_trials": float(n_trials),
+            "probabilistic_sharpe_ratio": None,
+            "deflated_sharpe_ratio": None,
+        }
+    skew = float(values.skew())
+    kurtosis = float(values.kurt()) + 3.0
+    sr0 = _expected_max_sharpe(trial_sharpes_daily, n_trials)
+    variance_term = (
+        1.0
+        - skew * sr
+        + ((kurtosis - 1.0) / 4.0) * sr * sr
+    )
+    variance_term = max(float(variance_term), 1e-12)
+    scale = math.sqrt(len(values) - 1.0) / math.sqrt(variance_term)
+    psr_z = float(sr * scale)
+    dsr_z = float((sr - sr0) * scale)
+    return {
+        "observations": int(len(values)),
+        "n_trials": float(n_trials),
+        "daily_sharpe": float(sr),
+        "annualized_sharpe": float(sr * math.sqrt(252.0)),
+        "skewness": skew,
+        "kurtosis": kurtosis,
+        "trial_sharpe_variance_daily": float(
+            np.var(
+                np.asarray(trial_sharpes_daily, dtype=np.float64),
+                ddof=1,
+            )
+        ),
+        "expected_max_daily_sharpe": float(sr0),
+        "expected_max_annualized_sharpe": float(
+            sr0 * math.sqrt(252.0)
+        ),
+        "probabilistic_sharpe_ratio": float(
+            NormalDist().cdf(psr_z)
+        ),
+        "deflated_sharpe_ratio": float(
+            NormalDist().cdf(dsr_z)
+        ),
+    }
+
+
+def _score_matrix_columns(
+    values: np.ndarray,
+    metric: str,
+) -> np.ndarray:
+    matrix = np.asarray(values, dtype=np.float64)
+    if metric == "log_growth":
+        clipped = np.clip(matrix, -0.999999999, None)
+        return np.nansum(np.log1p(clipped), axis=0)
+    if metric == "sharpe":
+        means = np.nanmean(matrix, axis=0)
+        stds = np.nanstd(matrix, axis=0, ddof=1)
+        return np.divide(
+            means,
+            stds,
+            out=np.full_like(means, np.nan, dtype=float),
+            where=stds > 0.0,
+        )
+    raise ValueError(f"Metrica PBO desconhecida: {metric}")
+
+
+def _pbo_cscv(
+    returns_matrix: pd.DataFrame,
+    *,
+    blocks: int = PBO_BLOCKS,
+    metric: str = "log_growth",
+) -> tuple[dict[str, Any], pd.DataFrame]:
+    if blocks < 2 or blocks % 2 != 0:
+        raise ValueError("PBO exige quantidade par de blocos.")
+    clean = returns_matrix.replace(
+        [np.inf, -np.inf],
+        np.nan,
+    ).dropna(axis=0, how="any")
+    matrix = clean.to_numpy(dtype=np.float64)
+    if len(matrix) < blocks:
+        raise ValueError("Observacoes insuficientes para PBO.")
+    block_indices = np.array_split(np.arange(len(matrix)), blocks)
+    all_blocks = tuple(range(blocks))
+    rows: list[dict[str, Any]] = []
+
+    for split_id, train_blocks in enumerate(
+        combinations(all_blocks, blocks // 2),
+        start=1,
+    ):
+        train_set = set(train_blocks)
+        test_blocks = tuple(
+            block for block in all_blocks if block not in train_set
+        )
+        train_idx = np.concatenate(
+            [block_indices[block] for block in train_blocks]
+        )
+        test_idx = np.concatenate(
+            [block_indices[block] for block in test_blocks]
+        )
+        is_scores = _score_matrix_columns(
+            matrix[train_idx],
+            metric,
+        )
+        valid_is = np.where(np.isfinite(is_scores), is_scores, -np.inf)
+        selected_index = int(np.argmax(valid_is))
+        oos_scores = _score_matrix_columns(
+            matrix[test_idx],
+            metric,
+        )
+        finite = np.isfinite(oos_scores)
+        if not finite[selected_index]:
+            continue
+        selected_oos = float(oos_scores[selected_index])
+        comparison = oos_scores[finite]
+        below = int(np.sum(comparison < selected_oos))
+        equal = int(np.sum(comparison == selected_oos))
+        rank = 1.0 + below + 0.5 * max(equal - 1, 0)
+        omega = float(rank / (len(comparison) + 1.0))
+        omega = min(max(omega, 1e-12), 1.0 - 1e-12)
+        logit = float(math.log(omega / (1.0 - omega)))
+        rows.append(
+            {
+                "metric": metric,
+                "split_id": split_id,
+                "train_blocks": ",".join(
+                    str(value) for value in train_blocks
+                ),
+                "test_blocks": ",".join(
+                    str(value) for value in test_blocks
+                ),
+                "selected_scenario": clean.columns[selected_index],
+                "is_score": float(is_scores[selected_index]),
+                "oos_score": selected_oos,
+                "oos_rank_percentile": omega,
+                "logit_oos_rank": logit,
+                "below_median_oos": bool(logit <= 0.0),
+            }
+        )
+
+    frame = pd.DataFrame(rows)
+    summary = {
+        "metric": metric,
+        "blocks": int(blocks),
+        "expected_splits": int(math.comb(blocks, blocks // 2)),
+        "completed_splits": int(len(frame)),
+        "scenario_count": int(returns_matrix.shape[1]),
+        "observation_count": int(len(clean)),
+        "pbo": (
+            float(frame["below_median_oos"].mean())
+            if not frame.empty
+            else None
+        ),
+        "median_oos_rank_percentile": (
+            float(frame["oos_rank_percentile"].median())
+            if not frame.empty
+            else None
+        ),
+        "median_logit_oos_rank": (
+            float(frame["logit_oos_rank"].median())
+            if not frame.empty
+            else None
+        ),
+    }
+    return summary, frame
+
+
+def _dynamic_transition_rows(
+    stages: list[dict[str, Any]],
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    previous: set[str] = set()
+    for stage in stages:
+        current = set(stage["selected_assets"])
+        universe = sorted(previous | current)
+        for symbol in universe:
+            if symbol in current and symbol in previous:
+                action = "MANTER"
+            elif symbol in current:
+                action = "ADICIONAR"
+            else:
+                action = "REMOVER"
+            rows.append(
+                {
+                    "stage": stage["stage"],
+                    "holdout_fold": stage["holdout_fold"],
+                    "asset": symbol,
+                    "action": action,
+                    "selected_before": symbol in previous,
+                    "selected_after": symbol in current,
+                }
+            )
+        previous = current
+    return pd.DataFrame(rows)
+
+
+def _run_decision_validation(
+    *,
+    snapshot: dict[str, Any],
+    baseline_payload: dict[str, Any],
+    baseline_metrics: dict[str, Any],
+    baseline_result: Any,
+    baseline_frames: dict[str, pd.DataFrame],
+    common_dates: pd.DatetimeIndex,
+    baseline_symbols: list[str],
+    folds: list[dict[str, Any]],
+    all_decision_dates: pd.DatetimeIndex,
+    decision_to_fold: dict[pd.Timestamp, int],
+    decision_metadata: Any,
+    config_u67: Any,
+    states: list[BaselineFoldState],
+    calibration_rows: list[dict[str, Any]],
+    started: float,
+) -> dict[str, Any]:
+    symbols = list(SUBSET_SOURCE_CANDIDATES)
+    discovery_selected = list(DISCOVERY_SELECTED_CANDIDATES)
+    credentials = load_alpaca_credentials(ROOT)
+
+    download_audit = _prepare_full_candidate_files(credentials, symbols)
+    download_audit.to_csv(OUT / "candidate_download.csv", index=False)
+    failed = download_audit.loc[
+        download_audit["status"].eq("failed"),
+        "asset",
+    ].astype(str).tolist()
+    if failed:
+        raise RuntimeError(
+            "Falha ao recuperar candidatos para decision validation: "
+            + ", ".join(failed)
+        )
+
+    candidate_frames, continuity, candidate_hashes = _prepare_candidate_frames(
+        symbols,
+        common_dates,
+        all_decision_dates,
+        config_u67,
+    )
+    continuity.to_csv(OUT / "continuity_audit.csv", index=False)
+    missing = [symbol for symbol in symbols if symbol not in candidate_frames]
+    if missing:
+        raise RuntimeError(
+            "Decision validation nao reproduziu os 15 candidatos: "
+            + ", ".join(missing)
+        )
+
+    candidate_fold_caches: dict[str, dict[int, CandidateFoldCache]] = {}
+    for position, symbol in enumerate(symbols, start=1):
+        candidate_fold_caches[symbol] = _train_candidate_caches(
+            symbol,
+            candidate_frames[symbol],
+            states,
+            config_u67,
+        )
+        print(
+            f"[decision-train] {position}/{len(symbols)} {symbol}",
+            flush=True,
+        )
+
+    scenario_cache: dict[tuple[str, ...], tuple[Any, dict[str, Any]]] = {}
+    scenario_calibration_rows: list[dict[str, Any]] = []
+    evaluation_order: list[tuple[str, ...]] = []
+
+    def canonical(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+        chosen = set(values)
+        return tuple(symbol for symbol in symbols if symbol in chosen)
+
+    def evaluate_subset(
+        values: list[str] | tuple[str, ...],
+    ) -> tuple[Any, dict[str, Any]]:
+        key = canonical(values)
+        if not key:
+            return baseline_result, baseline_metrics
+        if key in scenario_cache:
+            return scenario_cache[key]
+        result, metrics, rows = _evaluate_scenario(
+            "U67+DECISION_" + "_".join(key),
+            list(key),
+            baseline_frames,
+            candidate_frames,
+            baseline_symbols,
+            states,
+            candidate_fold_caches,
+            folds,
+            all_decision_dates,
+            decision_to_fold,
+            decision_metadata,
+            config_u67,
+        )
+        scenario_cache[key] = (result, metrics)
+        evaluation_order.append(key)
+        scenario_calibration_rows.extend(rows)
+        print(
+            f"[decision-scenario] {len(scenario_cache):03d} "
+            f"n={len(key):02d} capital=US$ "
+            f"{metrics['ending_capital']:,.2f}",
+            flush=True,
+        )
+        return result, metrics
+
+    def full_window_score(values: list[str] | tuple[str, ...]) -> float:
+        return float(evaluate_subset(values)[1]["ending_capital"])
+
+    all15_result, all15_metrics = evaluate_subset(symbols)
+    selected_result, selected_metrics = evaluate_subset(discovery_selected)
+    if not math.isclose(
+        float(all15_metrics["ending_capital"]),
+        EXPECTED_ALL_POSITIVE_ENDING_CAPITAL,
+        rel_tol=0.0,
+        abs_tol=BASELINE_ABS_TOL,
+    ):
+        raise RuntimeError("Checkpoint U67+15 divergiu na v1.4.")
+    if not math.isclose(
+        float(selected_metrics["ending_capital"]),
+        EXPECTED_DISCOVERY_SELECTED_ENDING_CAPITAL,
+        rel_tol=0.0,
+        abs_tol=BASELINE_ABS_TOL,
+    ):
+        raise RuntimeError("Checkpoint U67+10 divergiu na v1.4.")
+
+    full_search = _forward_backward_subset_search(
+        symbols,
+        full_window_score,
+        float(baseline_metrics["ending_capital"]),
+        SUBSET_IMPROVEMENT_TOL,
+    )
+    full_search_keys = list(evaluation_order)
+    if len(full_search_keys) != SOURCE_SUBSET_UNIQUE_SCENARIOS:
+        raise RuntimeError(
+            "Paisagem da busca divergente: "
+            f"observado={len(full_search_keys)} "
+            f"esperado={SOURCE_SUBSET_UNIQUE_SCENARIOS}"
+        )
+    if list(full_search["selected"]["assets"]) != discovery_selected:
+        raise RuntimeError(
+            "Subconjunto selecionado divergiu do Challenger congelado."
+        )
+
+    scenario_columns: list[str] = []
+    scenario_returns: list[pd.Series] = []
+    scenario_rows: list[dict[str, Any]] = []
+    for position, key in enumerate(full_search_keys, start=1):
+        result, metrics = scenario_cache[key]
+        scenario_id = f"S{position:03d}"
+        scenario_columns.append(scenario_id)
+        series = _daily_returns(result).rename(scenario_id)
+        scenario_returns.append(series)
+        scenario_rows.append(
+            {
+                "scenario_id": scenario_id,
+                "assets": ",".join(key),
+                "asset_count": len(key),
+                "ending_capital": metrics["ending_capital"],
+                "cagr": metrics["cagr"],
+                "sharpe": metrics["sharpe"],
+                "maximum_drawdown": metrics["maximum_drawdown"],
+                "worst_fold_return": metrics["worst_fold_return"],
+                "daily_sharpe": _daily_sharpe(
+                    series.to_numpy(dtype=np.float64)
+                ),
+            }
+        )
+    multiple_testing_scenarios = pd.DataFrame(scenario_rows)
+    multiple_testing_scenarios.to_csv(
+        OUT / "multiple_testing_scenarios.csv",
+        index=False,
+    )
+    returns_matrix = pd.concat(scenario_returns, axis=1).dropna(how="any")
+    returns_matrix.to_csv(
+        OUT / "multiple_testing_daily_returns.csv",
+        index_label="timestamp",
+    )
+
+    trial_sharpes = multiple_testing_scenarios[
+        "daily_sharpe"
+    ].to_numpy(dtype=np.float64)
+    effective_trials = _effective_trial_count(returns_matrix)
+    selected_returns = _daily_returns(selected_result)
+    dsr_raw = _deflated_sharpe_ratio(
+        selected_returns,
+        trial_sharpes,
+        float(SOURCE_SUBSET_UNIQUE_SCENARIOS),
+    )
+    dsr_effective = _deflated_sharpe_ratio(
+        selected_returns,
+        trial_sharpes,
+        effective_trials,
+    )
+    dsr_conservative = _deflated_sharpe_ratio(
+        selected_returns,
+        trial_sharpes,
+        float(
+            SOURCE_DIRECT_TESTED_COUNT
+            + SOURCE_SUBSET_UNIQUE_SCENARIOS
+        ),
+    )
+    multiple_testing_summary = {
+        "subset_scenario_count": SOURCE_SUBSET_UNIQUE_SCENARIOS,
+        "direct_candidate_count": SOURCE_DIRECT_TESTED_COUNT,
+        "effective_independent_trial_count_from_subset_returns": (
+            effective_trials
+        ),
+        "dsr_subset_raw_trials": dsr_raw,
+        "dsr_subset_effective_trials": dsr_effective,
+        "dsr_conservative_326_trials": dsr_conservative,
+        "conservative_326_note": (
+            "Sensitivity calculation: 146 marginal candidate tests plus 180 "
+            "subset scenarios. These trials are correlated and not identical "
+            "strategy families, so this is not an independent-trial estimate."
+        ),
+    }
+
+    pbo_growth_summary, pbo_growth = _pbo_cscv(
+        returns_matrix,
+        blocks=PBO_BLOCKS,
+        metric="log_growth",
+    )
+    pbo_sharpe_summary, pbo_sharpe = _pbo_cscv(
+        returns_matrix,
+        blocks=PBO_BLOCKS,
+        metric="sharpe",
+    )
+    pbo_growth.to_csv(OUT / "pbo_log_growth.csv", index=False)
+    pbo_sharpe.to_csv(OUT / "pbo_sharpe.csv", index=False)
+    multiple_testing_summary["pbo_log_growth"] = pbo_growth_summary
+    multiple_testing_summary["pbo_sharpe"] = pbo_sharpe_summary
+    _write_json(
+        OUT / "multiple_testing_summary.json",
+        multiple_testing_summary,
+    )
+
+    rank_frames = [
+        _rank_diagnostic_sessions(
+            scope="u67_baseline",
+            symbols=baseline_symbols,
+            states=states,
+            baseline_symbols=baseline_symbols,
+            baseline_frames=baseline_frames,
+            candidate_frames=candidate_frames,
+            candidate_fold_caches=candidate_fold_caches,
+            strategy_result=baseline_result,
+        ),
+        _rank_diagnostic_sessions(
+            scope="challenger_u67_plus_10",
+            symbols=sorted(
+                [*baseline_symbols, *discovery_selected]
+            ),
+            states=states,
+            baseline_symbols=baseline_symbols,
+            baseline_frames=baseline_frames,
+            candidate_frames=candidate_frames,
+            candidate_fold_caches=candidate_fold_caches,
+            strategy_result=selected_result,
+        ),
+        _rank_diagnostic_sessions(
+            scope="candidate_pool_15",
+            symbols=symbols,
+            states=states,
+            baseline_symbols=baseline_symbols,
+            baseline_frames=baseline_frames,
+            candidate_frames=candidate_frames,
+            candidate_fold_caches=candidate_fold_caches,
+            strategy_result=None,
+        ),
+    ]
+    rank_sessions = pd.concat(rank_frames, ignore_index=True)
+    rank_sessions.to_csv(
+        OUT / "decision_rank_sessions.csv",
+        index=False,
+    )
+    rank_summary = _rank_diagnostic_summary(rank_sessions)
+    rank_summary.to_csv(
+        OUT / "decision_rank_summary.csv",
+        index=False,
+    )
+
+    temporal_rows: list[dict[str, Any]] = []
+    temporal_trace_frames: list[pd.DataFrame] = []
+    for stage, selection_folds, holdout_fold in (
+        ("past_fold_1_to_future_fold_2", [1], 2),
+        ("past_folds_1_2_to_future_fold_3", [1, 2], 3),
+    ):
+        def temporal_score(values: list[str] | tuple[str, ...]) -> float:
+            return _compound_fold_capital(
+                evaluate_subset(values)[1],
+                selection_folds,
+                initial_capital=float(config_u67.initial_capital),
+            )
+
+        baseline_selection = _compound_fold_capital(
+            baseline_metrics,
+            selection_folds,
+            initial_capital=float(config_u67.initial_capital),
+        )
+        search = _forward_backward_subset_search(
+            symbols,
+            temporal_score,
+            baseline_selection,
+            SUBSET_IMPROVEMENT_TOL,
+        )
+        chosen = list(search["selected"]["assets"])
+        chosen_metrics = evaluate_subset(chosen)[1]
+        heldout = _fold_metric(chosen_metrics, holdout_fold)
+        baseline_holdout = _fold_metric(
+            baseline_metrics,
+            holdout_fold,
+        )
+        temporal_rows.append(
+            {
+                "stage": stage,
+                "selection_folds": ",".join(
+                    str(value) for value in selection_folds
+                ),
+                "holdout_fold": holdout_fold,
+                "selected_assets": chosen,
+                "selected_asset_count": len(chosen),
+                "selection_score": search["selected"]["ending_capital"],
+                "holdout_return": heldout["strategy_return"],
+                "u67_holdout_return": baseline_holdout["strategy_return"],
+                "holdout_excess_vs_u67": (
+                    float(heldout["strategy_return"])
+                    - float(baseline_holdout["strategy_return"])
+                ),
+                "jaccard_vs_discovery_10": _jaccard(
+                    chosen,
+                    discovery_selected,
+                ),
+            }
+        )
+        trace = pd.DataFrame(search["trace"])
+        if not trace.empty:
+            trace.insert(0, "stage", stage)
+            temporal_trace_frames.append(trace)
+
+    temporal_output = pd.DataFrame(
+        [
+            {
+                **row,
+                "selected_assets": ",".join(row["selected_assets"]),
+            }
+            for row in temporal_rows
+        ]
+    )
+    temporal_output.to_csv(
+        OUT / "dynamic_universe_temporal_validation.csv",
+        index=False,
+    )
+    transition_frame = _dynamic_transition_rows(temporal_rows)
+    transition_frame.to_csv(
+        OUT / "dynamic_universe_transitions.csv",
+        index=False,
+    )
+    (
+        pd.concat(temporal_trace_frames, ignore_index=True)
+        if temporal_trace_frames
+        else pd.DataFrame()
+    ).to_csv(
+        OUT / "dynamic_universe_search.csv",
+        index=False,
+    )
+
+    pd.DataFrame(
+        [*calibration_rows, *scenario_calibration_rows]
+    ).to_csv(
+        OUT / "scenario_fold_calibration.csv",
+        index=False,
+    )
+
+    rank_overall = rank_summary.loc[
+        rank_summary["fold_id"].eq("ALL")
+    ].to_dict(orient="records")
+    payload = {
+        "execution_schema": EXECUTION_SCHEMA,
+        "version": SCRIPT_VERSION,
+        "status": "completed",
+        "purpose": "u67_decision_and_selection_validation",
+        "run_mode": RUN_MODE,
+        "baseline": baseline_payload,
+        "checkpoints": {
+            "u67_exact_to_cent": baseline_payload["exact_to_cent"],
+            "all_15_exact_to_cent": True,
+            "selected_10_exact_to_cent": True,
+            "all_15_ending_capital": all15_metrics["ending_capital"],
+            "selected_10_ending_capital": (
+                selected_metrics["ending_capital"]
+            ),
+            "full_window_subset_scenarios_reproduced": len(
+                full_search_keys
+            ),
+        },
+        "decision_ranking": {
+            "overall": rank_overall,
+            "interpretation": (
+                "Ranking diagnostics compare predictions available at the "
+                "decision session with forward utility realized afterward. "
+                "They are evaluation diagnostics and are not used to make "
+                "historical decisions."
+            ),
+        },
+        "multiple_testing": multiple_testing_summary,
+        "dynamic_universe": {
+            "asset_list_is_permanent": False,
+            "stages": temporal_rows,
+            "transition_actions": (
+                transition_frame.groupby(
+                    ["stage", "action"],
+                    sort=False,
+                ).size().reset_index(name="count").to_dict(
+                    orient="records"
+                )
+            ),
+            "current_scope": (
+                "Fold-boundary pilot over the fixed 15-candidate discovery "
+                "pool. It does not yet rediscover the external universe daily."
+            ),
+        },
+        "data": {
+            "baseline_snapshot_sha256": snapshot.get("snapshot_sha256"),
+            "candidate_file_hashes": candidate_hashes,
+        },
+        "runtime_seconds": float(time.perf_counter() - started),
+    }
+    _write_json(
+        OUT / "pesquisa_u67_decision_validation.json",
+        payload,
+    )
+
+    package = criar_pacote_analise(
+        OUT,
+        comparison_file="pesquisa_u67_decision_validation.json",
+        execution_schema=EXECUTION_SCHEMA,
+        archive_name="pacote_analise_u67_decision_validation.zip",
+    )
+    print("=" * 78, flush=True)
+    print(
+        f"[final-decision] scenarios={len(full_search_keys)} "
+        f"effective_trials={effective_trials:.2f} "
+        f"PBO_growth={pbo_growth_summary['pbo']:.4f} "
+        f"PBO_sharpe={pbo_sharpe_summary['pbo']:.4f}",
+        flush=True,
+    )
+    print(
+        "[final-decision] dynamic_stages="
+        + " | ".join(
+            f"{row['stage']}:{','.join(row['selected_assets'])}"
+            for row in temporal_rows
+        ),
+        flush=True,
+    )
+    print(f"[final-decision] package={package}", flush=True)
+    print("=" * 78, flush=True)
+    sinal_sonoro_conclusao()
+    return payload
+
+
 def _marginal_row(
     symbol: str,
     sample_row: dict[str, Any],
@@ -2510,6 +3495,25 @@ def main() -> dict[str, Any]:
         f"[baseline] capital=US$ {baseline_metrics['ending_capital']:,.2f} exact_to_cent=True",
         flush=True,
     )
+
+    if RUN_MODE == "decision_validation":
+        return _run_decision_validation(
+            snapshot=snapshot,
+            baseline_payload=baseline_payload,
+            baseline_metrics=baseline_metrics,
+            baseline_result=baseline_result,
+            baseline_frames=baseline_frames,
+            common_dates=common_dates,
+            baseline_symbols=baseline_symbols,
+            folds=folds,
+            all_decision_dates=all_decision_dates,
+            decision_to_fold=decision_to_fold,
+            decision_metadata=decision_metadata,
+            config_u67=config_u67,
+            states=states,
+            calibration_rows=calibration_rows,
+            started=started,
+        )
 
     if RUN_MODE == "assurance_validation":
         return _run_assurance_validation(
