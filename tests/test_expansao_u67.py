@@ -10,8 +10,6 @@ from pesquisar_expansao_u67_spyder import (
     _merge_utility_caches,
     _ranker_dataset,
     _forward_backward_subset_search,
-    _regression_error,
-    _naive_mean_errors,
     _fit_quality_row,
     _compound_fold_capital,
 )
