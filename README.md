@@ -110,7 +110,7 @@ em:
 pesquisar_expansao_u67_spyder.py
 ```
 
-A versão 1.4.0 usa por padrão o modo `decision_validation`. Ela preserva
+A versão 1.4.1 usa por padrão o modo `decision_validation`. Ela preserva
 os checkpoints da assurance e mede qualidade de ranking/decisão, Deflated
 Sharpe Ratio, Probability of Backtest Overfitting e um piloto temporal de
 `ADICIONAR / MANTER / REMOVER` ativos. Os modos `assurance_validation`,
@@ -141,3 +141,12 @@ Os modos anteriores continuam usando `output/u67_assurance_validation/`,
 
 O desenho e as limitações da campanha estão documentados em
 `PESQUISA_EXPANSAO_U67.md`.
+
+Se uma execução v1.4.0 já concluiu os cálculos e falhou somente ao serializar
+`NaN` no JSON final, não repita o backtest. Preserve a pasta de output e rode:
+
+```bash
+python finalizar_u67_decision_validation_spyder.py
+```
+
+No Spyder, abra esse arquivo e execute com F5.
