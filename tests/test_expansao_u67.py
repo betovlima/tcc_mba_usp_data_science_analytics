@@ -2,6 +2,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+import pesquisar_expansao_u67_spyder as expansion
 
 from pesquisar_expansao_u67_spyder import (
     _capital_delta,
@@ -73,3 +74,26 @@ def test_ranker_dataset_cria_relevancia_cross_sectional_por_data():
     assert set(dataset["symbol"]) == {"AAA", "BBB", "CCC"}
     assert dataset.groupby("date")["symbol"].count().min() >= 3
     assert dataset["relevance"].between(0, 4).all()
+
+
+
+def test_amostra_congelada_mantem_500_sem_gate_do_catalogo_atual(tmp_path, monkeypatch):
+    assets = [f"X{index:03d}" for index in range(500)]
+    manifest = tmp_path / "sample.csv"
+    pd.DataFrame({"asset": assets}).to_csv(manifest, index=False)
+    monkeypatch.setattr(expansion, "CANDIDATE_SAMPLE_MANIFEST", manifest)
+
+    catalog = pd.DataFrame(
+        {
+            "asset": [assets[0]],
+            "stable_key": ["known"],
+            "name": ["known asset"],
+            "exchange": ["NYSE"],
+        }
+    )
+    sample = expansion._load_candidate_sample(catalog)
+
+    assert sample["asset"].tolist() == assets
+    assert sample["sample_order"].tolist() == list(range(1, 501))
+    assert bool(sample.loc[0, "catalog_currently_eligible"]) is True
+    assert bool(sample.loc[1, "catalog_currently_eligible"]) is False
