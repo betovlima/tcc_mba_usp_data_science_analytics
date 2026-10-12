@@ -1621,7 +1621,7 @@ não modifica os resultados numéricos nem a política de universo congelada.
 
 ### 25.12 Pesquisa experimental de persistência preditiva multi-horizonte (2026-10-12)
 
-**Versão experimental:** horizon-persistence-oos-v1.0.1.
+**Versão experimental:** horizon-persistence-oos-v1.0.2.
 **Branch separada:** research/horizon-persistence-oos-v1, criada a partir de
 da pesquisa U67+10 no commit 13e5ed39.
 Esta pesquisa **não modifica** os checkpoints, a reprodução oficial, o
@@ -1694,3 +1694,42 @@ de execução econômica permanece relevante antes de qualquer adoção futura.
 **Separação permanente:** apenas após execução e análise dos três braços,
 com auditoria OOS e deliberação do autor, uma versão operacional distinta
 poderá ser proposta. Esta pesquisa não altera a aplicação operacional.
+
+
+#### 25.12.1 Hotfix H05 — eliminação do double purge (v1.0.2, 2026-10-12)
+
+**Incidente observado na primeira execução local, confirmado pelo log do autor:**
+
+- control_holding_2: US$ 587.165.941,13 (reproduzido ao centavo).
+- ablation_holding_0: US$ 59.060.362,54.
+- RuntimeError H5: insuficientes residuos maturados para medir a incerteza
+  antes do OOS: 0.
+
+O erro aconteceu antes de calcular qualquer resultado do braço multi-horizonte.
+O fold 1 da calibração contém 700 observações de treino, o mínimo
+rotation_minimum_training_rows=700. A primeira implementação fazia
+safe_train_dates=state.train_dates[:-h], removendo mais 5 datas
+(695 linhas disponíveis) embora o protocolo oficial já separasse o treino
+da calibração com purge de 60 pregões. A função de treinamento retornava
+um dicionário de modelos vazio e a medição de erro recebia previsões
+não finitas, resultando em zero resíduos válidos. Não houve corrupção de
+dados, alteração da estratégia base nem conclusão sobre a política nova.
+
+A correção preserva todas as datas pré-calibração e pré-OOS cujo rótulo
+de horizonte h matura antes do primeiro pregão de avaliação. Para cada
+fold e h, a validação exige estritamente:
+
+    (train_end_exclusive - 1) + h < evaluation_start_index
+
+A verificação funciona para H05/H10/H20/H40/H60 com purge 60, sem
+novo truncamento das 700 observações mínimas. Também verifica que
+o dicionário de modelos não está vazio e mantém o descarte de
+rótulos de calibração não maturados antes da decisão OOS. Novos testes
+de regressão cobrem quantidade original de treinamento e rejeição de
+rótulos futuros.
+
+**A pesquisa nova ainda precisa ser executada novamente pelo autor.**
+O backtest completo não está validado pela CI unitária; os resultados
+Control e ablação observados não antecipam desempenho do método
+multi-horizonte. Reexecutar pesquisar_persistencia_horizontes_spyder.py
+após atualizar esta branch e enviar o ZIP produzido.
