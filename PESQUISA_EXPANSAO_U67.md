@@ -452,3 +452,157 @@ output/u67_assurance_validation/
     pesquisa_u67_assurance_validation.json
     pacote_analise_u67_assurance_validation.zip
 ```
+
+
+## Implementação v1.4.0: qualidade de decisão e selection overfitting
+
+A assurance v1.3.0 mostrou que MAE/RMSE absolutos não são suficientes para
+explicar o desempenho econômico. A v1.4.0 passa a testar diretamente a função
+que interessa à política: ordenar alternativas de investimento.
+
+O modo padrão passa a ser:
+
+```text
+RUN_MODE = "decision_validation"
+```
+
+Os checkpoints U67, U67+15 e U67+10 continuam obrigatórios e devem reproduzir
+até o centavo antes dos novos diagnósticos.
+
+### Diagnóstico cross-sectional de ranking
+
+Em cada sessão OOS, a previsão disponível no momento da decisão é comparada à
+`forward_risk_adjusted_utility` que somente se torna conhecida depois.
+
+São avaliados três escopos:
+
+```text
+U67 baseline
+U67 + 10 Challenger
+pool dos 15 candidatos positivos
+```
+
+As métricas incluem:
+
+```text
+Spearman / Information Coefficient
+NDCG@5
+NDCG@10
+sign accuracy
+top-1 exact hit
+top-1 previsto dentro do top-3 realizado
+top-1 previsto dentro do top-5 realizado
+percentil realizado do top-1 previsto
+overlap top-3
+utility realizada do top-1 previsto
+utility oracle
+regret do top-1
+percentil realizado do ativo efetivamente selecionado pela política
+```
+
+Essas métricas são somente diagnósticos de avaliação. A utility futura não
+participa da decisão histórica.
+
+### Reconstrução da paisagem de 180 subconjuntos
+
+A busca forward/backward da v1.2.0 é repetida com os mesmos 15 candidatos. A
+execução exige exatamente 180 cenários únicos e o mesmo subconjunto de 10
+ativos. Para cada cenário são preservados:
+
+```text
+capital final
+CAGR
+Sharpe
+MaxDD
+worst fold
+Sharpe diário
+série diária de retornos
+```
+
+Essa matriz permite medir risco de seleção retrospectiva.
+
+### Deflated Sharpe Ratio
+
+A v1.4.0 calcula o Deflated Sharpe Ratio do Challenger em três leituras:
+
+```text
+1. 180 trials brutos da busca de subconjuntos
+2. número efetivo de trials estimado pelos autovalores da matriz de correlação
+3. sensibilidade conservadora com 326 = 146 marginais + 180 subconjuntos
+```
+
+O terceiro número não é tratado como quantidade de testes independentes.
+Ele serve somente como cenário conservador de sensibilidade.
+
+Além do DSR, é preservado o Probabilistic Sharpe Ratio e o Sharpe esperado do
+melhor trial sob múltiplos testes.
+
+### Probability of Backtest Overfitting
+
+O CSCV/PBO divide a matriz de retornos em 10 blocos e avalia todas as
+combinações simétricas de cinco blocos em sample e cinco fora de sample:
+
+```text
+C(10,5) = 252 divisões
+```
+
+São produzidos dois PBOs:
+
+```text
+log_growth
+    alinhado ao critério usado para maximizar capital
+
+Sharpe
+    diagnóstico complementar de risco-retorno
+```
+
+Para cada divisão, registra-se qual cenário venceu no in-sample e sua posição
+relativa no OOS.
+
+### Piloto de universo dinâmico
+
+A seleção temporal permanece limitada ao pool fixo dos 15 positivos nesta
+versão:
+
+```text
+fold 1 -> selecionar -> testar fold 2
+folds 1+2 -> selecionar -> testar fold 3
+```
+
+Além do resultado temporal, a v1.4.0 converte a mudança de composição em ações:
+
+```text
+ADICIONAR
+MANTER
+REMOVER
+```
+
+A transição entre folds é somente um piloto de baixa frequência. A política
+final deverá redescobrir candidatos externos e reavaliar ativos internos em
+atualização diária ou outra frequência definida antes da execução.
+
+### Saídas da v1.4.0
+
+```text
+output/u67_decision_validation/
+    candidate_download.csv
+    continuity_audit.csv
+    decision_rank_sessions.csv
+    decision_rank_summary.csv
+    multiple_testing_scenarios.csv
+    multiple_testing_daily_returns.csv
+    multiple_testing_summary.json
+    pbo_log_growth.csv
+    pbo_sharpe.csv
+    dynamic_universe_temporal_validation.csv
+    dynamic_universe_transitions.csv
+    dynamic_universe_search.csv
+    scenario_fold_calibration.csv
+    pesquisa_u67_decision_validation.json
+    pacote_analise_u67_decision_validation.zip
+```
+
+O objetivo desta etapa não é encontrar mais capital. É determinar se o
+resultado de descoberta sobrevive a diagnósticos de ranking e múltiplos testes
+e se a composição ótima mostra comportamento temporal compatível com um
+universo não permanente.
