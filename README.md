@@ -110,6 +110,12 @@ em:
 pesquisar_expansao_u67_spyder.py
 ```
 
+A versão 1.1.0 reutiliza a amostra congelada de 500 símbolos registrada em
+`pesquisa_u67_amostra_500.csv`. Depois da auditoria estrutural mínima, todo
+candidato válido segue diretamente para o replay `U67 + ativo`. Filtros de
+preço, liquidez, volume e Learning-to-Rank não eliminam candidatos antes desse
+teste econômico.
+
 Ela exige as credenciais locais da Alpaca no arquivo `.env`, mas não recria nem
 altera `dados/u67`. Os dados dos candidatos são mantidos em cache local
 ignorado pelo Git.
