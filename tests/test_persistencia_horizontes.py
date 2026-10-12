@@ -10,6 +10,8 @@ from pesquisar_persistencia_horizontes_spyder import (
     uncertainty_from_matured_calibration,
     safe_json,
     select_purged_horizon_training_dates,
+    EarlyHorizonOverridePolicy,
+    calibrate_pair_gap_error,
 )
 
 
@@ -225,4 +227,150 @@ def test_horizon_training_must_not_hide_insufficient_model_rows():
             evaluation_start_index=760,
             horizon=5,
             min_training_rows=700,
+        )
+
+
+
+def _early_override_case(
+    *,
+    aggregate,
+    horizon,
+    control_actions,
+    multiplier=0.5,
+    sigma=0.01,
+):
+    dates = pd.date_range(
+        "2026-09-01", periods=len(aggregate), freq="B", tz="UTC"
+    )
+    aggregate_cache = {
+        pd.Timestamp(day): np.asarray(row, dtype=float)
+        for day, row in zip(dates, aggregate)
+    }
+    horizon_cache = {
+        pd.Timestamp(day): np.asarray(row, dtype=float)
+        for day, row in zip(dates, horizon)
+    }
+    actions = iter(control_actions)
+    audit = []
+
+    def controlled(day, current, holding):
+        del day, holding
+        action = next(actions)
+        return action, float(aggregate_cache[pd.Timestamp(dates[0])][action])
+
+    policy = EarlyHorizonOverridePolicy(
+        symbols=["MAN", "TSLA"],
+        dates=dates,
+        aggregate=aggregate_cache,
+        per_horizon={5: horizon_cache},
+        pair_error_p75={5: sigma},
+        weights={5: 1.0},
+        control_policy=controlled,
+        margin=0.001,
+        minimum_holding=2,
+        confidence_multiplier=multiplier,
+        audit=audit,
+        fold_id=1,
+    )
+    return dates, policy, audit
+
+
+def test_early_override_changes_only_control_minimum_hold_decision():
+    days, policy, audit = _early_override_case(
+        aggregate=[[0, 0.2, 0.1], [0, 0.15, 0.8]],
+        horizon=[[0, 0.2, 0.1], [0, 0.10, 0.90]],
+        control_actions=[1, 1],
+    )
+    assert policy(days[0], 0, 0)[0] == 1
+    assert policy(days[1], 1, 1)[0] == 2
+    assert audit[-1]["control_target"] == "MAN"
+    assert audit[-1]["final_target"] == "TSLA"
+    assert audit[-1]["early_override"]
+    assert audit[-1]["reason"] == "EARLY_OVERRIDE_HORIZON_PAIRS"
+
+
+def test_override_does_not_block_control_rotation_after_minimum_hold():
+    days, policy, audit = _early_override_case(
+        aggregate=[[0, 0.2, 0.1], [0, 0.1, 0.8]],
+        horizon=[[0, 0.2, 0.1], [0, -10, -10]],
+        control_actions=[1, 2],
+        multiplier=1000.0,
+    )
+    assert policy(days[0], 0, 0)[0] == 1
+    assert policy(days[1], 1, 2)[0] == 2
+    assert audit[-1]["reason"] == "CONTROL_HOLDING_ALREADY_ELIGIBLE"
+    assert not audit[-1]["early_override"]
+
+
+def test_override_does_not_fabricate_entry_forecast_when_fold_inherits_position():
+    days, policy, audit = _early_override_case(
+        aggregate=[[0, 0.1, 0.8]],
+        horizon=[[0, 0.1, 0.8]],
+        control_actions=[1],
+        multiplier=0.0,
+    )
+    assert policy(days[0], 1, 1)[0] == 1
+    assert audit[-1]["reason"] == "FOLD_INHERITED_OR_NO_ANCHOR"
+    assert not audit[-1]["entry_forecast_observed"]
+
+
+def test_override_keeps_cash_exit_from_control():
+    days, policy, audit = _early_override_case(
+        aggregate=[[0, 0.2, 0.1], [0, -0.1, -0.2]],
+        horizon=[[0, 0.2, 0.1], [0, 0.3, 0.8]],
+        control_actions=[1, 0],
+        multiplier=0.0,
+    )
+    assert policy(days[0], 0, 0)[0] == 1
+    assert policy(days[1], 1, 1)[0] == 0
+    assert audit[-1]["final_target"] == "CASH"
+    assert not audit[-1]["early_override"]
+
+
+def test_pair_gap_error_uses_only_fully_matured_days():
+    days = pd.date_range("2026-01-01", periods=90, freq="B", tz="UTC")
+    labels_a = np.zeros(90)
+    labels_b = np.zeros(90)
+    # H5 labels after index 64 must be ignored by cutoff 70.
+    labels_b[65:] = 1000.0
+    frames = {
+        "MAN": pd.DataFrame({"forward_horizon_utility_5": labels_a}, index=days),
+        "TSLA": pd.DataFrame({"forward_horizon_utility_5": labels_b}, index=days),
+    }
+    predictions = {pd.Timestamp(d): np.array([0.0, 0.2, 0.1]) for d in days}
+    aggregate = {pd.Timestamp(d): np.array([0.0, 0.2, 0.1]) for d in days}
+    q, n, pairs = calibrate_pair_gap_error(
+        horizon=5,
+        days=days[:70],
+        calendar=days,
+        last_matured_exclusive=70,
+        symbols=["MAN", "TSLA"],
+        frames=frames,
+        aggregate=aggregate,
+        predictions=predictions,
+    )
+    assert n == 65
+    assert pairs == 65
+    assert abs(q - 0.1) < 1e-12
+
+
+def test_pair_gap_error_does_not_count_many_pairs_as_many_days():
+    days = pd.date_range("2026-01-01", periods=90, freq="B", tz="UTC")
+    symbols = [f"S{i:02d}" for i in range(75)]
+    frames = {
+        s: pd.DataFrame({"forward_horizon_utility_5": np.zeros(90)}, index=days)
+        for s in symbols
+    }
+    prediction = np.array([0.0, *np.linspace(0.1, 0.2, len(symbols))])
+    predictions = {pd.Timestamp(d): prediction for d in days}
+    with pytest.raises(RuntimeError, match="evidência histórica insuficiente"):
+        calibrate_pair_gap_error(
+            horizon=5,
+            days=days[:2],
+            calendar=days,
+            last_matured_exclusive=30,
+            symbols=symbols,
+            frames=frames,
+            aggregate=predictions,
+            predictions=predictions,
         )
