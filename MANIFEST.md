@@ -1815,3 +1815,91 @@ científica para subsidiar decisão posterior.
 **Separação entre defeitos:** eventual diferença do contador de
 holding de produção precisa de correção operacional independente;
 nenhum resultado aqui justifica manter um contador desatualizado.
+
+
+#### 25.12.3 Versão v1.0.3 — override antecipado de rotação, sem veto adicional
+
+**Hipótese operacional em pesquisa (não promovida):** a política Control
+com permanência mínima de dois pregões apresentou desempenho muito superior
+ao holding=0 e à primeira heurística de confiança por horizonte. Em lugar de
+substituir toda a decisão Control por um veto de confiança, a nova experiência
+mantém as decisões do Control como fallback e tenta **somente antecipar**
+uma troca durante o período em que o Control ainda impediria a saída por
+holding mínimo. Depois de satisfeita a permanência, não aplica qualquer
+veto adicional à decisão Control.
+
+**Código:** mesma branch research/horizon-persistence-oos-v1, no mesmo
+arquivo pesquisar_persistencia_horizontes_spyder.py,
+script_version horizon-persistence-oos-v1.0.3.
+
+**Três braços:** controle original holding=2, ablação holding=0 e
+early_horizon_override. Todos compartilham o universo U67+10 de 75 ativos,
+calendário, modelos agregados, margens do Control, custos financeiros e
+checkpoint histórico congelado do Control, que deve reproduzir
+US$ 587.165.941,1330212 ao centavo antes das variantes.
+
+**Política de override:** primeiro calcular a decisão oficial do Control
+com a posição e idade efetivamente presentes na **própria simulação**
+experimental. Somente se o Control mantiver o ativo, ainda houver holding
+inferior a 2 pregões e existir uma previsão original de entrada registrada
+pelo próprio modelo para essa posição, verificar a melhor alternativa.
+Exigir vantagem positiva da utilidade agregada contra CASH e o incumbent,
+considerando a mesma switch margin do Control. Em seguida, calcular a
+vantagem predita do par por H05/H10/H20/H40/H60 e comparar tanto com a
+previsão atual quanto com a previsão original da entrada, usando pesos
+efetivos de horizontes ainda não expirados. Antecipar a troca apenas se
+ambas as vantagens de par superarem o multiplicador do erro quantílico
+correspondente. Não preencher previsões de entrada desconhecidas
+com uma observação sintética. Se houver transição de fold e a posição
+original for desconhecida, **não permitir override até a próxima
+entrada real**, preservando a decisão Control.
+
+**Erro de diferenças por par:** para cada data de estimação, comparar a
+previsão de utilidade individual por horizonte do líder agregado com a
+dos demais símbolos disponíveis e o retorno/risco realizado de cada par.
+Agregam-se os erros absolutos pelo p75 dentro do dia, e usa-se o p75
+desses erros diários para o horizonte. Somente rótulos totalmente
+maturados antes da data de corte participam da estimação. Isso evita
+contar 74 pares da mesma sessão como 74 observações cronológicas
+independentes. **O indicador continua sendo uma heurística de margem
+de erro, não uma probabilidade calibrada.**
+
+**Calibração cronológica separada:** o primeiro segmento de 2/3 das
+126 datas de calibração estima os erros por horizonte; o 1/3 final
+seleciona exclusivamente entre os multiplicadores 0,0; 0,5; 1,0,
+sem utilizar labels ou métricas da janela OOS. O protocolo original
+preserva o purge de 60 dias para treinar os modelos de horizonte.
+Um multiplicador pode permitir nenhuma troca antecipada; isso é um
+resultado legítimo de comparação, não uma promoção obrigatória.
+
+**Saídas v1.0.3 (separadas da v1.0.2):**
+
+    output/persistencia_horizontes_u77_v103/
+      experiment.json
+      comparison.csv
+      horizon_calibration.csv
+      horizon_decisions.csv
+      override_by_fold.csv
+      control_decision_reasons.csv
+      no_hold_decision_reasons.csv
+      control_holding_2_equity.csv / *_trades.csv
+      ablation_holding_0_equity.csv / *_trades.csv
+      early_horizon_override_equity.csv / *_trades.csv
+      pacote_persistencia_horizontes_u77_v103.zip
+
+**Interpretação:** preservar a lógica do Control como fallback significa
+não vetar as ações que ele autorizaria **dado o estado da variante no
+mesmo dia**. Uma rotação antecipada modifica o ativo subsequente,
+portanto a trajetória completa da variante pode divergir da
+trajetória do Control: não se afirma identidade de ordens ou de capital
+após um override. A análise medirá frequência, delta financeiro,
+custos, drawdown, estabilidade por fold e causalidade sem reotimizar
+o resultado original do TCC.
+
+**Status de resultados:** A implementação em branch e os testes de
+regressão não representam uma execução financeira completa desta
+versão. Os valores de 2026-10-12 na seção anterior pertencem à
+v1.0.2 e não se transferem automaticamente à v1.0.3. Os
+resultados ficam pendentes de execução no ambiente de pesquisa com
+os dados candidatos congelados. Nenhuma alteração foi feita na
+aplicação operacional, no Winner ou na main do TCC.
