@@ -50,7 +50,7 @@ from pesquisar_expansao_u67_spyder import (
 
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "output" / "persistencia_horizontes_u77"
-VERSION = "horizon-persistence-oos-v1.0.0"
+VERSION = "horizon-persistence-oos-v1.0.1"
 CONFIDENCE_MULTIPLIERS = (0.0, 0.5, 1.0)
 ANCHOR_BLEND = 0.5
 CHECKPOINT_TOLERANCE_DOLLARS = 0.01
@@ -98,6 +98,7 @@ def uncertainty_from_matured_calibration(
     """Erro absoluto p75 somente de alvos totalmente maturados antes do OOS."""
     lookup = {pd.Timestamp(date): i for i, date in enumerate(full_dates)}
     errors: list[float] = []
+    matured_dates_with_predictions = 0
     for day in timestamps:
         timestamp = pd.Timestamp(day)
         index = lookup.get(timestamp)
@@ -106,12 +107,16 @@ def uncertainty_from_matured_calibration(
         predicted = predictions.get(timestamp)
         if predicted is None:
             continue
+        observed_this_day = False
         for column, symbol in enumerate(symbols, start=1):
             actual = frames[symbol].loc[timestamp, f"forward_horizon_utility_{h}"]
             forecast = float(predicted[column])
             if np.isfinite(actual) and np.isfinite(forecast):
                 errors.append(abs(float(actual) - forecast))
-    if len(errors) < 30:
+                observed_this_day = True
+        if observed_this_day:
+            matured_dates_with_predictions += 1
+    if len(errors) < 30 or matured_dates_with_predictions < 15:
         raise RuntimeError(
             f"H{h}: insuficientes residuos maturados para medir a incerteza "
             f"antes do OOS: {len(errors)}. Nao usar rotulos futuros."
@@ -256,6 +261,11 @@ class HorizonPersistencePolicy:
                 "reason": reason,
                 "holding_days_simulator": holding,
                 "forecast_age_sessions": age,
+                "entry_forecast_origin": (
+                    "observed_entry"
+                    if self.anchor is not None and self.anchor["observed_at_entry"]
+                    else "fold_boundary_proxy" if self.anchor is not None else None
+                ),
                 "q_best": q_best,
                 "q_current": q_current,
                 "q_margin": self.margin,
