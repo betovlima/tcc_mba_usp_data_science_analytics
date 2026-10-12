@@ -1533,3 +1533,36 @@ O Challenger de US$ 587,17 milhões permanece uma referência forte de
 descoberta, não um resultado prospectivo final. A próxima fronteira científica
 é a redescoberta nested de candidatos e a decisão temporal de
 ADICIONAR/MANTER/REMOVER sem usar a janela futura.
+
+
+### 25.9 Foco científico consolidado após v1.4
+
+O ranking global não é objetivo da linha de expansão. Ele foi usado somente
+para diagnosticar por que o modelo podia apresentar erro absoluto OOS elevado
+e ainda gerar decisões econômicas úteis. O alvo científico consolidado é
+pertencimento dinâmico ao universo.
+
+A partir das séries diárias já preservadas, foi recuperada a contribuição
+individual por fold dos 15 positivos. Os casos mais informativos foram:
+
+```text
+NBR   fold1 +41,24% | fold2 ~0%    | fold3 +5,66%
+CRT   fold1 -0,98%  | fold2 +69,49%| fold3 ~0%
+CAPR  fold1 -0,98%  | fold2 ~0%    | fold3 +36,91%
+LEU   fold1 -15,35% | fold2 -39,29%| fold3 +102,90%
+EML   fold1 +2,52%  | fold2 ~0%    | fold3 ~0%
+LAD   fold1 -0,98%  | fold2 -3,24% | fold3 +6,58%
+```
+
+Isso demonstra diretamente que o sinal de pertencimento é temporal e que um
+rótulo estático de ativo bom/ruim é inadequado. A positividade full-window é
+somente evidência de descoberta dentro da janela controlada.
+
+A linha ainda não mediu remoção contrafactual dos 65 ativos efetivos do U67.
+Logo, não existe evidência para afirmar quais ativos do baseline deveriam sair.
+Também não existe ainda densidade temporal suficiente para calibrar frequência
+diária, histerese ou permanência mínima.
+
+Os dados congelados enviados para a campanha são suficientes para continuar
+sem novo download de candidatos; a próxima necessidade é gerar rótulos
+contrafactuais temporais mais densos e nested, não coletar mais OHLCV.
