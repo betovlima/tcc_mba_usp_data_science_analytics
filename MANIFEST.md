@@ -1587,27 +1587,33 @@ A fonte científica documentada tem 77 ativos solicitados e 75 efetivos
 na janela controlada, com exclusões estruturais DOC e CLMT. O checkpoint
 congelado de descoberta é US$ 587.165.941,1330212 para o cutoff 2026-10-06.
 
-Regras da transferência:
+Condições da transferência:
 
-- A estratégia do ambiente operacional é uma cópia operacional estática do Challenger; não
-  implementa ainda o universo de atualização diária ADICIONAR/MANTER/REMOVER.
-- O ambiente operacional utiliza séries atualizadas da Alpaca; não deve copiar os CSV congelados
-  nem prometer reproduzir o capital histórico com outro cutoff ou snapshots.
-- O código/contrato do U67 operacional existente e o Winner não devem ser
-  modificados ou promovidos por esta transferência.
-- A nova estratégia exige um binding e um contrato próprios para 77 ativos,
-  não uma alteração silenciosa da Strategy U67 já existente.
-- O primeiro backtest no ambiente operacional é diagnóstico, sem envio de ordens. Só após
-  confirmar integridade, paridade dos parâmetros, limites operacionais de
-  liquidez/custos e implementação prospectiva equivalente, o usuário poderá
-  decidir sobre promoção com XNYS fechado e sem ordens em andamento.
-- Capital final, Sharpe, MaxDD, pior fold, elegibilidade, calendários,
-  decisões, trades e hashes devem acompanhar a auditoria.
-- A versão atual do estudo (v1.4.1) conserva como WARNING o PBO de 53,57%
-  (log-growth) e 59,52% (Sharpe); a escolha da composição é exploratória.
+- O universo fixo solicitado é apenas uma fotografia operacional da pesquisa,
+  sem substituir a hipótese científica futura de ADICIONAR/MANTER/REMOVER.
+- O ambiente operacional utiliza dados da Alpaca atualizados; o checkpoint
+  congelado é referência histórica, não uma meta de capital futura.
+- A nova estratégia é distinta da versão U67 preexistente, para preservar
+  o histórico e permitir comparações.
+- O autor escolhe quando utilizar o backtest para decidir a adoção no catálogo
+  operacional; a pesquisa não estabelece homologações adicionais, vetos por
+  PBO, etapas extras de aprovação nem requisito de novo estudo antes da escolha.
+- Capital, Sharpe, MaxDD, pior fold, trades, exclusões e hashes permanecem
+  artefatos de análise, e não bloqueios administrativos introduzidos nesta linha.
+
+O histórico da v1.4.1 registra PBO de 53,57% (log-growth) e 59,52% (Sharpe)
+como diagnósticos científicos, não como impedimentos automáticos de adoção.
 
 O fechamento acadêmico oficial `v1.22.1` permanece independente. A tag
 de pesquisa solicitada deve apontar para o commit de encerramento desta
 branch, não para a `main`. A criação/push da tag anotada deve ocorrer via Git
 após conferir o HEAD, pois os conectores usados para esta entrega só expõem
 operações de escrita em branches, não criação de refs de tag.
+
+### 25.11 Correção de escopo de transferência
+
+Em 2026-10-12, o autor reiterou que não autorizou restrições adicionais de
+pesquisa sobre o cadastro, o backtest nem a possibilidade de adotar o
+Challenger como Winner no ambiente operacional. A redação anterior sobre
+etapas extras de homologação foi retirada. Esta alteração de documentação
+não modifica os resultados numéricos nem a política de universo congelada.
