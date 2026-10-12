@@ -294,3 +294,161 @@ output/u67_subset_optimization/
 
 O modo anterior permanece no mesmo arquivo como `RUN_MODE =
 "direct_marginal"` para reprodução da campanha de 500 ativos.
+
+
+## Implementação v1.3.0: assurance, generalização e universo dinâmico
+
+O resultado de descoberta de aproximadamente US$ 587,17 milhões passa a ser
+tratado como Challenger, não como resultado final.
+
+O modo padrão do runner é agora:
+
+```text
+RUN_MODE = "assurance_validation"
+```
+
+A versão exige reproduzir até o centavo três checkpoints conhecidos:
+
+```text
+U67 = US$ 76.927.051,39
+U67 + 15 positivos = US$ 290.727.954,41
+U67 + 10 selecionados = US$ 587.165.941,13
+```
+
+Depois executa cinco famílias de garantia.
+
+### 1. Overfitting e underfitting do LightGBM
+
+Para cada ativo e fold são gravados:
+
+```text
+train MAE / RMSE
+OOS MAE / RMSE
+naive mean train MAE / RMSE
+naive mean OOS MAE / RMSE
+train skill vs naive
+OOS skill vs naive
+generalization gap
+```
+
+Os warnings não usam um limiar arbitrário de gap:
+
+```text
+overfit_warning:
+    train skill > 0
+    e OOS skill <= 0
+
+underfit_warning:
+    train skill <= 0
+    e OOS skill <= 0
+```
+
+Assim, o modelo é comparado a um preditor ingênuo que usa somente a média do
+target observada no período de ajuste.
+
+### 2. Validação temporal da seleção do universo
+
+O conjunto de 15 candidatos positivos permanece congelado para esta fase.
+A seleção do subconjunto é refeita usando somente folds anteriores:
+
+```text
+fold 1
+    selecionar universo
+    testar no fold 2
+
+folds 1 + 2
+    selecionar universo
+    testar no fold 3
+```
+
+O score de seleção ignora o fold futuro. Como os modelos/políticas são
+independentes por fold, o cálculo dos cenários completos não altera o score
+histórico usado na decisão.
+
+Esta validação ainda não é uma redescoberta nested dos 500 ativos. O pool dos
+15 foi descoberto usando a janela controlada completa. O artefato registra
+explicitamente essa limitação.
+
+### 3. Leave-one-asset-out
+
+Para cada um dos 10 ativos do Challenger, o runner executa novamente o cenário
+sem aquele ativo e mede:
+
+```text
+capital
+delta contra o Challenger
+Sharpe
+MaxDD
+worst fold
+```
+
+O objetivo é detectar dependência excessiva de um único ativo.
+
+### 4. Stress de custos
+
+O Challenger é reavaliado com:
+
+```text
+base
+slippage = 5 bps
+slippage = 10 bps
+taxas regulatórias = 2x
+taxas regulatórias = 3x
+```
+
+O stress altera execução e recalibração da margem, mas preserva os modelos já
+treinados para isolar sensibilidade operacional a custos.
+
+### 5. Reprodutibilidade
+
+O Challenger é executado novamente na mesma campanha. São comparados:
+
+```text
+capital final até o centavo
+sequência de selected_asset
+diferença máxima absoluta da curva de capital
+```
+
+### Universo não fixo
+
+A lista atual não representa uma lista permanente de ativos.
+
+O objetivo final da pesquisa é estimar algo equivalente a:
+
+```text
+valor_marginal(ativo, universo_atual, regime, tempo)
+```
+
+para suportar futuramente três decisões:
+
+```text
+ADICIONAR
+MANTER
+REMOVER
+```
+
+usando apenas informação disponível no momento da decisão.
+
+Nesta fase o U67 congelado continua sendo a bancada experimental para medir
+efeitos de forma controlada. A transição para atualização diária será feita
+somente depois que a assinatura temporal e contextual estiver suficientemente
+validada.
+
+### Saídas da v1.3.0
+
+```text
+output/u67_assurance_validation/
+    candidate_download.csv
+    continuity_audit.csv
+    model_generalization.csv
+    temporal_universe_validation.csv
+    temporal_universe_search.csv
+    leave_one_asset_out.csv
+    cost_stress.csv
+    reproducibility.json
+    assurance_scenarios.csv
+    assurance_scenarios_partial.csv
+    scenario_fold_calibration.csv
+    pesquisa_u67_assurance_validation.json
+    pacote_analise_u67_assurance_validation.zip
+```
