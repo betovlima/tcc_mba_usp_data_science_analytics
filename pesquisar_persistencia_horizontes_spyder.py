@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import zipfile
 from typing import Any
 
 import numpy as np
@@ -396,6 +397,8 @@ def main() -> dict[str, Any]:
     )
     policies_2: dict[int, Any] = {}
     policies_0: dict[int, Any] = {}
+    control_guard_audit: dict[pd.Timestamp, dict[str, Any]] = {}
+    no_hold_guard_audit: dict[pd.Timestamp, dict[str, Any]] = {}
     fold_caches: dict[int, dict[str, Any]] = {}
     for state in states:
         cal = _merge_utility_caches(
@@ -426,10 +429,14 @@ def main() -> dict[str, Any]:
             float(selection["selected_candidate_margin"]),
         )
         policies_2[state.fold_id] = _politica_utilidade(
-            {}, frames, symbols, configuration, margin, utility_cache=oos
+            {}, frames, symbols, configuration, margin,
+            utility_cache=oos, decision_diagnostics=control_guard_audit,
+            fold_id=state.fold_id,
         )
         policies_0[state.fold_id] = _politica_utilidade(
-            {}, frames, symbols, configuration_without_hold, margin, utility_cache=oos
+            {}, frames, symbols, configuration_without_hold, margin,
+            utility_cache=oos, decision_diagnostics=no_hold_guard_audit,
+            fold_id=state.fold_id,
         )
         fold_caches[state.fold_id] = {
             "calibration": cal,
@@ -593,6 +600,14 @@ def main() -> dict[str, Any]:
         )
         result.trades.to_csv(OUT / f"{variant}_trades.csv", index=False)
     pd.DataFrame(model_audits).to_csv(OUT / "horizon_calibration.csv", index=False)
+    pd.DataFrame([
+        {"decision_date": date.isoformat(), **row}
+        for date, row in sorted(control_guard_audit.items())
+    ]).to_csv(OUT / "control_decision_reasons.csv", index=False)
+    pd.DataFrame([
+        {"decision_date": date.isoformat(), **row}
+        for date, row in sorted(no_hold_guard_audit.items())
+    ]).to_csv(OUT / "no_hold_decision_reasons.csv", index=False)
     pd.DataFrame(decision_audit).to_csv(OUT / "horizon_decisions.csv", index=False)
     pd.DataFrame([
         {"variant": name, **{k: values.get(k) for k in (
@@ -631,6 +646,12 @@ def main() -> dict[str, Any]:
         "export_to_operational": False,
     }
     write_json(OUT / "experiment.json", payload)
+    package_path = OUT / "pacote_persistencia_horizontes_u77.zip"
+    with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for artifact in sorted(OUT.iterdir()):
+            if artifact.is_file() and artifact != package_path:
+                archive.write(artifact, arcname=artifact.name)
+    print(f"[package] {package_path}", flush=True)
     print("[final] " + json.dumps(
         {name: values["ending_capital"] for name, values in variants.items()}
     ), flush=True)
