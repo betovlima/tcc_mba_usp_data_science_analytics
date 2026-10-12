@@ -50,7 +50,7 @@ from pesquisar_expansao_u67_spyder import (
 
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "output" / "persistencia_horizontes_u77"
-VERSION = "horizon-persistence-oos-v1.0.1"
+VERSION = "horizon-persistence-oos-v1.0.2"
 CONFIDENCE_MULTIPLIERS = (0.0, 0.5, 1.0)
 ANCHOR_BLEND = 0.5
 CHECKPOINT_TOLERANCE_DOLLARS = 0.01
@@ -83,6 +83,42 @@ def write_json(path: Path, obj: Any) -> None:
         json.dumps(safe_json(obj), ensure_ascii=False, allow_nan=False, indent=2),
         encoding="utf-8",
     )
+
+
+def select_purged_horizon_training_dates(
+    *,
+    calendar: pd.DatetimeIndex,
+    training_end_index: int,
+    evaluation_start_index: int,
+    horizon: int,
+    min_training_rows: int,
+) -> pd.DatetimeIndex:
+    """Keep all training labels that mature strictly before evaluation starts.
+
+    The official fold already has a 60-session purge. Removing another h
+    sessions from the training interval double-purges the first fold and
+    reduces its 700 available rows below the LightGBM minimum.
+    """
+    h = int(horizon)
+    end = int(training_end_index)
+    evaluation = int(evaluation_start_index)
+    minimum = int(min_training_rows)
+    if h <= 0 or end <= 0 or evaluation > len(calendar) or end > len(calendar):
+        raise ValueError("Invalid horizon or training/evaluation calendar indices.")
+    if end - 1 + h >= evaluation:
+        raise RuntimeError(
+            "CausalHorizonPurgeInsufficient: "
+            f"last training target index={end - 1 + h} must be strictly "
+            f"before evaluation_start_index={evaluation} for H{h}. "
+            "Never train using a label that matures inside evaluation."
+        )
+    if end < minimum:
+        raise RuntimeError(
+            "HorizonTrainingRowsInsufficient: "
+            f"available={end} minimum={minimum} H{h}. "
+            "Do not silently train with fewer rows or skip models."
+        )
+    return pd.DatetimeIndex(calendar[:end])
 
 
 def uncertainty_from_matured_calibration(
@@ -494,18 +530,34 @@ def main() -> dict[str, Any]:
         uncertainty = {}
         for h in configuration.rotation_target_horizons:
             target_column = f"forward_horizon_utility_{h}"
-            # Evita utilizar labels de horizonte que alcancariam a janela OOS.
-            safe_final_dates = common_dates[
-                :max(0, int(folds[state.fold_id - 1]["final_fit_end_index"]) - int(h))
-            ]
-            # The training label at date t uses observations until t+h.
-            # Purge that tail before the first calibration observation.
-            safe_train_dates = state.train_dates[:-int(h)]
+            # The official walk-forward protocol ALREADY purges 60 sessions.
+            # Do not remove h additional training sessions: fold 1 begins
+            # with exactly 700 rows and LightGBM needs all 700.
+            fold = folds[state.fold_id - 1]
+            safe_train_dates = select_purged_horizon_training_dates(
+                calendar=common_dates,
+                training_end_index=int(fold["train_end_index"]),
+                evaluation_start_index=int(fold["calibration_start_index"]),
+                horizon=int(h),
+                min_training_rows=int(configuration.rotation_minimum_training_rows),
+            )
+            safe_final_dates = select_purged_horizon_training_dates(
+                calendar=common_dates,
+                training_end_index=int(fold["final_fit_end_index"]),
+                evaluation_start_index=int(fold["test_start_index"]),
+                horizon=int(h),
+                min_training_rows=int(configuration.rotation_minimum_training_rows),
+            )
             cal_models = _ajustar_modelos_lightgbm(
                 frames, symbols, safe_train_dates, configuration,
                 phase=f"horizon_{h}_fold_{state.fold_id}_cal",
                 target_column=target_column,
             )
+            if not cal_models:
+                raise RuntimeError(
+                    f"H{h} fold={state.fold_id}: nenhum modelo na calibracao "
+                    f"com {len(safe_train_dates)} datas; verifique dados e labels."
+                )
             cal_cache, _ = _precalcular_utilidades_modelo(
                 cal_models, frames, symbols, state.calibration_dates, configuration
             )
@@ -513,9 +565,7 @@ def main() -> dict[str, Any]:
                 h=int(h),
                 timestamps=state.calibration_dates,
                 full_dates=common_dates,
-                latest_label_date_index=int(
-                    folds[state.fold_id - 1]["final_fit_end_index"]
-                ),
+                latest_label_date_index=int(fold["calibration_end_index"]),
                 symbols=symbols,
                 frames=frames,
                 predictions=cal_cache,
@@ -525,6 +575,11 @@ def main() -> dict[str, Any]:
                 phase=f"horizon_{h}_fold_{state.fold_id}_final",
                 target_column=target_column,
             )
+            if not final_models:
+                raise RuntimeError(
+                    f"H{h} fold={state.fold_id}: nenhum modelo no treino final "
+                    f"com {len(safe_final_dates)} datas."
+                )
             oos_cache, _ = _precalcular_utilidades_modelo(
                 final_models, frames, symbols, state.decision_dates, configuration
             )
