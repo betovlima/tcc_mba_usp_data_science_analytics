@@ -99,7 +99,8 @@ BASE_DATA = SnapshotPaths.u67(ROOT)
 CACHE_ROOT = ROOT / "dados" / ".u67_expansion_cache"
 FAST_CACHE = CACHE_ROOT / "fast_split_20261006"
 FULL_DATA = SnapshotPaths.from_root(CACHE_ROOT / "full_raw_20261006")
-OUT = ROOT / "output" / "u67_asset_expansion"\nCANDIDATE_SAMPLE_MANIFEST = ROOT / "pesquisa_u67_amostra_500.csv"
+OUT = ROOT / "output" / "u67_asset_expansion"
+CANDIDATE_SAMPLE_MANIFEST = ROOT / "pesquisa_u67_amostra_500.csv"
 
 SCRIPT_VERSION = "u67-asset-expansion-v1.1.0"
 EXECUTION_SCHEMA = "u67-asset-expansion-v2"
