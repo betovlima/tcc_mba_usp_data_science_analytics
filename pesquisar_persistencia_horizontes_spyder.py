@@ -1,6 +1,6 @@
 """Experimento isolado U67+10: holding=2 vs holding=0 vs evidencia por horizonte.
 
-Sem download de dados, sem mutacao da reproducao oficial ou do MCT.
+Sem download de dados, sem mutacao da reproducao oficial ou da aplicação operacional.
 Uso no Spyder: execute este arquivo (F5), com os caches U67+10 presentes.
 """
 from __future__ import annotations
@@ -628,7 +628,7 @@ def main() -> dict[str, Any]:
         "metrics": variants,
         "checkpoint_reference": expected,
         "reproduces_checkpoint_to_cent": True,
-        "export_to_mct": False,
+        "export_to_operational": False,
     }
     write_json(OUT / "experiment.json", payload)
     print("[final] " + json.dumps(
