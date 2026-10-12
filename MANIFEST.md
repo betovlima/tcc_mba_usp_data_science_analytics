@@ -1975,3 +1975,88 @@ v1.0.4 pendente de execução no Spyder com cache histórico completo.
 Não altera a `main`, a reprodução oficial, o aplicação operacional operacional
 ou qualquer Winner. Os resultados devem ser interpretados por fold,
 Sharpe, drawdown, custos e capital final, sem promoção automática.
+
+
+#### 25.12.5 Versão v1.0.5 — ganho percentual previsto relativo ao ativo atual
+
+**Hipótese fixada antes do backtest:** quando outra ação do mesmo universo
+apresenta retorno percentual **líquido previsto** maior que o da ação
+mantida em carteira nos horizontes de curto e médio prazo, pode valer
+a pena substituí-la. H05 e H10 formam o grupo curto; H20 e H40 formam
+o grupo médio. O H60 permanece somente no alvo da política Control
+original. Comparação é por ativo contra o incumbent na mesma data e
+não por preço nominal de uma ação.
+
+**Alvo numérico:** para cada H05/H10/H20/H40, criar
+`forward_horizon_net_return_pct_H` a partir de
+`expm1(forward_horizon_net_log_return_H)`, cujo log já desconta
+custos round-trip conforme configuração congelada. Cada regressão
+LightGBM estima diretamente retorno percentual líquido esperado
+condicional às características da data. O alvo utiliza futuro
+**somente no ajuste do modelo**, nunca para gerar decisões,
+selecionar ativos ou regras OOS. Um retorno líquido previsto é
+estimativa do modelo, não lucro garantido. Os custos e a liquidez
+efetiva continuam limitações.
+
+**Treinamento causal:** utilizar os mesmos folds e o embargo original
+de 60 sessões. Cada novo modelo H é treinado somente com rótulos
+que estejam inteiramente maturados antes do começo de seu
+período OOS, verificados com
+`select_purged_horizon_training_dates`. Em cada fold treinar
+4 regressões por ativo, reutilizando o mesmo pipeline, features
+contemporâneas, parâmetros LightGBM e snapshot U67+10.
+Usar as previsões para a data atual (não o retorno observado
+nos próximos H dias). Nenhuma consulta Alpaca e nenhuma troca
+de fonte para corrigir ativos.
+
+**Duas regras pré-definidas, ambas experimentais:**
+1. `relative_short_medium_group`: candidato deve ter previsão
+   de retorno líquido positivo nos dois grupos, superar o ativo
+   atual em ao menos 0,005 de retorno (0,5 ponto percentual)
+   nas médias H05/H10 e H20/H40; se o Control estiver
+   trocando para outro candidato, a nova escolha deve superar
+   também este destino nos dois grupos.
+2. `relative_all_four_positive`: mesmas condições, e vantagem
+   estritamente positiva em cada H05/H10/H20/H40 individual,
+   além de utilidade agregada superar o incumbent pela margem
+   Control. Isso é mais conservador que a regra 1.
+
+**Restrições:** manter holding mínimo=2, todas as previsões
+agregadas do Control, limiar de caixa e limiar de entrada.
+Preservar integralmente a ação do Control quando houver saída
+para caixa, quando o tempo mínimo não tiver vencido, ou quando
+não houver candidato qualificado; não acrescentar veto contra
+rotações do Control. Permitir que a regra experimental selecione
+um ativo alternativo quando supera as referências pelo critério
+de retorno dos horizontes. A diferença em decisões subsequentes
+pode aumentar com trajetórias distintas. Não interpretar o
+limiar 0,005 como uma margem otimizada, nem selecionar vencedor
+olhando o OOS.
+
+**Auditoria e limites:** registrar ranking dos dez primeiros
+candidatos por data/variante, previsões individuais e médias,
+diferenças em pontos percentuais frente ao ativo atual e destino
+Control, ações executadas, motivo, folds, custos, Sharpe,
+drawdown, capital final e os hashes dos dez históricos externos.
+A vantagem em retorno projetado não é causal nem garante
+execução real; comparar também com o baseline em cada fold.
+Como as mesmas janelas OOS já foram examinadas nas v1.0.2 a
+v1.0.4, o experimento é exploratório e a confirmação exigirá
+outra janela cronológica, sem ajustá-la a esses resultados.
+
+**Checkpoint de regressão:** o Control holding=2 deve gerar
+US$ 587.165.941,1330212 ao centavo, sem mutações na main.
+
+**Saídas:** `output/persistencia_horizontes_u77_v105/`,
+com `comparison.csv`, `fold_comparison.csv`,
+`group_candidate_ranking_top10.csv`,
+`four_horizons_candidate_ranking_top10.csv`,
+`group_policy_decisions.csv`,
+`four_horizons_policy_decisions.csv`,
+`horizon_model_training.csv`, curvas e operações por variante,
+`experiment.json` e ZIP `pacote_persistencia_horizontes_u77_v105.zip`.
+
+**Status:** código e testes unitários da v1.0.5 publicados na
+branch de pesquisa. Backtest financeiro pendente de execução
+local no Spyder com o cache U67+10. Não promove estratégia
+operacional ou altera a reprodução acadêmica oficial.
