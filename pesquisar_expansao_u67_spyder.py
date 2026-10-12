@@ -2970,9 +2970,19 @@ def _run_decision_validation(
             flush=True,
         )
 
-    scenario_cache: dict[tuple[str, ...], tuple[Any, dict[str, Any]]] = {}
+    scenario_metrics_cache: dict[tuple[str, ...], dict[str, Any]] = {}
+    scenario_returns_cache: dict[tuple[str, ...], pd.Series] = {}
+    retained_results: dict[tuple[str, ...], Any] = {}
     scenario_calibration_rows: list[dict[str, Any]] = []
     evaluation_order: list[tuple[str, ...]] = []
+    retain_keys = {
+        tuple(symbols),
+        tuple(
+            symbol
+            for symbol in symbols
+            if symbol in set(discovery_selected)
+        ),
+    }
 
     def canonical(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:
         chosen = set(values)
@@ -2980,12 +2990,12 @@ def _run_decision_validation(
 
     def evaluate_subset(
         values: list[str] | tuple[str, ...],
-    ) -> tuple[Any, dict[str, Any]]:
+    ) -> dict[str, Any]:
         key = canonical(values)
         if not key:
-            return baseline_result, baseline_metrics
-        if key in scenario_cache:
-            return scenario_cache[key]
+            return baseline_metrics
+        if key in scenario_metrics_cache:
+            return scenario_metrics_cache[key]
         result, metrics, rows = _evaluate_scenario(
             "U67+DECISION_" + "_".join(key),
             list(key),
@@ -3000,22 +3010,28 @@ def _run_decision_validation(
             decision_metadata,
             config_u67,
         )
-        scenario_cache[key] = (result, metrics)
+        scenario_metrics_cache[key] = metrics
+        scenario_returns_cache[key] = _daily_returns(result)
+        if key in retain_keys:
+            retained_results[key] = result
         evaluation_order.append(key)
         scenario_calibration_rows.extend(rows)
         print(
-            f"[decision-scenario] {len(scenario_cache):03d} "
+            f"[decision-scenario] {len(scenario_metrics_cache):03d} "
             f"n={len(key):02d} capital=US$ "
             f"{metrics['ending_capital']:,.2f}",
             flush=True,
         )
-        return result, metrics
+        return metrics
 
     def full_window_score(values: list[str] | tuple[str, ...]) -> float:
-        return float(evaluate_subset(values)[1]["ending_capital"])
+        return float(evaluate_subset(values)["ending_capital"])
 
-    all15_result, all15_metrics = evaluate_subset(symbols)
-    selected_result, selected_metrics = evaluate_subset(discovery_selected)
+    all15_key = canonical(symbols)
+    selected_key = canonical(discovery_selected)
+    all15_metrics = evaluate_subset(symbols)
+    selected_metrics = evaluate_subset(discovery_selected)
+    selected_result = retained_results[selected_key]
     if not math.isclose(
         float(all15_metrics["ending_capital"]),
         EXPECTED_ALL_POSITIVE_ENDING_CAPITAL,
@@ -3053,10 +3069,10 @@ def _run_decision_validation(
     scenario_returns: list[pd.Series] = []
     scenario_rows: list[dict[str, Any]] = []
     for position, key in enumerate(full_search_keys, start=1):
-        result, metrics = scenario_cache[key]
+        metrics = scenario_metrics_cache[key]
         scenario_id = f"S{position:03d}"
         scenario_columns.append(scenario_id)
-        series = _daily_returns(result).rename(scenario_id)
+        series = scenario_returns_cache[key].rename(scenario_id)
         scenario_returns.append(series)
         scenario_rows.append(
             {
@@ -3195,7 +3211,7 @@ def _run_decision_validation(
     ):
         def temporal_score(values: list[str] | tuple[str, ...]) -> float:
             return _compound_fold_capital(
-                evaluate_subset(values)[1],
+                evaluate_subset(values),
                 selection_folds,
                 initial_capital=float(config_u67.initial_capital),
             )
@@ -3212,7 +3228,7 @@ def _run_decision_validation(
             SUBSET_IMPROVEMENT_TOL,
         )
         chosen = list(search["selected"]["assets"])
-        chosen_metrics = evaluate_subset(chosen)[1]
+        chosen_metrics = evaluate_subset(chosen)
         heldout = _fold_metric(chosen_metrics, holdout_fold)
         baseline_holdout = _fold_metric(
             baseline_metrics,
