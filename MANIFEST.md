@@ -1589,15 +1589,15 @@ congelado de descoberta é US$ 587.165.941,1330212 para o cutoff 2026-10-06.
 
 Regras da transferência:
 
-- A estratégia do MCT é uma cópia operacional estática do Challenger; não
+- A estratégia do ambiente operacional é uma cópia operacional estática do Challenger; não
   implementa ainda o universo de atualização diária ADICIONAR/MANTER/REMOVER.
-- O MCT utiliza séries atualizadas da Alpaca; não deve copiar os CSV congelados
+- O ambiente operacional utiliza séries atualizadas da Alpaca; não deve copiar os CSV congelados
   nem prometer reproduzir o capital histórico com outro cutoff ou snapshots.
 - O código/contrato do U67 operacional existente e o Winner não devem ser
   modificados ou promovidos por esta transferência.
 - A nova estratégia exige um binding e um contrato próprios para 77 ativos,
   não uma alteração silenciosa da Strategy U67 já existente.
-- O primeiro backtest no MCT é diagnóstico, sem envio de ordens. Só após
+- O primeiro backtest no ambiente operacional é diagnóstico, sem envio de ordens. Só após
   confirmar integridade, paridade dos parâmetros, limites operacionais de
   liquidez/custos e implementação prospectiva equivalente, o usuário poderá
   decidir sobre promoção com XNYS fechado e sem ordens em andamento.
