@@ -24,7 +24,6 @@ from engine.configuracao import (
 )
 from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 from engine.modelo_lightgbm import (
-    _ajustar_modelos_lightgbm,
     _construir_contexto_execucao,
     selecionar_switch_margin,
 )
@@ -32,7 +31,6 @@ from engine.rotacao import (
     _crescimento_politica_simples,
     _politica_agendada,
     _politica_utilidade,
-    _precalcular_utilidades_modelo,
     _simular_exato,
 )
 from reproducao.dados import SnapshotPaths, validate_snapshot
@@ -891,7 +889,6 @@ def main() -> dict[str, Any]:
     }
     selected_fold_policies: dict[int, Any] = {}
     fold_selection: list[dict[str, Any]] = []
-    calibration_cut_fraction = 2.0 / 3.0
 
     for state in states:
         fold_id = int(state.fold_id)
