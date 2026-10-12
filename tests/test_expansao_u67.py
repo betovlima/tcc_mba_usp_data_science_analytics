@@ -12,6 +12,10 @@ from pesquisar_expansao_u67_spyder import (
     _forward_backward_subset_search,
     _fit_quality_row,
     _compound_fold_capital,
+    _safe_rank_correlation,
+    _deflated_sharpe_ratio,
+    _pbo_cscv,
+    _dynamic_transition_rows,
 )
 
 
@@ -189,3 +193,60 @@ def test_compound_fold_capital_usa_somente_folds_informados():
         ]
     }
     assert _compound_fold_capital(metrics, [1, 2], 100.0) == pytest.approx(600.0)
+
+
+
+def test_safe_rank_correlation_identifica_ordem_perfeita_e_invertida():
+    left = np.array([1.0, 2.0, 3.0, 4.0])
+    assert _safe_rank_correlation(left, left) == pytest.approx(1.0)
+    assert _safe_rank_correlation(left, left[::-1]) == pytest.approx(-1.0)
+
+
+def test_deflated_sharpe_ratio_retorna_probabilidade_valida():
+    returns = pd.Series(
+        [0.01, 0.02, -0.005, 0.015, 0.01, 0.005, -0.002] * 40
+    )
+    trials = np.array([0.01, 0.02, 0.03, 0.015, 0.025])
+    result = _deflated_sharpe_ratio(returns, trials, 5.0)
+
+    assert 0.0 <= result["probabilistic_sharpe_ratio"] <= 1.0
+    assert 0.0 <= result["deflated_sharpe_ratio"] <= 1.0
+    assert result["observations"] == len(returns)
+
+
+def test_pbo_cscv_completa_todas_as_divisoes():
+    rng = np.random.default_rng(42)
+    matrix = pd.DataFrame(
+        rng.normal(0.001, 0.01, size=(100, 4)),
+        columns=["S1", "S2", "S3", "S4"],
+    )
+    summary, rows = _pbo_cscv(
+        matrix,
+        blocks=4,
+        metric="log_growth",
+    )
+
+    assert summary["expected_splits"] == 6
+    assert summary["completed_splits"] == 6
+    assert len(rows) == 6
+    assert 0.0 <= summary["pbo"] <= 1.0
+
+
+def test_dynamic_transition_rows_registra_adicionar_manter_remover():
+    stages = [
+        {
+            "stage": "one",
+            "holdout_fold": 2,
+            "selected_assets": ["A", "B"],
+        },
+        {
+            "stage": "two",
+            "holdout_fold": 3,
+            "selected_assets": ["B", "C"],
+        },
+    ]
+    rows = _dynamic_transition_rows(stages)
+    second = rows.loc[rows["stage"].eq("two")]
+    actions = dict(zip(second["asset"], second["action"]))
+
+    assert actions == {"A": "REMOVER", "B": "MANTER", "C": "ADICIONAR"}
