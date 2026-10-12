@@ -110,11 +110,12 @@ em:
 pesquisar_expansao_u67_spyder.py
 ```
 
-A versão 1.1.0 reutiliza a amostra congelada de 500 símbolos registrada em
-`pesquisa_u67_amostra_500.csv`. Depois da auditoria estrutural mínima, todo
-candidato válido segue diretamente para o replay `U67 + ativo`. Filtros de
-preço, liquidez, volume e Learning-to-Rank não eliminam candidatos antes desse
-teste econômico.
+A versão 1.2.0 usa por padrão o modo `subset_optimization`: parte dos 15
+candidatos positivos encontrados pela campanha direta, reproduz primeiro o
+checkpoint `U67 + 15` de aproximadamente US$ 290,73 milhões e executa
+`forward selection` + `backward elimination` para procurar um subconjunto
+conjunto com capital final maior. O modo `direct_marginal` continua disponível
+no mesmo arquivo para repetir a campanha dos 500 símbolos.
 
 Ela exige as credenciais locais da Alpaca no arquivo `.env`, mas não recria nem
 altera `dados/u67`. Os dados dos candidatos são mantidos em cache local
@@ -129,11 +130,13 @@ python pesquisar_expansao_u67_spyder.py
 No Spyder, abra `pesquisar_expansao_u67_spyder.py`, reinicie o kernel e execute
 o arquivo completo com F5.
 
-Os resultados ficam em:
+No modo padrão de otimização conjunta, os resultados ficam em:
 
 ```text
-output/u67_asset_expansion/
+output/u67_subset_optimization/
 ```
+
+No modo `direct_marginal`, permanecem em `output/u67_asset_expansion/`.
 
 O desenho e as limitações da campanha estão documentados em
 `PESQUISA_EXPANSAO_U67.md`.
