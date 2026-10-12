@@ -1617,3 +1617,80 @@ pesquisa sobre o cadastro, o backtest nem a possibilidade de adotar o
 Challenger como Winner no ambiente operacional. A redação anterior sobre
 etapas extras de homologação foi retirada. Esta alteração de documentação
 não modifica os resultados numéricos nem a política de universo congelada.
+
+
+### 25.12 Pesquisa experimental de persistência preditiva multi-horizonte (2026-10-12)
+
+**Versão experimental:** horizon-persistence-oos-v1.0.0.
+**Branch separada:** research/horizon-persistence-oos-v1, criada a partir de
+research/u67-mct-asset-expansion-v1 no commit 13e5ed39.
+Esta pesquisa **não modifica** os checkpoints, a reprodução oficial, o
+checkpoint congelado U67+10 ou o universo original. Não existe promoção
+automática nem mudança do resultado acadêmico validado.
+
+**Hipótese:** a antiga permanência mínima fixa de dois pregões pode ser
+substituída por evidência individual dos horizontes 5/10/20/40/60, acompanhando
+a previsão registrada no instante de compra e suas revisões posteriores. O
+modelo oficial atual aprende **uma única utilidade agregada** como alvo, com
+pesos (0.10, 0.15, 0.20, 0.30, 0.25); ele não emite diretamente cinco
+previsões individuais. O experimento ajusta cabeças LightGBM adicionais por
+ativo e horizonte usando as colunas de alvo existentes
+forward_horizon_utility_{h} — não pressupõe previsões que o sistema
+original não produzia.
+
+**Três braços de replay**, mantendo o mesmo universo efetivo, preços,
+folds walk-forward, custos e modelos agregados:
+
+1. control_holding_2 — política congelada, incluindo a margem de troca
+   calibrada; o capital final deve reproduzir US$ 587.165.941,1330212.
+2. ablation_holding_0 — mesma utilidade agregada, modelos, margens e
+   custos; apenas o holding mínimo passa a zero.
+3. horizon_confidence — sem holding mínimo; o primeiro filtro econômico
+   da margem de troca permanece; uma segunda evidência usa previsões
+   individuais por horizonte, pesos das frações ainda não vencidas das
+   previsões feitas na entrada e erro absoluto p75 calculado estritamente
+   antes da janela fora da amostra. Multiplicadores 0/0.5/1.0 são
+   selecionados por score de calibração cronológica antes de cada fold
+   de teste. O p75 **não** é uma probabilidade calibrada de ganho.
+
+A nova regra emprega um estimador heurístico explícito: horizonte restante
+r_h=max(0,1-idade_em_sessoes/h), previsão atual do ativo comprado e
+previsão original no instante da entrada com mistura 50/50, e previsão
+atual de cada concorrente. A troca é admitida se o ganho esperado no
+horizonte em comparação com essa referência excede
+multiplicador*p75_erro. O efeito de truncar horizontes não representa
+matematicamente uma distribuição preditiva do retorno residual; por isso a
+regra é uma hipótese mensurável de pesquisa, não confiança probabilística.
+Quando o horizonte original se esgota, usam-se apenas previsões novas.
+Em troca de fold, se uma posição foi herdada e a previsão exata da compra
+anterior não está disponível, a observação atual é registrada como
+substituto marcado na auditoria. A simulação financeira não recebe preços
+futuros na seleção de operações.
+
+**Dados e causalidade:** o script exige o snapshot U67 versionado no Git
+e os arquivos RAW e Corporate Actions locais da campanha de dez ativos,
+com SHA-256 registrado na saída. Não baixa ativos adicionais. A rotina
+exige continuidade e ausência de quebra estrutural nos ativos externos.
+Treino de cada horizonte é truncado em h observações antes do próximo
+intervalo; o cálculo de erro descarta qualquer rótulo que só maturaria
+depois da janela de calibração. Os mesmos dez símbolos congelados são
+usados sem nova busca de subconjuntos.
+
+**Execução:** abrir pesquisar_persistencia_horizontes_spyder.py no Spyder e
+executar com F5; alternativamente:
+python pesquisar_persistencia_horizontes_spyder.py
+
+**Artefatos:** output/persistencia_horizontes_u77/{experiment.json,
+comparison.csv, horizon_calibration.csv, horizon_decisions.csv,
+control_holding_2_equity.csv, ablation_holding_0_equity.csv,
+horizon_confidence_equity.csv e *trades.csv}.
+Todas as saídas são de pesquisa. Nenhum resultado do novo experimento foi
+observado no momento da implementação. Os testes unitários validam
+causalidade de rótulos, memória da previsão de entrada, possibilidade de
+troca imediata e saída para CASH; não equivalem a uma execução financeira
+completa. A avaliação do efeito de múltiplas comparações e da capacidade
+de execução econômica permanece relevante antes de qualquer adoção futura.
+
+**Separação permanente:** apenas após execução e análise dos três braços,
+com auditoria OOS e deliberação do autor, uma versão operacional distinta
+poderá ser proposta. Esta pesquisa não altera a aplicação operacional.
