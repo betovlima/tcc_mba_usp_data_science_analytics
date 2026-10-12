@@ -142,3 +142,37 @@ def test_insufficient_matured_validation_fails_instead_of_using_future():
 def test_nonfinite_metrics_are_serializable_without_fake_values():
     assert safe_json({"risk": np.float64(float("nan"))}) == {"risk": None}
     assert safe_json({"risk": float("inf")}) == {"risk": None}
+
+
+
+def test_holding_position_inherited_across_fold_marks_forecast_proxy():
+    days, policy, audit = _policy(
+        aggregate=[[0, 0.3, 0.8]],
+        horizon=[[0, 0.3, 0.9]],
+        multiplier=0.0,
+    )
+    policy(days[0], 1, 4)
+    assert audit[-1]["entry_forecast_origin"] == "fold_boundary_proxy"
+
+
+def test_uncertainty_requires_multiple_matured_days_not_only_many_assets():
+    dates = pd.date_range("2026-01-01", periods=25, freq="B", tz="UTC")
+    symbols = [f"A{i:02d}" for i in range(75)]
+    frames = {
+        s: pd.DataFrame({"forward_horizon_utility_5": np.zeros(len(dates))}, index=dates)
+        for s in symbols
+    }
+    predictions = {
+        pd.Timestamp(d): np.zeros(len(symbols) + 1)
+        for d in dates
+    }
+    with pytest.raises(RuntimeError, match="insuficientes residuos maturados"):
+        uncertainty_from_matured_calibration(
+            h=5,
+            timestamps=dates[:1],
+            full_dates=dates,
+            latest_label_date_index=20,
+            symbols=symbols,
+            frames=frames,
+            predictions=predictions,
+        )
