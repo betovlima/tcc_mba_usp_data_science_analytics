@@ -1903,3 +1903,75 @@ v1.0.2 e não se transferem automaticamente à v1.0.3. Os
 resultados ficam pendentes de execução no ambiente de pesquisa com
 os dados candidatos congelados. Nenhuma alteração foi feita na
 aplicação operacional, no Winner ou na main do TCC.
+
+
+#### 25.12.4 Versão v1.0.4 — duração mínima da permanência
+
+**Motivação e evidência recebida (v1.0.3, 2026-10-12):** a execução do
+pacote `pacote_persistencia_horizontes_u77_v103.zip` reproduziu o Control
+(holding=2) em US$ 587.165.941,13 (Sharpe 2,7285, MaxDD -41,6828%).
+O override antecipado encerrou em US$ 353.355.356,01 (Sharpe 2,6147);
+holding=0 ficou em US$ 59.060.362,54. Houve 20 overrides apenas no
+primeiro fold, com seleção do multiplicador zero nesse fold. A v1.0.3
+não foi promovida. Não atribuir diferenças agregadas a uma única causa:
+trajetórias e capital reinvestido divergem após decisões diferentes.
+
+**Hipótese predefinida:** verificar se duração mínima fixa entre 1, 2, 3
+e 4 sessões explica a vantagem do Control; comparar ainda uma política
+que seleciona um desses quatro valores exclusivamente na calibração
+anterior a cada fold (sem escolher o melhor pelo OOS). Holding=2 e
+holding=0 permanecem como referências. A v1.0.4 NÃO antecipa rotações
+com previsões por horizonte; mantém previsões agregadas, mesmos
+hiperparâmetros, margens selecionadas para o Control, custos, universo
+U67+10 e calendário congelado.
+
+**Reprodução:** branch `research/horizon-persistence-oos-v1`;
+arquivo existente `pesquisar_persistencia_horizontes_spyder.py`;
+`VERSION=horizon-persistence-oos-v1.0.4`. O checkpoint Control
+US$ 587.165.941,1330212 deve ser reproduzido ao centavo ANTES
+de qualquer comparação. Só aceita os 75 ativos válidos, inclusive
+os dez externos já congelados no cache local, com hashes externos
+registrados. Falta de dados deve interromper a pesquisa, sem download,
+bridge entre fontes ou alteração manual de ativo.
+
+**Seleção por fold:** cada fold usa seu modelo e a margem já calibrada
+pelo Control. Os holdings 1,2,3,4 são avaliados nos últimos 1/3 das
+datas de calibração do próprio fold (aproximadamente 42 sessões).
+O melhor score de crescimento ajustado por risco escolhe um único
+valor para a janela OOS subsequente. O empate prefere holding=2,
+depois o valor mais próximo de 2. Em nenhum momento a seleção lê
+retornos ou métricas OOS. Como a margem Control já foi calibrada
+utilizando a janela histórica e a amostra para holding é curta,
+há risco de sobreajuste INTRA-calibração e elevada variância;
+o método é exploratório e não uma comprovação de superioridade.
+Os holdings fixos são comparadores registrados antes da execução,
+não candidatos selecionáveis pelo resultado final OOS.
+
+**Diagnóstico causalmente disponível:** registrar nas decisões em que
+o Control bloqueou uma troca por permanência mínima as variáveis
+`vol_20`, `vol_60`, `return_5`, `trend_efficiency_20`,
+`distance_from_high_20` da data da decisão, sem rótulos futuros.
+Esse CSV é observacional, não identifica sozinho o efeito causal
+de regime ou da mudança de holding; não há regra adaptativa
+treinada por essas variáveis na v1.0.4.
+
+**Outputs separados da v1.0.3:**
+
+    output/persistencia_horizontes_u77_v104/
+      experiment.json
+      comparison.csv
+      fold_comparison.csv
+      calibrated_holding_by_fold.csv
+      hold_guard_point_in_time_features.csv
+      control_decision_reasons.csv
+      trades_by_asset.csv
+      trades_by_month.csv
+      *_equity.csv / *_trades.csv
+      pacote_persistencia_horizontes_u77_v104.zip
+
+**Status:** implementação publicada apenas nesta branch de pesquisa.
+Testes unitários de seleção e causalidade adicionados. Backtest financeiro
+v1.0.4 pendente de execução no Spyder com cache histórico completo.
+Não altera a `main`, a reprodução oficial, o MCT operacional
+ou qualquer Winner. Os resultados devem ser interpretados por fold,
+Sharpe, drawdown, custos e capital final, sem promoção automática.
