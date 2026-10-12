@@ -205,3 +205,33 @@ O pacote novo é separado daquele produzido pela versão 1.0.2:
 
 A campanha deve reproduzir o checkpoint Control ao centavo antes
 de avaliar a nova hipótese. Veja a seção 25.12.3 de MANIFEST.md.
+
+
+### Versão experimental 1.0.4 — permanência de 1 a 4 pregões
+
+A partir desta atualização, o mesmo arquivo
+`pesquisar_persistencia_horizontes_spyder.py` executa por padrão a
+**v1.0.4**; a versão v1.0.3 permanece reproduzível pelo commit histórico.
+A v1.0.4 compara holdings fixos 1, 2, 3 e 4 e um holding selecionado
+exclusivamente pela calibração anterior a cada fold. Inclui holding=0
+como ablação histórica. Não treina modelos adicionais por horizonte
+nem faz download da Alpaca. Exige os mesmos dez históricos em cache.
+
+No terminal do Git, a partir da pasta do repositório:
+
+    git fetch origin
+    git switch research/horizon-persistence-oos-v1
+    git pull --ff-only origin research/horizon-persistence-oos-v1
+
+Depois reinicie o kernel do Spyder e execute:
+
+    %run pesquisar_persistencia_horizontes_spyder.py
+
+O script reproduz o checkpoint Control ao centavo antes dos novos
+cenários. Os resultados da v1.0.4 ainda dependem dessa execução.
+O ZIP final, exclusivo dessa versão, fica em:
+
+    output/persistencia_horizontes_u77_v104/pacote_persistencia_horizontes_u77_v104.zip
+
+Consulte a seção 25.12.4 de MANIFEST.md para os critérios de seleção,
+limitações de validação e interpretação do CSV de variáveis históricas.
