@@ -1283,3 +1283,176 @@ execução, incluindo liquidez e participação no volume, com desenho e dados
 documentados antes de apresentar resultados. A contribuição individual dos
 componentes da utilidade também permanece sem experimentos de isolamento.
 Não transformar essas pendências em resultados já disponíveis.
+
+
+---
+
+## 25. Pesquisa pós-release de universo dinâmico U67+n (2026-10-12)
+
+### 25.1 Escopo e separação da entrega acadêmica oficial
+
+Esta seção registra uma linha exploratória posterior à release `v1.22.1`.
+Ela não reescreve os resultados oficiais preservados nas seções anteriores e
+não altera a `main`. A pesquisa permanece na branch
+`research/u67-mct-asset-expansion-v1`.
+
+O U67 congelado continua sendo a bancada experimental. A pergunta desta linha
+não é encontrar uma lista fixa definitiva, mas estimar quando um ativo agrega
+valor como opção disponível no universo. O objetivo operacional futuro é uma
+política de estado dinâmico:
+
+```text
+ADICIONAR
+MANTER
+REMOVER
+```
+
+usando somente informação disponível no momento da decisão. Portanto, um ativo
+pode ser útil em uma janela e deixar de ser útil em outra. A lista não deve ser
+interpretada como permanente.
+
+### 25.2 Campanha direta e otimização do subconjunto
+
+A v1.1.0 removeu como gates os filtros de preço, liquidez, volume e o
+Learning-to-Rank. Dos 500 símbolos congelados, somente condições estruturais de
+dados puderam impedir o replay financeiro. A comparação econômica passou a ser
+direta:
+
+```text
+U67 + candidato versus U67
+```
+
+A campanha produziu 15 candidatos com delta marginal positivo. A v1.2.0
+reproduziu `U67 + 15` em US$ 290.727.954,41339606 e aplicou forward selection
+e backward elimination. O Challenger resultante contém 10 ativos:
+
+```text
+CRT, NBR, CAPR, PNBK, PENN, JBL, STAG, MCHB, LAD, TOWN
+```
+
+e reproduziu capital final de US$ 587.165.941,1330212. A busca avaliou 180
+subconjuntos únicos. Esse valor é um resultado de descoberta/otimização, não
+uma estimativa prospectiva independente.
+
+### 25.3 Assurance v1.3.0
+
+A execução `u67-asset-expansion-v1.3.0` reproduziu exatamente os três
+checkpoints:
+
+```text
+U67                         = US$ 76.927.051,38897176
+U67 + 15 positivos          = US$ 290.727.954,41339606
+U67 + 10 Challenger         = US$ 587.165.941,1330212
+```
+
+A reexecução do Challenger preservou o capital até o centavo, a sequência de
+`selected_asset` e a curva de capital, com diferença máxima absoluta igual a
+zero.
+
+Os diagnósticos preditivos registraram 45 combinações candidato-fold. Houve 38
+warnings de overfitting, nenhum warning de underfitting e apenas 7 combinações
+com skill OOS positivo contra o preditor ingênuo da média. No próprio U67,
+171 das 195 combinações ativo-fold também receberam warning de overfitting e
+24 tiveram skill OOS positivo. Portanto, o alerta não é exclusivo dos novos
+ativos e deve ser investigado na dimensão de ranking/decisão, não apenas por
+MAE/RMSE de magnitude absoluta.
+
+A validação temporal do subconjunto, ainda usando o pool fixo de 15 candidatos,
+produziu:
+
+```text
+seleção com fold 1
+    NBR, PENN, EML
+holdout fold 2
+    retorno 77,917619 contra 77,898220 do U67
+
+seleção com folds 1+2
+    CRT, NBR, PNBK, PENN, JBL, STAG, MCHB, TOWN
+holdout fold 3
+    retorno 35,536979 contra 24,484656 do U67
+```
+
+A similaridade de Jaccard com os 10 do Challenger foi 0,181818 na primeira
+etapa e 0,80 na segunda. Isso é compatível com a hipótese de universo variável
+no tempo, mas ainda não constitui redescoberta nested dos 500 ativos.
+
+O leave-one-asset-out dos 10 não encontrou remoção individual que aumentasse o
+capital. As perdas relativas ao retirar cada ativo foram aproximadamente:
+CRT -42,90%, NBR -36,10%, CAPR -27,26%, PNBK -20,73%, JBL -17,51%, PENN
+-16,69%, MCHB -4,13%, LAD -3,28%, TOWN -2,84% e STAG -1,25%.
+
+O stress de custos manteve o resultado acima do U67, mas mostrou sensibilidade
+material a slippage:
+
+```text
+base                 US$ 587,17 mi
+slippage 5 bps       US$ 411,67 mi
+slippage 10 bps      US$ 288,63 mi
+taxas regulatórias 2x: -0,90% versus base
+taxas regulatórias 3x: -1,80% versus base
+```
+
+### 25.4 Interpretação metodológica após a assurance
+
+O contraste entre MAE/RMSE OOS fracos e forte desempenho econômico sugere que
+a qualidade relevante pode estar na ordenação relativa entre ativos, não na
+previsão precisa da magnitude de `forward_risk_adjusted_utility`.
+
+Por isso, a próxima validação não deve procurar mais capital. Ela deve medir:
+
+- Information Coefficient/Spearman cross-sectional por sessão;
+- NDCG@5 e NDCG@10;
+- acerto do top-1 e presença do top-1 previsto no top-3/top-5 realizado;
+- overlap de top-3;
+- percentil realizado do ativo previsto e do ativo efetivamente selecionado;
+- regret da escolha prevista frente ao melhor ativo realizado;
+- sign accuracy como diagnóstico secundário.
+
+A avaliação usa a utility realizada posterior somente como rótulo de avaliação.
+Ela não pode entrar na decisão histórica.
+
+### 25.5 Selection overfitting e v1.4.0
+
+A v1.4.0 introduz `RUN_MODE = "decision_validation"` e mantém os checkpoints
+anteriores congelados. Ela refaz de forma determinística a paisagem de 180
+subconjuntos da v1.2 para gerar séries diárias comparáveis.
+
+Serão calculados:
+
+```text
+Deflated Sharpe Ratio
+    - 180 trials brutos da busca de subconjuntos
+    - número efetivo de trials via dimensão efetiva da matriz de correlação
+    - sensibilidade conservadora usando 146 testes marginais + 180 subconjuntos
+
+Probability of Backtest Overfitting / CSCV
+    - 10 blocos
+    - 252 divisões simétricas
+    - métrica log-growth, alinhada ao objetivo de capital
+    - métrica Sharpe, como diagnóstico complementar
+```
+
+O cálculo com 326 trials é explicitamente uma análise de sensibilidade:
+os testes são correlacionados e pertencem a famílias diferentes, portanto não
+devem ser tratados como 326 experimentos independentes.
+
+A v1.4.0 também repete a seleção temporal em fronteiras de fold e grava a
+transição entre universos como `ADICIONAR`, `MANTER` ou `REMOVER`. Isso é
+um piloto em baixa frequência. Ainda não é a política diária final.
+
+### 25.6 Próxima fronteira científica
+
+Após a v1.4.0, o passo seguinte é uma redescoberta nested do universo externo:
+em cada data de atualização, candidatos e ativos internos devem ser avaliados
+somente com histórico disponível até aquela data. A política deverá decidir
+adição, permanência e remoção, congelar o universo resultante e medir o efeito
+somente no período posterior.
+
+A regra de universo dinâmico deverá incluir controles contra churn, como
+histerese, evidência mínima e/ou permanência mínima. Esses controles ainda não
+foram calibrados e não devem ser descritos como resultados disponíveis.
+
+Esta seção é a memória técnica da pesquisa exploratória pós-release. As
+alterações concretas continuam versionadas na mesma branch de pesquisa; a
+`main` e a tag `v1.22.1` permanecem referências imutáveis da entrega
+acadêmica consolidada.
