@@ -150,3 +150,38 @@ python finalizar_u67_decision_validation_spyder.py
 ```
 
 No Spyder, abra esse arquivo e execute com F5.
+
+
+## Pesquisa experimental U67+10 — Persistência multi-horizonte
+
+Esta seção descreve uma **branch de pesquisa**, não uma atualização da
+reprodução oficial v1.22.1. A política congelada não é alterada.
+
+Na branch research/horizon-persistence-oos-v1, o arquivo
+pesquisar_persistencia_horizontes_spyder.py compara:
+
+- Control U67+10 com permanência mínima de 2 sessões;
+- Control U67+10 com permanência mínima de 0 sessões;
+- política nova baseada na revisão das previsões H05/H10/H20/H40/H60
+  e no erro medido antes de cada fold fora da amostra.
+
+Requer os dados U67 versionados e os 10 históricos candidatos já baixados
+pela pesquisa U67+n na máquina local, em:
+
+dados/.u67_expansion_cache/full_raw_20261006/raw_bars/
+dados/.u67_expansion_cache/full_raw_20261006/corporate_actions/
+
+Os seguintes símbolos precisam estar presentes nos dois diretórios:
+CRT, NBR, CAPR, PNBK, PENN, JBL, STAG, MCHB, LAD, TOWN.
+
+O script **não consulta Alpaca**; se esses arquivos faltarem, reporta os
+nomes ausentes. Reinicie o kernel do Spyder, abra
+pesquisar_persistencia_horizontes_spyder.py e execute com F5; ou use:
+
+    python pesquisar_persistencia_horizontes_spyder.py
+
+Arquivos gerados apenas após uma execução completa em:
+output/persistencia_horizontes_u77/
+
+Leia a seção 25.12 de MANIFEST.md para critérios de causalidade,
+limitações da confiança heurística e interpretação de resultados.
