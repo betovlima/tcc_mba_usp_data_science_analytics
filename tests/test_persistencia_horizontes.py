@@ -9,6 +9,7 @@ from pesquisar_persistencia_horizontes_spyder import (
     HorizonPersistencePolicy,
     uncertainty_from_matured_calibration,
     safe_json,
+    select_purged_horizon_training_dates,
 )
 
 
@@ -175,4 +176,53 @@ def test_uncertainty_requires_multiple_matured_days_not_only_many_assets():
             symbols=symbols,
             frames=frames,
             predictions=predictions,
+        )
+
+
+def test_official_sixty_session_purge_preserves_all_700_training_rows():
+    calendar = pd.date_range("2020-01-01", periods=1600, freq="B", tz="UTC")
+    for horizon in (5, 10, 20, 40, 60):
+        calibration_training = select_purged_horizon_training_dates(
+            calendar=calendar,
+            training_end_index=700,
+            evaluation_start_index=760,
+            horizon=horizon,
+            min_training_rows=700,
+        )
+        assert len(calibration_training) == 700
+        assert calibration_training[-1] == calendar[699]
+        # Even H60 matures by the final purged session, before validation.
+        assert calendar.get_loc(calibration_training[-1]) + horizon < 760
+
+        final_training = select_purged_horizon_training_dates(
+            calendar=calendar,
+            training_end_index=886,
+            evaluation_start_index=946,
+            horizon=horizon,
+            min_training_rows=700,
+        )
+        assert len(final_training) == 886
+
+
+def test_horizon_training_must_never_leak_into_calibration():
+    calendar = pd.date_range("2020-01-01", periods=1000, freq="B", tz="UTC")
+    with pytest.raises(RuntimeError, match="CausalHorizonPurgeInsufficient"):
+        select_purged_horizon_training_dates(
+            calendar=calendar,
+            training_end_index=700,
+            evaluation_start_index=750,
+            horizon=60,
+            min_training_rows=700,
+        )
+
+
+def test_horizon_training_must_not_hide_insufficient_model_rows():
+    calendar = pd.date_range("2020-01-01", periods=1000, freq="B", tz="UTC")
+    with pytest.raises(RuntimeError, match="HorizonTrainingRowsInsufficient"):
+        select_purged_horizon_training_dates(
+            calendar=calendar,
+            training_end_index=699,
+            evaluation_start_index=760,
+            horizon=5,
+            min_training_rows=700,
         )
