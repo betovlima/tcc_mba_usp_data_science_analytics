@@ -98,7 +98,7 @@ OUTPUT_DIR_BY_MODE = {
 OUT = ROOT / "output" / OUTPUT_DIR_BY_MODE[RUN_MODE]
 CANDIDATE_SAMPLE_MANIFEST = ROOT / "pesquisa_u67_amostra_500.csv"
 
-SCRIPT_VERSION = "u67-asset-expansion-v1.4.0"
+SCRIPT_VERSION = "u67-asset-expansion-v1.4.1"
 EXECUTION_SCHEMA = "u67-asset-expansion-v5"
 ANALYSIS_END_DATE = "2026-10-06"
 EXPECTED_U67_ENDING_CAPITAL = 76_927_051.38897176
@@ -220,9 +220,35 @@ def _stable_key(snapshot_sha: str, symbol: str) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def _json_safe(value: Any) -> Any:
+    """Converte escalares nao finitos para null antes de serializar JSON."""
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return [_json_safe(item) for item in value.tolist()]
+    if value is pd.NA or value is pd.NaT:
+        return None
+    if isinstance(value, (np.bool_,)):
+        return bool(value)
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (float, np.floating)):
+        number = float(value)
+        return number if np.isfinite(number) else None
+    return value
+
+
 def _write_json(path: Path, payload: Any) -> None:
     path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False, default=str),
+        json.dumps(
+            _json_safe(payload),
+            ensure_ascii=False,
+            indent=2,
+            allow_nan=False,
+            default=str,
+        ),
         encoding="utf-8",
     )
 
