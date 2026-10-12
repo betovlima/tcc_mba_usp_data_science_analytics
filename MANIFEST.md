@@ -1481,3 +1481,55 @@ A orientação para a execução afetada é preservar
 `output/u67_decision_validation/`, atualizar a branch e executar somente o
 script de finalização. Rodar novamente o runner principal apagaria esse output
 no início e repetiria desnecessariamente a campanha.
+
+
+### 25.8 Resultado da validação de decisão v1.4
+
+A v1.4.0 foi concluída e o pacote final foi recuperado pela v1.4.1 sem repetir
+modelos ou backtests. Os 180 subconjuntos da busca full-window e os checkpoints
+de US$ 290.727.954,41339606 e US$ 587.165.941,1330212 foram preservados.
+
+O diagnóstico de ranking no Challenger U67+10 mostrou IC cross-sectional médio
+de 0,03419, NDCG@5 de 0,52660, NDCG@10 de 0,53826, sign accuracy de 63,10%,
+top-1 exato de 2,26%, top-1 dentro do top-3 realizado em 8,25% e dentro do
+top-5 em 12,71%. O sinal de ordenação global é pequeno, mas há enriquecimento
+no topo em relação à expectativa combinatória.
+
+O Deflated Sharpe Ratio permaneceu praticamente igual a 1 tanto com 180 trials
+quanto na sensibilidade conservadora de 326 trials. A dimensão efetiva de
+trials foi 1,2792, resultado de correlação média aproximada de 0,879 entre as
+180 séries. Por isso, a dimensão efetiva não deve ser usada isoladamente como
+prova de robustez.
+
+O CSCV/PBO produziu 53,57% para log-growth e 59,52% para Sharpe. Isso indica
+instabilidade material do processo de escolher o melhor cenário dentro da
+amostra. Em contraste, o Challenger fixo de 10 ativos teve percentil OOS
+mediano de 93,92% por log-growth e 82,04% por Sharpe nas mesmas 252 divisões,
+ficando abaixo da mediana em 0% e 7,54% dos casos, respectivamente. A leitura
+correta é que o cenário fixo é forte, mas o processo de seleção entre muitos
+subconjuntos ainda apresenta selection overfitting.
+
+O piloto temporal confirmou mudança de composição. Com apenas o fold 1,
+NBR/PENN/EML foram escolhidos e praticamente empataram com o U67 no fold 2.
+Com folds 1+2, a seleção passou para CRT/NBR/PNBK/PENN/JBL/STAG/MCHB/TOWN e
+superou materialmente o U67 no fold 3. Na transição, NBR e PENN foram mantidos,
+EML removido e CRT/PNBK/JBL/STAG/MCHB/TOWN adicionados.
+
+Estado da evidência após v1.4:
+
+```text
+reprodutibilidade                 PASS
+integridade dos checkpoints       PASS
+stress de custos                  PASS com sensibilidade a slippage
+leave-one-asset-out               PASS local
+ranking cross-sectional           SINAL FRACO/MODERADO NO TOPO
+Deflated Sharpe Ratio             PASS
+PBO da rotina de seleção          WARNING
+universo temporal                 PARTIAL PASS
+redescoberta nested completa      PENDENTE
+```
+
+O Challenger de US$ 587,17 milhões permanece uma referência forte de
+descoberta, não um resultado prospectivo final. A próxima fronteira científica
+é a redescoberta nested de candidatos e a decisão temporal de
+ADICIONAR/MANTER/REMOVER sem usar a janela futura.
