@@ -24,6 +24,7 @@ from engine.configuracao import (
 )
 from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 from engine.modelo_lightgbm import (
+    _ajustar_modelos_lightgbm,
     _construir_contexto_execucao,
     selecionar_switch_margin,
 )
@@ -31,6 +32,7 @@ from engine.rotacao import (
     _crescimento_politica_simples,
     _politica_agendada,
     _politica_utilidade,
+    _precalcular_utilidades_modelo,
     _simular_exato,
 )
 from reproducao.dados import SnapshotPaths, validate_snapshot
@@ -48,11 +50,16 @@ from pesquisar_expansao_u67_spyder import (
 )
 
 ROOT = Path(__file__).resolve().parent
-OUT = ROOT / "output" / "persistencia_horizontes_u77_v104"
-VERSION = "horizon-persistence-oos-v1.0.4"
+OUT = ROOT / "output" / "persistencia_horizontes_u77_v105"
+VERSION = "horizon-persistence-oos-v1.0.5"
 CONFIDENCE_MULTIPLIERS = (0.0, 0.5, 1.0)  # historico v1.0.3
 ANCHOR_BLEND = 0.5  # historico v1.0.3
-HOLDING_CANDIDATES = (1, 2, 3, 4)
+HOLDING_CANDIDATES = (1, 2, 3, 4)  # historico v1.0.4
+RELATIVE_HORIZONS = (5, 10, 20, 40)
+SHORT_HORIZONS = (5, 10)
+MEDIUM_HORIZONS = (20, 40)
+MIN_GROUP_ADVANTAGE_PCT = 0.005
+CANDIDATE_REPORT_TOP_K = 10
 CHECKPOINT_TOLERANCE_DOLLARS = 0.01
 
 
@@ -740,6 +747,238 @@ def causal_hold_guard_features(
     ])
 
 
+
+def add_horizon_percentage_training_targets(
+    frames: dict[str, pd.DataFrame],
+    horizons: tuple[int, ...] = RELATIVE_HORIZONS,
+) -> None:
+    """Rotulos FUTUROS apenas de treino; jamais valores usados nas decisoes."""
+    for symbol, frame in frames.items():
+        for h in horizons:
+            source = f"forward_horizon_net_log_return_{h}"
+            target = f"forward_horizon_net_return_pct_{h}"
+            if source not in frame.columns:
+                raise RuntimeError(f"{symbol}: missing frozen training target {source}")
+            raw = pd.to_numeric(frame[source], errors="coerce")
+            frame[target] = np.expm1(raw)
+            frame.loc[~np.isfinite(frame[target]), target] = np.nan
+
+
+def relative_horizon_candidates(
+    *,
+    date: pd.Timestamp,
+    incumbent: int,
+    control_target: int,
+    symbols: list[str],
+    aggregate: np.ndarray,
+    forecasts: dict[int, dict[pd.Timestamp, np.ndarray]],
+    min_group_advantage: float,
+    require_each_horizon: bool,
+    effective_margin: float,
+    top_k: int = CANDIDATE_REPORT_TOP_K,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Compara somente previsoes contemporaneas. Sem leitura de labels."""
+    if incumbent <= 0 or incumbent > len(symbols):
+        return [], []
+    timestamp = pd.Timestamp(date)
+    expected_length = len(symbols) + 1
+    arrays: dict[int, np.ndarray] = {}
+    for h in RELATIVE_HORIZONS:
+        cache = forecasts.get(h, {})
+        value = cache.get(timestamp)
+        if value is None:
+            return [], []
+        values = np.asarray(value, dtype=np.float64)
+        if len(values) != expected_length:
+            raise ValueError(f"H{h}: expected {expected_length} model scores")
+        arrays[h] = values
+    if not all(np.isfinite(arrays[h][incumbent]) for h in RELATIVE_HORIZONS):
+        return [], []
+
+    reference = control_target if control_target > 0 else incumbent
+    if not all(np.isfinite(arrays[h][reference]) for h in RELATIVE_HORIZONS):
+        return [], []
+    current_short = float(np.mean([arrays[h][incumbent] for h in SHORT_HORIZONS]))
+    current_medium = float(np.mean([arrays[h][incumbent] for h in MEDIUM_HORIZONS]))
+    baseline_short = float(np.mean([arrays[h][reference] for h in SHORT_HORIZONS]))
+    baseline_medium = float(np.mean([arrays[h][reference] for h in MEDIUM_HORIZONS]))
+
+    ranking: list[dict[str, Any]] = []
+    eligible: list[dict[str, Any]] = []
+    for pos, symbol in enumerate(symbols, start=1):
+        if pos == incumbent:
+            continue
+        if any(not np.isfinite(arrays[h][pos]) for h in RELATIVE_HORIZONS):
+            continue
+        preds = {h: float(arrays[h][pos]) for h in RELATIVE_HORIZONS}
+        short = float(np.mean([preds[h] for h in SHORT_HORIZONS]))
+        medium = float(np.mean([preds[h] for h in MEDIUM_HORIZONS]))
+        short_advantage = short - current_short
+        medium_advantage = medium - current_medium
+        short_vs_control = short - baseline_short
+        medium_vs_control = medium - baseline_medium
+        individual = {h: preds[h] - float(arrays[h][incumbent]) for h in RELATIVE_HORIZONS}
+        aggregate_score = float(aggregate[pos])
+        utility_valid = bool(
+            np.isfinite(aggregate_score)
+            and aggregate_score > 0.0
+        )
+        passes_each = all(individual[h] > 0.0 for h in RELATIVE_HORIZONS)
+        qualifies = bool(
+            utility_valid
+            and short > 0.0
+            and medium > 0.0
+            and short_advantage >= min_group_advantage
+            and medium_advantage >= min_group_advantage
+            and (not require_each_horizon or passes_each)
+            and (
+                control_target in (0, incumbent, pos)
+                or (
+                    short_vs_control > 0.0
+                    and medium_vs_control > 0.0
+                )
+            )
+            and (
+                not require_each_horizon
+                or aggregate_score >= float(aggregate[incumbent]) + effective_margin
+            )
+        )
+        row = {
+            "decision_date": timestamp.isoformat(),
+            "current_asset": symbols[incumbent - 1],
+            "control_target": (
+                symbols[control_target - 1] if control_target > 0 else "CASH"
+            ),
+            "candidate": symbol,
+            "candidate_position": pos,
+            "net_expected_short_pct": short,
+            "net_expected_medium_pct": medium,
+            "current_expected_short_pct": current_short,
+            "current_expected_medium_pct": current_medium,
+            "delta_short_pct_points": short_advantage,
+            "delta_medium_pct_points": medium_advantage,
+            "delta_vs_control_short_pct_points": short_vs_control,
+            "delta_vs_control_medium_pct_points": medium_vs_control,
+            "candidate_aggregate_utility": aggregate_score,
+            "qualifies": qualifies,
+            **{f"candidate_expected_H{h}_pct": preds[h] for h in RELATIVE_HORIZONS},
+            **{f"current_expected_H{h}_pct": float(arrays[h][incumbent]) for h in RELATIVE_HORIZONS},
+            **{f"delta_H{h}_pct_points": individual[h] for h in RELATIVE_HORIZONS},
+        }
+        ranking.append(row)
+        if qualifies:
+            eligible.append(row)
+    key = lambda row: (
+        -0.5 * (
+            row["delta_short_pct_points"] + row["delta_medium_pct_points"]
+        ),
+        -min(row["delta_short_pct_points"], row["delta_medium_pct_points"]),
+        row["candidate"],
+    )
+    ranking.sort(key=key)
+    eligible.sort(key=key)
+    return eligible, ranking[:top_k]
+
+
+class RelativeHorizonGainPolicy:
+    """Control como fallback; tentativa de escolher lider relativo H5/H10/H20/H40."""
+
+    def __init__(
+        self,
+        *,
+        symbols: list[str],
+        aggregate: dict[pd.Timestamp, np.ndarray],
+        forecasts: dict[int, dict[pd.Timestamp, np.ndarray]],
+        control_policy: Any,
+        minimum_holding: int,
+        margin: float,
+        require_each_horizon: bool,
+        min_group_advantage: float = MIN_GROUP_ADVANTAGE_PCT,
+        fold_id: int,
+        audit: list[dict[str, Any]] | None = None,
+        ranking_audit: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.symbols = symbols
+        self.aggregate = aggregate
+        self.forecasts = forecasts
+        self.control_policy = control_policy
+        self.minimum_holding = int(minimum_holding)
+        self.margin = float(margin)
+        self.require_each_horizon = bool(require_each_horizon)
+        self.min_group_advantage = float(min_group_advantage)
+        self.fold_id = int(fold_id)
+        self.audit = audit
+        self.ranking_audit = ranking_audit
+
+    def __call__(self, timestamp: pd.Timestamp, current: int, holding: int) -> tuple[int, float]:
+        day = pd.Timestamp(timestamp)
+        normal_target, normal_score = self.control_policy(day, current, holding)
+        action = int(normal_target)
+        score = float(normal_score)
+        reason = "CONTROL_FALLBACK"
+        candidate_count = 0
+        chosen: dict[str, Any] | None = None
+        if current <= 0:
+            reason = "NO_INCUMBENT_CASH"
+        elif holding < self.minimum_holding:
+            reason = "MIN_HOLD_PRESERVED"
+        elif normal_target == 0:
+            reason = "CONTROL_CASH_EXIT_PRESERVED"
+        else:
+            eligible, ranked = relative_horizon_candidates(
+                date=day,
+                incumbent=current,
+                control_target=int(normal_target),
+                symbols=self.symbols,
+                aggregate=self.aggregate[day],
+                forecasts=self.forecasts,
+                min_group_advantage=self.min_group_advantage,
+                require_each_horizon=self.require_each_horizon,
+                effective_margin=self.margin,
+            )
+            candidate_count = len(eligible)
+            if self.ranking_audit is not None:
+                self.ranking_audit.extend([
+                    {
+                        "fold_id": self.fold_id,
+                        "holding_sessions": holding,
+                        "rule": "each_horizon" if self.require_each_horizon else "group_average",
+                        **item,
+                    } for item in ranked
+                ])
+            if eligible:
+                chosen = eligible[0]
+                proposal = int(chosen["candidate_position"])
+                if proposal != normal_target:
+                    action = proposal
+                    score = float(self.aggregate[day][proposal])
+                    reason = "RELATIVE_HORIZON_SWITCH"
+                else:
+                    reason = "CONTROL_TARGET_ALREADY_BEST"
+            else:
+                reason = "NO_SUPERIOR_HORIZON_CANDIDATE"
+        if self.audit is not None:
+            self.audit.append({
+                "decision_date": day.isoformat(),
+                "fold_id": self.fold_id,
+                "rule": "each_horizon" if self.require_each_horizon else "group_average",
+                "holding_sessions": holding,
+                "current_asset": self.symbols[current - 1] if current > 0 else "CASH",
+                "control_target": self.symbols[normal_target - 1] if normal_target > 0 else "CASH",
+                "final_target": self.symbols[action - 1] if action > 0 else "CASH",
+                "reason": reason,
+                "changes_control_decision": action != normal_target,
+                "eligible_candidate_count": candidate_count,
+                "chosen_delta_short_pct_points": (
+                    chosen["delta_short_pct_points"] if chosen else None
+                ),
+                "chosen_delta_medium_pct_points": (
+                    chosen["delta_medium_pct_points"] if chosen else None
+                ),
+            })
+        return action, score
+
+
 def main() -> dict[str, Any]:
     OUT.mkdir(parents=True, exist_ok=True)
     data = SnapshotPaths.u67(ROOT)
@@ -864,151 +1103,141 @@ def main() -> dict[str, Any]:
         )
     print(f"[control] US$ {actual:,.2f} reproduzido ao centavo", flush=True)
 
-    result_0 = _simular_exato(
-        "horizon_research_holding_0",
-        _politica_agendada(policies_0, decision_to_fold),
-        frames, symbols, all_decision_dates, configuration_without_hold,
-        calcular_taxas_referencia, aplicar_deslizamento,
-        decision_metadata=decision_metadata,
-        model_label="U67+10 hold=0 (ablation)",
-    )
-    metrics_0 = scenario_metrics(result_0, folds, float(configuration.initial_capital))
-    print(f"[ablation] US$ {metrics_0['ending_capital']:,.2f}", flush=True)
 
-
-    # A mesma utilidade agregada e o mesmo modelo de previsao alimentam
-    # todos os cenarios: a unica mudanca sera o minimo de permanencia.
-    configs = {
-        h: configuration.copiar_modelo(
-            update={"rotation_min_holding_days": h}
-        )
-        for h in HOLDING_CANDIDATES
-    }
-    policies_by_holding: dict[int, dict[int, Any]] = {
-        h: {} for h in HOLDING_CANDIDATES
-    }
-    selected_fold_policies: dict[int, Any] = {}
-    fold_selection: list[dict[str, Any]] = []
-
+    # Adiciona rotulos percentuais de treino, sem consultar o futuro nas decisoes.
+    # O target leva em conta o retorno com custos round-trip do snapshot.
+    add_horizon_percentage_training_targets(frames)
+    audit_group: list[dict[str, Any]] = []
+    audit_each: list[dict[str, Any]] = []
+    ranking_group: list[dict[str, Any]] = []
+    ranking_each: list[dict[str, Any]] = []
+    fitted_audit: list[dict[str, Any]] = []
+    policy_group: dict[int, Any] = {}
+    policy_each: dict[int, Any] = {}
     for state in states:
         fold_id = int(state.fold_id)
+        fold = folds[fold_id - 1]
         margin = float(fold_caches[fold_id]["margin"])
-        calibrated_cache = fold_caches[fold_id]["calibration"]
-        oos_cache = fold_caches[fold_id]["oos"]
-        policies_by_holding[2][fold_id] = policies_2[fold_id]
-
-        holdout_start = (2 * len(state.calibration_dates)) // 3
-        selection_dates = state.calibration_dates[holdout_start:]
-        if len(selection_dates) < 20:
-            raise RuntimeError(
-                f"Fold {fold_id}: menos de 20 datas na calibracao final."
+        horizon_predictions: dict[int, dict[pd.Timestamp, np.ndarray]] = {}
+        for h in RELATIVE_HORIZONS:
+            safe_dates = select_purged_horizon_training_dates(
+                calendar=common_dates,
+                training_end_index=int(fold["final_fit_end_index"]),
+                evaluation_start_index=int(fold["test_start_index"]),
+                horizon=int(h),
+                min_training_rows=int(configuration.rotation_minimum_training_rows),
             )
-
-        scores: dict[int, float] = {}
-        for h in HOLDING_CANDIDATES:
-            # Calibracao historica. OOS nao participa da escolha.
-            validation_policy = _politica_utilidade(
-                {}, frames, symbols, configs[h], margin,
-                utility_cache=calibrated_cache,
+            target_column = f"forward_horizon_net_return_pct_{h}"
+            models = _ajustar_modelos_lightgbm(
+                frames, symbols, safe_dates, configuration,
+                phase=f"relative_pct_H{h}_fold_{fold_id}",
+                target_column=target_column,
             )
-            scores[h] = float(_crescimento_politica_simples(
-                validation_policy, frames, symbols,
-                selection_dates, configs[h],
-            ))
-            if h != 2:
-                policies_by_holding[h][fold_id] = _politica_utilidade(
-                    {}, frames, symbols, configs[h], margin,
-                    utility_cache=oos_cache,
+            if len(models) != len(symbols):
+                raise RuntimeError(
+                    f"Fold={fold_id} H{h}: missing models; "
+                    f"fitted={len(models)} expected={len(symbols)}"
                 )
-        winner = select_calibrated_holding(scores)
-        selected_fold_policies[fold_id] = policies_by_holding[winner][fold_id]
-        fold_selection.append({
-            "fold_id": fold_id,
-            "calibration_total_sessions": len(state.calibration_dates),
-            "calibration_validation_sessions": len(selection_dates),
-            "calibration_validation_first": selection_dates[0].isoformat(),
-            "calibration_validation_last": selection_dates[-1].isoformat(),
-            "margin_frozen_from_control": margin,
-            "hold_scores": {str(h): scores[h] for h in HOLDING_CANDIDATES},
-            "chosen_holding": winner,
-            "control_holding": 2,
-            "score_difference_vs_control": scores[winner] - scores[2],
-        })
-        print(
-            f"[selection] fold={fold_id} holding={winner} "
-            f"score={scores[winner]:.6f} versus control={scores[2]:.6f}",
-            flush=True,
-        )
+            forecast, diagnostic = _precalcular_utilidades_modelo(
+                models, frames, symbols, state.decision_dates, configuration
+            )
+            horizon_predictions[h] = forecast
+            fitted_audit.append({
+                "fold_id": fold_id,
+                "horizon": h,
+                "training_last_date": safe_dates[-1].isoformat(),
+                "evaluation_first_date": pd.Timestamp(
+                    state.decision_dates[0]
+                ).isoformat(),
+                "model_count": len(models),
+                "prediction_cache_sessions": len(forecast),
+                "target": target_column,
+                "cache_diagnostics": diagnostic,
+            })
+            print(
+                f"[horizon] fold={fold_id} H{h} models={len(models)} "
+                f"last_train={safe_dates[-1].date()}",
+                flush=True,
+            )
+        for require_each_horizon, destination, audit, ranking in (
+            (False, policy_group, audit_group, ranking_group),
+            (True, policy_each, audit_each, ranking_each),
+        ):
+            control = _politica_utilidade(
+                {}, frames, symbols, configuration, margin,
+                utility_cache=fold_caches[fold_id]["oos"],
+            )
+            destination[fold_id] = RelativeHorizonGainPolicy(
+                symbols=symbols,
+                aggregate=fold_caches[fold_id]["oos"],
+                forecasts=horizon_predictions,
+                control_policy=control,
+                minimum_holding=int(configuration.rotation_min_holding_days),
+                margin=margin,
+                require_each_horizon=require_each_horizon,
+                fold_id=fold_id,
+                audit=audit,
+                ranking_audit=ranking,
+            )
 
-    outcomes: dict[str, Any] = {
-        "control_holding_2": result_2,
-        "ablation_holding_0": result_0,
-    }
-    for h in (1, 3, 4):
+    variants_results = {"control_holding_2": result_2}
+    for name, policies in (
+        ("relative_short_medium_group", policy_group),
+        ("relative_all_four_positive", policy_each),
+    ):
         result = _simular_exato(
-            f"horizon_research_holding_{h}",
-            _politica_agendada(policies_by_holding[h], decision_to_fold),
-            frames, symbols, all_decision_dates, configs[h],
+            name,
+            _politica_agendada(policies, decision_to_fold),
+            frames, symbols, all_decision_dates, configuration,
             calcular_taxas_referencia, aplicar_deslizamento,
             decision_metadata=decision_metadata,
-            model_label=f"U67+10 minimum holding={h} (research)",
+            model_label=f"U67+10 {name} pct LightGBM research",
         )
-        outcomes[f"holding_{h}"] = result
+        variants_results[name] = result
         print(
-            f"[holding] {h} ending_equity="
+            f"[variant] {name} ending_capital="
             f"{scenario_metrics(result, folds, float(configuration.initial_capital))['ending_capital']:,.2f}",
             flush=True,
         )
-
-    result_selected = _simular_exato(
-        "horizon_research_calibration_selected_holding",
-        _politica_agendada(selected_fold_policies, decision_to_fold),
-        frames, symbols, all_decision_dates, configuration,
-        calcular_taxas_referencia, aplicar_deslizamento,
-        decision_metadata=decision_metadata,
-        model_label="U67+10 calibrated holding per fold (research)",
-    )
-    outcomes["calibration_selected_holding"] = result_selected
-
     variants = {
         name: scenario_metrics(result, folds, float(configuration.initial_capital))
-        for name, result in outcomes.items()
+        for name, result in variants_results.items()
     }
-    for name, result in outcomes.items():
-        result.predictions.to_csv(OUT / f"{name}_equity.csv", index_label="timestamp")
+    for name, result in variants_results.items():
+        result.predictions.to_csv(
+            OUT / f"{name}_equity.csv", index_label="timestamp"
+        )
         result.trades.to_csv(OUT / f"{name}_trades.csv", index=False)
 
-    pd.DataFrame(fold_selection).to_csv(
-        OUT / "calibrated_holding_by_fold.csv", index=False
-    )
+    pd.DataFrame(audit_group).to_csv(OUT / "group_policy_decisions.csv", index=False)
+    pd.DataFrame(audit_each).to_csv(OUT / "four_horizons_policy_decisions.csv", index=False)
+    pd.DataFrame(ranking_group).to_csv(OUT / "group_candidate_ranking_top10.csv", index=False)
+    pd.DataFrame(ranking_each).to_csv(OUT / "four_horizons_candidate_ranking_top10.csv", index=False)
+    pd.DataFrame(fitted_audit).to_csv(OUT / "horizon_model_training.csv", index=False)
     pd.DataFrame([
         {"decision_date": day.isoformat(), **record}
         for day, record in sorted(control_guard_audit.items())
     ]).to_csv(OUT / "control_decision_reasons.csv", index=False)
-    causal_hold_guard_features(
-        control_guard_audit, frames
-    ).to_csv(OUT / "hold_guard_point_in_time_features.csv", index=False)
 
-    rows_comparison = []
-    fold_comparison = []
-    asset_comparison = []
-    month_comparison = []
-    baseline = float(metrics_2["ending_capital"])
+    comparison = []
+    by_fold = []
     for name, values in variants.items():
-        rows_comparison.append({
+        comparison.append({
             "variant": name,
             **{k: values.get(k) for k in (
                 "ending_capital", "cagr", "sharpe", "maximum_drawdown",
                 "worst_fold_return", "capital_rotations",
                 "total_transaction_fees",
             )},
-            "final_delta_vs_control": float(values["ending_capital"]) - baseline,
-            "final_ratio_vs_control": (
-                float(values["ending_capital"]) / baseline - 1.0
+            "delta_capital_vs_control": (
+                float(values["ending_capital"]) - float(actual)
+            ),
+            "delta_fraction_vs_control": (
+                float(values["ending_capital"]) / float(actual) - 1.0
             ),
         })
         for fold in values.get("folds", []):
-            fold_comparison.append({
+            by_fold.append({
                 "variant": name,
                 "fold_id": fold["fold_id"],
                 "test_start": fold["test_start"],
@@ -1019,40 +1248,9 @@ def main() -> dict[str, Any]:
                 "fold_maximum_drawdown": fold["maximum_drawdown"],
                 "sessions": fold["sessions"],
             })
-        trades = outcomes[name].trades
-        if not trades.empty:
-            trade_data = trades.copy()
-            trade_data["month"] = pd.to_datetime(
-                trade_data["timestamp"], utc=True
-            ).dt.strftime("%Y-%m")
-            for dimensions, output in (
-                (["walk_forward_fold", "asset", "action"], asset_comparison),
-                (["month", "walk_forward_fold"], month_comparison),
-            ):
-                for key, group in trade_data.groupby(dimensions, dropna=False):
-                    key = key if isinstance(key, tuple) else (key,)
-                    output.append({
-                        "variant": name,
-                        **dict(zip(dimensions, key)),
-                        "trade_count": len(group),
-                        "total_fee": float(group["total_fee"].fillna(0).sum()),
-                        "realized_pnl": float(group["realized_pnl"].fillna(0).sum()),
-                    })
-
-    pd.DataFrame(rows_comparison).to_csv(
-        OUT / "comparison.csv", index=False
-    )
-    pd.DataFrame(fold_comparison).to_csv(
-        OUT / "fold_comparison.csv", index=False
-    )
-    pd.DataFrame(asset_comparison).to_csv(
-        OUT / "trades_by_asset.csv", index=False
-    )
-    pd.DataFrame(month_comparison).to_csv(
-        OUT / "trades_by_month.csv", index=False
-    )
-
-    external_hashes = {
+    pd.DataFrame(comparison).to_csv(OUT / "comparison.csv", index=False)
+    pd.DataFrame(by_fold).to_csv(OUT / "fold_comparison.csv", index=False)
+    hashes_by_symbol = {
         symbol: {
             "raw_sha256": sha256_file(FULL_DATA.raw_bars / f"{symbol}.csv"),
             "actions_sha256": sha256_file(
@@ -1066,30 +1264,41 @@ def main() -> dict[str, Any]:
         "status": "completed",
         "analysis_end": ANALYSIS_END_DATE,
         "snapshot_u67_sha256": snapshot.get("snapshot_sha256"),
-        "external_asset_hashes": external_hashes,
+        "external_asset_hashes": hashes_by_symbol,
         "requested_asset_count": len(U67_REQUESTED_ASSETS) + len(needed),
         "effective_asset_count": len(symbols),
         "structural_exclusions": sorted(U67_EXPECTED_EXCLUSIONS),
-        "holding_candidates": list(HOLDING_CANDIDATES),
-        "holding_selection": fold_selection,
-        "policy_rule": "static_holding_1_2_3_4_and_fold_calibration_selection",
-        "calibration_protocol": (
-            "Fold-local baseline models and switch margins are preserved. "
-            "Holding candidates are scored only in last third of the "
-            "126-session historical calibration window. No OOS labels "
-            "enter parameter selection. Selection may overfit calibration."
+        "horizons_short": list(SHORT_HORIZONS),
+        "horizons_medium": list(MEDIUM_HORIZONS),
+        "horizon_long_reserved_control": 60,
+        "comparison_units": (
+            "predicted net percentage return (not utility), "
+            "with short/medium gaps reported in fractional percentage points"
         ),
-        "features_note": (
-            "Only same-day features at Control minimum-holding guards; "
-            "descriptive, not proof of causal advantage or a trained regime model."
+        "min_group_advantage_fraction": MIN_GROUP_ADVANTAGE_PCT,
+        "minimum_holding_days": int(configuration.rotation_min_holding_days),
+        "target_generation": (
+            "expm1(forward_horizon_net_log_return_h) is an observed "
+            "future net percentage gain used exclusively as a model "
+            "training label. No realized OOS outcome enters decisions."
         ),
+        "policy_rule": (
+            "Control fallback, original holding/cash exits, additional "
+            "rank only if candidate beats incumbent in both short and "
+            "medium predicted net return; all-four variant also requires "
+            "individual positive gaps and aggregate utility margin."
+        ),
+        "decision_overrides": {
+            "group": sum(bool(row["changes_control_decision"]) for row in audit_group),
+            "each_horizon": sum(bool(row["changes_control_decision"]) for row in audit_each),
+        },
         "metrics": variants,
         "checkpoint_reference": expected,
         "reproduces_checkpoint_to_cent": True,
         "export_to_operational": False,
     }
     write_json(OUT / "experiment.json", payload)
-    package_path = OUT / "pacote_persistencia_horizontes_u77_v104.zip"
+    package_path = OUT / "pacote_persistencia_horizontes_u77_v105.zip"
     with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for artifact in sorted(OUT.iterdir()):
             if artifact.is_file() and artifact != package_path:
