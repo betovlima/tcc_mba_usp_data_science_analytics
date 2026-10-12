@@ -1017,6 +1017,18 @@ def _train_baseline_states(
         decision_cache, _ = _precalcular_utilidades_modelo(
             final_models, frames, symbols, decision_dates, config
         )
+        fit_diagnostics = {
+            symbol: dict(getattr(model, "_fit_diagnostics", {}) or {})
+            for symbol, model in final_models.items()
+        }
+        oos_diagnostics = diagnosticos_fora_amostra(
+            final_models,
+            frames,
+            symbols,
+            decision_dates,
+            decision_cache,
+            fold_id=fold_id,
+        )
         policies[fold_id] = _politica_utilidade(
             {},
             frames,
@@ -1038,6 +1050,8 @@ def _train_baseline_states(
                 decision_cache=decision_cache,
                 selected_margin=selected_margin,
                 effective_margin=effective_margin,
+                fit_diagnostics=fit_diagnostics,
+                oos_diagnostics=oos_diagnostics,
             )
         )
         del calibration_models, final_models
@@ -1092,10 +1106,23 @@ def _train_candidate_caches(
             state.decision_dates,
             config,
         )
+        fit_diagnostics = dict(
+            getattr(final_model.get(symbol), "_fit_diagnostics", {}) or {}
+        )
+        oos_diagnostics = diagnosticos_fora_amostra(
+            final_model,
+            one_frame,
+            [symbol],
+            state.decision_dates,
+            decision_cache,
+            fold_id=state.fold_id,
+        )
         output[state.fold_id] = CandidateFoldCache(
             fold_id=state.fold_id,
             calibration_cache=calibration_cache,
             decision_cache=decision_cache,
+            fit_diagnostics=fit_diagnostics,
+            oos_diagnostics=oos_diagnostics,
         )
         del calibration_model, final_model
     return output
