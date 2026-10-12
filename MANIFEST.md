@@ -1566,3 +1566,48 @@ diária, histerese ou permanência mínima.
 Os dados congelados enviados para a campanha são suficientes para continuar
 sem novo download de candidatos; a próxima necessidade é gerar rótulos
 contrafactuais temporais mais densos e nested, não coletar mais OHLCV.
+
+
+### 25.10 Congelamento do Challenger U67+10 para integração operacional
+
+Solicitação do autor em 2026-10-12: encerrar esta etapa de pesquisa com a tag
+`research-u67plus10-challenger-v1.4.1` e transferir ao ambiente operacional
+uma **nova estratégia de universo fixo**, sem substituir a política atualmente
+vencedora.
+
+A composição requisitada para a estratégia operacional é o universo U67
+original, preservado em sua ordem e identidade, mais dez ativos, exatamente
+nesta ordem:
+
+```text
+CRT,NBR,CAPR,PNBK,PENN,JBL,STAG,MCHB,LAD,TOWN
+```
+
+A fonte científica documentada tem 77 ativos solicitados e 75 efetivos
+na janela controlada, com exclusões estruturais DOC e CLMT. O checkpoint
+congelado de descoberta é US$ 587.165.941,1330212 para o cutoff 2026-10-06.
+
+Regras da transferência:
+
+- A estratégia do MCT é uma cópia operacional estática do Challenger; não
+  implementa ainda o universo de atualização diária ADICIONAR/MANTER/REMOVER.
+- O MCT utiliza séries atualizadas da Alpaca; não deve copiar os CSV congelados
+  nem prometer reproduzir o capital histórico com outro cutoff ou snapshots.
+- O código/contrato do U67 operacional existente e o Winner não devem ser
+  modificados ou promovidos por esta transferência.
+- A nova estratégia exige um binding e um contrato próprios para 77 ativos,
+  não uma alteração silenciosa da Strategy U67 já existente.
+- O primeiro backtest no MCT é diagnóstico, sem envio de ordens. Só após
+  confirmar integridade, paridade dos parâmetros, limites operacionais de
+  liquidez/custos e implementação prospectiva equivalente, o usuário poderá
+  decidir sobre promoção com XNYS fechado e sem ordens em andamento.
+- Capital final, Sharpe, MaxDD, pior fold, elegibilidade, calendários,
+  decisões, trades e hashes devem acompanhar a auditoria.
+- A versão atual do estudo (v1.4.1) conserva como WARNING o PBO de 53,57%
+  (log-growth) e 59,52% (Sharpe); a escolha da composição é exploratória.
+
+O fechamento acadêmico oficial `v1.22.1` permanece independente. A tag
+de pesquisa solicitada deve apontar para o commit de encerramento desta
+branch, não para a `main`. A criação/push da tag anotada deve ocorrer via Git
+após conferir o HEAD, pois os conectores usados para esta entrega só expõem
+operações de escrita em branches, não criação de refs de tag.
