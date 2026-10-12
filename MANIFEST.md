@@ -1972,6 +1972,6 @@ treinada por essas variáveis na v1.0.4.
 **Status:** implementação publicada apenas nesta branch de pesquisa.
 Testes unitários de seleção e causalidade adicionados. Backtest financeiro
 v1.0.4 pendente de execução no Spyder com cache histórico completo.
-Não altera a `main`, a reprodução oficial, o MCT operacional
+Não altera a `main`, a reprodução oficial, o aplicação operacional operacional
 ou qualquer Winner. Os resultados devem ser interpretados por fold,
 Sharpe, drawdown, custos e capital final, sem promoção automática.
