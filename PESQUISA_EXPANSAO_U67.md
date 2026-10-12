@@ -221,3 +221,76 @@ ativos que recebem o replay financeiro.
 A campanha continua sendo exploratória. Uma assinatura aprendida a partir dos
 resultados deverá ser confirmada posteriormente em ativos não usados para
 construí-la.
+
+
+## Implementação v1.2.0: otimização conjunta dos 15 positivos
+
+A campanha direta sobre os 500 símbolos produziu 15 candidatos com delta
+marginal positivo:
+
+```text
+CRT, NBR, CAPR, PNBK, PENN, JBL, LEU, JBSS, STAG, MCHB,
+EML, MAR, LAD, TOWN, ACIW
+```
+
+Antes da busca conjunta, a v1.2.0 exige reproduzir o checkpoint:
+
+```text
+U67 + 15 positivos = US$ 290.727.954,41
+```
+
+com tolerância absoluta de um centavo. Se esse checkpoint divergir, a busca é
+interrompida.
+
+O modo padrão de `pesquisar_expansao_u67_spyder.py` passa a ser
+`subset_optimization`. O runner não repete a campanha dos 500 ativos. Ele
+reutiliza somente os 15 positivos e os dados RAW armazenados no cache local,
+reajusta seus modelos por fold e executa uma busca determinística em duas
+direções:
+
+```text
+forward selection
+    começar em U67
+    testar a adição de cada candidato restante
+    aceitar a adição que produz o maior capital
+    parar quando nenhuma adição melhora o capital
+
+backward elimination
+    partir de U67 + todos os 15
+    testar a remoção de um candidato por vez
+    aceitar a remoção que produz o maior capital
+    repetir até nenhuma remoção melhorar
+
+backward from forward
+    aplicar a mesma eliminação ao conjunto encontrado pelo forward
+```
+
+O vencedor é o conjunto com maior capital entre `all_positive`, `forward`,
+`backward_from_all` e `backward_from_forward`. Empates econômicos dentro do
+critério de busca são resolvidos de forma determinística e favorecem o conjunto
+menor no comparativo final.
+
+Essa é uma busca heurística, não uma enumeração exaustiva das 32.767
+combinações não vazias possíveis dos 15 ativos. A escolha evita um custo
+computacional muito maior e mantém toda a trilha de cenários efetivamente
+avaliados.
+
+As novas saídas ficam em:
+
+```text
+output/u67_subset_optimization/
+    candidate_download.csv
+    continuity_audit.csv
+    subset_scenarios_partial.csv
+    subset_scenarios.csv
+    subset_search.csv
+    decision_changes.csv
+    trades_new_assets.csv
+    scenario_fold_calibration.csv
+    selected_subset_replay.json
+    pesquisa_u67_subset_optimization.json
+    pacote_analise_u67_subset_optimization.zip
+```
+
+O modo anterior permanece no mesmo arquivo como `RUN_MODE =
+"direct_marginal"` para reprodução da campanha de 500 ativos.
