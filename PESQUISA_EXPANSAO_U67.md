@@ -607,3 +607,46 @@ O objetivo desta etapa não é encontrar mais capital. É determinar se o
 resultado de descoberta sobrevive a diagnósticos de ranking e múltiplos testes
 e se a composição ótima mostra comportamento temporal compatível com um
 universo não permanente.
+
+
+## Hotfix v1.4.1: serialização JSON e recuperação sem rerun
+
+Uma execução completa da v1.4.0 chegou ao final dos cálculos, incluindo mais de
+300 cenários totais após as buscas temporais, mas falhou somente ao escrever o
+JSON final:
+
+```text
+ValueError: Out of range float values are not JSON compliant: nan
+```
+
+A causa foi um `NaN` legítimo em campos diagnósticos agregados. O contrato do
+artefato usa `allow_nan=False`, portanto valores não finitos precisam ser
+convertidos explicitamente para `null` antes da serialização.
+
+A v1.4.1 adiciona sanitização recursiva para:
+
+```text
+NaN       -> null
++Infinity -> null
+-Infinity -> null
+np.integer -> int
+np.bool_   -> bool
+```
+
+A correção não altera modelos, decisões, retornos, DSR, PBO, ranking ou seleção
+temporal.
+
+Como a falha ocorreu depois dos cálculos e os CSV/JSON intermediários já tinham
+sido gravados, foi criado:
+
+```text
+finalizar_u67_decision_validation_spyder.py
+```
+
+Esse recovery valida os 180 cenários, os checkpoints U67+15 e U67+10, recupera
+os hashes dos 15 candidatos, recompõe somente o JSON final e cria o ZIP de
+análise. Ele não treina modelos, não executa backtests e não apaga a pasta de
+output existente.
+
+Para uma execução que apresentou exatamente essa falha, usar o recovery em vez
+de repetir a campanha completa.
