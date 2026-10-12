@@ -235,3 +235,35 @@ O ZIP final, exclusivo dessa versão, fica em:
 
 Consulte a seção 25.12.4 de MANIFEST.md para os critérios de seleção,
 limitações de validação e interpretação do CSV de variáveis históricas.
+
+
+### Versão experimental 1.0.5 — comparar ganhos de ativos no curto e médio prazo
+
+A execução padrão do arquivo existente
+`pesquisar_persistencia_horizontes_spyder.py` passa a ser v1.0.5.
+O código testa candidatos contra o ativo **realmente mantido** na
+simulação da própria variante: H05/H10 (curto) e H20/H40 (médio).
+Treina regressões auxiliares de retorno percentual líquido com
+apenas os rótulos passados plenamente maturados. A política
+Control permanece como fallback, com holding=2. H60 continua
+no Control original.
+
+Na pasta do TCC, use o console do Spyder:
+
+    !git fetch origin
+    !git switch research/horizon-persistence-oos-v1
+    !git pull --ff-only origin research/horizon-persistence-oos-v1
+
+Reinicie o kernel e execute:
+
+    %run pesquisar_persistencia_horizontes_spyder.py
+
+Os dez históricos candidatos do cache local U67+10 são
+obrigatórios. Nenhum download será feito.
+O pacote de resultados está separado das versões anteriores:
+
+    output/persistencia_horizontes_u77_v105/pacote_persistencia_horizontes_u77_v105.zip
+
+Antes de simular candidatos, o código verifica o checkpoint
+US$ 587.165.941,13 da política Control. Ver detalhes e
+limitações na seção 25.12.5 de `MANIFEST.md`.
