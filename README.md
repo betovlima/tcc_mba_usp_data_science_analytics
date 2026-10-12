@@ -110,10 +110,10 @@ em:
 pesquisar_expansao_u67_spyder.py
 ```
 
-A versão 1.3.0 usa por padrão o modo `assurance_validation`. Ela trata o
-subconjunto de descoberta como Challenger e executa diagnóstico de
-overfitting/underfitting, validação temporal da seleção do universo,
-leave-one-asset-out, stress de custos e rerun de reprodutibilidade. Os modos
+A versão 1.4.0 usa por padrão o modo `decision_validation`. Ela preserva
+os checkpoints da assurance e mede qualidade de ranking/decisão, Deflated
+Sharpe Ratio, Probability of Backtest Overfitting e um piloto temporal de
+`ADICIONAR / MANTER / REMOVER` ativos. Os modos `assurance_validation`,
 `subset_optimization` e `direct_marginal` permanecem disponíveis para
 reproduzir as etapas anteriores.
 
@@ -130,14 +130,14 @@ python pesquisar_expansao_u67_spyder.py
 No Spyder, abra `pesquisar_expansao_u67_spyder.py`, reinicie o kernel e execute
 o arquivo completo com F5.
 
-No modo padrão de assurance, os resultados ficam em:
+No modo padrão de validação da decisão, os resultados ficam em:
 
 ```text
-output/u67_assurance_validation/
+output/u67_decision_validation/
 ```
 
-Os modos anteriores continuam usando `output/u67_subset_optimization/` e
-`output/u67_asset_expansion/`.
+Os modos anteriores continuam usando `output/u67_assurance_validation/`,
+`output/u67_subset_optimization/` e `output/u67_asset_expansion/`.
 
 O desenho e as limitações da campanha estão documentados em
 `PESQUISA_EXPANSAO_U67.md`.
