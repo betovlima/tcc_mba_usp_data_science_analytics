@@ -1733,3 +1733,85 @@ O backtest completo não está validado pela CI unitária; os resultados
 Control e ablação observados não antecipam desempenho do método
 multi-horizonte. Reexecutar pesquisar_persistencia_horizontes_spyder.py
 após atualizar esta branch e enviar o ZIP produzido.
+
+
+#### 25.12.2 Resultado executado dos três braços (v1.0.2, 2026-10-12)
+
+**Fonte observada:** pacote local
+pacote_persistencia_horizontes_u77.zip fornecido pelo autor, script_version
+horizon-persistence-oos-v1.0.2, status completed e cutoff 2026-10-06.
+Snapshot U67 SHA-256:
+e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575.
+Universo requisitado 77, efetivo 75, exclusões CLMT e DOC.
+A campanha usa os dez ativos novos congelados e os mesmos três folds.
+
+| Política | Capital final USD | Sharpe | MaxDD | CAGR | Rotações |
+|---|---:|---:|---:|---:|---:|
+| Control, holding=2 | 587.165.941,13 | 2,728536 | -41,6828% | 486,575% | 354 |
+| Ablação, holding=0 | 59.060.362,54 | 2,257679 | -41,6828% | 305,150% | 450 |
+| Horizonte/confiança heurística | 473.069,88 | 1,264438 | -74,7582% | 86,1475% | 129 |
+
+O Control reproduziu o checkpoint de US$ 587.165.941,1330212 ao
+centavo. A retirada da permanência mínima reduziu o capital simulado em
+89,94145% e aumentou as rotações de 354 para 450. A nova política de
+confiança alcançou apenas 0,0805683% do capital do Control e não
+demonstrou vantagem. Não se deve exportar ou promover a nova política
+com base nesta execução.
+
+**Capitais acumulados nos finais de fold:**
+
+| Fold | Control USD | Sem holding USD | Multi-horizonte USD |
+|---|---:|---:|---:|
+| 1 | 67.999,95 | 37.425,26 | 25.249,95 |
+| 2 | 10.968.842,01 | 3.205.786,89 | 39.859,00 |
+| 3 | 587.165.941,13 | 59.060.362,54 | 473.069,88 |
+
+No braço multi-horizonte, as 1.560 decisões registradas incluem:
+751 CURRENT_BEST, 666 HORIZON_CONFIDENCE_NOT_MET,
+129 ROTATE_HORIZON_CONFIDENT, 13 SWITCH_MARGIN e uma entrada inicial.
+O fold 2, especificamente, registrou 411 bloqueios de confiança,
+apenas 4 rotações e 79 decisões em que o ativo atual era o melhor.
+O multiplicador calibrado foi 0,0 no fold 1; 1,0 no fold 2; e 0,0
+no fold 3. São escolhas de limiar heurístico, não probabilidades
+estatisticamente calibradas.
+
+O Control registrou 355 aplicações do MIN_HOLD_GUARD, porém somente
+162 dessas decisões identificavam um ativo bruto superior ao
+incumbente. Logo, contar 355 como oportunidades perdidas seria
+incorreto. Comparando as posições diárias, a ablação diferiu do
+Control em 164 de 1.560 sessões (10,5%), e o multi-horizonte em
+712 sessões (45,6%). Os efeitos cumulativos refletem trajetórias
+distintas de composição de capital, não apenas diferenças isoladas
+de taxa de transação.
+
+**Interpretação e limitações:** A política experimental faz uma
+comparação adicional com uma mistura da previsão atual e da previsão
+da compra em cinco horizontes, cujo erro absoluto p75 é calculado
+em períodos anteriores ao OOS. Esse p75 não é calibrado como
+probabilidade condicional de outra ação superar a posição corrente,
+nem mede diretamente a diferença de utilidade de pares. No fold 2,
+o limiar impediu quase toda a rotação. O experimento demonstra
+fracasso da heurística específica, **não** refutação da possibilidade
+de usar memória preditiva por horizonte.
+
+Em 73 linhas de decisão a origem da previsão de entrada foi
+fold_boundary_proxy (posição herdada de outro fold), e não a
+previsão histórica original da compra. Esse caso deve ser
+resolvido em uma próxima versão para obter a equivalência de estado
+do replay prospectivo.
+
+**Próxima hipótese a testar, em pesquisa separada nesta mesma branch:**
+manter o comportamento do Control holding=2 como fallback, habilitando
+um override antecipado estritamente quando evidência calibrada de
+vantagem líquida específica do par candidato-incumbente for suficiente.
+Para isolar o efeito, comparar baseline, override antecipado e
+limiar calibrado, preservando o protocolo temporal. Registrar
+decisões antecipadas, PnL contrafactual, custos, calibragem e
+estabilidade por fold. Não escolher thresholds com base na janela
+OOS final, não confundir o score agregado com probabilidade e não
+impor aprovação ou gate novo à adoção: trata-se de pesquisa
+científica para subsidiar decisão posterior.
+
+**Separação entre defeitos:** eventual diferença do contador de
+holding de produção precisa de correção operacional independente;
+nenhum resultado aqui justifica manter um contador desatualizado.
