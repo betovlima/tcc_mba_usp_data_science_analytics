@@ -1,7 +1,7 @@
 """Experimento isolado U67+10: permanencia 1/2/3/4 e selecao cronologica.
 
 Mantem modelos, snapshots, margens e custos da politica Control v1.0.3.
-Nao faz download nem altera a reproducao oficial ou o MCT.
+Nao faz download nem altera a reproducao oficial ou o aplicação operacional.
 Uso no Spyder: execute este arquivo (F5), com os caches U67+10 presentes.
 """
 from __future__ import annotations
