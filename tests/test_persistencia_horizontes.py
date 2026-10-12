@@ -374,3 +374,61 @@ def test_pair_gap_error_does_not_count_many_pairs_as_many_days():
             aggregate=predictions,
             predictions=predictions,
         )
+
+
+def test_v104_calibrated_holding_selects_only_given_historical_scores():
+    from pesquisar_persistencia_horizontes_spyder import select_calibrated_holding
+
+    assert select_calibrated_holding({1: 0.1, 2: 0.2, 3: 0.3, 4: 0.0}) == 3
+    assert select_calibrated_holding({1: 0.2, 2: 0.2, 3: 0.2, 4: 0.2}) == 2
+    assert select_calibrated_holding({1: 1.0, 2: 0.0, 3: 1.0, 4: 0.0}) == 1
+    with pytest.raises(ValueError, match="todos os holdings"):
+        select_calibrated_holding({1: 0.1, 2: 0.2, 3: 0.3})
+    with pytest.raises(ValueError, match="nao finitos"):
+        select_calibrated_holding({1: 0.1, 2: float("nan"), 3: 0.3, 4: 0.4})
+
+
+def test_v104_holding_changes_only_min_hold_gate_with_frozen_utilities():
+    from types import SimpleNamespace
+    from engine.rotacao import _politica_utilidade
+
+    day = pd.Timestamp("2026-10-01", tz="UTC")
+    cache = {day: np.asarray([0.0, 0.20, 0.80])}
+    for holding in (1, 2, 3, 4):
+        cfg = SimpleNamespace(
+            rotation_cash_threshold=0.0,
+            rotation_min_expected_edge=0.001,
+            rotation_switch_margin=0.0005,
+            rotation_min_holding_days=holding,
+        )
+        policy = _politica_utilidade(
+            {}, {}, ["MAN", "TSLA"], cfg, 0.0005, utility_cache=cache
+        )
+        assert policy(day, 1, 1)[0] == (2 if holding == 1 else 1)
+        assert policy(day, 1, holding)[0] == 2
+
+
+def test_v104_point_in_time_features_do_not_export_forward_labels():
+    from pesquisar_persistencia_horizontes_spyder import causal_hold_guard_features
+
+    day = pd.Timestamp("2026-10-01", tz="UTC")
+    frame = pd.DataFrame({
+        "vol_20": [0.03], "vol_60": [0.06], "return_5": [0.10],
+        "trend_efficiency_20": [0.40], "distance_from_high_20": [-0.02],
+        "forward_horizon_utility_5": [99999.0],
+    }, index=pd.DatetimeIndex([day]))
+    audit = {day: {
+        "min_hold_guard_applied": True,
+        "decision_fold_id": 1,
+        "current_asset": "MAN",
+        "raw_best_asset": "TSLA",
+        "holding_days_at_decision": 1,
+        "best_vs_current_gap": 0.11,
+    }}
+    table = causal_hold_guard_features(audit, {"MAN": frame})
+    assert len(table) == 1
+    assert table.iloc[0]["vol_20"] == 0.03
+    assert not any("forward" in col for col in table.columns)
+
+    audit[day]["min_hold_guard_applied"] = False
+    assert causal_hold_guard_features(audit, {"MAN": frame}).empty
