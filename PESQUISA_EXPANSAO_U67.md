@@ -828,3 +828,81 @@ Portanto, a próxima etapa não deve otimizar novamente o mesmo conjunto. Ela
 deve validar a regra de construção do universo em um desenho nested, no qual
 candidatos externos e ativos internos sejam redescobertos usando somente
 informação disponível até cada data de atualização.
+
+
+## Recentragem do objetivo: pertencimento dinâmico, não ranking global
+
+A análise conjunta dos artefatos v1.1-v1.4 e do cache congelado confirma que o
+objetivo científico não é ordenar globalmente todos os ativos. O ranking
+cross-sectional da v1.4 permanece apenas como diagnóstico da política
+LightGBM. A pergunta principal passa a ser explicitamente:
+
+```text
+Dado o universo U_t e o contexto observável em t,
+o ativo X agrega valor como opção disponível?
+```
+
+Para ativos externos, isso corresponde à contribuição de inclusão. Para ativos
+já presentes, corresponde à contribuição de permanência versus remoção.
+
+A matriz diária dos 180 cenários permite recuperar, sem novo download, a
+contribuição relativa de cada um dos 15 candidatos quando testado
+individualmente contra o U67 em cada fold. O resultado é:
+
+| ativo | fold 1 vs U67 | fold 2 vs U67 | fold 3 vs U67 | full-window |
+|---|---:|---:|---:|---:|
+| CRT | -0,98% | +69,49% | ~0,00% | +69,50% |
+| NBR | +41,24% | +0,01% | +5,66% | +56,49% |
+| CAPR | -0,98% | ~0,00% | +36,91% | +36,91% |
+| PNBK | -0,98% | +4,09% | +21,19% | +26,15% |
+| PENN | +18,84% | +0,01% | ~0,00% | +20,03% |
+| JBL | -0,98% | +6,61% | +11,96% | +19,36% |
+| LEU | -15,35% | -39,29% | +102,90% | +5,30% |
+| JBSS | -0,98% | ~0,00% | +5,21% | +5,21% |
+| STAG | -0,98% | +4,78% | ~0,00% | +4,78% |
+| MCHB | -0,98% | +4,30% | ~0,00% | +4,30% |
+| EML | +2,52% | ~0,00% | ~0,00% | +3,54% |
+| MAR | -0,98% | +3,26% | ~0,00% | +3,26% |
+| LAD | -0,98% | -3,24% | +6,58% | +3,13% |
+| TOWN | -0,98% | +1,33% | ~0,00% | +1,33% |
+| ACIW | -0,98% | +1,07% | ~0,00% | +1,07% |
+
+Os percentuais por fold são a diferença relativa de capital do cenário
+`U67 + ativo` contra o U67 dentro daquele fold, derivados das séries diárias
+já preservadas. Valores próximos de zero significam pouca ou nenhuma
+contribuição econômica naquele período.
+
+A tabela mostra diretamente que positividade full-window não significa
+pertencimento permanente. LEU é o caso extremo: prejudica fortemente os folds
+1 e 2 e só se torna muito favorável no fold 3. CAPR é essencialmente um ativo
+de contribuição tardia; CRT concentra quase todo o benefício no fold 2; EML é
+útil no início e depois perde relevância.
+
+Isso também explica por que o Challenger full-window não pode ser convertido
+em lista fixa. CAPR e LAD fazem parte dos 10 finais, mas não eram escolhidos
+pela seleção que usava apenas folds 1+2. Seu valor aparece posteriormente.
+
+### Perguntas já respondidas com os dados disponíveis
+
+Os dados existentes já suportam as seguintes conclusões:
+
+- a contribuição de um ativo muda materialmente com o tempo;
+- positividade isolada full-window não garante utilidade conjunta;
+- a composição útil mudou entre as duas decisões temporais observadas;
+- a seleção temporal realizou ADICIONAR/MANTER/REMOVER de forma coerente com
+  a hipótese de universo não permanente;
+- filtros estáticos simples de preço, liquidez, momentum ou ranking global não
+  são uma definição adequada da assinatura.
+
+Ainda permanecem sem resposta causal suficiente:
+
+- quais ativos do próprio U67 deveriam ser removidos, pois o U67 foi mantido
+  fixo em todos os experimentos desta linha;
+- qual é a regra de pertencimento em frequência diária ou quase diária;
+- quanto de histerese/permanência mínima é necessário para evitar churn;
+- se a assinatura aprendida em uma janela permanece válida quando candidatos
+  externos são redescobertos de forma nested sem acesso ao futuro.
+
+O cache atual contém os dados de mercado necessários para aprofundar essas
+perguntas sem novo download dos 500 candidatos. O que falta são rótulos
+contrafactuais temporais mais densos, produzidos pelo próprio replay controlado.
