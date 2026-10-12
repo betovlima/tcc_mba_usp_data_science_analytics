@@ -185,3 +185,23 @@ output/persistencia_horizontes_u77/
 
 Leia a seção 25.12 de MANIFEST.md para critérios de causalidade,
 limitações da confiança heurística e interpretação de resultados.
+
+
+### Versão experimental 1.0.3 — antecipação sem veto adicional
+
+Use a mesma branch e o mesmo arquivo
+pesquisar_persistencia_horizontes_spyder.py.
+A versão 1.0.3 substitui, somente para esta nova campanha,
+a heurística que bloqueava rotações do Control por uma política
+**Control + antecipações de troca por evidência multi-horizonte**.
+
+O script continua exigindo os dez históricos externos em cache
+e não consulta a corretora. Execute com F5 no Spyder depois
+de atualizar a branch e reiniciar o kernel.
+
+O pacote novo é separado daquele produzido pela versão 1.0.2:
+
+    output/persistencia_horizontes_u77_v103/pacote_persistencia_horizontes_u77_v103.zip
+
+A campanha deve reproduzir o checkpoint Control ao centavo antes
+de avaliar a nova hipótese. Veja a seção 25.12.3 de MANIFEST.md.
