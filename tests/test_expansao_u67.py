@@ -10,6 +10,10 @@ from pesquisar_expansao_u67_spyder import (
     _merge_utility_caches,
     _ranker_dataset,
     _forward_backward_subset_search,
+    _regression_error,
+    _naive_mean_errors,
+    _fit_quality_row,
+    _compound_fold_capital,
 )
 
 
@@ -128,3 +132,62 @@ def test_forward_backward_subset_search_encontra_interacao_conjunta_melhor():
     assert result["backward_from_all"]["assets"] == ["A", "B"]
     assert result["selected"]["assets"] == ["A", "B"]
     assert result["selected"]["ending_capital"] == pytest.approx(180.0)
+
+
+
+def test_fit_quality_detecta_overfit_sem_limiar_arbitrario():
+    dates = pd.date_range("2020-01-01", periods=8, freq="B", tz="UTC")
+    frame = pd.DataFrame(
+        {
+            "forward_risk_adjusted_utility": [
+                0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0
+            ]
+        },
+        index=dates,
+    )
+    row = _fit_quality_row(
+        universe_role="candidate",
+        symbol="AAA",
+        fold_id=1,
+        frame=frame,
+        train_dates=dates[:4],
+        decision_dates=dates[4:],
+        fit_diagnostics={"train": {"rows": 4, "mae": 0.05, "rmse": 0.10}},
+        oos_diagnostics={"rows": 4, "mae": 0.60, "rmse": 0.60},
+    )
+    assert row["train_skill_vs_naive"] > 0
+    assert row["oos_skill_vs_naive"] <= 0
+    assert row["overfit_warning"] is True
+    assert row["underfit_warning"] is False
+
+
+def test_fit_quality_detecta_underfit_contra_media_ingenua():
+    dates = pd.date_range("2020-01-01", periods=8, freq="B", tz="UTC")
+    frame = pd.DataFrame(
+        {"forward_risk_adjusted_utility": [0.0, 1.0] * 4},
+        index=dates,
+    )
+    row = _fit_quality_row(
+        universe_role="candidate",
+        symbol="AAA",
+        fold_id=1,
+        frame=frame,
+        train_dates=dates[:4],
+        decision_dates=dates[4:],
+        fit_diagnostics={"train": {"rows": 4, "mae": 0.60, "rmse": 0.60}},
+        oos_diagnostics={"rows": 4, "mae": 0.60, "rmse": 0.60},
+    )
+    assert row["train_skill_vs_naive"] <= 0
+    assert row["oos_skill_vs_naive"] <= 0
+    assert row["underfit_warning"] is True
+
+
+def test_compound_fold_capital_usa_somente_folds_informados():
+    metrics = {
+        "folds": [
+            {"fold_id": 1, "strategy_return": 1.0},
+            {"fold_id": 2, "strategy_return": 2.0},
+            {"fold_id": 3, "strategy_return": 99.0},
+        ]
+    }
+    assert _compound_fold_capital(metrics, [1, 2], 100.0) == pytest.approx(600.0)
