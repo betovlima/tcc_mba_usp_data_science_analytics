@@ -1623,7 +1623,7 @@ não modifica os resultados numéricos nem a política de universo congelada.
 
 **Versão experimental:** horizon-persistence-oos-v1.0.0.
 **Branch separada:** research/horizon-persistence-oos-v1, criada a partir de
-research/u67-mct-asset-expansion-v1 no commit 13e5ed39.
+da pesquisa U67+10 no commit 13e5ed39.
 Esta pesquisa **não modifica** os checkpoints, a reprodução oficial, o
 checkpoint congelado U67+10 ou o universo original. Não existe promoção
 automática nem mudança do resultado acadêmico validado.
