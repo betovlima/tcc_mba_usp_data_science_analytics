@@ -9,6 +9,7 @@ from pesquisar_expansao_u67_spyder import (
     _continuity_audit,
     _merge_utility_caches,
     _ranker_dataset,
+    _forward_backward_subset_search,
 )
 
 
@@ -97,3 +98,33 @@ def test_amostra_congelada_mantem_500_sem_gate_do_catalogo_atual(tmp_path, monke
     assert sample["sample_order"].tolist() == list(range(1, 501))
     assert bool(sample.loc[0, "catalog_currently_eligible"]) is True
     assert bool(sample.loc[1, "catalog_currently_eligible"]) is False
+
+
+
+def test_forward_backward_subset_search_encontra_interacao_conjunta_melhor():
+    table = {
+        (): 100.0,
+        ("A",): 130.0,
+        ("B",): 125.0,
+        ("C",): 110.0,
+        ("A", "B"): 180.0,
+        ("A", "C"): 135.0,
+        ("B", "C"): 140.0,
+        ("A", "B", "C"): 170.0,
+    }
+
+    def score(assets):
+        return table[tuple(assets)]
+
+    result = _forward_backward_subset_search(
+        ["A", "B", "C"],
+        score,
+        baseline_capital=100.0,
+        improvement_tol=0.0,
+    )
+
+    assert result["forward"]["assets"] == ["A", "B"]
+    assert result["forward"]["ending_capital"] == pytest.approx(180.0)
+    assert result["backward_from_all"]["assets"] == ["A", "B"]
+    assert result["selected"]["assets"] == ["A", "B"]
+    assert result["selected"]["ending_capital"] == pytest.approx(180.0)
