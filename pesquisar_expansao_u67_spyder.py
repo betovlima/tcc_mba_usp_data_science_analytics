@@ -1,29 +1,29 @@
-"""Pesquisa incremental U67+n por contribuicao marginal direta.
+"""Pesquisa incremental U67+n e otimizacao do subconjunto positivo.
 
 Objetivo
 --------
-Preservar integralmente o U67 oficial e testar a adicao de ativos externos
-sem gates intermediarios de mercado ou ranking. O snapshot dados/u67 nunca e
-reconstruido nem alterado por este script.
+Preservar integralmente o U67 oficial. A campanha de descoberta direta ja
+identificou 15 candidatos com contribuicao marginal positiva. Esta versao
+reproduz esse checkpoint e procura um subconjunto conjunto que maximize o
+capital final sem remover ou substituir ativos do U67.
 
 Execucao no Spyder
 ------------------
 Abra este arquivo, reinicie o kernel e pressione F5.
 
-Fluxo
------
-1. valida e reproduz o baseline U67 congelado;
-2. reutiliza a mesma amostra congelada de 500 ativos da campanha inicial;
-3. baixa historico RAW completo e Corporate Actions da amostra;
-4. aplica somente auditoria estrutural de dados, continuidade e identidade;
-5. testa diretamente U67 + candidato para todo ativo estruturalmente valido;
-6. seleciona os candidatos com delta de capital positivo;
-7. testa U67 + todos os positivos;
-8. se necessario, procura um subconjunto positivo por adicao gulosa.
+Modo padrao
+-----------
+subset_optimization:
+1. reproduz o baseline U67 congelado;
+2. carrega os 15 positivos descobertos na campanha de 500 ativos;
+3. reproduz U67 + todos os 15 e exige o mesmo checkpoint financeiro;
+4. executa forward selection pelo capital final;
+5. executa backward elimination partindo de todos os positivos e do forward;
+6. escolhe o melhor conjunto observado e grava toda a trilha de busca.
 
-Preco, liquidez, volume e Learning-to-Rank nao eliminam candidatos nesta
-versao. A verdade de selecao e a contribuicao marginal observada no replay
-financeiro completo contra o mesmo U67 recalculado nesta execucao.
+O modo direct_marginal permanece disponivel no mesmo arquivo para repetir a
+campanha dos 500 ativos. Nenhum filtro de preco, liquidez, volume ou ranking
+participa da decisao do subconjunto.
 """
 from __future__ import annotations
 
@@ -95,18 +95,42 @@ from reproducao.preparacao import (
 
 # %% 0 - Parametros da campanha
 ROOT = Path(__file__).resolve().parent
+RUN_MODE = "subset_optimization"
 BASE_DATA = SnapshotPaths.u67(ROOT)
 CACHE_ROOT = ROOT / "dados" / ".u67_expansion_cache"
 FAST_CACHE = CACHE_ROOT / "fast_split_20261006"
 FULL_DATA = SnapshotPaths.from_root(CACHE_ROOT / "full_raw_20261006")
-OUT = ROOT / "output" / "u67_asset_expansion"
+OUT = ROOT / "output" / (
+    "u67_subset_optimization"
+    if RUN_MODE == "subset_optimization"
+    else "u67_asset_expansion"
+)
 CANDIDATE_SAMPLE_MANIFEST = ROOT / "pesquisa_u67_amostra_500.csv"
 
-SCRIPT_VERSION = "u67-asset-expansion-v1.1.0"
-EXECUTION_SCHEMA = "u67-asset-expansion-v2"
+SCRIPT_VERSION = "u67-asset-expansion-v1.2.0"
+EXECUTION_SCHEMA = "u67-asset-expansion-v3"
 ANALYSIS_END_DATE = "2026-10-06"
 EXPECTED_U67_ENDING_CAPITAL = 76_927_051.38897176
+EXPECTED_ALL_POSITIVE_ENDING_CAPITAL = 290_727_954.41339606
 BASELINE_ABS_TOL = 0.01
+SUBSET_IMPROVEMENT_TOL = 0.01
+SUBSET_SOURCE_CANDIDATES = (
+    "CRT",
+    "NBR",
+    "CAPR",
+    "PNBK",
+    "PENN",
+    "JBL",
+    "LEU",
+    "JBSS",
+    "STAG",
+    "MCHB",
+    "EML",
+    "MAR",
+    "LAD",
+    "TOWN",
+    "ACIW",
+)
 
 CATALOG_SAMPLE_SEED = "u67-asset-expansion-v1"
 CANDIDATE_SCAN_BUDGET = 500
@@ -1230,6 +1254,438 @@ def _new_asset_trades(scenario: str, result: Any, candidate_symbols: set[str]) -
     return subset
 
 
+def _forward_backward_subset_search(
+    symbols: list[str],
+    score_assets: Any,
+    baseline_capital: float,
+    improvement_tol: float = SUBSET_IMPROVEMENT_TOL,
+) -> dict[str, Any]:
+    """Busca deterministica forward + backward usando capital final como score."""
+    ordered = list(dict.fromkeys(str(symbol) for symbol in symbols))
+    order = {symbol: index for index, symbol in enumerate(ordered)}
+    trace: list[dict[str, Any]] = []
+
+    def canonical(values: list[str] | tuple[str, ...]) -> list[str]:
+        chosen = set(values)
+        return [symbol for symbol in ordered if symbol in chosen]
+
+    def best_trial(
+        phase: str,
+        step: int,
+        current_assets: list[str],
+        candidates: list[tuple[str, list[str]]],
+        current_capital: float,
+    ) -> tuple[str | None, list[str], float, bool]:
+        evaluated: list[tuple[str, list[str], float]] = []
+        for action_symbol, assets in candidates:
+            normalized = canonical(assets)
+            capital = float(score_assets(normalized))
+            evaluated.append((action_symbol, normalized, capital))
+        if not evaluated:
+            return None, current_assets, current_capital, False
+        evaluated.sort(key=lambda item: (-item[2], order[item[0]]))
+        best_symbol, best_assets, best_capital = evaluated[0]
+        accepted = best_capital > current_capital + improvement_tol
+        for action_symbol, assets, capital in evaluated:
+            trace.append(
+                {
+                    "phase": phase,
+                    "step": step,
+                    "action_symbol": action_symbol,
+                    "assets": ",".join(assets),
+                    "asset_count": len(assets),
+                    "ending_capital": capital,
+                    "current_capital_before": current_capital,
+                    "best_trial": action_symbol == best_symbol,
+                    "accepted": bool(accepted and action_symbol == best_symbol),
+                }
+            )
+        return best_symbol, best_assets, best_capital, accepted
+
+    forward_assets: list[str] = []
+    forward_capital = float(baseline_capital)
+    remaining = ordered.copy()
+    step = 0
+    while remaining:
+        step += 1
+        trials = [
+            (symbol, [*forward_assets, symbol])
+            for symbol in remaining
+        ]
+        symbol, assets, capital, accepted = best_trial(
+            "forward",
+            step,
+            forward_assets,
+            trials,
+            forward_capital,
+        )
+        if not accepted or symbol is None:
+            break
+        forward_assets = assets
+        forward_capital = capital
+        remaining = [item for item in remaining if item != symbol]
+
+    def backward(start_assets: list[str], phase: str) -> tuple[list[str], float]:
+        current_assets = canonical(start_assets)
+        current_capital = (
+            float(score_assets(current_assets))
+            if current_assets
+            else float(baseline_capital)
+        )
+        step = 0
+        while len(current_assets) > 1:
+            step += 1
+            trials = [
+                (
+                    symbol,
+                    [item for item in current_assets if item != symbol],
+                )
+                for symbol in current_assets
+            ]
+            symbol, assets, capital, accepted = best_trial(
+                phase,
+                step,
+                current_assets,
+                trials,
+                current_capital,
+            )
+            if not accepted or symbol is None:
+                break
+            current_assets = assets
+            current_capital = capital
+        return current_assets, current_capital
+
+    all_assets = canonical(ordered)
+    all_capital = float(score_assets(all_assets))
+    backward_all_assets, backward_all_capital = backward(
+        all_assets,
+        "backward_from_all",
+    )
+    backward_forward_assets, backward_forward_capital = backward(
+        forward_assets,
+        "backward_from_forward",
+    )
+
+    solutions = [
+        ("all_positive", all_assets, all_capital),
+        ("forward", forward_assets, forward_capital),
+        ("backward_from_all", backward_all_assets, backward_all_capital),
+        (
+            "backward_from_forward",
+            backward_forward_assets,
+            backward_forward_capital,
+        ),
+    ]
+    solutions.sort(key=lambda item: (-item[2], len(item[1]), item[0]))
+    selected_label, selected_assets, selected_capital = solutions[0]
+    return {
+        "forward": {
+            "assets": forward_assets,
+            "ending_capital": forward_capital,
+        },
+        "backward_from_all": {
+            "assets": backward_all_assets,
+            "ending_capital": backward_all_capital,
+        },
+        "backward_from_forward": {
+            "assets": backward_forward_assets,
+            "ending_capital": backward_forward_capital,
+        },
+        "all_positive": {
+            "assets": all_assets,
+            "ending_capital": all_capital,
+        },
+        "selected": {
+            "source": selected_label,
+            "assets": selected_assets,
+            "ending_capital": selected_capital,
+        },
+        "trace": trace,
+    }
+
+
+def _run_subset_optimization(
+    *,
+    snapshot: dict[str, Any],
+    baseline_payload: dict[str, Any],
+    baseline_metrics: dict[str, Any],
+    baseline_result: Any,
+    baseline_frames: dict[str, pd.DataFrame],
+    common_dates: pd.DatetimeIndex,
+    baseline_symbols: list[str],
+    folds: list[dict[str, Any]],
+    all_decision_dates: pd.DatetimeIndex,
+    decision_to_fold: dict[pd.Timestamp, int],
+    decision_metadata: Any,
+    config_u67: Any,
+    states: list[BaselineFoldState],
+    calibration_rows: list[dict[str, Any]],
+    started: float,
+) -> dict[str, Any]:
+    symbols = list(SUBSET_SOURCE_CANDIDATES)
+    credentials = load_alpaca_credentials(ROOT)
+    download_audit = _prepare_full_candidate_files(credentials, symbols)
+    download_audit.to_csv(OUT / "candidate_download.csv", index=False)
+    failed_downloads = download_audit.loc[
+        download_audit["status"].eq("failed"),
+        "asset",
+    ].astype(str).tolist()
+    if failed_downloads:
+        raise RuntimeError(
+            "Falha ao reproduzir dados dos 15 positivos: "
+            + ", ".join(failed_downloads)
+        )
+
+    candidate_frames, continuity, candidate_hashes = _prepare_candidate_frames(
+        symbols,
+        common_dates,
+        all_decision_dates,
+        config_u67,
+    )
+    continuity.to_csv(OUT / "continuity_audit.csv", index=False)
+    missing_structural = [
+        symbol for symbol in symbols if symbol not in candidate_frames
+    ]
+    if missing_structural:
+        raise RuntimeError(
+            "Checkpoint dos 15 positivos nao pode ser reproduzido; "
+            "falha estrutural em: "
+            + ", ".join(missing_structural)
+        )
+
+    candidate_fold_caches: dict[str, dict[int, CandidateFoldCache]] = {}
+    for position, symbol in enumerate(symbols, start=1):
+        candidate_fold_caches[symbol] = _train_candidate_caches(
+            symbol,
+            candidate_frames[symbol],
+            states,
+            config_u67,
+        )
+        print(
+            f"[subset-train] {position}/{len(symbols)} {symbol}",
+            flush=True,
+        )
+
+    scenario_metrics_cache: dict[tuple[str, ...], dict[str, Any]] = {}
+    scenario_rows: list[dict[str, Any]] = []
+    subset_calibration_rows: list[dict[str, Any]] = []
+
+    def canonical(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+        chosen = set(values)
+        return tuple(symbol for symbol in symbols if symbol in chosen)
+
+    def score_assets(values: list[str] | tuple[str, ...]) -> float:
+        key = canonical(values)
+        if not key:
+            return float(baseline_metrics["ending_capital"])
+        cached = scenario_metrics_cache.get(key)
+        if cached is not None:
+            return float(cached["ending_capital"])
+        scenario_name = "U67+SUBSET_" + "_".join(key)
+        _, metrics, rows = _evaluate_scenario(
+            scenario_name,
+            list(key),
+            baseline_frames,
+            candidate_frames,
+            baseline_symbols,
+            states,
+            candidate_fold_caches,
+            folds,
+            all_decision_dates,
+            decision_to_fold,
+            decision_metadata,
+            config_u67,
+        )
+        scenario_metrics_cache[key] = metrics
+        subset_calibration_rows.extend(rows)
+        scenario_rows.append(
+            {
+                "assets": ",".join(key),
+                "asset_count": len(key),
+                "ending_capital": metrics.get("ending_capital"),
+                "cagr": metrics.get("cagr"),
+                "sharpe": metrics.get("sharpe"),
+                "maximum_drawdown": metrics.get("maximum_drawdown"),
+                "worst_fold_return": metrics.get("worst_fold_return"),
+                "capital_rotations": metrics.get("capital_rotations"),
+            }
+        )
+        pd.DataFrame(scenario_rows).to_csv(
+            OUT / "subset_scenarios_partial.csv",
+            index=False,
+        )
+        print(
+            f"[subset-score] n={len(key):02d} "
+            f"capital=US$ {metrics['ending_capital']:,.2f} "
+            f"assets={','.join(key)}",
+            flush=True,
+        )
+        return float(metrics["ending_capital"])
+
+    all_positive_capital = score_assets(symbols)
+    all_positive_exact = math.isclose(
+        all_positive_capital,
+        EXPECTED_ALL_POSITIVE_ENDING_CAPITAL,
+        rel_tol=0.0,
+        abs_tol=BASELINE_ABS_TOL,
+    )
+    if not all_positive_exact:
+        raise RuntimeError(
+            "Checkpoint U67+15 nao foi reproduzido. "
+            f"observado={all_positive_capital:.8f} "
+            f"esperado={EXPECTED_ALL_POSITIVE_ENDING_CAPITAL:.8f}"
+        )
+    print(
+        "[subset-checkpoint] U67+15 reproduced_exact_to_cent=True",
+        flush=True,
+    )
+
+    search = _forward_backward_subset_search(
+        symbols,
+        score_assets,
+        float(baseline_metrics["ending_capital"]),
+        SUBSET_IMPROVEMENT_TOL,
+    )
+    pd.DataFrame(search["trace"]).to_csv(
+        OUT / "subset_search.csv",
+        index=False,
+    )
+    pd.DataFrame(scenario_rows).sort_values(
+        ["ending_capital", "asset_count"],
+        ascending=[False, True],
+        kind="stable",
+    ).to_csv(OUT / "subset_scenarios.csv", index=False)
+
+    selected_assets = list(search["selected"]["assets"])
+    selected_score = float(search["selected"]["ending_capital"])
+    final_result, final_metrics, final_rows = _evaluate_scenario(
+        "U67+SUBSET_SELECTED",
+        selected_assets,
+        baseline_frames,
+        candidate_frames,
+        baseline_symbols,
+        states,
+        candidate_fold_caches,
+        folds,
+        all_decision_dates,
+        decision_to_fold,
+        decision_metadata,
+        config_u67,
+    )
+    calibration_rows.extend(subset_calibration_rows)
+    calibration_rows.extend(final_rows)
+    if not math.isclose(
+        float(final_metrics["ending_capital"]),
+        selected_score,
+        rel_tol=0.0,
+        abs_tol=BASELINE_ABS_TOL,
+    ):
+        raise RuntimeError("Replay final do subconjunto divergiu do score da busca.")
+
+    final_changes = _decision_changes(
+        "U67+SUBSET_SELECTED",
+        baseline_result,
+        final_result,
+        set(selected_assets),
+    )
+    final_trades = _new_asset_trades(
+        "U67+SUBSET_SELECTED",
+        final_result,
+        set(selected_assets),
+    )
+    final_changes.to_csv(OUT / "decision_changes.csv", index=False)
+    final_trades.to_csv(OUT / "trades_new_assets.csv", index=False)
+    pd.DataFrame(calibration_rows).to_csv(
+        OUT / "scenario_fold_calibration.csv",
+        index=False,
+    )
+
+    delta, rate = _capital_delta(
+        float(final_metrics["ending_capital"]),
+        float(baseline_metrics["ending_capital"]),
+    )
+    delta_vs_all, rate_vs_all = _capital_delta(
+        float(final_metrics["ending_capital"]),
+        EXPECTED_ALL_POSITIVE_ENDING_CAPITAL,
+    )
+    result_payload = {
+        "status": "completed",
+        "source_positive_candidates": symbols,
+        "source_all_positive_checkpoint": {
+            "expected_ending_capital": EXPECTED_ALL_POSITIVE_ENDING_CAPITAL,
+            "observed_ending_capital": all_positive_capital,
+            "exact_to_cent": all_positive_exact,
+        },
+        "search": {
+            key: value
+            for key, value in search.items()
+            if key != "trace"
+        },
+        "selected": {
+            "assets": selected_assets,
+            "asset_count": len(selected_assets),
+            "metrics": final_metrics,
+            "ending_capital_delta_vs_u67": delta,
+            "ending_capital_delta_rate_vs_u67": rate,
+            "ending_capital_delta_vs_all_15": delta_vs_all,
+            "ending_capital_delta_rate_vs_all_15": rate_vs_all,
+            "decision_sessions_changed": int(len(final_changes)),
+            "new_asset_trade_rows": int(len(final_trades)),
+        },
+    }
+    _write_json(OUT / "selected_subset_replay.json", result_payload)
+
+    payload = {
+        "execution_schema": EXECUTION_SCHEMA,
+        "version": SCRIPT_VERSION,
+        "status": "completed",
+        "purpose": "u67_positive_subset_optimization",
+        "run_mode": RUN_MODE,
+        "baseline": baseline_payload,
+        "source_campaign": {
+            "positive_candidate_count": len(symbols),
+            "positive_candidates": symbols,
+            "expected_all_positive_ending_capital": (
+                EXPECTED_ALL_POSITIVE_ENDING_CAPITAL
+            ),
+        },
+        "optimization": result_payload,
+        "data": {
+            "baseline_snapshot_sha256": snapshot.get("snapshot_sha256"),
+            "candidate_financial_replay_feed": "sip",
+            "candidate_financial_replay_timeframe": "1Day",
+            "candidate_financial_replay_adjustment": "raw",
+            "candidate_financial_replay_start": START_DATE,
+            "candidate_financial_replay_end": ANALYSIS_END_DATE,
+            "candidate_file_hashes": candidate_hashes,
+        },
+        "runtime_seconds": float(time.perf_counter() - started),
+    }
+    _write_json(OUT / "pesquisa_u67_subset_optimization.json", payload)
+
+    package = criar_pacote_analise(
+        OUT,
+        comparison_file="pesquisa_u67_subset_optimization.json",
+        execution_schema=EXECUTION_SCHEMA,
+        archive_name="pacote_analise_u67_subset_optimization.zip",
+    )
+    print("=" * 78, flush=True)
+    print(
+        f"[final-subset] U67=US$ {baseline_metrics['ending_capital']:,.2f} "
+        f"U67+15=US$ {all_positive_capital:,.2f}",
+        flush=True,
+    )
+    print(
+        f"[final-subset] selected={selected_assets} "
+        f"capital=US$ {final_metrics['ending_capital']:,.2f}",
+        flush=True,
+    )
+    print(f"[final-subset] package={package}", flush=True)
+    print("=" * 78, flush=True)
+    sinal_sonoro_conclusao()
+    return payload
+
+
 def _marginal_row(
     symbol: str,
     sample_row: dict[str, Any],
@@ -1360,7 +1816,28 @@ def main() -> dict[str, Any]:
         flush=True,
     )
 
-    # A v1.1.0 reutiliza exatamente os 500 simbolos da campanha inicial.
+    if RUN_MODE == "subset_optimization":
+        return _run_subset_optimization(
+            snapshot=snapshot,
+            baseline_payload=baseline_payload,
+            baseline_metrics=baseline_metrics,
+            baseline_result=baseline_result,
+            baseline_frames=baseline_frames,
+            common_dates=common_dates,
+            baseline_symbols=baseline_symbols,
+            folds=folds,
+            all_decision_dates=all_decision_dates,
+            decision_to_fold=decision_to_fold,
+            decision_metadata=decision_metadata,
+            config_u67=config_u67,
+            states=states,
+            calibration_rows=calibration_rows,
+            started=started,
+        )
+    if RUN_MODE != "direct_marginal":
+        raise RuntimeError(f"RUN_MODE desconhecido: {RUN_MODE}")
+
+    # O modo direct_marginal reutiliza exatamente os 500 simbolos da campanha inicial.
     # Nenhum filtro de preco/liquidez/volume ou ranking decide quem recebe replay.
     credentials = load_alpaca_credentials(ROOT)
     catalog = _eligible_catalog(
