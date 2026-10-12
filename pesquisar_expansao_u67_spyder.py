@@ -3027,7 +3027,6 @@ def _run_decision_validation(
     def full_window_score(values: list[str] | tuple[str, ...]) -> float:
         return float(evaluate_subset(values)["ending_capital"])
 
-    all15_key = canonical(symbols)
     selected_key = canonical(discovery_selected)
     all15_metrics = evaluate_subset(symbols)
     selected_metrics = evaluate_subset(discovery_selected)
