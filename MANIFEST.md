@@ -1294,7 +1294,7 @@ Não transformar essas pendências em resultados já disponíveis.
 Esta seção registra uma linha exploratória posterior à release `v1.22.1`.
 Ela não reescreve os resultados oficiais preservados nas seções anteriores e
 não altera a `main`. A pesquisa permanece na branch
-`research/u67-mct-asset-expansion-v1`.
+a branch de pesquisa atual.
 
 O U67 congelado continua sendo a bancada experimental. A pergunta desta linha
 não é encontrar uma lista fixa definitiva, mas estimar quando um ativo agrega
