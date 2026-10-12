@@ -1,10 +1,10 @@
-"""Pesquisa incremental U67+n inspirada em uma busca de ativos operacional.
+"""Pesquisa incremental U67+n por contribuicao marginal direta.
 
 Objetivo
 --------
-Preservar integralmente o U67 oficial e testar somente a adicao de ativos
-externos. O snapshot dados/u67 nunca e reconstruido nem alterado por este
-script.
+Preservar integralmente o U67 oficial e testar a adicao de ativos externos
+sem gates intermediarios de mercado ou ranking. O snapshot dados/u67 nunca e
+reconstruido nem alterado por este script.
 
 Execucao no Spyder
 ------------------
@@ -13,16 +13,17 @@ Abra este arquivo, reinicie o kernel e pressione F5.
 Fluxo
 -----
 1. valida e reproduz o baseline U67 congelado;
-2. treina um Learning-to-Rank no historico do proprio U67;
-3. faz uma triagem deterministica de ativos externos ativos na Alpaca;
-4. baixa historico RAW completo somente dos melhores ranqueados;
-5. audita continuidade e identidade;
-6. testa U67 + candidato, um a um, com o mesmo calendario/folds;
-7. testa U67 + todos os candidatos de delta positivo;
+2. reutiliza a mesma amostra congelada de 500 ativos da campanha inicial;
+3. baixa historico RAW completo e Corporate Actions da amostra;
+4. aplica somente auditoria estrutural de dados, continuidade e identidade;
+5. testa diretamente U67 + candidato para todo ativo estruturalmente valido;
+6. seleciona os candidatos com delta de capital positivo;
+7. testa U67 + todos os positivos;
 8. se necessario, procura um subconjunto positivo por adicao gulosa.
 
-O ranking reduz o espaco de busca. A aprovacao economica depende do replay da
-Strategy e do delta de capital final contra o U67 recalculado nesta execucao.
+Preco, liquidez, volume e Learning-to-Rank nao eliminam candidatos nesta
+versao. A verdade de selecao e a contribuicao marginal observada no replay
+financeiro completo contra o mesmo U67 recalculado nesta execucao.
 """
 from __future__ import annotations
 
@@ -98,10 +99,10 @@ BASE_DATA = SnapshotPaths.u67(ROOT)
 CACHE_ROOT = ROOT / "dados" / ".u67_expansion_cache"
 FAST_CACHE = CACHE_ROOT / "fast_split_20261006"
 FULL_DATA = SnapshotPaths.from_root(CACHE_ROOT / "full_raw_20261006")
-OUT = ROOT / "output" / "u67_asset_expansion"
+OUT = ROOT / "output" / "u67_asset_expansion"\nCANDIDATE_SAMPLE_MANIFEST = ROOT / "pesquisa_u67_amostra_500.csv"
 
-SCRIPT_VERSION = "u67-asset-expansion-v1.0.1"
-EXECUTION_SCHEMA = "u67-asset-expansion-v1"
+SCRIPT_VERSION = "u67-asset-expansion-v1.1.0"
+EXECUTION_SCHEMA = "u67-asset-expansion-v2"
 ANALYSIS_END_DATE = "2026-10-06"
 EXPECTED_U67_ENDING_CAPITAL = 76_927_051.38897176
 BASELINE_ABS_TOL = 0.01
@@ -521,6 +522,33 @@ def _eligible_catalog(catalog: list[dict[str, Any]], snapshot_sha: str) -> pd.Da
     return frame.sort_values(["stable_key", "asset"], kind="stable").reset_index(drop=True)
 
 
+def _load_candidate_sample(catalog: pd.DataFrame) -> pd.DataFrame:
+    if not CANDIDATE_SAMPLE_MANIFEST.exists():
+        raise RuntimeError(
+            f"Amostra congelada ausente: {CANDIDATE_SAMPLE_MANIFEST.name}"
+        )
+    manifest = pd.read_csv(CANDIDATE_SAMPLE_MANIFEST)
+    if "asset" not in manifest.columns:
+        raise RuntimeError("Amostra congelada deve conter a coluna asset.")
+    manifest = manifest[["asset"]].copy()
+    manifest["asset"] = manifest["asset"].astype(str).str.strip().str.upper()
+    manifest = manifest.loc[manifest["asset"].ne("")].reset_index(drop=True)
+    if len(manifest) != CANDIDATE_SCAN_BUDGET:
+        raise RuntimeError(
+            "Amostra congelada divergente: "
+            f"observado={len(manifest)} esperado={CANDIDATE_SCAN_BUDGET}"
+        )
+    if manifest["asset"].duplicated().any():
+        duplicated = sorted(manifest.loc[manifest["asset"].duplicated(), "asset"].unique())
+        raise RuntimeError(f"Amostra congelada contem duplicatas: {duplicated[:10]}")
+    manifest["sample_order"] = np.arange(1, len(manifest) + 1)
+
+    metadata = catalog.drop_duplicates("asset", keep="first").copy()
+    sample = manifest.merge(metadata, on="asset", how="left", validate="one_to_one")
+    sample["catalog_currently_eligible"] = sample["stable_key"].notna()
+    return sample
+
+
 def _fast_cache_path(symbol: str) -> Path:
     return FAST_CACHE / f"{symbol}.csv"
 
@@ -673,33 +701,65 @@ def _full_raw_cache_valid(symbol: str) -> bool:
         return False
     if frame.empty:
         return False
-    first = pd.Timestamp(frame.index.min()).tz_convert("UTC")
     last = pd.Timestamp(frame.index.max()).tz_convert("UTC")
-    latest_start = pd.Timestamp(START_DATE, tz="UTC") + pd.Timedelta(days=HISTORY_START_TOLERANCE_DAYS)
     cutoff = pd.Timestamp(ANALYSIS_END_DATE, tz="UTC")
-    return first.normalize() <= latest_start.normalize() and last.normalize() >= cutoff.normalize()
+    # Historico curto e uma propriedade a ser auditada, nao motivo para baixar
+    # novamente o mesmo arquivo em toda execucao.
+    return last.normalize() >= cutoff.normalize()
 
 
-def _prepare_full_candidate_files(credentials: Any, symbols: list[str]) -> None:
+def _prepare_full_candidate_files(credentials: Any, symbols: list[str]) -> pd.DataFrame:
+    """Baixa RAW por candidato sem abortar toda a campanha por um unico ativo."""
     FULL_DATA.ensure()
-    missing_raw = tuple(symbol for symbol in symbols if not _full_raw_cache_valid(symbol))
-    if missing_raw:
-        download_raw_bars(
-            credentials,
-            FULL_DATA,
-            assets=missing_raw,
-            bar_snapshot_as_of_end=ANALYSIS_END_DATE,
-            analysis_end_date=ANALYSIS_END_DATE,
+    rows: list[dict[str, Any]] = []
+    raw_ready: list[str] = []
+    for position, symbol in enumerate(symbols, start=1):
+        row: dict[str, Any] = {
+            "asset": symbol,
+            "status": "pending",
+            "reason": None,
+        }
+        if _full_raw_cache_valid(symbol):
+            row["status"] = "cached"
+            raw_ready.append(symbol)
+        else:
+            last_error: Exception | None = None
+            for attempt in range(1, 5):
+                try:
+                    download_raw_bars(
+                        credentials,
+                        FULL_DATA,
+                        assets=(symbol,),
+                        bar_snapshot_as_of_end=ANALYSIS_END_DATE,
+                        analysis_end_date=ANALYSIS_END_DATE,
+                    )
+                    row["status"] = "downloaded"
+                    raw_ready.append(symbol)
+                    last_error = None
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < 4:
+                        time.sleep(min(2 ** (attempt - 1), 8))
+            if last_error is not None:
+                row["status"] = "failed"
+                row["reason"] = str(last_error)[:500]
+        rows.append(row)
+        print(
+            f"[full-data] {position}/{len(symbols)} {symbol} status={row['status']}",
+            flush=True,
         )
-    # Corporate Actions sao atualizadas em toda execucao da campanha. A janela e
-    # congelada no cutoff e os CSVs ficam somente no cache local ignorado pelo Git.
-    if symbols:
+
+    # A consulta e paginada/chunked pelo helper oficial. Somente ativos com RAW
+    # disponivel participam da auditoria estrutural subsequente.
+    if raw_ready:
         download_corporate_actions(
             credentials,
             FULL_DATA,
-            assets=tuple(symbols),
+            assets=tuple(raw_ready),
             query_end=ANALYSIS_END_DATE,
         )
+    return pd.DataFrame(rows)
 
 
 def _generic_identity_issue(symbol: str, actions: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -1171,7 +1231,7 @@ def _new_asset_trades(scenario: str, result: Any, candidate_symbols: set[str]) -
 
 def _marginal_row(
     symbol: str,
-    rank_row: dict[str, Any],
+    sample_row: dict[str, Any],
     metrics: dict[str, Any],
     baseline_metrics: dict[str, Any],
     changes: pd.DataFrame,
@@ -1180,9 +1240,8 @@ def _marginal_row(
     delta, delta_rate = _capital_delta(metrics.get("ending_capital"), baseline_metrics.get("ending_capital"))
     return {
         "asset": symbol,
-        "rank": rank_row.get("rank"),
-        "rank_score": rank_row.get("rank_score"),
-        "ranker_raw_score": rank_row.get("raw_score"),
+        "sample_order": sample_row.get("sample_order"),
+        "catalog_currently_eligible": sample_row.get("catalog_currently_eligible"),
         "ending_capital": metrics.get("ending_capital"),
         "ending_capital_delta": delta,
         "ending_capital_delta_rate": delta_rate,
@@ -1300,79 +1359,102 @@ def main() -> dict[str, Any]:
         flush=True,
     )
 
-    # Learning-to-Rank no proprio U67, apenas para priorizar candidatos externos.
-    ranker_seed = int(hashlib.sha256(str(snapshot.get("snapshot_sha256") or "").encode()).hexdigest()[:8], 16)
-    ranker, ranker_diagnostics = _train_ranker(baseline_raw, ranker_seed)
-    baseline_returns = _baseline_recent_returns(baseline_raw)
-
+    # A v1.1.0 reutiliza exatamente os 500 simbolos da campanha inicial.
+    # Nenhum filtro de preco/liquidez/volume ou ranking decide quem recebe replay.
     credentials = load_alpaca_credentials(ROOT)
-    catalog = _eligible_catalog(_load_catalog(credentials), str(snapshot.get("snapshot_sha256") or ""))
+    catalog = _eligible_catalog(
+        _load_catalog(credentials),
+        str(snapshot.get("snapshot_sha256") or ""),
+    )
     catalog.to_csv(OUT / "candidate_catalog.csv", index=False)
-    screening, ranked = _scan_and_rank_candidates(credentials, catalog, ranker, baseline_returns)
-    screening.to_csv(OUT / "candidate_screening.csv", index=False)
-    ranked.to_csv(OUT / "candidate_rank.csv", index=False)
-    if ranked.empty:
-        raise RuntimeError("Nenhum candidato passou pela triagem tecnica/ranking.")
-
-    selected_ranked = ranked.loc[ranked["replay_selected"]].copy()
-    selected_symbols = list(selected_ranked["asset"].astype(str))
+    sample = _load_candidate_sample(catalog)
+    sample.to_csv(OUT / "candidate_sample.csv", index=False)
+    selected_symbols = list(sample["asset"].astype(str))
     print(
-        f"[ranking] catalog={len(catalog)} screened={len(screening)} passed={len(ranked)} "
-        f"financial_replay={len(selected_symbols)}",
+        f"[direct-search] catalog={len(catalog)} sample={len(selected_symbols)} "
+        "screening_gate=False ranking_gate=False",
         flush=True,
     )
 
-    _prepare_full_candidate_files(credentials, selected_symbols)
-    candidate_frames, continuity, candidate_hashes = _prepare_candidate_frames(
-        selected_symbols,
-        common_dates,
-        all_decision_dates,
-        config_u67,
-    )
-    continuity.to_csv(OUT / "continuity_audit.csv", index=False)
-    if not candidate_frames:
-        raise RuntimeError("Nenhum candidato ranqueado passou pela auditoria de continuidade/identidade.")
+    download_audit = _prepare_full_candidate_files(credentials, selected_symbols)
+    download_audit.to_csv(OUT / "candidate_download.csv", index=False)
+    download_lookup = {
+        str(row.asset): row._asdict()
+        for row in download_audit.itertuples(index=False)
+    }
+    sample_lookup = {
+        str(row.asset): row._asdict()
+        for row in sample.itertuples(index=False)
+    }
 
-    # Treina somente os modelos dos ativos novos. Os 65 modelos/caches do U67 ja
-    # foram calculados uma unica vez e sao reutilizados exatamente.
+    # Processamento sequencial: candidatos negativos nao permanecem em memoria.
+    # Somente positivos conservam frame/cache para a validacao conjunta posterior.
+    candidate_frames: dict[str, pd.DataFrame] = {}
     candidate_fold_caches: dict[str, dict[int, CandidateFoldCache]] = {}
-    model_failures = {}
+    candidate_hashes: dict[str, dict[str, str]] = {}
+    usable_symbols: list[str] = []
+    model_failures: dict[str, str] = {}
+    continuity_frames: list[pd.DataFrame] = []
+    marginal_rows: list[dict[str, Any]] = []
+    decision_change_frames: list[pd.DataFrame] = []
+    new_trade_frames: list[pd.DataFrame] = []
+    individual_results: dict[str, tuple[Any, dict[str, Any]]] = {}
+
     for position, symbol in enumerate(selected_symbols, start=1):
-        if symbol not in candidate_frames:
-            continue
-        try:
-            candidate_fold_caches[symbol] = _train_candidate_caches(
-                symbol, candidate_frames[symbol], states, config_u67
+        download_row = download_lookup.get(symbol, {})
+        if download_row.get("status") == "failed":
+            continuity_frames.append(
+                pd.DataFrame(
+                    [
+                        {
+                            "asset": symbol,
+                            "status": "failed",
+                            "reason": "download_failed: " + str(download_row.get("reason") or ""),
+                        }
+                    ]
+                )
             )
+            print(
+                f"[direct] {position}/{len(selected_symbols)} {symbol} skipped=download_failed",
+                flush=True,
+            )
+            continue
+
+        frames_one, audit_one, hashes_one = _prepare_candidate_frames(
+            [symbol],
+            common_dates,
+            all_decision_dates,
+            config_u67,
+        )
+        continuity_frames.append(audit_one)
+        candidate_hashes.update(hashes_one)
+        if symbol not in frames_one:
+            print(
+                f"[direct] {position}/{len(selected_symbols)} {symbol} skipped=structural_audit",
+                flush=True,
+            )
+            continue
+
+        frame = frames_one[symbol]
+        try:
+            caches = _train_candidate_caches(symbol, frame, states, config_u67)
         except Exception as exc:
             model_failures[symbol] = str(exc)
-            print(f"[candidate-train] {symbol} failed={exc}", flush=True)
-        print(
-            f"[candidate-train] completed={position}/{len(selected_symbols)} usable={len(candidate_fold_caches)}",
-            flush=True,
-        )
-    usable_symbols = [symbol for symbol in selected_symbols if symbol in candidate_fold_caches]
-    if not usable_symbols:
-        raise RuntimeError("Nenhum candidato conseguiu produzir caches de modelo validos.")
+            print(
+                f"[direct] {position}/{len(selected_symbols)} {symbol} model_failed={exc}",
+                flush=True,
+            )
+            continue
 
-    rank_lookup = {
-        str(row.asset): row._asdict()
-        for row in selected_ranked.itertuples(index=False)
-    }
-    marginal_rows = []
-    decision_change_frames = []
-    new_trade_frames = []
-    individual_results: dict[str, tuple[Any, dict[str, Any]]] = {}
-    for position, symbol in enumerate(usable_symbols, start=1):
-        print(f"[marginal] {position}/{len(usable_symbols)} U67+{symbol}", flush=True)
+        usable_symbols.append(symbol)
         result, metrics, rows = _evaluate_scenario(
             f"U67+{symbol}",
             [symbol],
             baseline_frames,
-            candidate_frames,
+            {symbol: frame},
             baseline_symbols,
             states,
-            candidate_fold_caches,
+            {symbol: caches},
             folds,
             all_decision_dates,
             decision_to_fold,
@@ -1386,19 +1468,56 @@ def main() -> dict[str, Any]:
             decision_change_frames.append(changes)
         if not trades.empty:
             new_trade_frames.append(trades)
-        marginal_rows.append(
-            _marginal_row(symbol, rank_lookup.get(symbol, {}), metrics, baseline_metrics, changes, trades)
+
+        marginal_row = _marginal_row(
+            symbol,
+            sample_lookup.get(symbol, {}),
+            metrics,
+            baseline_metrics,
+            changes,
+            trades,
         )
-        individual_results[symbol] = (result, metrics)
-        delta, rate = _capital_delta(metrics["ending_capital"], baseline_metrics["ending_capital"])
+        marginal_rows.append(marginal_row)
+        delta, rate = _capital_delta(
+            metrics["ending_capital"],
+            baseline_metrics["ending_capital"],
+        )
+        if delta is not None and delta > 0.0:
+            candidate_frames[symbol] = frame
+            candidate_fold_caches[symbol] = caches
+            individual_results[symbol] = (result, metrics)
+
+        # Checkpoint legivel mesmo se uma execucao longa for interrompida.
+        pd.DataFrame(marginal_rows).to_csv(
+            OUT / "marginal_replay_partial.csv",
+            index=False,
+        )
+        pd.concat(continuity_frames, ignore_index=True).to_csv(
+            OUT / "continuity_audit_partial.csv",
+            index=False,
+        )
         print(
-            f"[marginal] {symbol} capital=US$ {metrics['ending_capital']:,.2f} "
+            f"[marginal] {position}/{len(selected_symbols)} {symbol} "
+            f"capital=US$ {metrics['ending_capital']:,.2f} "
             f"delta=US$ {delta:+,.2f} ({rate:+.4%})",
             flush=True,
         )
 
+    continuity = (
+        pd.concat(continuity_frames, ignore_index=True)
+        if continuity_frames
+        else pd.DataFrame()
+    )
+    continuity.to_csv(OUT / "continuity_audit.csv", index=False)
+    if not marginal_rows:
+        raise RuntimeError(
+            "Nenhum candidato da amostra congelada chegou ao replay financeiro."
+        )
+
     marginal = pd.DataFrame(marginal_rows).sort_values(
-        ["ending_capital_delta", "rank"], ascending=[False, True], kind="stable"
+        ["ending_capital_delta", "sample_order"],
+        ascending=[False, True],
+        kind="stable",
     )
     marginal.to_csv(OUT / "marginal_replay.csv", index=False)
     positives = marginal.loc[marginal["positive_capital_delta"]].copy()
@@ -1556,29 +1675,41 @@ def main() -> dict[str, Any]:
             "risk_metrics_are_reported_not_hard_gated": True,
         },
         "baseline": baseline_payload,
-        "ranker": ranker_diagnostics,
+        "ranker": {
+            "used_for_selection": False,
+            "status": "disabled_in_direct_marginal_v1_1_0",
+        },
         "candidate_search": {
-            "active_alpaca_catalog": True,
+            "active_alpaca_catalog_observed": True,
             "survivorship_bias_fully_eliminated": False,
             "exploratory_asset_discovery": True,
             "selection_bias_possible": True,
-            "ranker_trained_on_full_frozen_u67_history": True,
+            "sample_reused_from_initial_campaign": True,
+            "sample_manifest": CANDIDATE_SAMPLE_MANIFEST.name,
+            "sample_manifest_sha256": _sha256_file(CANDIDATE_SAMPLE_MANIFEST),
             "catalog_external_count": int(len(catalog)),
-            "scan_budget": int(min(CANDIDATE_SCAN_BUDGET, len(catalog))),
-            "screening_passed": int(len(ranked)),
-            "ranked_replay_limit": int(RANKED_REPLAY_LIMIT),
+            "sample_size": int(len(selected_symbols)),
+            "screening_gate_enabled": False,
+            "ranking_gate_enabled": False,
+            "direct_marginal_replay": True,
+            "download_failures": int((download_audit["status"] == "failed").sum()),
+            "structural_audit_passed": int(
+                (continuity["status"] == "passed").sum()
+                if not continuity.empty and "status" in continuity.columns
+                else 0
+            ),
             "financial_usable_candidates": usable_symbols,
-            "filters": {
-                "allowed_exchanges": sorted(ALLOWED_EXCHANGES),
-                "tradable": True,
-                "minimum_latest_price": MIN_LATEST_PRICE,
-                "minimum_median_dollar_volume": MIN_MEDIAN_DOLLAR_VOLUME,
-                "minimum_nonzero_volume_ratio": MIN_NONZERO_VOLUME_RATIO,
-            },
+            "pre_replay_checks": [
+                "raw_history_available",
+                "corporate_actions_available",
+                "no_structural_identity_change",
+                "complete_u67_calendar_continuity",
+                "complete_execution_prices",
+            ],
+            "performance_filters_before_replay": [],
         },
         "data": {
             "baseline_snapshot_sha256": snapshot.get("snapshot_sha256"),
-            "candidate_fast_scan_adjustment": "split",
             "candidate_financial_replay_feed": "sip",
             "candidate_financial_replay_timeframe": "1Day",
             "candidate_financial_replay_adjustment": "raw",
