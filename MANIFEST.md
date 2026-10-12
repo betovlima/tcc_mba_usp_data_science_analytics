@@ -1621,7 +1621,7 @@ não modifica os resultados numéricos nem a política de universo congelada.
 
 ### 25.12 Pesquisa experimental de persistência preditiva multi-horizonte (2026-10-12)
 
-**Versão experimental:** horizon-persistence-oos-v1.0.0.
+**Versão experimental:** horizon-persistence-oos-v1.0.1.
 **Branch separada:** research/horizon-persistence-oos-v1, criada a partir de
 da pesquisa U67+10 no commit 13e5ed39.
 Esta pesquisa **não modifica** os checkpoints, a reprodução oficial, o
