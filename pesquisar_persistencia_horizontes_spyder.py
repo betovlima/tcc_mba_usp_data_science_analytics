@@ -858,13 +858,24 @@ def main() -> dict[str, Any]:
             cal_cache, _ = _precalcular_utilidades_modelo(
                 cal_models, frames, symbols, state.calibration_dates, configuration
             )
-            error, samples = uncertainty_from_matured_calibration(
-                h=int(h),
-                timestamps=state.calibration_dates,
-                full_dates=common_dates,
-                latest_label_date_index=int(fold["calibration_end_index"]),
+            # Pairwise errors are measured in the FIRST part of the historical
+            # calibration period, with fully matured H labels. The SECOND part
+            # is kept aside to select the multiplier with no OOS peek.
+            evidence_end_index = (
+                int(fold["calibration_start_index"])
+                + (2 * len(state.calibration_dates)) // 3
+            )
+            evidence_days = state.calibration_dates[
+                : (2 * len(state.calibration_dates)) // 3
+            ]
+            error, sample_days, sample_pairs = calibrate_pair_gap_error(
+                horizon=int(h),
+                days=evidence_days,
+                calendar=common_dates,
+                last_matured_exclusive=evidence_end_index,
                 symbols=symbols,
                 frames=frames,
+                aggregate=fold_caches[state.fold_id]["calibration"],
                 predictions=cal_cache,
             )
             final_models = _ajustar_modelos_lightgbm(
@@ -886,8 +897,10 @@ def main() -> dict[str, Any]:
             model_audits.append({
                 "fold_id": state.fold_id,
                 "horizon": int(h),
-                "matured_calibration_errors": samples,
-                "absolute_error_p75": error,
+                "matured_calibration_days": sample_days,
+                "calibration_pair_errors": sample_pairs,
+                "pair_gap_error_daily_p75": error,
+                "evidence_cutoff": common_dates[evidence_end_index - 1].isoformat(),
                 "calibration_models": len(cal_models),
                 "calibration_training_end": safe_train_dates[-1].isoformat(),
                 "oos_models": len(final_models),
@@ -899,63 +912,86 @@ def main() -> dict[str, Any]:
                 flush=True,
             )
 
+        # Multipliers are evaluated only on calibration dates AFTER the
+        # uncertainty estimation window. No future/OOS labels are consumed.
+        holdout_dates = state.calibration_dates[
+            (2 * len(state.calibration_dates)) // 3:
+        ]
+        if len(holdout_dates) < 20:
+            raise RuntimeError(
+                f"Fold {state.fold_id}: insufficient chronological "
+                "calibration holdout for threshold selection."
+            )
         calibrated: list[tuple[float, float]] = []
         for multiplier in CONFIDENCE_MULTIPLIERS:
-            policy = make_policy(
+            policy = make_early_override(
                 symbols=symbols,
-                dates=state.calibration_dates,
+                dates=holdout_dates,
                 aggregate=fold_caches[state.fold_id]["calibration"],
                 per_horizon=horizon_cal,
-                uncertainties=uncertainty,
-                config=configuration_without_hold,
+                pair_error_p75=uncertainty,
+                config=configuration,
                 margin=fold_caches[state.fold_id]["margin"],
                 multiplier=multiplier,
             )
             score = _crescimento_politica_simples(
-                policy, frames, symbols, state.calibration_dates,
-                configuration_without_hold,
+                policy, frames, symbols, holdout_dates, configuration
             )
             calibrated.append((multiplier, float(score)))
-        # Calibra o multiplicador apenas com as sessoes anteriores ao teste.
-        selected = sorted(calibrated, key=lambda item: (-item[1], item[0]))[0][0]
+        selected = sorted(
+            calibrated, key=lambda item: (-item[1], -item[0])
+        )[0][0]
+        baseline_score = _crescimento_politica_simples(
+            _politica_utilidade(
+                {}, frames, symbols, configuration,
+                fold_caches[state.fold_id]["margin"],
+                utility_cache=fold_caches[state.fold_id]["calibration"],
+            ),
+            frames, symbols, holdout_dates, configuration,
+        )
         confidence_selection.append({
             "fold_id": state.fold_id,
+            "pair_error_evidence_days": int(
+                (2 * len(state.calibration_dates)) // 3
+            ),
+            "threshold_selection_days": len(holdout_dates),
+            "control_calibration_score": float(baseline_score),
             "candidates": [
                 {"multiplier": x, "calibration_score": y}
                 for x, y in calibrated
             ],
             "selected": selected,
         })
-        policy_h[state.fold_id] = make_policy(
+        policy_h[state.fold_id] = make_early_override(
             symbols=symbols,
             dates=state.decision_dates,
             aggregate=fold_caches[state.fold_id]["oos"],
             per_horizon=horizon_oos,
-            uncertainties=uncertainty,
-            config=configuration_without_hold,
+            pair_error_p75=uncertainty,
+            config=configuration,
             margin=fold_caches[state.fold_id]["margin"],
             multiplier=selected,
             audit=decision_audit,
             fold_id=state.fold_id,
         )
     result_h = _simular_exato(
-        "horizon_research_confidence",
+        "horizon_research_early_override",
         _politica_agendada(policy_h, decision_to_fold),
-        frames, symbols, all_decision_dates, configuration_without_hold,
+        frames, symbols, all_decision_dates, configuration,
         calcular_taxas_referencia, aplicar_deslizamento,
         decision_metadata=decision_metadata,
-        model_label="U67+10 horizon-persistence experimental",
+        model_label="U67+10 early horizon override experimental",
     )
     metrics_h = scenario_metrics(result_h, folds, float(configuration.initial_capital))
     variants = {
         "control_holding_2": metrics_2,
         "ablation_holding_0": metrics_0,
-        "horizon_confidence": metrics_h,
+        "early_horizon_override": metrics_h,
     }
     for variant, result in (
         ("control_holding_2", result_2),
         ("ablation_holding_0", result_0),
-        ("horizon_confidence", result_h),
+        ("early_horizon_override", result_h),
     ):
         result.predictions.to_csv(
             OUT / f"{variant}_equity.csv", index_label="timestamp"
@@ -971,6 +1007,22 @@ def main() -> dict[str, Any]:
         for date, row in sorted(no_hold_guard_audit.items())
     ]).to_csv(OUT / "no_hold_decision_reasons.csv", index=False)
     pd.DataFrame(decision_audit).to_csv(OUT / "horizon_decisions.csv", index=False)
+    pd.DataFrame([
+        {
+            "fold_id": fold_id,
+            "decision_count": sum(r["fold_id"] == fold_id for r in decision_audit),
+            "early_overrides": sum(
+                r["fold_id"] == fold_id and r["early_override"]
+                for r in decision_audit
+            ),
+            "candidate_pair_rejected": sum(
+                r["fold_id"] == fold_id
+                and r["reason"] == "PAIR_EVIDENCE_INSUFFICIENT"
+                for r in decision_audit
+            ),
+        }
+        for fold_id in sorted({r["fold_id"] for r in decision_audit})
+    ]).to_csv(OUT / "override_by_fold.csv", index=False)
     pd.DataFrame([
         {"variant": name, **{k: values.get(k) for k in (
             "ending_capital", "cagr", "sharpe", "maximum_drawdown",
@@ -998,9 +1050,12 @@ def main() -> dict[str, Any]:
         "horizon_weights": list(configuration.rotation_target_horizon_weights),
         "confidence_multiplier_candidates": list(CONFIDENCE_MULTIPLIERS),
         "confidence_note": (
-            "Proxy using matured pre-OOS prediction errors; not a calibrated "
-            "probability. Full impact requires independent OOS confirmation."
+            "Daily-quantile of matured pair-gap prediction error; calibrated "
+            "within earlier historical dates, not a probability and not an "
+            "estimate of live execution impact."
         ),
+        "policy_rule": "control_plus_confident_early_rotation_only",
+        "early_override_count": sum(r["early_override"] for r in decision_audit),
         "confidence_selections": confidence_selection,
         "metrics": variants,
         "checkpoint_reference": expected,
