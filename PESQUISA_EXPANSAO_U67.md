@@ -589,6 +589,7 @@ output/u67_decision_validation/
     continuity_audit.csv
     decision_rank_sessions.csv
     decision_rank_summary.csv
+    full_window_subset_search.csv
     multiple_testing_scenarios.csv
     multiple_testing_daily_returns.csv
     multiple_testing_summary.json
