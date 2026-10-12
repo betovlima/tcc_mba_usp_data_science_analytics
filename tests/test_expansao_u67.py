@@ -16,6 +16,8 @@ from pesquisar_expansao_u67_spyder import (
     _deflated_sharpe_ratio,
     _pbo_cscv,
     _dynamic_transition_rows,
+    _json_safe,
+    _write_json,
 )
 
 
@@ -250,3 +252,29 @@ def test_dynamic_transition_rows_registra_adicionar_manter_remover():
     actions = dict(zip(second["asset"], second["action"]))
 
     assert actions == {"A": "REMOVER", "B": "MANTER", "C": "ADICIONAR"}
+
+
+
+def test_json_safe_converte_nan_inf_e_numpy_para_null(tmp_path):
+    payload = {
+        "nan": float("nan"),
+        "pos_inf": float("inf"),
+        "neg_inf": np.float64("-inf"),
+        "integer": np.int64(7),
+        "boolean": np.bool_(True),
+        "nested": [1.0, np.float64("nan")],
+    }
+    safe = _json_safe(payload)
+
+    assert safe["nan"] is None
+    assert safe["pos_inf"] is None
+    assert safe["neg_inf"] is None
+    assert safe["integer"] == 7
+    assert safe["boolean"] is True
+    assert safe["nested"] == [1.0, None]
+
+    path = tmp_path / "payload.json"
+    _write_json(path, payload)
+    text = path.read_text(encoding="utf-8")
+    assert "NaN" not in text
+    assert "Infinity" not in text
