@@ -2743,7 +2743,14 @@ def _deflated_sharpe_ratio(
         "kurtosis": kurtosis,
         "trial_sharpe_variance_daily": float(
             np.var(
-                np.asarray(trial_sharpes_daily, dtype=np.float64),
+                np.asarray(trial_sharpes_daily, dtype=np.float64)[
+                    np.isfinite(
+                        np.asarray(
+                            trial_sharpes_daily,
+                            dtype=np.float64,
+                        )
+                    )
+                ],
                 ddof=1,
             )
         ),
@@ -3063,6 +3070,10 @@ def _run_decision_validation(
         raise RuntimeError(
             "Subconjunto selecionado divergiu do Challenger congelado."
         )
+    pd.DataFrame(full_search["trace"]).to_csv(
+        OUT / "full_window_subset_search.csv",
+        index=False,
+    )
 
     scenario_columns: list[str] = []
     scenario_returns: list[pd.Series] = []
