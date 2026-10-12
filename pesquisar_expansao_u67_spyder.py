@@ -1,29 +1,14 @@
-"""Pesquisa incremental U67+n e otimizacao do subconjunto positivo.
+"""Pesquisa incremental U67+n com garantia de generalizacao.
 
-Objetivo
---------
-Preservar integralmente o U67 oficial. A campanha de descoberta direta ja
-identificou 15 candidatos com contribuicao marginal positiva. Esta versao
-reproduz esse checkpoint e procura um subconjunto conjunto que maximize o
-capital final sem remover ou substituir ativos do U67.
+A versao 1.3.0 transforma o vencedor de descoberta em Challenger e tenta
+quebrar o resultado antes de qualquer promocao. O modo padrao executa:
+diagnosticos de overfitting/underfitting do LightGBM, validacao temporal da
+selecao de universo, leave-one-asset-out, stress de custos e reproducibilidade
+deterministica.
 
-Execucao no Spyder
-------------------
-Abra este arquivo, reinicie o kernel e pressione F5.
-
-Modo padrao
------------
-subset_optimization:
-1. reproduz o baseline U67 congelado;
-2. carrega os 15 positivos descobertos na campanha de 500 ativos;
-3. reproduz U67 + todos os 15 e exige o mesmo checkpoint financeiro;
-4. executa forward selection pelo capital final;
-5. executa backward elimination partindo de todos os positivos e do forward;
-6. escolhe o melhor conjunto observado e grava toda a trilha de busca.
-
-O modo direct_marginal permanece disponivel no mesmo arquivo para repetir a
-campanha dos 500 ativos. Nenhum filtro de preco, liquidez, volume ou ranking
-participa da decisao do subconjunto.
+A lista de ativos continua sendo tratada como estado dinamico futuro da
+estrategia. Nesta fase, a avaliacao permanece em janela historica controlada;
+os resultados nao sao interpretados como uma lista permanente de ativos.
 """
 from __future__ import annotations
 
@@ -63,6 +48,7 @@ from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 from engine.modelo_lightgbm import (
     _ajustar_modelos_lightgbm,
     _construir_contexto_execucao,
+    diagnosticos_fora_amostra,
     selecionar_switch_margin,
 )
 from engine.rotacao import (
@@ -95,25 +81,29 @@ from reproducao.preparacao import (
 
 # %% 0 - Parametros da campanha
 ROOT = Path(__file__).resolve().parent
-RUN_MODE = "subset_optimization"
+RUN_MODE = "assurance_validation"
 BASE_DATA = SnapshotPaths.u67(ROOT)
 CACHE_ROOT = ROOT / "dados" / ".u67_expansion_cache"
 FAST_CACHE = CACHE_ROOT / "fast_split_20261006"
 FULL_DATA = SnapshotPaths.from_root(CACHE_ROOT / "full_raw_20261006")
-OUT = ROOT / "output" / (
-    "u67_subset_optimization"
-    if RUN_MODE == "subset_optimization"
-    else "u67_asset_expansion"
-)
+OUTPUT_DIR_BY_MODE = {
+    "assurance_validation": "u67_assurance_validation",
+    "subset_optimization": "u67_subset_optimization",
+    "direct_marginal": "u67_asset_expansion",
+}
+OUT = ROOT / "output" / OUTPUT_DIR_BY_MODE[RUN_MODE]
 CANDIDATE_SAMPLE_MANIFEST = ROOT / "pesquisa_u67_amostra_500.csv"
 
-SCRIPT_VERSION = "u67-asset-expansion-v1.2.0"
-EXECUTION_SCHEMA = "u67-asset-expansion-v3"
+SCRIPT_VERSION = "u67-asset-expansion-v1.3.0"
+EXECUTION_SCHEMA = "u67-asset-expansion-v4"
 ANALYSIS_END_DATE = "2026-10-06"
 EXPECTED_U67_ENDING_CAPITAL = 76_927_051.38897176
 EXPECTED_ALL_POSITIVE_ENDING_CAPITAL = 290_727_954.41339606
+EXPECTED_DISCOVERY_SELECTED_ENDING_CAPITAL = 587_165_941.1330212
 BASELINE_ABS_TOL = 0.01
 SUBSET_IMPROVEMENT_TOL = 0.01
+SOURCE_DIRECT_TESTED_COUNT = 146
+SOURCE_SUBSET_UNIQUE_SCENARIOS = 180
 SUBSET_SOURCE_CANDIDATES = (
     "CRT",
     "NBR",
@@ -130,6 +120,18 @@ SUBSET_SOURCE_CANDIDATES = (
     "LAD",
     "TOWN",
     "ACIW",
+)
+DISCOVERY_SELECTED_CANDIDATES = (
+    "CRT",
+    "NBR",
+    "CAPR",
+    "PNBK",
+    "PENN",
+    "JBL",
+    "STAG",
+    "MCHB",
+    "LAD",
+    "TOWN",
 )
 
 CATALOG_SAMPLE_SEED = "u67-asset-expansion-v1"
@@ -179,6 +181,8 @@ class BaselineFoldState:
     decision_cache: dict[pd.Timestamp, np.ndarray]
     selected_margin: float
     effective_margin: float
+    fit_diagnostics: dict[str, Any] | None = None
+    oos_diagnostics: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -186,6 +190,8 @@ class CandidateFoldCache:
     fold_id: int
     calibration_cache: dict[pd.Timestamp, np.ndarray]
     decision_cache: dict[pd.Timestamp, np.ndarray]
+    fit_diagnostics: dict[str, Any] | None = None
+    oos_diagnostics: dict[str, Any] | None = None
 
 
 def _package_version(name: str) -> str | None:
