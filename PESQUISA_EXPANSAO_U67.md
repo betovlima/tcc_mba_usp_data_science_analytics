@@ -650,3 +650,181 @@ output existente.
 
 Para uma execução que apresentou exatamente essa falha, usar o recovery em vez
 de repetir a campanha completa.
+
+
+## Resultados da v1.4.0 / recovery v1.4.1
+
+A campanha de validação de decisão foi concluída e recuperada sem rerun após o
+hotfix de serialização. Os checkpoints permaneceram exatos:
+
+```text
+U67                         = US$ 76.927.051,38897176
+U67 + 15 positivos          = US$ 290.727.954,41339606
+U67 + 10 Challenger         = US$ 587.165.941,1330212
+subconjuntos full-window    = 180
+```
+
+### Qualidade de ranking
+
+No universo U67+10, considerando 75 ativos e 1.503 sessões OOS:
+
+```text
+Spearman IC médio                       = 0,03419
+NDCG@5 médio                            = 0,52660
+NDCG@10 médio                           = 0,53826
+sign accuracy                           = 63,10%
+top-1 exato                             = 2,26%
+top-1 previsto no top-3 realizado       = 8,25%
+top-1 previsto no top-5 realizado       = 12,71%
+percentil realizado médio do top-1      = 55,38%
+```
+
+O sinal cross-sectional global é pequeno, mas há concentração no topo. Como
+referência puramente combinatória, em 75 ativos um top-1 aleatório acertaria o
+melhor ativo em 1,33% das sessões, estaria no top-3 em 4,0% e no top-5 em
+6,67%. Portanto, o modelo mostra sinal útil no topo, mas ainda fraco para uma
+ordenação completa e estável do universo.
+
+No pool dos 15 candidatos positivos:
+
+```text
+Spearman IC médio                       = 0,01444
+top-1 exato                             = 14,11%
+top-1 previsto no top-3 realizado       = 25,62%
+top-1 previsto no top-5 realizado       = 39,19%
+percentil realizado médio do top-1      = 57,36%
+```
+
+A expectativa combinatória de top-1 exato para 15 ativos é 6,67%. Assim, a
+habilidade de identificar ocasionalmente o melhor candidato existe, mas o IC
+próximo de zero confirma que a classificação completa permanece ruidosa.
+
+### Deflated Sharpe Ratio
+
+O Challenger apresentou:
+
+```text
+Sharpe anualizado                       = 2,72854
+DSR com 180 trials                      ≈ 0,9999999999997
+DSR com 326 trials conservadores        ≈ 0,9999999999995
+```
+
+A dimensão efetiva estimada pela matriz de correlação foi apenas 1,2792. Essa
+medida isolada é otimista porque os 180 cenários compartilham grande parte do
+mesmo universo e das mesmas operações. A interpretação principal deve usar os
+180 trials brutos e a sensibilidade conservadora de 326 trials, que também
+mantiveram DSR próximo de 1.
+
+### Probability of Backtest Overfitting
+
+O CSCV com 10 blocos e 252 divisões produziu:
+
+```text
+PBO por log-growth                      = 53,57%
+mediana do percentil OOS                = 48,48%
+
+PBO por Sharpe                          = 59,52%
+mediana do percentil OOS                = 36,74%
+```
+
+Esses valores são um alerta. Quando a própria rotina de otimização escolhe o
+vencedor em diferentes subconjuntos temporais, esse vencedor cai abaixo da
+mediana OOS em mais da metade dos casos. Portanto, a busca do melhor subconjunto
+não pode ser considerada estável apenas pelo capital final.
+
+Há, porém, uma distinção importante. Recalculando a posição OOS do Challenger
+fixo de 10 ativos em todas as 252 divisões, sem reescolher a estratégia:
+
+```text
+log-growth:
+    percentil OOS mediano                = 93,92%
+    abaixo da mediana OOS                = 0,00%
+    top-decile OOS                       = 58,33%
+
+Sharpe:
+    percentil OOS mediano                = 82,04%
+    abaixo da mediana OOS                = 7,54%
+    top-decile OOS                       = 33,73%
+```
+
+Assim, o PBO elevado descreve principalmente a instabilidade do mecanismo de
+seleção do vencedor entre muitos subconjuntos. O Challenger específico é
+forte quando tratado como cenário fixo, mas ainda foi descoberto usando a
+janela completa e, portanto, não deve ser promovido como evidência prospectiva
+independente.
+
+### Correlação entre cenários
+
+As 180 séries de retorno são fortemente correlacionadas:
+
+```text
+correlação par-a-par média               ≈ 0,879
+mediana                                  ≈ 0,879
+10º percentil                            ≈ 0,746
+90º percentil                            ≈ 0,988
+séries de retorno exatamente distintas  = 158 de 180
+```
+
+Isso explica por que a dimensão efetiva de trials é pequena e reforça a
+necessidade de interpretar DSR e PBO em conjunto.
+
+### Universo dinâmico
+
+A validação temporal repetiu a composição apenas com informação dos folds
+anteriores.
+
+Etapa 1:
+
+```text
+seleção usando fold 1:
+    NBR, PENN, EML
+
+holdout fold 2:
+    retorno universo dinâmico = 77,917619
+    retorno U67               = 77,898220
+```
+
+A vantagem foi muito pequena e deve ser tratada como empate econômico.
+
+Etapa 2:
+
+```text
+seleção usando folds 1+2:
+    CRT, NBR, PNBK, PENN, JBL, STAG, MCHB, TOWN
+
+holdout fold 3:
+    retorno universo dinâmico = 35,536979
+    retorno U67               = 24,484656
+```
+
+A segunda etapa apresentou vantagem material no holdout. A transição entre as
+duas composições foi:
+
+```text
+MANTER:
+    NBR, PENN
+
+REMOVER:
+    EML
+
+ADICIONAR:
+    CRT, PNBK, JBL, STAG, MCHB, TOWN
+```
+
+Esse comportamento é compatível com a hipótese central da pesquisa: o universo
+não deve ser uma lista permanente.
+
+### Conclusão da v1.4
+
+A v1.4 não elimina o risco de selection overfitting. Ela mostra duas evidências
+simultâneas:
+
+1. o Challenger fixo de 10 ativos é muito forte em DSR e em sua posição OOS
+   dentro das divisões CSCV;
+2. a rotina de escolher o vencedor entre muitos subconjuntos é instável, com
+   PBO acima de 50%.
+
+Portanto, a próxima etapa não deve otimizar novamente o mesmo conjunto. Ela
+deve validar a regra de construção do universo em um desenho nested, no qual
+candidatos externos e ativos internos sejam redescobertos usando somente
+informação disponível até cada data de atualização.
