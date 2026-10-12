@@ -432,3 +432,129 @@ def test_v104_point_in_time_features_do_not_export_forward_labels():
 
     audit[day]["min_hold_guard_applied"] = False
     assert causal_hold_guard_features(audit, {"MAN": frame}).empty
+
+
+def _v105_fixture(
+    *,
+    incumbent_values=(0.01, 0.02, 0.03, 0.04),
+    challenger_values=(0.04, 0.05, 0.08, 0.10),
+    other_values=(0.02, 0.025, 0.02, 0.03),
+    control_action=1,
+    aggregate=None,
+):
+    from pesquisar_persistencia_horizontes_spyder import (
+        RelativeHorizonGainPolicy,
+    )
+
+    day = pd.Timestamp("2026-10-01", tz="UTC")
+    mat = {
+        h: {day: np.array([0.0, incumbent_values[i], challenger_values[i], other_values[i]])}
+        for i, h in enumerate((5, 10, 20, 40))
+    }
+    agg = {day: np.array(
+        aggregate if aggregate is not None else [0.0, 0.3, 0.8, 0.2]
+    )}
+
+    def baseline(timestamp, current, holding):
+        assert timestamp == day
+        del current, holding
+        return control_action, float(agg[day][control_action])
+
+    audit = []
+    ranks = []
+    p = RelativeHorizonGainPolicy(
+        symbols=["AAPL", "NVDA", "MSFT"],
+        aggregate=agg,
+        forecasts=mat,
+        control_policy=baseline,
+        minimum_holding=2,
+        margin=0.001,
+        require_each_horizon=False,
+        fold_id=1,
+        audit=audit,
+        ranking_audit=ranks,
+    )
+    return day, p, audit, ranks
+
+
+def test_v105_candidate_relatively_superior_both_buckets():
+    day, policy, audit, ranking = _v105_fixture()
+    assert policy(day, 1, 2)[0] == 2
+    assert audit[-1]["changes_control_decision"]
+    assert audit[-1]["reason"] == "RELATIVE_HORIZON_SWITCH"
+    assert ranking[0]["candidate"] == "NVDA"
+    assert ranking[0]["candidate_expected_H5_pct"] == 0.04
+    assert ranking[0]["delta_H40_pct_points"] == pytest.approx(0.06)
+
+
+def test_v105_short_term_only_does_not_justify_rotation():
+    day, policy, audit, _ = _v105_fixture(
+        challenger_values=(0.04, 0.06, 0.02, 0.03),
+    )
+    assert policy(day, 1, 2)[0] == 1
+    assert audit[-1]["reason"] == "NO_SUPERIOR_HORIZON_CANDIDATE"
+
+
+def test_v105_min_holding_and_cash_control_are_preserved():
+    day, policy, audit, _ = _v105_fixture()
+    assert policy(day, 1, 1)[0] == 1
+    assert audit[-1]["reason"] == "MIN_HOLD_PRESERVED"
+
+    day, policy, audit, _ = _v105_fixture(control_action=0)
+    assert policy(day, 1, 2)[0] == 0
+    assert audit[-1]["reason"] == "CONTROL_CASH_EXIT_PRESERVED"
+
+
+def test_v105_strict_variant_requires_each_horizon_and_margin():
+    from pesquisar_persistencia_horizontes_spyder import (
+        relative_horizon_candidates,
+    )
+    day, policy, _, _ = _v105_fixture(
+        challenger_values=(0.0, 0.09, 0.04, 0.20)
+    )
+    accepted, _ = relative_horizon_candidates(
+        date=day,
+        incumbent=1,
+        control_target=1,
+        symbols=policy.symbols,
+        aggregate=policy.aggregate[day],
+        forecasts=policy.forecasts,
+        min_group_advantage=0.005,
+        require_each_horizon=False,
+        effective_margin=0.001,
+    )
+    assert accepted and accepted[0]["candidate"] == "NVDA"
+    strict, _ = relative_horizon_candidates(
+        date=day,
+        incumbent=1,
+        control_target=1,
+        symbols=policy.symbols,
+        aggregate=policy.aggregate[day],
+        forecasts=policy.forecasts,
+        min_group_advantage=0.005,
+        require_each_horizon=True,
+        effective_margin=0.001,
+    )
+    assert strict == []
+
+
+def test_v105_compares_with_existing_control_target_not_just_incumbent():
+    day, policy, audit, _ = _v105_fixture(
+        control_action=3,
+        other_values=(0.12, 0.14, 0.15, 0.16),
+    )
+    assert policy(day, 1, 2)[0] == 3
+    assert not audit[-1]["changes_control_decision"]
+
+
+def test_v105_future_labels_are_training_only():
+    from pesquisar_persistencia_horizontes_spyder import (
+        add_horizon_percentage_training_targets,
+    )
+    day = pd.Timestamp("2026-10-01", tz="UTC")
+    frames = {"AAPL": pd.DataFrame({
+        f"forward_horizon_net_log_return_{h}": [np.log1p(h / 1000)]
+        for h in (5, 10, 20, 40)
+    }, index=[day])}
+    add_horizon_percentage_training_targets(frames)
+    assert frames["AAPL"].loc[day, "forward_horizon_net_return_pct_20"] == pytest.approx(0.02)
