@@ -1719,6 +1719,662 @@ def _run_subset_optimization(
     return payload
 
 
+
+def _regression_error(actual: Any, predicted: Any) -> dict[str, Any]:
+    actual_values = np.asarray(actual, dtype=np.float64)
+    predicted_values = np.asarray(predicted, dtype=np.float64)
+    valid = np.isfinite(actual_values) & np.isfinite(predicted_values)
+    if not bool(valid.any()):
+        return {"rows": 0, "mae": None, "rmse": None}
+    residual = predicted_values[valid] - actual_values[valid]
+    return {
+        "rows": int(valid.sum()),
+        "mae": float(np.mean(np.abs(residual))),
+        "rmse": float(np.sqrt(np.mean(np.square(residual)))),
+    }
+
+
+def _naive_mean_errors(
+    frame: pd.DataFrame,
+    train_dates: pd.DatetimeIndex,
+    decision_dates: pd.DatetimeIndex,
+    target_column: str = "forward_risk_adjusted_utility",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    train = pd.to_numeric(
+        frame.reindex(train_dates)[target_column],
+        errors="coerce",
+    ).to_numpy(dtype=np.float64)
+    finite_train = train[np.isfinite(train)]
+    if len(finite_train) == 0:
+        empty = {"rows": 0, "mae": None, "rmse": None}
+        return empty, empty
+    mean_target = float(np.mean(finite_train))
+    train_error = _regression_error(
+        train,
+        np.full(len(train), mean_target, dtype=np.float64),
+    )
+    oos = pd.to_numeric(
+        frame.reindex(decision_dates)[target_column],
+        errors="coerce",
+    ).to_numpy(dtype=np.float64)
+    oos_error = _regression_error(
+        oos,
+        np.full(len(oos), mean_target, dtype=np.float64),
+    )
+    return train_error, oos_error
+
+
+def _fit_quality_row(
+    *,
+    universe_role: str,
+    symbol: str,
+    fold_id: int,
+    frame: pd.DataFrame,
+    train_dates: pd.DatetimeIndex,
+    decision_dates: pd.DatetimeIndex,
+    fit_diagnostics: dict[str, Any] | None,
+    oos_diagnostics: dict[str, Any] | None,
+) -> dict[str, Any]:
+    fit = dict(fit_diagnostics or {})
+    train = dict(fit.get("train") or {})
+    oos = dict(oos_diagnostics or {})
+    naive_train, naive_oos = _naive_mean_errors(
+        frame,
+        train_dates,
+        decision_dates,
+    )
+    train_rmse = _finite(train.get("rmse"))
+    oos_rmse = _finite(oos.get("rmse"))
+    naive_train_rmse = _finite(naive_train.get("rmse"))
+    naive_oos_rmse = _finite(naive_oos.get("rmse"))
+
+    train_skill = (
+        1.0 - train_rmse / naive_train_rmse
+        if train_rmse is not None
+        and naive_train_rmse is not None
+        and naive_train_rmse > 0
+        else None
+    )
+    oos_skill = (
+        1.0 - oos_rmse / naive_oos_rmse
+        if oos_rmse is not None
+        and naive_oos_rmse is not None
+        and naive_oos_rmse > 0
+        else None
+    )
+    generalization_gap = (
+        oos_rmse / train_rmse - 1.0
+        if oos_rmse is not None and train_rmse is not None and train_rmse > 0
+        else None
+    )
+    overfit_warning = bool(
+        train_skill is not None
+        and oos_skill is not None
+        and train_skill > 0.0
+        and oos_skill <= 0.0
+    )
+    underfit_warning = bool(
+        train_skill is not None
+        and oos_skill is not None
+        and train_skill <= 0.0
+        and oos_skill <= 0.0
+    )
+    return {
+        "universe_role": universe_role,
+        "asset": symbol,
+        "fold_id": int(fold_id),
+        "train_rows": int(train.get("rows") or 0),
+        "oos_rows": int(oos.get("rows") or 0),
+        "train_mae": _finite(train.get("mae")),
+        "train_rmse": train_rmse,
+        "oos_mae": _finite(oos.get("mae")),
+        "oos_rmse": oos_rmse,
+        "naive_train_mae": _finite(naive_train.get("mae")),
+        "naive_train_rmse": naive_train_rmse,
+        "naive_oos_mae": _finite(naive_oos.get("mae")),
+        "naive_oos_rmse": naive_oos_rmse,
+        "train_skill_vs_naive": train_skill,
+        "oos_skill_vs_naive": oos_skill,
+        "generalization_gap_rmse_ratio": generalization_gap,
+        "overfit_warning": overfit_warning,
+        "underfit_warning": underfit_warning,
+    }
+
+
+def _fold_metric(metrics: dict[str, Any], fold_id: int) -> dict[str, Any]:
+    for row in metrics.get("folds") or []:
+        if int(row.get("fold_id")) == int(fold_id):
+            return dict(row)
+    raise KeyError(f"fold_id={fold_id} ausente nas metricas")
+
+
+def _compound_fold_capital(
+    metrics: dict[str, Any],
+    fold_ids: list[int] | tuple[int, ...],
+    initial_capital: float = 10_000.0,
+) -> float:
+    capital = float(initial_capital)
+    for fold_id in fold_ids:
+        row = _fold_metric(metrics, int(fold_id))
+        capital *= 1.0 + float(row["strategy_return"])
+    return float(capital)
+
+
+def _jaccard(left: list[str] | tuple[str, ...], right: list[str] | tuple[str, ...]) -> float:
+    a = set(left)
+    b = set(right)
+    union = a | b
+    return float(len(a & b) / len(union)) if union else 1.0
+
+
+def _run_assurance_validation(
+    *,
+    snapshot: dict[str, Any],
+    baseline_payload: dict[str, Any],
+    baseline_metrics: dict[str, Any],
+    baseline_result: Any,
+    baseline_frames: dict[str, pd.DataFrame],
+    common_dates: pd.DatetimeIndex,
+    baseline_symbols: list[str],
+    folds: list[dict[str, Any]],
+    all_decision_dates: pd.DatetimeIndex,
+    decision_to_fold: dict[pd.Timestamp, int],
+    decision_metadata: Any,
+    config_u67: Any,
+    states: list[BaselineFoldState],
+    calibration_rows: list[dict[str, Any]],
+    started: float,
+) -> dict[str, Any]:
+    symbols = list(SUBSET_SOURCE_CANDIDATES)
+    discovery_selected = list(DISCOVERY_SELECTED_CANDIDATES)
+    credentials = load_alpaca_credentials(ROOT)
+
+    download_audit = _prepare_full_candidate_files(credentials, symbols)
+    download_audit.to_csv(OUT / "candidate_download.csv", index=False)
+    failed = download_audit.loc[
+        download_audit["status"].eq("failed"),
+        "asset",
+    ].astype(str).tolist()
+    if failed:
+        raise RuntimeError(
+            "Falha ao recuperar candidatos para assurance: " + ", ".join(failed)
+        )
+
+    candidate_frames, continuity, candidate_hashes = _prepare_candidate_frames(
+        symbols,
+        common_dates,
+        all_decision_dates,
+        config_u67,
+    )
+    continuity.to_csv(OUT / "continuity_audit.csv", index=False)
+    missing = [symbol for symbol in symbols if symbol not in candidate_frames]
+    if missing:
+        raise RuntimeError(
+            "Assurance nao reproduziu a elegibilidade dos 15 positivos: "
+            + ", ".join(missing)
+        )
+
+    candidate_fold_caches: dict[str, dict[int, CandidateFoldCache]] = {}
+    for position, symbol in enumerate(symbols, start=1):
+        candidate_fold_caches[symbol] = _train_candidate_caches(
+            symbol,
+            candidate_frames[symbol],
+            states,
+            config_u67,
+        )
+        print(
+            f"[assurance-train] {position}/{len(symbols)} {symbol}",
+            flush=True,
+        )
+
+    model_rows: list[dict[str, Any]] = []
+    for state in states:
+        baseline_oos_by_asset = dict(
+            (state.oos_diagnostics or {}).get("by_asset") or {}
+        )
+        for symbol in baseline_symbols:
+            model_rows.append(
+                _fit_quality_row(
+                    universe_role="u67_baseline",
+                    symbol=symbol,
+                    fold_id=state.fold_id,
+                    frame=baseline_frames[symbol],
+                    train_dates=state.final_fit_dates,
+                    decision_dates=state.decision_dates,
+                    fit_diagnostics=dict(
+                        (state.fit_diagnostics or {}).get(symbol) or {}
+                    ),
+                    oos_diagnostics=dict(
+                        baseline_oos_by_asset.get(symbol) or {}
+                    ),
+                )
+            )
+    for symbol in symbols:
+        for state in states:
+            cache = candidate_fold_caches[symbol][state.fold_id]
+            candidate_oos = dict(
+                (cache.oos_diagnostics or {}).get("by_asset") or {}
+            )
+            model_rows.append(
+                _fit_quality_row(
+                    universe_role=(
+                        "discovery_selected"
+                        if symbol in discovery_selected
+                        else "positive_not_selected"
+                    ),
+                    symbol=symbol,
+                    fold_id=state.fold_id,
+                    frame=candidate_frames[symbol],
+                    train_dates=state.final_fit_dates,
+                    decision_dates=state.decision_dates,
+                    fit_diagnostics=cache.fit_diagnostics,
+                    oos_diagnostics=dict(candidate_oos.get(symbol) or {}),
+                )
+            )
+    model_diagnostics = pd.DataFrame(model_rows)
+    model_diagnostics.to_csv(OUT / "model_generalization.csv", index=False)
+
+    candidate_model_diag = model_diagnostics.loc[
+        model_diagnostics["asset"].isin(symbols)
+    ].copy()
+    model_summary = {
+        "candidate_asset_fold_rows": int(len(candidate_model_diag)),
+        "overfit_warning_rows": int(candidate_model_diag["overfit_warning"].sum()),
+        "underfit_warning_rows": int(candidate_model_diag["underfit_warning"].sum()),
+        "positive_oos_skill_rows": int(
+            (candidate_model_diag["oos_skill_vs_naive"] > 0.0).sum()
+        ),
+        "nonpositive_oos_skill_rows": int(
+            (candidate_model_diag["oos_skill_vs_naive"] <= 0.0).sum()
+        ),
+        "classification_rule": {
+            "overfit_warning": (
+                "train skill > 0 versus naive and OOS skill <= 0"
+            ),
+            "underfit_warning": (
+                "train skill <= 0 and OOS skill <= 0 versus naive"
+            ),
+            "no_arbitrary_gap_threshold": True,
+        },
+    }
+
+    scenario_metrics_cache: dict[tuple[str, ...], dict[str, Any]] = {}
+    assurance_calibration_rows: list[dict[str, Any]] = []
+    scenario_rows: list[dict[str, Any]] = []
+
+    def canonical(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+        chosen = set(values)
+        return tuple(symbol for symbol in symbols if symbol in chosen)
+
+    def evaluate_subset(values: list[str] | tuple[str, ...]) -> dict[str, Any]:
+        key = canonical(values)
+        if not key:
+            return baseline_metrics
+        if key in scenario_metrics_cache:
+            return scenario_metrics_cache[key]
+        _, metrics, rows = _evaluate_scenario(
+            "U67+ASSURANCE_" + "_".join(key),
+            list(key),
+            baseline_frames,
+            candidate_frames,
+            baseline_symbols,
+            states,
+            candidate_fold_caches,
+            folds,
+            all_decision_dates,
+            decision_to_fold,
+            decision_metadata,
+            config_u67,
+        )
+        scenario_metrics_cache[key] = metrics
+        assurance_calibration_rows.extend(rows)
+        scenario_rows.append(
+            {
+                "assets": ",".join(key),
+                "asset_count": len(key),
+                "ending_capital": metrics.get("ending_capital"),
+                "cagr": metrics.get("cagr"),
+                "sharpe": metrics.get("sharpe"),
+                "maximum_drawdown": metrics.get("maximum_drawdown"),
+                "worst_fold_return": metrics.get("worst_fold_return"),
+            }
+        )
+        pd.DataFrame(scenario_rows).to_csv(
+            OUT / "assurance_scenarios_partial.csv",
+            index=False,
+        )
+        return metrics
+
+    all_positive_metrics = evaluate_subset(symbols)
+    selected_metrics = evaluate_subset(discovery_selected)
+    all_positive_exact = math.isclose(
+        float(all_positive_metrics["ending_capital"]),
+        EXPECTED_ALL_POSITIVE_ENDING_CAPITAL,
+        rel_tol=0.0,
+        abs_tol=BASELINE_ABS_TOL,
+    )
+    selected_exact = math.isclose(
+        float(selected_metrics["ending_capital"]),
+        EXPECTED_DISCOVERY_SELECTED_ENDING_CAPITAL,
+        rel_tol=0.0,
+        abs_tol=BASELINE_ABS_TOL,
+    )
+    if not all_positive_exact or not selected_exact:
+        raise RuntimeError(
+            "Checkpoint de descoberta divergiu: "
+            f"all15={all_positive_metrics['ending_capital']:.8f} "
+            f"selected10={selected_metrics['ending_capital']:.8f}"
+        )
+
+    temporal_rows: list[dict[str, Any]] = []
+    temporal_trace_frames: list[pd.DataFrame] = []
+    previous_assets: list[str] | None = None
+    for stage, selection_folds, holdout_fold in (
+        ("past_fold_1_to_future_fold_2", [1], 2),
+        ("past_folds_1_2_to_future_fold_3", [1, 2], 3),
+    ):
+        def temporal_score(values: list[str] | tuple[str, ...]) -> float:
+            return _compound_fold_capital(
+                evaluate_subset(values),
+                selection_folds,
+                initial_capital=float(config_u67.initial_capital),
+            )
+
+        baseline_selection_score = _compound_fold_capital(
+            baseline_metrics,
+            selection_folds,
+            initial_capital=float(config_u67.initial_capital),
+        )
+        search = _forward_backward_subset_search(
+            symbols,
+            temporal_score,
+            baseline_selection_score,
+            SUBSET_IMPROVEMENT_TOL,
+        )
+        chosen = list(search["selected"]["assets"])
+        chosen_metrics = evaluate_subset(chosen)
+        heldout = _fold_metric(chosen_metrics, holdout_fold)
+        baseline_holdout = _fold_metric(baseline_metrics, holdout_fold)
+        discovery_holdout = _fold_metric(selected_metrics, holdout_fold)
+        temporal_rows.append(
+            {
+                "stage": stage,
+                "selection_folds": ",".join(str(value) for value in selection_folds),
+                "holdout_fold": holdout_fold,
+                "selected_assets": ",".join(chosen),
+                "selected_asset_count": len(chosen),
+                "selection_score": search["selected"]["ending_capital"],
+                "holdout_return": heldout["strategy_return"],
+                "u67_holdout_return": baseline_holdout["strategy_return"],
+                "holdout_excess_vs_u67": (
+                    float(heldout["strategy_return"])
+                    - float(baseline_holdout["strategy_return"])
+                ),
+                "discovery_10_holdout_return": discovery_holdout["strategy_return"],
+                "jaccard_vs_discovery_10": _jaccard(
+                    chosen,
+                    discovery_selected,
+                ),
+                "jaccard_vs_previous_stage": (
+                    _jaccard(chosen, previous_assets)
+                    if previous_assets is not None
+                    else None
+                ),
+            }
+        )
+        trace = pd.DataFrame(search["trace"])
+        if not trace.empty:
+            trace.insert(0, "stage", stage)
+            temporal_trace_frames.append(trace)
+        previous_assets = chosen
+
+    temporal_validation = pd.DataFrame(temporal_rows)
+    temporal_validation.to_csv(
+        OUT / "temporal_universe_validation.csv",
+        index=False,
+    )
+    temporal_trace = (
+        pd.concat(temporal_trace_frames, ignore_index=True)
+        if temporal_trace_frames
+        else pd.DataFrame()
+    )
+    temporal_trace.to_csv(OUT / "temporal_universe_search.csv", index=False)
+
+    loo_rows = []
+    selected_capital = float(selected_metrics["ending_capital"])
+    for symbol in discovery_selected:
+        reduced = [item for item in discovery_selected if item != symbol]
+        metrics = evaluate_subset(reduced)
+        loo_rows.append(
+            {
+                "removed_asset": symbol,
+                "remaining_assets": ",".join(reduced),
+                "ending_capital": metrics["ending_capital"],
+                "delta_vs_selected_10": (
+                    float(metrics["ending_capital"]) - selected_capital
+                ),
+                "relative_delta_vs_selected_10": (
+                    float(metrics["ending_capital"]) / selected_capital - 1.0
+                ),
+                "sharpe": metrics["sharpe"],
+                "maximum_drawdown": metrics["maximum_drawdown"],
+                "worst_fold_return": metrics["worst_fold_return"],
+            }
+        )
+    pd.DataFrame(loo_rows).sort_values(
+        "delta_vs_selected_10",
+        ascending=False,
+        kind="stable",
+    ).to_csv(OUT / "leave_one_asset_out.csv", index=False)
+
+    stress_profiles = [
+        ("base", {}),
+        ("slippage_5bps", {"slippage_bps": 5.0}),
+        ("slippage_10bps", {"slippage_bps": 10.0}),
+        (
+            "regulatory_fees_2x",
+            {
+                "sec_fee_rate": float(config_u67.sec_fee_rate) * 2.0,
+                "taf_fee_per_share": float(config_u67.taf_fee_per_share) * 2.0,
+                "taf_fee_cap": float(config_u67.taf_fee_cap) * 2.0,
+                "cat_fee_per_share": float(config_u67.cat_fee_per_share) * 2.0,
+            },
+        ),
+        (
+            "regulatory_fees_3x",
+            {
+                "sec_fee_rate": float(config_u67.sec_fee_rate) * 3.0,
+                "taf_fee_per_share": float(config_u67.taf_fee_per_share) * 3.0,
+                "taf_fee_cap": float(config_u67.taf_fee_cap) * 3.0,
+                "cat_fee_per_share": float(config_u67.cat_fee_per_share) * 3.0,
+            },
+        ),
+    ]
+    stress_rows = []
+    for name, update in stress_profiles:
+        if name == "base":
+            metrics = selected_metrics
+        else:
+            stress_config = config_u67.copiar_modelo(update=update)
+            _, metrics, rows = _evaluate_scenario(
+                "U67+ASSURANCE_STRESS_" + name,
+                discovery_selected,
+                baseline_frames,
+                candidate_frames,
+                baseline_symbols,
+                states,
+                candidate_fold_caches,
+                folds,
+                all_decision_dates,
+                decision_to_fold,
+                decision_metadata,
+                stress_config,
+            )
+            assurance_calibration_rows.extend(rows)
+        stress_rows.append(
+            {
+                "profile": name,
+                "ending_capital": metrics["ending_capital"],
+                "delta_vs_base": (
+                    float(metrics["ending_capital"]) - selected_capital
+                ),
+                "relative_delta_vs_base": (
+                    float(metrics["ending_capital"]) / selected_capital - 1.0
+                ),
+                "cagr": metrics["cagr"],
+                "sharpe": metrics["sharpe"],
+                "maximum_drawdown": metrics["maximum_drawdown"],
+                "worst_fold_return": metrics["worst_fold_return"],
+            }
+        )
+    pd.DataFrame(stress_rows).to_csv(OUT / "cost_stress.csv", index=False)
+
+    reproducibility_result, reproducibility_metrics, reproducibility_rows = (
+        _evaluate_scenario(
+            "U67+ASSURANCE_REPRODUCIBILITY",
+            discovery_selected,
+            baseline_frames,
+            candidate_frames,
+            baseline_symbols,
+            states,
+            candidate_fold_caches,
+            folds,
+            all_decision_dates,
+            decision_to_fold,
+            decision_metadata,
+            config_u67,
+        )
+    )
+    assurance_calibration_rows.extend(reproducibility_rows)
+    selected_result, _, selected_rows = _evaluate_scenario(
+        "U67+ASSURANCE_SELECTED_REFERENCE",
+        discovery_selected,
+        baseline_frames,
+        candidate_frames,
+        baseline_symbols,
+        states,
+        candidate_fold_caches,
+        folds,
+        all_decision_dates,
+        decision_to_fold,
+        decision_metadata,
+        config_u67,
+    )
+    assurance_calibration_rows.extend(selected_rows)
+    left = selected_result.predictions[["selected_asset", "strategy_equity"]]
+    right = reproducibility_result.predictions[
+        ["selected_asset", "strategy_equity"]
+    ]
+    aligned = left.join(
+        right,
+        how="inner",
+        lsuffix="_reference",
+        rsuffix="_rerun",
+    )
+    max_equity_abs_diff = float(
+        (
+            aligned["strategy_equity_reference"]
+            - aligned["strategy_equity_rerun"]
+        ).abs().max()
+    )
+    same_assets = bool(
+        (
+            aligned["selected_asset_reference"]
+            == aligned["selected_asset_rerun"]
+        ).all()
+    )
+    reproducibility = {
+        "ending_capital_reference": selected_capital,
+        "ending_capital_rerun": reproducibility_metrics["ending_capital"],
+        "exact_to_cent": math.isclose(
+            float(reproducibility_metrics["ending_capital"]),
+            selected_capital,
+            rel_tol=0.0,
+            abs_tol=BASELINE_ABS_TOL,
+        ),
+        "selected_asset_sequence_identical": same_assets,
+        "max_equity_absolute_difference": max_equity_abs_diff,
+    }
+    _write_json(OUT / "reproducibility.json", reproducibility)
+
+    pd.DataFrame(scenario_rows).drop_duplicates(
+        subset=["assets"],
+        keep="last",
+    ).to_csv(OUT / "assurance_scenarios.csv", index=False)
+    pd.DataFrame(
+        [*calibration_rows, *assurance_calibration_rows]
+    ).to_csv(OUT / "scenario_fold_calibration.csv", index=False)
+
+    payload = {
+        "execution_schema": EXECUTION_SCHEMA,
+        "version": SCRIPT_VERSION,
+        "status": "completed",
+        "purpose": "u67_assurance_validation",
+        "run_mode": RUN_MODE,
+        "baseline": baseline_payload,
+        "checkpoints": {
+            "all_15_exact_to_cent": all_positive_exact,
+            "selected_10_exact_to_cent": selected_exact,
+            "all_15_ending_capital": all_positive_metrics["ending_capital"],
+            "selected_10_ending_capital": selected_metrics["ending_capital"],
+        },
+        "model_generalization": model_summary,
+        "temporal_universe_validation": temporal_rows,
+        "leave_one_asset_out_count": len(loo_rows),
+        "cost_stress_profiles": [row["profile"] for row in stress_rows],
+        "reproducibility": reproducibility,
+        "selection_bias_context": {
+            "source_direct_financially_tested_candidates": (
+                SOURCE_DIRECT_TESTED_COUNT
+            ),
+            "source_subset_unique_scenarios": SOURCE_SUBSET_UNIQUE_SCENARIOS,
+            "candidate_pool_for_temporal_validation": symbols,
+            "candidate_pool_was_discovered_using_full_controlled_window": True,
+            "interpretation": (
+                "Temporal test validates subset selection with a fixed discovery "
+                "pool; it is not yet a fully nested rediscovery of the 500 assets."
+            ),
+        },
+        "dynamic_universe_principle": {
+            "asset_list_is_permanent": False,
+            "future_target": (
+                "estimate marginal value of adding, keeping, or removing an asset "
+                "using information available at the decision time"
+            ),
+            "current_phase": "controlled_historical_window_assurance",
+        },
+        "data": {
+            "baseline_snapshot_sha256": snapshot.get("snapshot_sha256"),
+            "candidate_file_hashes": candidate_hashes,
+        },
+        "runtime_seconds": float(time.perf_counter() - started),
+    }
+    _write_json(OUT / "pesquisa_u67_assurance_validation.json", payload)
+
+    package = criar_pacote_analise(
+        OUT,
+        comparison_file="pesquisa_u67_assurance_validation.json",
+        execution_schema=EXECUTION_SCHEMA,
+        archive_name="pacote_analise_u67_assurance_validation.zip",
+    )
+    print("=" * 78, flush=True)
+    print(
+        f"[final-assurance] selected10=US$ {selected_capital:,.2f} "
+        f"overfit_warnings={model_summary['overfit_warning_rows']} "
+        f"underfit_warnings={model_summary['underfit_warning_rows']}",
+        flush=True,
+    )
+    print(
+        f"[final-assurance] reproducible={reproducibility['exact_to_cent']} "
+        f"same_assets={same_assets}",
+        flush=True,
+    )
+    print(f"[final-assurance] package={package}", flush=True)
+    print("=" * 78, flush=True)
+    sinal_sonoro_conclusao()
+    return payload
+
+
 def _marginal_row(
     symbol: str,
     sample_row: dict[str, Any],
@@ -1848,6 +2504,25 @@ def main() -> dict[str, Any]:
         f"[baseline] capital=US$ {baseline_metrics['ending_capital']:,.2f} exact_to_cent=True",
         flush=True,
     )
+
+    if RUN_MODE == "assurance_validation":
+        return _run_assurance_validation(
+            snapshot=snapshot,
+            baseline_payload=baseline_payload,
+            baseline_metrics=baseline_metrics,
+            baseline_result=baseline_result,
+            baseline_frames=baseline_frames,
+            common_dates=common_dates,
+            baseline_symbols=baseline_symbols,
+            folds=folds,
+            all_decision_dates=all_decision_dates,
+            decision_to_fold=decision_to_fold,
+            decision_metadata=decision_metadata,
+            config_u67=config_u67,
+            states=states,
+            calibration_rows=calibration_rows,
+            started=started,
+        )
 
     if RUN_MODE == "subset_optimization":
         return _run_subset_optimization(
