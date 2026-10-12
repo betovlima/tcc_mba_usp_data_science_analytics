@@ -1,20 +1,23 @@
-"""Pesquisa incremental U67+n com garantia de generalizacao.
+"""Pesquisa incremental U67+n com validacao da decisao e do universo dinamico.
 
-A versao 1.3.0 transforma o vencedor de descoberta em Challenger e tenta
-quebrar o resultado antes de qualquer promocao. O modo padrao executa:
-diagnosticos de overfitting/underfitting do LightGBM, validacao temporal da
-selecao de universo, leave-one-asset-out, stress de custos e reproducibilidade
-deterministica.
+A versao 1.4.0 parte dos checkpoints reproduzidos pela assurance v1.3.0 e
+avalia se o LightGBM e util para a decisao relativa entre ativos, mesmo quando
+MAE/RMSE absolutos mostram fraca generalizacao. Tambem mede o risco de
+selection overfitting da busca de subconjuntos com Deflated Sharpe Ratio e
+Probability of Backtest Overfitting.
 
-A lista de ativos continua sendo tratada como estado dinamico futuro da
-estrategia. Nesta fase, a avaliacao permanece em janela historica controlada;
-os resultados nao sao interpretados como uma lista permanente de ativos.
+A lista de ativos permanece um estado dinamico da estrategia. O piloto temporal
+registra transicoes ADICIONAR, MANTER e REMOVER entre universos escolhidos
+somente com folds anteriores. A redescoberta diaria completa dos candidatos
+fica para a etapa posterior.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import combinations
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
+from statistics import NormalDist
 from typing import Any
 import hashlib
 import json
@@ -81,12 +84,13 @@ from reproducao.preparacao import (
 
 # %% 0 - Parametros da campanha
 ROOT = Path(__file__).resolve().parent
-RUN_MODE = "assurance_validation"
+RUN_MODE = "decision_validation"
 BASE_DATA = SnapshotPaths.u67(ROOT)
 CACHE_ROOT = ROOT / "dados" / ".u67_expansion_cache"
 FAST_CACHE = CACHE_ROOT / "fast_split_20261006"
 FULL_DATA = SnapshotPaths.from_root(CACHE_ROOT / "full_raw_20261006")
 OUTPUT_DIR_BY_MODE = {
+    "decision_validation": "u67_decision_validation",
     "assurance_validation": "u67_assurance_validation",
     "subset_optimization": "u67_subset_optimization",
     "direct_marginal": "u67_asset_expansion",
@@ -94,8 +98,8 @@ OUTPUT_DIR_BY_MODE = {
 OUT = ROOT / "output" / OUTPUT_DIR_BY_MODE[RUN_MODE]
 CANDIDATE_SAMPLE_MANIFEST = ROOT / "pesquisa_u67_amostra_500.csv"
 
-SCRIPT_VERSION = "u67-asset-expansion-v1.3.0"
-EXECUTION_SCHEMA = "u67-asset-expansion-v4"
+SCRIPT_VERSION = "u67-asset-expansion-v1.4.0"
+EXECUTION_SCHEMA = "u67-asset-expansion-v5"
 ANALYSIS_END_DATE = "2026-10-06"
 EXPECTED_U67_ENDING_CAPITAL = 76_927_051.38897176
 EXPECTED_ALL_POSITIVE_ENDING_CAPITAL = 290_727_954.41339606
@@ -104,6 +108,8 @@ BASELINE_ABS_TOL = 0.01
 SUBSET_IMPROVEMENT_TOL = 0.01
 SOURCE_DIRECT_TESTED_COUNT = 146
 SOURCE_SUBSET_UNIQUE_SCENARIOS = 180
+PBO_BLOCKS = 10
+PBO_SPLIT_COUNT = math.comb(PBO_BLOCKS, PBO_BLOCKS // 2)
 SUBSET_SOURCE_CANDIDATES = (
     "CRT",
     "NBR",
