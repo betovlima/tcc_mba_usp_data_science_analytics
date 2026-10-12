@@ -50,7 +50,7 @@ from pesquisar_expansao_u67_spyder import (
 
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "output" / "persistencia_horizontes_u77"
-VERSION = "horizon-persistence-oos-v1.0.2"
+VERSION = "horizon-persistence-oos-v1.0.3"
 CONFIDENCE_MULTIPLIERS = (0.0, 0.5, 1.0)
 ANCHOR_BLEND = 0.5
 CHECKPOINT_TOLERANCE_DOLLARS = 0.01
@@ -372,6 +372,303 @@ def make_policy(
         fold_id=fold_id,
     )
 
+
+
+
+def calibrate_pair_gap_error(
+    *,
+    horizon: int,
+    days: pd.DatetimeIndex,
+    calendar: pd.DatetimeIndex,
+    last_matured_exclusive: int,
+    symbols: list[str],
+    frames: dict[str, pd.DataFrame],
+    aggregate: dict[pd.Timestamp, np.ndarray],
+    predictions: dict[pd.Timestamp, np.ndarray],
+) -> tuple[float, int, int]:
+    """Quantile across days of within-day pairwise prediction errors.
+
+    At each training-calibration day, compare the aggregate leader with
+    every other asset, but use only H-specific labels completely observed
+    BEFORE the threshold-selection interval. Each day's 75th percentile
+    is one statistical observation, to avoid counting 74 correlated
+    leader/challenger pairs as independent days.
+    """
+    lookups = {pd.Timestamp(date): n for n, date in enumerate(calendar)}
+    daily_pair_p75: list[float] = []
+    pairs_used = 0
+    h = int(horizon)
+    for date in days:
+        stamp = pd.Timestamp(date)
+        idx = lookups.get(stamp)
+        if idx is None or idx + h >= int(last_matured_exclusive):
+            continue
+        aggregate_row = aggregate.get(stamp)
+        horizon_row = predictions.get(stamp)
+        if aggregate_row is None or horizon_row is None:
+            continue
+        valid = np.flatnonzero(
+            np.isfinite(aggregate_row[1:]) & np.isfinite(horizon_row[1:])
+        ) + 1
+        if len(valid) < 2:
+            continue
+        leader = int(valid[np.argmax(aggregate_row[valid])])
+        leader_label = float(frames[symbols[leader - 1]].at[
+            stamp, f"forward_horizon_utility_{h}"
+        ])
+        if not np.isfinite(leader_label):
+            continue
+        errors: list[float] = []
+        for pos in valid:
+            pos = int(pos)
+            if pos == leader:
+                continue
+            counterpart_label = float(frames[symbols[pos - 1]].at[
+                stamp, f"forward_horizon_utility_{h}"
+            ])
+            if not np.isfinite(counterpart_label):
+                continue
+            predicted_gap = float(horizon_row[leader] - horizon_row[pos])
+            realized_gap = leader_label - counterpart_label
+            errors.append(abs(predicted_gap - realized_gap))
+        if errors:
+            daily_pair_p75.append(float(np.quantile(errors, 0.75)))
+            pairs_used += len(errors)
+    if len(daily_pair_p75) < 15 or pairs_used < 30:
+        raise RuntimeError(
+            f"H{h}: evidência histórica insuficiente para calibração "
+            f"do erro de diferença entre ativos: "
+            f"days={len(daily_pair_p75)}, pairs={pairs_used}. "
+            "Não utilizar dados posteriores ao corte."
+        )
+    return float(np.quantile(daily_pair_p75, 0.75)), len(daily_pair_p75), pairs_used
+
+
+class EarlyHorizonOverridePolicy:
+    """Preserve Control decisions except a horizon-supported early rotation.
+
+    The fold boundary can inherit an asset without its original entry
+    forecast. In that case the early override is disabled until a new
+    observed entry; the ordinary Control decision is still executable.
+    """
+
+    def __init__(
+        self,
+        *,
+        symbols: list[str],
+        dates: pd.DatetimeIndex,
+        aggregate: dict[pd.Timestamp, np.ndarray],
+        per_horizon: dict[int, dict[pd.Timestamp, np.ndarray]],
+        pair_error_p75: dict[int, float],
+        weights: dict[int, float],
+        control_policy: Any,
+        margin: float,
+        minimum_holding: int,
+        confidence_multiplier: float,
+        audit: list[dict[str, Any]] | None = None,
+        fold_id: int | None = None,
+    ) -> None:
+        self.symbols = symbols
+        self.indices = {pd.Timestamp(d): n for n, d in enumerate(dates)}
+        self.aggregate = aggregate
+        self.per_horizon = per_horizon
+        self.pair_error_p75 = pair_error_p75
+        self.weights = weights
+        self.control_policy = control_policy
+        self.margin = float(margin)
+        self.minimum_holding = int(minimum_holding)
+        self.confidence_multiplier = float(confidence_multiplier)
+        self.audit = audit
+        self.fold_id = fold_id
+        self.entry: dict[str, Any] | None = None
+
+    def __call__(
+        self, timestamp: pd.Timestamp, current: int, holding: int
+    ) -> tuple[int, float]:
+        stamp = pd.Timestamp(timestamp)
+        normal_action, normal_score = self.control_policy(
+            stamp, current, holding
+        )
+        row = self.aggregate[stamp]
+        date_index = self.indices[stamp]
+        horizon_rows = {
+            int(h): self.per_horizon[int(h)].get(stamp)
+            for h in self.weights
+        }
+        if current > 0 and (
+            self.entry is None or self.entry["position"] != current
+        ):
+            # Never fabricate a historical entry prediction at a fold boundary.
+            self.entry = {
+                "position": current,
+                "observed": False,
+                "date_index": date_index,
+                "horizon": {},
+            }
+
+        action, score = int(normal_action), float(normal_score)
+        candidate = None
+        fresh_advantage = None
+        original_advantage = None
+        uncertainty = None
+        reason = "CONTROL_UNCHANGED"
+        eligible = (
+            0 < current <= len(self.symbols)
+            and 0 < holding < self.minimum_holding
+            and action == current
+            and bool(self.entry and self.entry["observed"])
+            and np.isfinite(row[current])
+            and np.isfinite(row[1:]).any()
+        )
+
+        if eligible:
+            candidate = int(np.nanargmax(row))
+            if candidate <= 0 or candidate == current:
+                reason = "NO_ALTERNATIVE"
+            elif not (
+                np.isfinite(row[candidate])
+                and row[candidate] > 0.0
+                and row[candidate] >= row[current] + self.margin
+            ):
+                reason = "AGGREGATE_MARGIN_NOT_MET"
+            else:
+                age = max(0, date_index - int(self.entry["date_index"]))
+                differences = []
+                for h, weight in self.weights.items():
+                    forecast = horizon_rows[h]
+                    old = self.entry["horizon"].get(h)
+                    if (
+                        forecast is None
+                        or old is None
+                        or not np.isfinite(old)
+                        or not (
+                            np.isfinite(forecast[current])
+                            and np.isfinite(forecast[candidate])
+                        )
+                    ):
+                        continue
+                    remaining = max(0.0, 1.0 - age / float(h))
+                    effective_weight = float(weight) * remaining
+                    if effective_weight <= 0.0:
+                        continue
+                    differences.append(
+                        (
+                            effective_weight,
+                            float(forecast[candidate] - forecast[current]),
+                            float(forecast[candidate] - old),
+                            float(self.pair_error_p75[h]),
+                        )
+                    )
+                total_weight = sum(w for w, _, _, _ in differences)
+                if total_weight <= 0:
+                    reason = "MISSING_ACTIVE_HORIZON"
+                else:
+                    fresh_advantage = sum(
+                        w * gap for w, gap, _, _ in differences
+                    ) / total_weight
+                    original_advantage = sum(
+                        w * gap for w, _, gap, _ in differences
+                    ) / total_weight
+                    uncertainty = sum(
+                        w * sigma for w, _, _, sigma in differences
+                    ) / total_weight
+                    threshold = self.confidence_multiplier * uncertainty
+                    if (
+                        fresh_advantage > threshold
+                        and original_advantage > threshold
+                    ):
+                        action, score = candidate, float(row[candidate])
+                        reason = "EARLY_OVERRIDE_HORIZON_PAIRS"
+                    else:
+                        reason = "PAIR_EVIDENCE_INSUFFICIENT"
+        elif 0 < current and holding < self.minimum_holding:
+            reason = "FOLD_INHERITED_OR_NO_ANCHOR"
+        elif holding >= self.minimum_holding:
+            reason = "CONTROL_HOLDING_ALREADY_ELIGIBLE"
+
+        if self.audit is not None:
+            self.audit.append({
+                "fold_id": self.fold_id,
+                "decision_date": stamp.isoformat(),
+                "current_asset": (
+                    self.symbols[current - 1] if current > 0 else "CASH"
+                ),
+                "control_target": (
+                    self.symbols[normal_action - 1]
+                    if normal_action > 0 else "CASH"
+                ),
+                "best_candidate": (
+                    self.symbols[candidate - 1]
+                    if candidate is not None and candidate > 0 else None
+                ),
+                "final_target": (
+                    self.symbols[action - 1] if action > 0 else "CASH"
+                ),
+                "holding_sessions": holding,
+                "entry_forecast_observed": bool(
+                    self.entry and self.entry["observed"]
+                ),
+                "reason": reason,
+                "early_override": action != normal_action,
+                "fresh_pair_advantage": fresh_advantage,
+                "entry_pair_advantage": original_advantage,
+                "pair_error_p75": uncertainty,
+                "confidence_multiplier": self.confidence_multiplier,
+            })
+
+        if action != current:
+            if action > 0:
+                self.entry = {
+                    "position": action,
+                    "observed": True,
+                    "date_index": date_index,
+                    "horizon": {
+                        int(h): (
+                            float(forecast[action])
+                            if forecast is not None
+                            and np.isfinite(forecast[action])
+                            else float("nan")
+                        )
+                        for h, forecast in horizon_rows.items()
+                    },
+                }
+            else:
+                self.entry = None
+        return int(action), float(score)
+
+
+def make_early_override(
+    *,
+    symbols: list[str],
+    dates: pd.DatetimeIndex,
+    aggregate: dict[pd.Timestamp, np.ndarray],
+    per_horizon: dict[int, dict[pd.Timestamp, np.ndarray]],
+    pair_error_p75: dict[int, float],
+    config: Any,
+    margin: float,
+    multiplier: float,
+    audit: list[dict[str, Any]] | None = None,
+    fold_id: int | None = None,
+) -> EarlyHorizonOverridePolicy:
+    w = np.asarray(config.rotation_target_horizon_weights, dtype=float)
+    w /= w.sum()
+    control = _politica_utilidade(
+        {}, {}, symbols, config, margin, utility_cache=aggregate
+    )
+    return EarlyHorizonOverridePolicy(
+        symbols=symbols,
+        dates=dates,
+        aggregate=aggregate,
+        per_horizon=per_horizon,
+        pair_error_p75=pair_error_p75,
+        weights=dict(zip((int(h) for h in config.rotation_target_horizons), w)),
+        control_policy=control,
+        margin=margin,
+        minimum_holding=int(config.rotation_min_holding_days),
+        confidence_multiplier=multiplier,
+        audit=audit,
+        fold_id=fold_id,
+    )
 
 def scenario_metrics(result: Any, folds: list[dict[str, Any]], capital: float) -> dict[str, Any]:
     m = summarize_metrics(result, folds, capital)
