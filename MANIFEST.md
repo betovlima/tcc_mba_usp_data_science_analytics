@@ -2369,8 +2369,8 @@ O ZIP deve conter os logs e CSVs.
 
 **Governanca e limitacoes:** somente a branch
 `research/horizon-persistence-oos-v1`.
-A main, a reproducao Control congelada e o Market Cycle Trader
-operacional permanecem inalterados. O checkpoint do Control
+A main, a reproducao Control congelada e a aplicacao
+operacional permanecem inalteradas. O checkpoint do Control
 US$ 587.165.941,13 continua obrigatorio. Nenhuma nova
 politica e simulada financeiramente ou promovida.
 Como os folds OOS anteriores ja foram vistos muitas vezes,
