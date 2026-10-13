@@ -66,7 +66,7 @@ from reproducao.artefatos import (
 from reproducao.dados import SnapshotPaths, read_snapshot_manifest
 from reproducao.experimento import build_control_config, summarize_metrics
 from reproducao.graficos import gerar_analises_backtest
-from reproducao.preparacao import load_raw_bar_file, prepare_model_frames
+from reproducao.preparacao import prepare_model_frames
 
 
 # %% 0 - Contrato oficial do experimento U67
@@ -83,7 +83,6 @@ U67_CHECKPOINT_DATE = "2026-09-17"
 U67_EXPECTED_ENDING_CAPITAL = 76_927_051.38897176
 U67_EXPECTED_CAPITAL_AT_CHECKPOINT = 78_782_538.31270888
 CHECKPOINT_ABS_TOL = 0.01
-MODEL_DATA_COLUMNS = ("open", "high", "low", "close", "volume")
 
 
 def _package_version(name: str) -> str | None:
@@ -106,8 +105,8 @@ print("data_source=FROZEN_GIT_SNAPSHOT", flush=True)
 print("feed=SIP adjustment=RAW timeframe=1Day", flush=True)
 print("database=NO", flush=True)
 print("csv_float_precision=round_trip", flush=True)
-print("requested_assets=67 expected_effective_assets=65", flush=True)
-print("expected_runtime_exclusions=CLMT,DOC", flush=True)
+print(f"requested_assets={len(U67_REQUESTED_ASSETS)}", flush=True)
+
 print("=" * 78, flush=True)
 
 
