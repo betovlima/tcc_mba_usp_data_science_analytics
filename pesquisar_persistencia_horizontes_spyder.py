@@ -2388,10 +2388,18 @@ def rank_quality_metrics(
     from scipy.stats import kendalltau, spearmanr
 
     observed = np.asarray(realized, dtype=float)
+    # Nunca substituir o Top-1 ausente pelo proximo ativo com label:
+    # isso usaria a disponibilidade do futuro para mudar o vencedor.
+    actual_first = int(ranking[0][0]) if ranking else -1
     ranked = [
         index for index, _ in ranking if np.isfinite(observed[index])
     ]
-    if len(ranked) < 3 or not np.isfinite(observed[reference_index]):
+    if (
+        actual_first < 0
+        or not np.isfinite(observed[actual_first])
+        or len(ranked) < 3
+        or not np.isfinite(observed[reference_index])
+    ):
         return {
             "evaluable_assets": len(ranked),
             "spearman": None, "kendall": None,
