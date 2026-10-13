@@ -21,7 +21,7 @@ def test_reproducao_e_busca_nao_compartilham_ciclo_de_download() -> None:
     assert "load_alpaca_credentials" not in runner
     assert "download_raw_bars" not in runner
     assert "load_alpaca_credentials" in discovery
-    assert "validate_snapshot(U67)" in discovery
+    assert "read_snapshot_manifest(U67)" in discovery
     assert "EXPECTED_BRANCH" not in discovery
     assert "if __name__ == \"__main__\":" in discovery
 
