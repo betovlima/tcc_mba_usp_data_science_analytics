@@ -4024,12 +4024,14 @@ def main() -> dict[str, Any]:
         "operational_orders": False,
         "oos_used_for_parameter_selection": False,
         "method_limitations": (
-            "Trained supervised pairwise differences are not an exact "
-            "market-impact simulation or deployable policy. Labels "
-            "reflect next-open to H-close price paths, with a frozen "
-            "round-trip cost convention; candidate switching costs "
-            "are estimated separately. Per-fold OOS results have "
-            "already been repeatedly examined in previous studies."
+            "Mathematical rotation policies are independently simulated "
+            "with the historical simulator and frozen execution fees, "
+            "but its simplistic fills do not establish market impact "
+            "or deployability at large compound capital. Decision-"
+            "precision labels are post-hoc next-open-to-H-close "
+            "relative returns, not realized strategy PnL. "
+            "The OOS folds were repeatedly studied before v1.0.10; "
+            "comparisons are exploratory until an untouched future period."
         ),
         "export_to_operational": False,
     }
@@ -4052,7 +4054,7 @@ def audible_completion(*, succeeded: bool) -> str:
     try:
         import winsound
     except ImportError:
-        print("\\a", end="", flush=True)
+        print("\a", end="", flush=True)
         return "terminal_bell_fallback"
     if succeeded:
         winsound.Beep(880, 160)
