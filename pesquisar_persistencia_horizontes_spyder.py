@@ -2970,6 +2970,120 @@ def autonomous_decision_quality(
                 })
     return quality, summary
 
+
+def utility_ablation_variant_config(
+    config: Any, *, minimum_hold: int, margin_mode: str,
+    calibrated_margin: float,
+) -> tuple[Any, float]:
+    """Altera SOMENTE hold e margem mantendo features e modelos congelados."""
+    if minimum_hold not in UTILITY_ABLATION_HOLD:
+        raise ValueError("Unsupported ablation holding")
+    if margin_mode not in UTILITY_ABLATION_MARGINS:
+        raise ValueError("Unsupported ablation margin mode")
+    base = float(config.rotation_switch_margin)
+    if margin_mode == "zero":
+        setting = config.copiar_modelo(update={
+            "rotation_min_holding_days": minimum_hold,
+            "rotation_switch_margin": 0.0,
+        })
+        margin = 0.0
+    else:
+        setting = config.copiar_modelo(update={
+            "rotation_min_holding_days": minimum_hold,
+        })
+        margin = (
+            base if margin_mode == "base"
+            else max(base, float(calibrated_margin))
+        )
+    return setting, float(margin)
+
+
+def prepare_utility_ablation_policies(
+    *,
+    config: Any,
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    fold_caches: dict[int, dict[str, Any]],
+    hold: int,
+    margin_mode: str,
+    decision_diagnostics: dict[pd.Timestamp, dict[str, Any]] | None,
+) -> dict[int, Any]:
+    """Mesma utilidade treinada do Control, decisoes geradas em separado."""
+    policies: dict[int, Any] = {}
+    for fid, cache in sorted(fold_caches.items()):
+        setting, margin = utility_ablation_variant_config(
+            config,
+            minimum_hold=hold, margin_mode=margin_mode,
+            calibrated_margin=float(cache["margin"]),
+        )
+        policies[fid] = _politica_utilidade(
+            {}, frames, symbols, setting, margin,
+            utility_cache=cache["oos"],
+            decision_diagnostics=decision_diagnostics,
+            fold_id=fid,
+            calibrated_switch_margin=margin,
+        )
+    return policies
+
+
+def summarize_ablation_decision_outcomes(
+    *,
+    audit: list[dict[str, Any]],
+    frames: dict[str, pd.DataFrame],
+    calendar: pd.DatetimeIndex,
+    folds: list[dict[str, Any]],
+    config: Any,
+    methods: tuple[str, ...],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Avalia uma unica definicao de precisao pos-hoc para TODAS variantes."""
+    return autonomous_decision_quality(
+        audit=audit, frames=frames, calendar=calendar,
+        folds=folds, config=config, methods=methods,
+    )
+
+
+def one_step_utility_ablation(
+    *,
+    baseline_decisions: dict[pd.Timestamp, dict[str, Any]],
+    policies: dict[str, dict[int, Any]],
+    symbols: list[str],
+    date_to_fold: dict[pd.Timestamp, int],
+) -> list[dict[str, Any]]:
+    """Confronto pareado SEM alterar o estado real do Control.
+
+    Cada variante ve a MESMA posicao, data e holding do Control.
+    Diferencas sao atribuiveis somente as regras hold/margem;
+    replay financeiro separado mede efeitos dinamicos posteriores.
+    """
+    rows = []
+    for date, reference in sorted(baseline_decisions.items()):
+        day = pd.Timestamp(date)
+        if day not in date_to_fold:
+            continue
+        fid = int(date_to_fold[day])
+        incumbent = str(reference["current_asset"])
+        current_pos = (
+            0 if incumbent == "CASH" else symbols.index(incumbent) + 1
+        )
+        holding = int(reference["holding_days_at_decision"])
+        official = str(reference["final_action_asset"])
+        for method, per_fold in policies.items():
+            action, score = per_fold[fid](day, current_pos, holding)
+            predicted = "CASH" if action == 0 else symbols[action - 1]
+            rows.append({
+                "decision_date": day.isoformat(),
+                "fold_id": fid, "method": method,
+                "current_asset": incumbent,
+                "holding_sessions": holding,
+                "official_control_action": official,
+                "counterfactual_action": predicted,
+                "differs_from_control": predicted != official,
+                "counterfactual_score": float(score),
+                "same_state_as_official_control": True,
+            })
+    return rows
+
+
 def main() -> dict[str, Any]:
     OUT.mkdir(parents=True, exist_ok=True)
     data = SnapshotPaths.u67(ROOT)
