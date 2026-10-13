@@ -311,3 +311,45 @@ O pacote será escrito exclusivamente em:
 
 Leia a seção 25.12.6 do `MANIFEST.md` para os critérios
 de causalidade e as limitações da análise contrafactual.
+
+
+### Versão experimental 1.0.7 — comparar pares com calibração histórica
+
+A versão padrão do mesmo script
+`pesquisar_persistencia_horizontes_spyder.py` é agora v1.0.7.
+Para H02/H03/H05/H10, compara cada candidato tanto com
+o ativo em carteira quanto com a próxima escolha do Control.
+O ganho previsto relativo é reduzido conforme erros
+observados em pares selecionados na janela histórica.
+Uma checagem cronológica fica separada da estimação de
+confiabilidade. As decisões financeiras do Control
+permanecem intocadas.
+
+Na mesma execução, a auditoria independente continua
+com H01/H02/H03/H05/H10/H15/H20/H30/H40/H60.
+Os resultados só são medidos se o horizonte termina
+dentro do fold, sem reutilizar fronteiras de decisão.
+Somente o Control é simulado financeiramente.
+
+Atualize a branch no console do Spyder:
+
+    !git fetch origin
+    !git switch research/horizon-persistence-oos-v1
+    !git pull --ff-only origin research/horizon-persistence-oos-v1
+
+Reinicie o kernel e execute:
+
+    %run pesquisar_persistencia_horizontes_spyder.py
+
+O script requer os mesmos dez históricos externos congelados
+do U67+10, não faz download de dados e pode demorar
+significativamente: dez horizontes finais mais quatro
+de calibração por ativo e por fold. O resultado fica em:
+
+    output/persistencia_horizontes_u77_v107/pacote_persistencia_horizontes_u77_v107.zip
+
+O checkpoint Control de US$ 587.165.941,13 é condição
+obrigatória antes da pesquisa. O novo estudo não produziu
+ainda resultado financeiro, e os rankings são diagnósticos,
+não ordens nem prova de lucratividade. Consulte a seção
+25.12.7 em `MANIFEST.md`.
