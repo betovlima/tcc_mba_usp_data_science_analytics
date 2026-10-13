@@ -353,3 +353,25 @@ obrigatória antes da pesquisa. O novo estudo não produziu
 ainda resultado financeiro, e os rankings são diagnósticos,
 não ordens nem prova de lucratividade. Consulte a seção
 25.12.7 em `MANIFEST.md`.
+
+### v1.0.8 — aprendizado direto entre pares e auditoria independente
+
+A versao padrao do arquivo `pesquisar_persistencia_horizontes_spyder.py` e agora v1.0.8. Reconstroi os rotulos de cada H independentemente, corrigindo a falta artificial de resultados curtos perto do fim do historico. Para H02/H03/H05/H10, treina LightGBM para prever diretamente a diferenca de retorno candidato versus referencia, com calibracao historica do erro do vencedor. A comparacao considera tanto o ativo atual quanto a acao que o Control escolheria.
+
+Na mesma execucao continua a auditoria H01/H02/H03/H05/H10/H15/H20/H30/H40/H60, isolada do novo modelo. Somente o Control holding=2 opera; nenhum candidato e negociado. A pesquisa exige os mesmos dez ativos externos do cache congelado e nao consulta Alpaca.
+
+Atualize a branch no console do Spyder:
+
+    !git fetch origin
+    !git switch research/horizon-persistence-oos-v1
+    !git pull --ff-only origin research/horizon-persistence-oos-v1
+
+Reinicie o kernel e execute:
+
+    %run pesquisar_persistencia_horizontes_spyder.py
+
+O checkpoint obrigatorio e US$ 587.165.941,13. Esta versao adiciona ate 24 ajustes de modelos de pares aos 2.250 treinamentos individuais da auditoria; pode demorar substancialmente. O pacote esperado e:
+
+    output/persistencia_horizontes_u77_v108/pacote_persistencia_horizontes_u77_v108.zip
+
+Resultados da v1.0.8 ainda aguardam execucao. Para o protocolo cientifico e as limitacoes, consulte a secao 25.12.8 de `MANIFEST.md`.
