@@ -281,6 +281,10 @@ a v1.0.6 por padrão. A mesma execução gera dois estudos
   H01/H02/H03/H05/H10/H15/H20/H30/H40/H60,
   com ranking consolidado e o líder de cada horizonte.
 
+O ranking de captura exige vantagem prevista em pelo menos
+três horizontes, com ganho médio positivo nos grupos
+H02/H03 e H05/H10. A auditoria não aplica esse filtro.
+
 O Control original, com holding=2, é o único backtest
 financeiro; candidatos NÃO são automaticamente negociados.
 O processo calcula diferenças realizadas somente depois
