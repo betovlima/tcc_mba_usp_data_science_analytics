@@ -1972,7 +1972,7 @@ treinada por essas variáveis na v1.0.4.
 **Status:** implementação publicada apenas nesta branch de pesquisa.
 Testes unitários de seleção e causalidade adicionados. Backtest financeiro
 v1.0.4 pendente de execução no Spyder com cache histórico completo.
-Não altera a `main`, a reprodução oficial, o aplicação operacional operacional
+Não altera a `main`, a reprodução oficial, a aplicação operacional
 ou qualquer Winner. Os resultados devem ser interpretados por fold,
 Sharpe, drawdown, custos e capital final, sem promoção automática.
 
@@ -2060,3 +2060,104 @@ com `comparison.csv`, `fold_comparison.csv`,
 branch de pesquisa. Backtest financeiro pendente de execução
 local no Spyder com o cache U67+10. Não promove estratégia
 operacional ou altera a reprodução acadêmica oficial.
+
+
+#### 25.12.6 v1.0.6 — análise de captura e seleção expandida de auditoria
+
+**Motivação:** v1.0.5 confirmou Control holding=2 US$ 587.165.941,13
+no universo U67+10. Regras adicionais com ganhos projetados
+superiores em H05/H10/H20/H40 reduziram o resultado financeiro.
+A maioria das operações do Control durou menos de cinco a dez
+sessões. É necessário testar a correspondência entre horizonte
+preditivo e duração operacional antes de formular novas trocas.
+
+**Dois estudos na MESMA execução, com seleções independentes:**
+A. `capture` considera H02/H03/H05/H10, priorizando
+   horizontes de captura observados na carteira. Compara todos
+   os candidatos com o ativo atual na data de decisão, com
+   previsão percentual líquida e um desconto incremental
+   conservador de custo de troca.
+B. `expanded_audit` classifica os mesmos candidatos de maneira
+   independente em H01/H02/H03/H05/H10/H15/H20/H30/H40/H60.
+   Também exporta o melhor candidato isolado por horizonte.
+   Inclui granularidade mais ampla, mas não amplia o prazo
+   máximo além do embargo causal original de 60 sessões.
+   H90/H120 exigiriam reprojetar o protocolo temporal, não
+   sendo testados nesta versão.
+
+**Sem nova estratégia de rotação:** ambos os seletores são
+EXCLUSIVAMENTE diagnósticos. A simulação financeira executa
+somente o Control, sem ordens experimentais. O Control deve
+reproduzir o checkpoint ao centavo antes do estudo. Não
+existe promoção do melhor candidato ou do melhor horizonte
+por desempenho observado fora da amostra. O mesmo fold
+histórico já foi consultado em outras campanhas e, portanto,
+a pesquisa ainda é exploratória.
+
+**Alvos e preços:** usar o mesmo ajuste e snapshot de dados.
+H05/H10/H20/H40/H60 reutilizam exatamente os targets
+`forward_horizon_net_log_return` previamente definidos
+pelo pipeline. H01/H02/H03/H15/H30 produzem rótulos
+suplementares usando abertura na sessão seguinte,
+fechamento da sessão t+H e custo round-trip equivalente,
+reindexando no calendário oficial ANTES de aplicar o
+deslocamento; não se comprimem lacunas ou se criam dias
+sintéticos. O log líquido é convertido a retorno percentual
+por `expm1`. É proibido usar retornos observados futuros
+para treinar dentro do fold OOS ou para classificar candidatos
+na data de decisão.
+
+**Calibração e treino:** novos LightGBM com as features,
+parâmetros, universo e folds oficiais. Há uma regressão
+de retorno percentual para cada ativo e horizonte,
+treinada por fold exclusivamente com labels que
+amadurecem antes do período de teste. H60 usa o embargo
+de 60 pregões já existente; nenhum alvo superior a H60
+é treinado sem ajustar o desenho experimental.
+
+**Ranking:** converter a diferença entre percentual
+previsto de candidato e incumbente em pontos percentuais.
+Descontar um custo incremental round-trip de troca como
+proxy conservadora (não um backtest executável);
+normalizar o delta por H para gerar um score diário
+comparável entre horizontes; ordenar por maior média
+do ganho diário previsto, com desempate determinístico.
+Registrar cinco melhores candidatos por data e seleção,
+quantidade de horizontes com vantagem e as previsões
+individuais. Uma vantagem prevista negativa não gera
+`best_candidate`, mas o ranking pode incluir pontuações
+negativas para auditoria.
+
+**Avaliação fora da amostra, separada da seleção:**
+após congelar os rankings, juntar retornos realizados
+do ativo atual e do candidato escolhido por H.
+Somente calcular um resultado quando t+H se completar
+DENTRO do mesmo fold OOS, evitando dados do fold
+seguinte ou do futuro não observado. Resultado realizado
+é uma diferença contrafactual de retorno fixo, não
+um P&L de carteira executado ou um efeito causal.
+Relatar taxa de acerto, ganho realizado, MAE, RMSE,
+acurácia de sinal e quantidade de observações maduras,
+por fold e horizonte. Registrar hashes dos históricos
+complementares, preservando exclusões estruturais.
+
+**Saídas isoladas:**
+`output/persistencia_horizontes_u77_v106/`:
+`control_holding_2_equity.csv`,
+`control_holding_2_trades.csv`,
+`control_decision_reasons.csv`,
+`capture_ranked_top5.csv`, `capture_selected.csv`,
+`capture_quality_by_fold_horizon.csv`,
+`expanded_audit_ranked_top5.csv`,
+`expanded_audit_selected.csv`,
+`expanded_audit_best_per_horizon.csv`,
+`expanded_audit_quality_by_fold_horizon.csv`,
+`horizon_model_training.csv`, `comparison.csv`,
+`experiment.json` e o ZIP
+`pacote_persistencia_horizontes_u77_v106.zip`.
+
+**Estado:** código de pesquisa na branch
+`research/horizon-persistence-oos-v1`; backtest v1.0.6
+pendente no Spyder com o cache histórico privado.
+Sem downloads de corretora e sem alteração na main,
+na execução oficial ou na aplicação operacional.
