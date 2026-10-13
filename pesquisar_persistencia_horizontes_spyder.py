@@ -3346,6 +3346,52 @@ def main() -> dict[str, Any]:
         symbols=symbols,
         date_to_fold=ablation_decision_to_fold,
     )
+    # Contrafactual isolado de UMA decisao, avaliado so depois da
+    # maturacao H05 e mantendo a posicao oficial como estado fixo.
+    # Nao e um backtest de trajetoria alternativa.
+    ablation_calendar_index = {
+        pd.Timestamp(d): i for i, d in enumerate(common_dates)
+    }
+    ablation_folds = {int(f["fold_id"]): f for f in folds}
+    for paired in one_step_rows:
+        t = pd.Timestamp(paired["decision_date"])
+        fid = int(paired["fold_id"])
+        i = ablation_calendar_index[t]
+        paired["H05_observable"] = False
+        paired["H05_alternative_vs_control_fraction"] = None
+        if i + UTILITY_ABLATION_PRIMARY_HORIZON >= int(
+            ablation_folds[fid]["test_end_index"]
+        ):
+            continue
+        incumbent = str(paired["current_asset"])
+        alternative = str(paired["counterfactual_action"])
+        reference = str(paired["official_control_action"])
+        def observed(asset: str) -> float:
+            if asset == "CASH":
+                return 0.0
+            if t not in frames[asset].index:
+                return float("nan")
+            return float(frames[asset].at[
+                t, "forward_horizon_net_return_pct_5"
+            ])
+        real_alt = observed(alternative)
+        real_ref = observed(reference)
+        if not (np.isfinite(real_alt) and np.isfinite(real_ref)):
+            continue
+        cost_alt = point_in_time_switch_cost(
+            day=t, current_asset=incumbent, candidate=alternative,
+            frames=frames, config=configuration,
+        )
+        cost_ref = point_in_time_switch_cost(
+            day=t, current_asset=incumbent, candidate=reference,
+            frames=frames, config=configuration,
+        )
+        if not (np.isfinite(cost_alt) and np.isfinite(cost_ref)):
+            continue
+        paired["H05_observable"] = True
+        paired["H05_alternative_vs_control_fraction"] = float(
+            (real_alt - cost_alt) - (real_ref - cost_ref)
+        )
     official_variant = "utility_hold2_margin_calibrated"
     if any(
         r["differs_from_control"]
@@ -4306,6 +4352,15 @@ def main() -> dict[str, Any]:
         for row in autonomous_financial
     ])
     write_csv("autonomous_quality_leaderboard.csv", rotation_leaderboard)
+    write_csv("utility_ablation_financial.csv", [
+        {key: value for key, value in row.items() if key != "folds"}
+        for row in utility_ablation_financial
+    ])
+    write_csv("utility_ablation_quality_by_fold.csv", ablation_quality_fold)
+    write_csv("utility_ablation_quality_by_decision.csv", ablation_quality)
+    write_csv("utility_ablation_policy_decisions.csv",
+              utility_ablation_decisions)
+    write_csv("utility_ablation_one_step.csv", one_step_rows)
     write_csv("horizon_model_training.csv", model_audit)
     write_csv("control_decision_reasons.csv", [
         {"decision_date": d.isoformat(), **row}
@@ -4327,6 +4382,18 @@ def main() -> dict[str, Any]:
             "policy_uses_control_action": False,
         }
         for row in autonomous_financial
+    ] + [
+        {
+            "variant": row["method"],
+            "ending_capital": row["ending_capital"],
+            "sharpe": row["sharpe"],
+            "maximum_drawdown": row["maximum_drawdown"],
+            "capital_rotations": row["capital_rotations"],
+            "fees": row["fees"],
+            "control_reproduced": True,
+            "policy_uses_control_action": False,
+        }
+        for row in utility_ablation_financial
     ])
     fixed_hashes = {
         sym: {
@@ -4348,6 +4415,24 @@ def main() -> dict[str, Any]:
         "pair_feature_columns": pair_feature_columns(),
         "reference_sampling": "two deterministic rotating anchors per day, with reverse pairs",
         "pair_models": 2 * len(CAPTURE_HORIZONS) * len(folds),
+        "utility_ablation_factors": {
+            "minimum_holding": list(UTILITY_ABLATION_HOLD),
+            "margin_mode": list(UTILITY_ABLATION_MARGINS),
+            "primary_horizon": UTILITY_ABLATION_PRIMARY_HORIZON,
+            "primary_metric": UTILITY_ABLATION_PRIMARY_METRIC,
+            "signal_source": "frozen_Control_fold_specific_risk_adjusted_utility",
+            "same_signal_all_variants": True,
+            "same_state_policy_comparison": True,
+            "oos_tuning": False,
+        },
+        "utility_ablation_financial": utility_ablation_financial,
+        "utility_ablation_quality_by_fold": ablation_quality_fold,
+        "utility_ablation_same_state_summary": [{
+            "method": row["method"],
+            "one_step_action_disagreements_vs_control":
+                row["one_step_action_disagreements_vs_control"],
+            "one_step_dates": row["one_step_dates"],
+        } for row in utility_ablation_financial],
         "autonomous_policy_methods": list(AUTONOMOUS_POLICY_METHODS),
         "autonomous_financial_comparison": autonomous_financial,
         "autonomous_rotation_precision_by_fold": rotation_quality_summary,
