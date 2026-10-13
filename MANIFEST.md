@@ -2502,10 +2502,10 @@ garantia de desempenho futuro.
 | Politica | Precisao H05 macro-fold | Trocas H05 maduras | Capital final (US$) | MaxDD |
 |---|---:|---:|---:|---:|
 | Control | 58,7604% | 352 | 587.165.941,13 | -41,68% |
-| Net gain | 51,9033% | 195 | 165.481,10 | -70,66% |
-| TOPSIS | 50,9317% | 187 | 120.939,50 | -75,47% |
-| Borda + Pareto | 50,1932% | 209 | 156.107,30 | -76,73% |
-| Consensus | 49,0961% | 200 | 216.923,00 | -65,43% |
+| Net gain | 51,9033% | 195 | 165.481,13 | -70,66% |
+| TOPSIS | 50,9317% | 187 | 120.939,53 | -75,47% |
+| Borda + Pareto | 50,1932% | 209 | 156.107,33 | -76,73% |
+| Consensus | 49,0961% | 200 | 216.922,97 | -65,43% |
 
 **Diagnostico do mecanismo Control, sem afirmacao causal:**
 `control_decision_reasons.csv` registra 1.560 decisoes:
