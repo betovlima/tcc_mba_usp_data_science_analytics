@@ -267,3 +267,43 @@ O pacote de resultados está separado das versões anteriores:
 Antes de simular candidatos, o código verifica o checkpoint
 US$ 587.165.941,13 da política Control. Ver detalhes e
 limitações na seção 25.12.5 de `MANIFEST.md`.
+
+
+### Versão experimental 1.0.6 — captura H02/H03/H05/H10 + auditoria ampliada
+
+`pesquisar_persistencia_horizontes_spyder.py` executa
+a v1.0.6 por padrão. A mesma execução gera dois estudos
+**independentes e apenas diagnósticos**:
+
+- **Captura:** retorno previsto do candidato versus o ativo
+  em carteira, nos horizontes H02/H03/H05/H10.
+- **Auditoria ampliada:** seleção em
+  H01/H02/H03/H05/H10/H15/H20/H30/H40/H60,
+  com ranking consolidado e o líder de cada horizonte.
+
+O Control original, com holding=2, é o único backtest
+financeiro; candidatos NÃO são automaticamente negociados.
+O processo calcula diferenças realizadas somente depois
+de selecionados os candidatos, com maturidade dentro do
+próprio fold. Não há download de dados e o cache histórico
+U67+10 anterior é obrigatório.
+
+No Spyder:
+
+    !git fetch origin
+    !git switch research/horizon-persistence-oos-v1
+    !git pull --ff-only origin research/horizon-persistence-oos-v1
+
+Reinicie o kernel e execute:
+
+    %run pesquisar_persistencia_horizontes_spyder.py
+
+A execução usa CPU para treinar dez regressões por ativo
+e fold; pode demorar consideravelmente mais que a v1.0.5.
+O Control deve reproduzir US$ 587.165.941,13.
+O pacote será escrito exclusivamente em:
+
+    output/persistencia_horizontes_u77_v106/pacote_persistencia_horizontes_u77_v106.zip
+
+Leia a seção 25.12.6 do `MANIFEST.md` para os critérios
+de causalidade e as limitações da análise contrafactual.
