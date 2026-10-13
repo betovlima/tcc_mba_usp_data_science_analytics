@@ -1355,3 +1355,125 @@ def test_v110_beep_distinguishes_success_error(monkeypatch):
     emitted.clear()
     assert audible_completion(succeeded=False) == "windows_error_two_tones"
     assert emitted == [(440, 420), (330, 470)]
+
+
+def test_v111_ablation_factorial_config_preserves_control_config():
+    from types import SimpleNamespace
+    from pesquisar_persistencia_horizontes_spyder import (
+        utility_ablation_variant_config,
+    )
+
+    class Config(SimpleNamespace):
+        def copiar_modelo(self, update):
+            return Config(**{**vars(self), **update})
+
+    official = Config(
+        rotation_min_holding_days=2, rotation_switch_margin=0.0005
+    )
+    zero, zmargin = utility_ablation_variant_config(
+        official, minimum_hold=0, margin_mode="zero",
+        calibrated_margin=0.01,
+    )
+    base, bmargin = utility_ablation_variant_config(
+        official, minimum_hold=0, margin_mode="base",
+        calibrated_margin=0.01,
+    )
+    calibrated, cmargin = utility_ablation_variant_config(
+        official, minimum_hold=2, margin_mode="calibrated",
+        calibrated_margin=0.01,
+    )
+    assert (zero.rotation_min_holding_days, zero.rotation_switch_margin, zmargin) == (0, 0, 0)
+    assert (base.rotation_min_holding_days, base.rotation_switch_margin, bmargin) == (0, 0.0005, 0.0005)
+    assert (calibrated.rotation_min_holding_days, cmargin) == (2, 0.01)
+    assert official.rotation_min_holding_days == 2
+    assert official.rotation_switch_margin == 0.0005
+    with pytest.raises(ValueError, match="Unsupported ablation"):
+        utility_ablation_variant_config(
+            official, minimum_hold=3, margin_mode="zero",
+            calibrated_margin=0.01,
+        )
+
+
+def test_v111_same_frozen_utility_hold_and_margin_causes_direct_decision_change():
+    from types import SimpleNamespace
+    from pesquisar_persistencia_horizontes_spyder import (
+        prepare_utility_ablation_policies,
+    )
+
+    class Config(SimpleNamespace):
+        def copiar_modelo(self, update):
+            return Config(**{**vars(self), **update})
+
+    d = pd.Timestamp("2026-04-15", tz="UTC")
+    cfg = Config(
+        rotation_min_holding_days=2,
+        rotation_switch_margin=0.0005,
+        rotation_cash_threshold=0.0,
+        rotation_min_expected_edge=0.0,
+    )
+    features = {d: np.array([0.0, 0.01, 0.03])}
+    fold_cache = {1: {"margin": 0.025, "oos": features}}
+    def build(hold, margin):
+        return prepare_utility_ablation_policies(
+            config=cfg, frames={}, symbols=["AAPL", "NVDA"],
+            fold_caches=fold_cache, hold=hold, margin_mode=margin,
+            decision_diagnostics=None,
+        )[1]
+
+    h2 = build(2, "base")
+    h0 = build(0, "base")
+    large = build(0, "calibrated")
+    assert h2(d, 1, 1)[0] == 1
+    assert h0(d, 1, 1)[0] == 2
+    assert h2(d, 1, 2)[0] == 2
+    assert large(d, 1, 2)[0] == 1
+    # "Control" forneceu apenas o array de utilidades, nunca a acao.
+
+
+def test_v111_paired_counterfactual_keeps_control_state_constant():
+    from pesquisar_persistencia_horizontes_spyder import (
+        one_step_utility_ablation,
+    )
+
+    date = pd.Timestamp("2026-01-05", tz="UTC")
+    baseline = {date: {
+        "current_asset": "AAPL",
+        "holding_days_at_decision": 1,
+        "final_action_asset": "AAPL",
+    }}
+    def stay(t, position, holding):
+        assert (t, position, holding) == (date, 1, 1)
+        return 1, 0.1
+    def change(t, position, holding):
+        assert (t, position, holding) == (date, 1, 1)
+        return 2, 0.2
+    observed = one_step_utility_ablation(
+        baseline_decisions=baseline,
+        policies={"control_like": {1: stay}, "no_hold": {1: change}},
+        symbols=["AAPL", "NVDA"], date_to_fold={date: 1},
+    )
+    assert len(observed) == 2
+    assert observed[0]["differs_from_control"] is False
+    assert observed[1]["differs_from_control"] is True
+    assert observed[0]["same_state_as_official_control"] is True
+    assert observed[1]["holding_sessions"] == 1
+
+
+def test_v111_zip_contains_success_sound_and_complete_stdout(tmp_path, monkeypatch):
+    import zipfile
+    import pesquisar_persistencia_horizontes_spyder as module
+
+    monkeypatch.setattr(module, "OUT", tmp_path)
+    (tmp_path / "experiment.json").write_text('{"status":"completed"}')
+    (tmp_path / "execution_full.log").write_text(
+        "[experiment] COMPLETED\n[audio] SUCCESS windows_success_two_tones\n"
+    )
+    zipped = module.finalize_experiment_package()
+    assert zipped.name == "pacote_persistencia_horizontes_u77_v111.zip"
+    with zipfile.ZipFile(zipped) as archive:
+        assert archive.testzip() is None
+        assert "experiment.json" in archive.namelist()
+        assert "[audio] SUCCESS" in archive.read(
+            "execution_full.log"
+        ).decode("utf-8")
+        assert zipped.name not in archive.namelist()
