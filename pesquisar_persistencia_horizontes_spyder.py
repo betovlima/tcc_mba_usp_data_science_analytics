@@ -1,9 +1,9 @@
-"""Pesquisa U67+10 v1.0.6: horizontes de captura e auditoria expandida.
+"""Pesquisa U67+10 v1.0.7: comparacao de pares calibrada sem lookahead.
 
-O Control congelado define a carteira/decisoes; a pesquisa apenas identifica
-candidatos e mede resultados contrafactuais de horizonte fixo. A auditoria
-expandida e independente, sem alterar ordens nem selecionar politicas OOS.
-Nao consulta a corretora e nao altera a reproducao oficial.
+Control e unico backtest; selecao de candidatos e diagnostica.
+Reproduz o checkpoint, calibra diferencas de retorno em historico
+anterior ao teste e preserva auditoria independente H01..H60.
+Sem download, sem alteracao da reproducao oficial ou de sistemas externos.
 """
 from __future__ import annotations
 
@@ -51,8 +51,8 @@ from pesquisar_expansao_u67_spyder import (
 )
 
 ROOT = Path(__file__).resolve().parent
-OUT = ROOT / "output" / "persistencia_horizontes_u77_v106"
-VERSION = "horizon-persistence-oos-v1.0.6"
+OUT = ROOT / "output" / "persistencia_horizontes_u77_v107"
+VERSION = "horizon-persistence-oos-v1.0.7"
 CONFIDENCE_MULTIPLIERS = (0.0, 0.5, 1.0)  # historico v1.0.3
 ANCHOR_BLEND = 0.5  # historico v1.0.3
 HOLDING_CANDIDATES = (1, 2, 3, 4)  # historico v1.0.4
@@ -1253,6 +1253,389 @@ def summarize_selection_quality(
     return output
 
 
+
+PAIR_MIN_TRAIN_DAYS = 15
+PAIR_CALIBRATION_FRACTION = 2.0 / 3.0
+PAIR_ERROR_QUANTILE = 0.75
+
+
+def estimated_incremental_pair_cost(
+    *,
+    day: pd.Timestamp,
+    incumbent: str,
+    control_target: str,
+    candidate: str,
+    frames: dict[str, pd.DataFrame],
+    config: Any,
+) -> float:
+    """Friccao proporcional conservadora, calculada com fechamentos em t.
+
+    Precos futuros, quantidade futura e capital final nao sao consultados.
+    TAF/CAT por acao estimadas com notional de US$ 1 e sem cap,
+    como limite conservador; nao substituir por taxas reais do backtest.
+    """
+    def one_side(symbol: str, side: str) -> float:
+        frame = frames[symbol]
+        price = float(frame.at[pd.Timestamp(day), "close"])
+        if not np.isfinite(price) or price <= 0.0:
+            raise RuntimeError(f"Invalid same-day quote {symbol} {day}")
+        base = (
+            max(0.0, float(config.slippage_bps)) / 10000.0
+            + max(0.0, float(config.commission_rate))
+            + max(0.0, float(config.cat_fee_per_share)) / price
+        )
+        if side == "SELL":
+            base += (
+                max(0.0, float(config.sec_fee_rate))
+                + max(0.0, float(config.taf_fee_per_share)) / price
+            )
+        return float(base)
+
+    if control_target == "CASH":
+        return float("inf")
+    # Se Control ja gira, compara apenas custo de compra do novo
+    # candidato contra custo de compra do alvo congelado. O custo
+    # de venda da posicao anterior se cancela nos dois cenarios.
+    if control_target != incumbent:
+        return max(
+            0.0,
+            one_side(candidate, "BUY") - one_side(control_target, "BUY"),
+        )
+    return (
+        one_side(incumbent, "SELL") + one_side(candidate, "BUY")
+    )
+
+
+def historical_control_pair_context(
+    *,
+    days: pd.DatetimeIndex,
+    policy: Any,
+) -> list[dict[str, Any]]:
+    """Estado historico do Control na calibracao, apenas decisoes conhecidas."""
+    current, holding = 0, 0
+    records: list[dict[str, Any]] = []
+    for day in days:
+        t = pd.Timestamp(day)
+        action, _ = policy(t, current, holding)
+        records.append({
+            "decision_date": t,
+            "incumbent_position": int(current),
+            "control_position": int(action),
+            "holding_days": int(holding),
+        })
+        if int(action) == current:
+            holding = holding + 1 if current > 0 else 0
+        else:
+            current = int(action)
+            holding = 1 if current > 0 else 0
+    return records
+
+
+def rank_direct_pair_gap(
+    *,
+    day: pd.Timestamp,
+    incumbent: str,
+    control_target: str,
+    symbols: list[str],
+    forecasts: dict[int, dict[pd.Timestamp, np.ndarray]],
+    frames: dict[str, pd.DataFrame],
+    config: Any,
+    horizons: tuple[int, ...] = CAPTURE_HORIZONS,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Um par (candidato, benchmark Control) por linha, sem labels futuros."""
+    if incumbent == "CASH" or control_target == "CASH":
+        return []
+    if incumbent not in symbols or control_target not in symbols:
+        raise ValueError("Historical control asset outside locked universe")
+    t = pd.Timestamp(day)
+    pos_current = symbols.index(incumbent) + 1
+    pos_control = symbols.index(control_target) + 1
+    arrays: dict[int, np.ndarray] = {}
+    for h in horizons:
+        arr = forecasts.get(h, {}).get(t)
+        if arr is None:
+            raise RuntimeError(f"H{h} prediction missing on {t}")
+        array = np.asarray(arr, dtype=float)
+        if len(array) != len(symbols) + 1:
+            raise RuntimeError("Horizon forecast universe mismatch")
+        arrays[h] = array
+    if any(
+        not np.isfinite(arrays[h][pos_current])
+        or not np.isfinite(arrays[h][pos_control])
+        for h in horizons
+    ):
+        return []
+    rows: list[dict[str, Any]] = []
+    for pos, candidate in enumerate(symbols, start=1):
+        if pos in (pos_current, pos_control):
+            continue
+        if any(not np.isfinite(arrays[h][pos]) for h in horizons):
+            continue
+        friction = estimated_incremental_pair_cost(
+            day=t, incumbent=incumbent, control_target=control_target,
+            candidate=candidate, frames=frames, config=config,
+        )
+        if not np.isfinite(friction):
+            continue
+        raw: dict[int, float] = {}
+        current: dict[int, float] = {}
+        for h in horizons:
+            raw[h] = float(
+                arrays[h][pos] - arrays[h][pos_control] - friction
+            )
+            current[h] = float(
+                arrays[h][pos] - arrays[h][pos_current] - friction
+            )
+        short = float(np.mean([raw[h] for h in (2, 3)]))
+        medium = float(np.mean([raw[h] for h in (5, 10)]))
+        current_short = float(np.mean([current[h] for h in (2, 3)]))
+        current_medium = float(np.mean([current[h] for h in (5, 10)]))
+        score = float(np.mean([raw[h] / h for h in horizons]))
+        qualifies = (
+            short > 0.0 and medium > 0.0
+            and current_short > 0.0 and current_medium > 0.0
+            and sum(raw[h] > 0 for h in horizons) >= 3
+        )
+        rows.append({
+            "decision_date": t.isoformat(),
+            "incumbent": incumbent,
+            "control_target": control_target,
+            "candidate": candidate,
+            "incremental_cost_fraction": friction,
+            "raw_pair_mean_daily_gap": score,
+            "raw_pair_short_gap": short,
+            "raw_pair_medium_gap": medium,
+            "raw_incumbent_short_gap": current_short,
+            "raw_incumbent_medium_gap": current_medium,
+            "raw_qualifies": qualifies,
+            **{f"H{h}_raw_pair_gap_fraction": raw[h] for h in horizons},
+            **{f"H{h}_raw_incumbent_gap_fraction": current[h]
+               for h in horizons},
+        })
+    rows.sort(key=lambda r: (-r["raw_pair_mean_daily_gap"], r["candidate"]))
+    return rows[:limit]
+
+
+def train_pairwise_winner_calibration(
+    *,
+    selected: list[dict[str, Any]],
+    frames: dict[str, pd.DataFrame],
+    calendar: pd.DatetimeIndex,
+    split_date: pd.Timestamp,
+    cutoff_date: pd.Timestamp,
+    horizons: tuple[int, ...] = CAPTURE_HORIZONS,
+    minimum_days: int = PAIR_MIN_TRAIN_DAYS,
+) -> dict[str, Any]:
+    """Slope/uncertainty do par vencedor, estimados SO com labels maturados.
+
+    O embargo ate split_date impede que um rotulo de treino atravesse
+    para a validacao historica; OOS jamais participa.
+    """
+    dates = pd.DatetimeIndex(calendar)
+    lookup = {pd.Timestamp(t): i for i, t in enumerate(dates)}
+    split = lookup[pd.Timestamp(split_date)]
+    cutoff = lookup[pd.Timestamp(cutoff_date)]
+    evidence: dict[int, list[tuple[float, float, str]]] = {
+        h: [] for h in horizons
+    }
+    for row in selected:
+        t = pd.Timestamp(row["decision_date"])
+        index = lookup.get(t)
+        if index is None:
+            raise RuntimeError("Pair training date not in calendar")
+        if t >= split_date:
+            continue
+        candidate, reference = row["candidate"], row["control_target"]
+        friction = float(row["incremental_cost_fraction"])
+        for h in horizons:
+            if index + h >= split or index + h >= cutoff:
+                continue
+            source = f"forward_horizon_net_return_pct_{h}"
+            cand = float(frames[candidate].at[t, source])
+            base = float(frames[reference].at[t, source])
+            if not (np.isfinite(cand) and np.isfinite(base)):
+                continue
+            predicted = float(row[f"H{h}_raw_pair_gap_fraction"])
+            realized = cand - base - friction
+            evidence[h].append((predicted, realized, t.isoformat()))
+    calib: dict[str, Any] = {
+        "split_date": pd.Timestamp(split_date).isoformat(),
+        "cutoff_date": pd.Timestamp(cutoff_date).isoformat(),
+        "quantile": PAIR_ERROR_QUANTILE,
+        "by_horizon": {},
+    }
+    for h in horizons:
+        values = evidence[h]
+        distinct = len({x[2] for x in values})
+        if distinct < minimum_days:
+            raise RuntimeError(
+                f"Insufficient distinct causal pair-days H{h}: {distinct}"
+            )
+        x = np.asarray([v[0] for v in values], dtype=float)
+        y = np.asarray([v[1] for v in values], dtype=float)
+        slope = float(np.clip(
+            float(np.dot(x, y)) / max(float(np.dot(x, x)), 1e-12),
+            0.0, 1.0,
+        ))
+        residual = y - slope * x
+        q75 = float(np.quantile(np.abs(residual), PAIR_ERROR_QUANTILE))
+        calib["by_horizon"][str(h)] = {
+            "slope": slope,
+            "abs_residual_p75": q75,
+            "training_unique_days": distinct,
+            "training_pairs": len(values),
+            "mean_raw_predicted_gap": float(x.mean()),
+            "mean_realized_pair_gap": float(y.mean()),
+        }
+    return calib
+
+
+def calibrated_pair_choice(
+    ranking: list[dict[str, Any]],
+    calibration: dict[str, Any],
+    *,
+    require_confidence: bool = True,
+    horizons: tuple[int, ...] = CAPTURE_HORIZONS,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Ajusta diferenca entre pares; nao seleciona parametros por OOS."""
+    enriched = []
+    for base in ranking:
+        row = dict(base)
+        gaps = {}
+        current = {}
+        for h in horizons:
+            params = calibration["by_horizon"][str(h)]
+            slope = float(params["slope"])
+            gaps[h] = slope * float(row[f"H{h}_raw_pair_gap_fraction"])
+            current[h] = slope * float(row[f"H{h}_raw_incumbent_gap_fraction"])
+            row[f"H{h}_calibrated_pair_gap_fraction"] = gaps[h]
+            row[f"H{h}_historical_error_p75"] = float(params["abs_residual_p75"])
+        row["calibrated_mean_daily_gap"] = float(
+            np.mean([gaps[h] / h for h in horizons])
+        )
+        row["calibrated_short_gap"] = float(np.mean(
+            [gaps[2], gaps[3]]
+        ))
+        row["calibrated_medium_gap"] = float(np.mean(
+            [gaps[5], gaps[10]]
+        ))
+        row["calibrated_incumbent_short_gap"] = float(np.mean(
+            [current[2], current[3]]
+        ))
+        row["calibrated_incumbent_medium_gap"] = float(np.mean(
+            [current[5], current[10]]
+        ))
+        row["calibrated_min_confidence_daily"] = float(np.mean([
+            float(calibration["by_horizon"][str(h)]["abs_residual_p75"])
+            / h for h in horizons
+        ]))
+        row["calibrated_qualifies"] = bool(
+            base["raw_qualifies"]
+            and row["calibrated_short_gap"] > 0.0
+            and row["calibrated_medium_gap"] > 0.0
+            and row["calibrated_incumbent_short_gap"] > 0.0
+            and row["calibrated_incumbent_medium_gap"] > 0.0
+            and (not require_confidence or
+                 row["calibrated_mean_daily_gap"] >
+                 row["calibrated_min_confidence_daily"])
+        )
+        enriched.append(row)
+    enriched.sort(key=lambda r: (
+        -r["calibrated_mean_daily_gap"], r["candidate"]
+    ))
+    return next((r for r in enriched if r["calibrated_qualifies"]), None), enriched
+
+
+def assess_pairwise_fixed_outcomes(
+    records: list[dict[str, Any]],
+    *,
+    frames: dict[str, pd.DataFrame],
+    calendar: pd.DatetimeIndex,
+    horizon_end_exclusive: pd.Timestamp,
+    horizons: tuple[int, ...] = CAPTURE_HORIZONS,
+) -> list[dict[str, Any]]:
+    """Liga observacoes futuras SOMENTE apos escolha do par.
+
+    Dentro do proprio fold, incluindo a primeira decisao pre-abertura;
+    nenhuma observacao cruza limite do fold.
+    """
+    days = pd.DatetimeIndex(calendar)
+    index = {pd.Timestamp(t): i for i, t in enumerate(days)}
+    cutoff = index[pd.Timestamp(horizon_end_exclusive)]
+    outcome = []
+    for record in records:
+        row = dict(record)
+        day = pd.Timestamp(row["decision_date"])
+        offset = index[day]
+        for h in horizons:
+            key = f"H{h}"
+            reference = row["control_target"]
+            candidate = row.get("candidate")
+            if candidate is None or offset + h >= cutoff:
+                row[key + "_realized_gap_fraction"] = None
+                row[key + "_hit"] = None
+                continue
+            source = f"forward_horizon_net_return_pct_{h}"
+            cand = float(frames[candidate].at[day, source])
+            base = float(frames[reference].at[day, source])
+            if not (np.isfinite(cand) and np.isfinite(base)):
+                row[key + "_realized_gap_fraction"] = None
+                row[key + "_hit"] = None
+                continue
+            gap = cand - base - float(row["incremental_cost_fraction"])
+            row[key + "_realized_gap_fraction"] = gap
+            row[key + "_hit"] = bool(gap > 0.0)
+            row[key + "_prediction_error_fraction"] = (
+                float(row[f"{key}_calibrated_pair_gap_fraction"]) - gap
+            ) if f"{key}_calibrated_pair_gap_fraction" in row else None
+        outcome.append(row)
+    return outcome
+
+
+def aggregate_pairwise_quality(
+    evaluated: list[dict[str, Any]],
+    horizons: tuple[int, ...] = CAPTURE_HORIZONS,
+) -> list[dict[str, Any]]:
+    rows = []
+    for fold in sorted({int(r["fold_id"]) for r in evaluated}):
+        selected = [r for r in evaluated if int(r["fold_id"]) == fold]
+        for h in horizons:
+            available = [
+                r for r in selected
+                if r.get(f"H{h}_realized_gap_fraction") is not None
+            ]
+            realized = np.asarray([
+                float(r[f"H{h}_realized_gap_fraction"])
+                for r in available
+            ], dtype=float)
+            error = np.asarray([
+                float(r[f"H{h}_prediction_error_fraction"])
+                for r in available if r.get(
+                    f"H{h}_prediction_error_fraction"
+                ) is not None
+            ], dtype=float)
+            rows.append({
+                "fold_id": fold,
+                "horizon": h,
+                "selected": len(selected),
+                "matured_evaluable": len(available),
+                "realized_win_rate": (
+                    float(np.mean(realized > 0)) if len(realized) else None
+                ),
+                "mean_realized_pair_gap_fraction": (
+                    float(realized.mean()) if len(realized) else None
+                ),
+                "prediction_mae": (
+                    float(np.abs(error).mean()) if len(error) else None
+                ),
+                "prediction_rmse": (
+                    float(np.sqrt(np.mean(error**2))) if len(error) else None
+                ),
+            })
+    return rows
+
+
 def main() -> dict[str, Any]:
     OUT.mkdir(parents=True, exist_ok=True)
     data = SnapshotPaths.u67(ROOT)
@@ -1379,185 +1762,278 @@ def main() -> dict[str, Any]:
 
 
 
-    # Um unico conjunto de treinamentos alimenta as DUAS selecoes.
-    # A pesquisa de captura e a auditoria usam a MESMA execucao e snapshot.
-    build_horizon_return_labels(
-        frames, common_dates, configuration, ALL_RESEARCH_HORIZONS
-    )
-    cost_per_rotation = min(
-        0.25, 2.0 * (
-            max(0.0, float(configuration.slippage_bps)) / 10000.0
-            + max(0.0, float(configuration.commission_rate))
-        )
-    )
-    folds_maturity: dict[int, dict[pd.Timestamp, int]] = {}
+
+    # Nenhuma regra de pesquisa pode alterar a execucao financeira.
+    build_horizon_return_labels(frames, common_dates, configuration)
     model_audit: list[dict[str, Any]] = []
-    capture_rankings: list[dict[str, Any]] = []
-    capture_selections: list[dict[str, Any]] = []
-    extended_rankings: list[dict[str, Any]] = []
-    extended_selections: list[dict[str, Any]] = []
-    audit_horizon_rankings: list[dict[str, Any]] = []
+    calibration_audit: list[dict[str, Any]] = []
+    validation_audit: list[dict[str, Any]] = []
+    capture_ranked: list[dict[str, Any]] = []
+    raw_selected: list[dict[str, Any]] = []
+    confident_selected: list[dict[str, Any]] = []
+    expanded_rankings: list[dict[str, Any]] = []
+    expanded_selections: list[dict[str, Any]] = []
+    expanded_per_horizon: list[dict[str, Any]] = []
+    used_decisions: set[pd.Timestamp] = set()
+    folds_by_id = {int(f["fold_id"]): f for f in folds}
 
     for state in states:
         fold_id = int(state.fold_id)
-        fold = next(
-            fold for fold in folds if int(fold["fold_id"]) == fold_id
-        )
-        decision_calendar = pd.DatetimeIndex(state.decision_dates)
-        folds_maturity[fold_id] = {
-            pd.Timestamp(day): len(decision_calendar) - 1 - index
-            for index, day in enumerate(decision_calendar)
-        }
-        all_forecasts: dict[int, dict[pd.Timestamp, np.ndarray]] = {}
+        fold = folds_by_id[fold_id]
+        decision_days = pd.DatetimeIndex(state.decision_dates)
+        cal_days = pd.DatetimeIndex(state.calibration_dates)
+        split_index = int(len(cal_days) * PAIR_CALIBRATION_FRACTION)
+        split_date = pd.Timestamp(cal_days[split_index])
+        # Exclui da calibracao de residuos labels que atravessariam
+        # a divisao treino/validacao. A validacao nao escolhe parametros.
+        forecast_cal: dict[int, dict[pd.Timestamp, np.ndarray]] = {}
+        forecast_oos: dict[int, dict[pd.Timestamp, np.ndarray]] = {}
         for h in ALL_RESEARCH_HORIZONS:
-            safe_dates = select_purged_horizon_training_dates(
+            target = f"forward_horizon_net_return_pct_{h}"
+            if h in CAPTURE_HORIZONS:
+                safe_initial = select_purged_horizon_training_dates(
+                    calendar=common_dates,
+                    training_end_index=int(fold["train_end_index"]),
+                    evaluation_start_index=int(fold["calibration_start_index"]),
+                    horizon=h,
+                    min_training_rows=int(configuration.rotation_minimum_training_rows),
+                )
+                first_models = _ajustar_modelos_lightgbm(
+                    frames, symbols, safe_initial, configuration,
+                    phase=f"v107_cal_H{h}_fold{fold_id}",
+                    target_column=target,
+                )
+                if len(first_models) != len(symbols):
+                    raise RuntimeError("Pair calibration models incomplete")
+                preds, _ = _precalcular_utilidades_modelo(
+                    first_models, frames, symbols, cal_days, configuration
+                )
+                forecast_cal[h] = preds
+                del first_models
+
+            safe_final = select_purged_horizon_training_dates(
                 calendar=common_dates,
                 training_end_index=int(fold["final_fit_end_index"]),
                 evaluation_start_index=int(fold["test_start_index"]),
                 horizon=h,
                 min_training_rows=int(configuration.rotation_minimum_training_rows),
             )
-            target = f"forward_horizon_net_return_pct_{h}"
-            models = _ajustar_modelos_lightgbm(
-                frames, symbols, safe_dates, configuration,
-                phase=f"v106_h{h}_fold{fold_id}",
+            final_models = _ajustar_modelos_lightgbm(
+                frames, symbols, safe_final, configuration,
+                phase=f"v107_final_H{h}_fold{fold_id}",
                 target_column=target,
             )
-            if len(models) != len(symbols):
-                raise RuntimeError(
-                    f"Fold {fold_id} H{h}: models={len(models)} "
-                    f"expected={len(symbols)}. No silent asset removal."
-                )
-            forecasts, diagnostics = _precalcular_utilidades_modelo(
-                models, frames, symbols, decision_calendar, configuration,
+            if len(final_models) != len(symbols):
+                raise RuntimeError("Final horizon models incomplete")
+            forecast_oos[h], diagnostics = _precalcular_utilidades_modelo(
+                final_models, frames, symbols, decision_days, configuration,
             )
-            all_forecasts[h] = forecasts
             model_audit.append({
                 "fold_id": fold_id,
                 "horizon": h,
-                "target": target,
-                "last_train": safe_dates[-1].isoformat(),
-                "first_oos": decision_calendar[0].isoformat(),
-                "models": len(models),
-                "prediction_sessions": len(forecasts),
+                "train_calibration_models": (
+                    len(symbols) if h in CAPTURE_HORIZONS else 0
+                ),
+                "train_final_models": len(final_models),
+                "calibration_start": cal_days[0].isoformat(),
+                "calibration_end": cal_days[-1].isoformat(),
+                "calibration_split": split_date.isoformat(),
+                "final_training_last_date": safe_final[-1].isoformat(),
+                "test_first": decision_days[0].isoformat(),
                 "diagnostics": diagnostics,
             })
+            del final_models
             print(
-                f"[v106] fold={fold_id} H{h} models={len(models)} "
-                f"train_last={safe_dates[-1].date()}",
+                f"[v107] fold={fold_id} horizon=H{h} "
+                f"calibration={'yes' if h in CAPTURE_HORIZONS else 'no'}",
                 flush=True,
             )
 
-        for day in decision_calendar:
-            key = pd.Timestamp(day)
-            control_row = control_guard_audit.get(key)
-            if control_row is None or control_row.get("current_asset") in (None, "CASH"):
+        cal_policy = _politica_utilidade(
+            {}, frames, symbols, configuration,
+            float(fold_caches[fold_id]["margin"]),
+            utility_cache=fold_caches[fold_id]["calibration"],
+        )
+        historical_state = historical_control_pair_context(
+            days=cal_days, policy=cal_policy
+        )
+        training_pairs = []
+        validation_pairs = []
+        for state_row in historical_state:
+            if (state_row["incumbent_position"] == 0
+                or state_row["control_position"] == 0
+                or state_row["holding_days"]
+                < int(configuration.rotation_min_holding_days)):
                 continue
-            incumbent = str(control_row["current_asset"])
-            for name, horizons, ranked_dest, selection_dest in (
-                ("capture", CAPTURE_HORIZONS, capture_rankings, capture_selections),
-                ("expanded_audit", EXTENDED_AUDIT_HORIZONS,
-                 extended_rankings, extended_selections),
-            ):
-                ranking, summary = select_horizon_candidates(
-                    day=key, incumbent=incumbent, symbols=symbols,
-                    forecast=all_forecasts, horizons=horizons,
-                    extra_switch_cost=cost_per_rotation,
-                    capture_require_short_medium_advantage=(
-                        name == "capture"
-                    ),
-                )
-                common_info = {
-                    "fold_id": fold_id,
-                    "selection": name,
-                    "control_target": control_row["final_action_asset"],
-                    "holding_days_at_decision": control_row["holding_days_at_decision"],
-                    "control_decision_reason": control_row["decision_reason"],
-                }
-                ranked_dest.extend([
-                    {**common_info, "candidate_rank": rank, **r}
-                    for rank, r in enumerate(ranking, start=1)
-                ])
-                selection_dest.append({**common_info, **summary})
-            # Auditoria separada: melhores candidatos por H, sem rotação.
+            day = pd.Timestamp(state_row["decision_date"])
+            inc = symbols[state_row["incumbent_position"] - 1]
+            base = symbols[state_row["control_position"] - 1]
+            options = rank_direct_pair_gap(
+                day=day, incumbent=inc, control_target=base,
+                symbols=symbols, forecasts=forecast_cal,
+                frames=frames, config=configuration, limit=5,
+            )
+            if not options:
+                continue
+            leader = next(
+                (r for r in options if r["raw_qualifies"]), None
+            )
+            if leader is None:
+                continue
+            enriched = {"fold_id": fold_id, **leader}
+            if day < split_date:
+                training_pairs.append(enriched)
+            else:
+                validation_pairs.append(enriched)
+
+        calibration = train_pairwise_winner_calibration(
+            selected=training_pairs, frames=frames, calendar=common_dates,
+            split_date=split_date,
+            cutoff_date=pd.Timestamp(fold["test_start"]),
+        )
+        calibration_audit.append({
+            "fold_id": fold_id,
+            "train_selected_pair_days": len(training_pairs),
+            "validation_selected_pair_days": len(validation_pairs),
+            **calibration,
+        })
+        for vrow in validation_pairs:
+            picked, calibrated = calibrated_pair_choice(
+                [vrow], calibration
+            )
+            if not calibrated:
+                continue
+            r = {"fold_id": fold_id, **calibrated[0]}
+            r["would_pass_confidence"] = picked is not None
+            validation_audit.extend(assess_pairwise_fixed_outcomes(
+                [r], frames=frames, calendar=common_dates,
+                horizon_end_exclusive=pd.Timestamp(fold["test_start"]),
+            ))
+
+        for day in decision_days:
+            t = pd.Timestamp(day)
+            if decision_to_fold.get(t) != fold_id:
+                continue
+            if t in used_decisions:
+                raise RuntimeError(f"Decision duplication across folds {t}")
+            used_decisions.add(t)
+            control = control_guard_audit.get(t)
+            if control is None or control.get("current_asset") in (None, "CASH"):
+                continue
+            incumbent = str(control["current_asset"])
+            destination = str(control["final_action_asset"])
+            metadata = {
+                "fold_id": fold_id,
+                "holding_days": int(control["holding_days_at_decision"]),
+                "control_decision_reason": control["decision_reason"],
+            }
+            # Auditoria expandida v1.0.6 permanece independente.
+            audit_rank, audit_choice = select_horizon_candidates(
+                day=t, incumbent=incumbent, symbols=symbols,
+                forecast=forecast_oos,
+                horizons=EXTENDED_AUDIT_HORIZONS,
+                extra_switch_cost=0.0,
+                capture_require_short_medium_advantage=False,
+            )
+            expanded_rankings.extend([
+                {**metadata, "rank": k, **r}
+                for k, r in enumerate(audit_rank, 1)
+            ])
+            expanded_selections.append({**metadata, **audit_choice})
+            idx = symbols.index(incumbent) + 1
             for h in EXTENDED_AUDIT_HORIZONS:
-                arr = all_forecasts[h].get(key)
-                if arr is None:
-                    raise RuntimeError(f"H{h} missing forecast at {key}")
-                idx_current = symbols.index(incumbent) + 1
-                options = [
-                    (symbols[i - 1], float(arr[i]) - float(arr[idx_current])
-                     - cost_per_rotation)
-                    for i in range(1, len(symbols) + 1)
-                    if i != idx_current and np.isfinite(arr[i])
-                ]
-                options.sort(key=lambda it: (-it[1], it[0]))
-                best = options[0] if options else (None, None)
-                audit_horizon_rankings.append({
-                    "decision_date": key.isoformat(),
-                    "fold_id": fold_id,
-                    "horizon": h,
-                    "current_asset": incumbent,
-                    "top_candidate": best[0] if best[1] is not None and best[1] > 0 else None,
-                    "predicted_net_gap_pp": best[1] * 100.0 if best[1] is not None else None,
-                    "candidate_would_outperform_predicted": bool(
-                        best[1] is not None and best[1] > 0
-                    ),
-                    "audit_only": True,
+                prediction = forecast_oos[h][t]
+                leader = sorted([
+                    (symbols[pos - 1],
+                     float(prediction[pos] - prediction[idx]))
+                    for pos in range(1, len(symbols) + 1)
+                    if pos != idx and np.isfinite(prediction[pos])
+                ], key=lambda r: (-r[1], r[0]))
+                if leader:
+                    expanded_per_horizon.append({
+                        "decision_date": t.isoformat(),
+                        "fold_id": fold_id,
+                        "horizon": h,
+                        "incumbent": incumbent,
+                        "top_candidate": leader[0][0],
+                        "pred_gap_fraction": leader[0][1],
+                        "audit_only": True,
+                    })
+
+            if (destination == "CASH"
+                or int(control["holding_days_at_decision"])
+                < int(configuration.rotation_min_holding_days)):
+                continue
+            pairs = rank_direct_pair_gap(
+                day=t, incumbent=incumbent, control_target=destination,
+                symbols=symbols, forecasts=forecast_oos,
+                frames=frames, config=configuration, limit=5,
+            )
+            selected, calibrated = calibrated_pair_choice(pairs, calibration)
+            capture_ranked.extend([
+                {**metadata, "rank": rank, **entry}
+                for rank, entry in enumerate(calibrated, 1)
+            ])
+            raw = next(
+                (r for r in pairs if r["raw_qualifies"]), None
+            )
+            if raw is not None:
+                raw_selected.append({
+                    **metadata, "calibration_status": "raw_only",
+                    **raw,
                 })
-
-    capture_ranks_eval, capture_selected_eval = attach_fixed_horizon_outcomes(
-        capture_rankings, capture_selections,
-        horizons=CAPTURE_HORIZONS,
-        folds_maturity=folds_maturity, frames=frames,
-        extra_switch_cost=cost_per_rotation,
-    )
-    expanded_ranks_eval, expanded_selected_eval = attach_fixed_horizon_outcomes(
-        extended_rankings, extended_selections,
-        horizons=EXTENDED_AUDIT_HORIZONS,
-        folds_maturity=folds_maturity, frames=frames,
-        extra_switch_cost=cost_per_rotation,
-    )
-    for row in audit_horizon_rankings:
-        winner = row["top_candidate"]
-        day = pd.Timestamp(row["decision_date"])
-        h = int(row["horizon"])
-        maturity = folds_maturity[int(row["fold_id"])]
-        current_real = fixed_horizon_value(
-            day=day, horizon=h, symbol=row["current_asset"],
-            frames=frames, maturity=maturity,
-        )
-        winner_real = (
-            fixed_horizon_value(
-                day=day, horizon=h, symbol=winner,
-                frames=frames, maturity=maturity,
-            ) if winner else None
-        )
-        row["realized_gap_pp"] = (
-            (winner_real - current_real - cost_per_rotation) * 100.0
-            if winner_real is not None and current_real is not None else None
-        )
-        row["actual_outperformance"] = (
-            row["realized_gap_pp"] > 0
-            if row["realized_gap_pp"] is not None else None
+            if selected is not None:
+                confident_selected.append({
+                    **metadata, "calibration_status": "confidence_passed",
+                    **selected,
+                })
+        print(
+            f"[fold] {fold_id} train_pairs={len(training_pairs)} "
+            f"val_pairs={len(validation_pairs)} "
+            f"confidence_total={len(confident_selected)}",
+            flush=True,
         )
 
-    def export_rows(path: str, rows: list[dict[str, Any]]) -> None:
-        pd.DataFrame(rows).to_csv(OUT / path, index=False)
+    def export_rows(name: str, rows: list[dict[str, Any]]) -> None:
+        pd.DataFrame(rows).to_csv(OUT / name, index=False)
 
-    export_rows("capture_ranked_top5.csv", capture_ranks_eval)
-    export_rows("capture_selected.csv", capture_selected_eval)
-    export_rows("capture_quality_by_fold_horizon.csv",
-                summarize_selection_quality(capture_selected_eval, CAPTURE_HORIZONS))
-    export_rows("expanded_audit_ranked_top5.csv", expanded_ranks_eval)
-    export_rows("expanded_audit_selected.csv", expanded_selected_eval)
-    export_rows("expanded_audit_quality_by_fold_horizon.csv",
-                summarize_selection_quality(expanded_selected_eval, EXTENDED_AUDIT_HORIZONS))
-    export_rows("expanded_audit_best_per_horizon.csv", audit_horizon_rankings)
+    # A avaliacao realizada entra SOMENTE depois da selecao congelada.
+    evaluated_raw: list[dict[str, Any]] = []
+    evaluated_confident: list[dict[str, Any]] = []
+    for fold_id, fold in folds_by_id.items():
+        raw_part = [r for r in raw_selected if r["fold_id"] == fold_id]
+        calibrated_part = [
+            r for r in confident_selected if r["fold_id"] == fold_id
+        ]
+        evaluated_raw.extend(assess_pairwise_fixed_outcomes(
+            raw_part, frames=frames, calendar=common_dates,
+            horizon_end_exclusive=common_dates[int(fold["test_end_index"])]
+            if int(fold["test_end_index"]) < len(common_dates)
+            else common_dates[-1] + pd.Timedelta(days=7),
+        ))
+        evaluated_confident.extend(assess_pairwise_fixed_outcomes(
+            calibrated_part, frames=frames, calendar=common_dates,
+            horizon_end_exclusive=common_dates[int(fold["test_end_index"])]
+            if int(fold["test_end_index"]) < len(common_dates)
+            else common_dates[-1] + pd.Timedelta(days=7),
+        ))
+
+    export_rows("capture_pair_ranked_top5.csv", capture_ranked)
+    export_rows("capture_pair_raw_selected.csv", evaluated_raw)
+    export_rows("capture_pair_confident_selected.csv", evaluated_confident)
+    export_rows("capture_pair_calibration_by_fold.csv", calibration_audit)
+    export_rows("capture_pair_historical_validation.csv", validation_audit)
+    export_rows("capture_pair_raw_quality.csv",
+                aggregate_pairwise_quality(evaluated_raw))
+    export_rows("capture_pair_confident_quality.csv",
+                aggregate_pairwise_quality(evaluated_confident))
+    export_rows("expanded_audit_ranked_top5.csv", expanded_rankings)
+    export_rows("expanded_audit_selected.csv", expanded_selections)
+    export_rows("expanded_audit_best_per_horizon.csv", expanded_per_horizon)
     export_rows("horizon_model_training.csv", model_audit)
     export_rows("control_decision_reasons.csv", [
-        {"decision_date": day.isoformat(), **record}
-        for day, record in sorted(control_guard_audit.items())
+        {"decision_date": d.isoformat(), **r}
+        for d, r in sorted(control_guard_audit.items())
     ])
     result_2.predictions.to_csv(
         OUT / "control_holding_2_equity.csv", index_label="timestamp"
@@ -1568,54 +2044,50 @@ def main() -> dict[str, Any]:
         "ending_capital": metrics_2["ending_capital"],
         "sharpe": metrics_2.get("sharpe"),
         "maximum_drawdown": metrics_2.get("maximum_drawdown"),
-        "research_variants_executed": False,
-        "selection_is_diagnostic_only": True,
+        "candidate_backtest_performed": False,
+        "control_reproduced": True,
     }])
-    hashes_by_symbol = {
-        symbol: {
-            "raw_sha256": sha256_file(FULL_DATA.raw_bars / f"{symbol}.csv"),
+    hashes = {
+        sym: {
+            "raw_sha256": sha256_file(FULL_DATA.raw_bars / f"{sym}.csv"),
             "actions_sha256": sha256_file(
-                FULL_DATA.corporate_actions / f"{symbol}.csv"
+                FULL_DATA.corporate_actions / f"{sym}.csv"
             ),
-        } for symbol in needed
+        } for sym in needed
     }
     payload = {
         "script_version": VERSION,
         "status": "completed",
         "analysis_end": ANALYSIS_END_DATE,
-        "snapshot_u67_sha256": snapshot.get("snapshot_sha256"),
-        "external_asset_hashes": hashes_by_symbol,
         "effective_asset_count": len(symbols),
         "structural_exclusions": sorted(U67_EXPECTED_EXCLUSIONS),
+        "snapshot_u67_sha256": snapshot.get("snapshot_sha256"),
+        "external_asset_hashes": hashes,
         "capture_horizons": list(CAPTURE_HORIZONS),
-        "expanded_audit_horizons": list(EXTENDED_AUDIT_HORIZONS),
-        "audit_only_horizons": list(AUDIT_ONLY_HORIZONS),
-        "independent_audit": True,
-        "model_training_per_fold": len(ALL_RESEARCH_HORIZONS) * len(symbols),
-        "cost_proxy_extra_switch_fraction": cost_per_rotation,
+        "audit_horizons": list(EXTENDED_AUDIT_HORIZONS),
+        "calibration_fit_fraction": PAIR_CALIBRATION_FRACTION,
+        "calibration_quantile": PAIR_ERROR_QUANTILE,
+        "calibration": calibration_audit,
+        "capture_raw_selected": len(raw_selected),
+        "capture_confident_selected": len(confident_selected),
+        "no_duplicate_oos_decisions": True,
+        "OOS_used_for_parameter_selection": False,
+        "control_capital": actual,
         "control_checkpoint_reference": expected,
         "reproduces_checkpoint_to_cent": True,
-        "policy_changes_from_control": 0,
-        "financial_results": {"control_holding_2": metrics_2},
-        "capture_selection_count": sum(
-            row["best_candidate"] is not None for row in capture_selections
-        ),
-        "expanded_audit_selection_count": sum(
-            row["best_candidate"] is not None for row in extended_selections
-        ),
-        "note": (
-            "Selections and counterfactual fixed-horizon outcomes are "
-            "diagnostic, not executed trades. Outcome labels are joined "
-            "only after point-in-time rankings and only when the entire "
-            "horizon matures inside its original OOS fold. Net return "
-            "target uses frozen round-trip cost, and candidate-vs-hold "
-            "gap subtracts an additional conservative switching proxy. "
-            "The same OOS folds were inspected in previous campaigns."
+        "operational_orders": False,
+        "candidate_backtest_performed": False,
+        "scientific_limitation": (
+            "Pairwise shrinkage calibrates differences of independent "
+            "horizon forecasts on historical winning pairs. It is not "
+            "a separately trained pairwise LightGBM, nor a portfolio "
+            "backtest. Overlapping outcomes and repeatedly examined "
+            "OOS folds limit statistical independence."
         ),
         "export_to_operational": False,
     }
     write_json(OUT / "experiment.json", payload)
-    package_path = OUT / "pacote_persistencia_horizontes_u77_v106.zip"
+    package_path = OUT / "pacote_persistencia_horizontes_u77_v107.zip"
     with zipfile.ZipFile(
         package_path, "w", compression=zipfile.ZIP_DEFLATED
     ) as archive:
@@ -1623,7 +2095,6 @@ def main() -> dict[str, Any]:
             if artifact.is_file() and artifact != package_path:
                 archive.write(artifact, arcname=artifact.name)
     print(f"[package] {package_path}", flush=True)
-    print(f"[output] {OUT}", flush=True)
     return payload
 
 
