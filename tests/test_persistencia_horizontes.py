@@ -558,3 +558,133 @@ def test_v105_future_labels_are_training_only():
     }, index=[day])}
     add_horizon_percentage_training_targets(frames)
     assert frames["AAPL"].loc[day, "forward_horizon_net_return_pct_20"] == pytest.approx(0.02)
+
+
+def test_v106_capture_prediction_does_not_read_labels():
+    from pesquisar_persistencia_horizontes_spyder import select_horizon_candidates
+
+    day = pd.Timestamp("2025-05-01", tz="UTC")
+    forecast = {
+        h: {day: np.array([0.0, 0.01, 0.07, 0.02])}
+        for h in (2, 3, 5, 10)
+    }
+    top, selected = select_horizon_candidates(
+        day=day, incumbent="AAPL",
+        symbols=["AAPL", "NVDA", "MSFT"],
+        forecast=forecast, horizons=(2, 3, 5, 10),
+        extra_switch_cost=0.005,
+    )
+    assert selected["best_candidate"] == "NVDA"
+    assert top[0]["candidate"] == "NVDA"
+    assert selected["H2_pred_increment_pct_points"] == pytest.approx(5.5)
+    # Selected only from the forecast arrays: no realized labels exist here.
+
+
+def test_v106_audit_selection_independent_of_capture():
+    from pesquisar_persistencia_horizontes_spyder import select_horizon_candidates
+
+    day = pd.Timestamp("2025-05-01", tz="UTC")
+    forecasts = {
+        h: {day: np.array([0.0, 0.01, 0.09, 0.02])}
+        for h in (2, 3, 5, 10)
+    }
+    forecasts.update({
+        h: {day: np.array([0.0, 0.01, 0.02, 0.16])}
+        for h in (1, 15, 20, 30, 40, 60)
+    })
+    capture, capture_selected = select_horizon_candidates(
+        day=day, incumbent="AAPL", symbols=["AAPL", "NVDA", "MSFT"],
+        forecast=forecasts, horizons=(2, 3, 5, 10),
+        extra_switch_cost=0.005,
+    )
+    broad, broad_selected = select_horizon_candidates(
+        day=day, incumbent="AAPL", symbols=["AAPL", "NVDA", "MSFT"],
+        forecast=forecasts,
+        horizons=(1, 2, 3, 5, 10, 15, 20, 30, 40, 60),
+        extra_switch_cost=0.005,
+    )
+    assert capture_selected["best_candidate"] == "NVDA"
+    assert broad_selected["best_candidate"] == "MSFT"
+    assert capture[0]["candidate"] == "NVDA"
+    assert broad[0]["candidate"] == "MSFT"
+
+
+def test_v106_new_horizon_targets_use_fixed_calendar_not_sparse_shifts():
+    from types import SimpleNamespace
+    from pesquisar_persistencia_horizontes_spyder import build_horizon_return_labels
+
+    calendar = pd.date_range("2025-01-02", periods=16, freq="B", tz="UTC")
+    frame = pd.DataFrame({
+        "open": np.arange(100.0, 116.0),
+        "close": np.arange(100.0, 116.0),
+    }, index=calendar)
+    frames = {"A": frame.copy()}
+    cfg = SimpleNamespace(slippage_bps=0.0, commission_rate=0.0)
+    build_horizon_return_labels(frames, calendar, cfg, (2, 3, 15))
+    assert frames["A"].loc[calendar[0], "forward_horizon_net_return_pct_2"] == pytest.approx(
+        102.0 / 101.0 - 1
+    )
+    assert pd.isna(frames["A"].loc[calendar[1], "forward_horizon_net_return_pct_15"])
+
+    # Missing middle session must NOT transform H2 into an H3 bar.
+    sparse = frame.drop(index=calendar[2])
+    frames = {"A": sparse}
+    build_horizon_return_labels(frames, calendar, cfg, (2,))
+    assert pd.isna(
+        frames["A"].loc[calendar[0], "forward_horizon_net_return_pct_2"]
+    )
+
+
+def test_v106_maturity_and_realized_outcome_are_strictly_post_selection():
+    from pesquisar_persistencia_horizontes_spyder import (
+        attach_fixed_horizon_outcomes,
+        fixed_horizon_value,
+        summarize_selection_quality,
+    )
+
+    day = pd.Timestamp("2025-05-01", tz="UTC")
+    frame_a = pd.DataFrame({
+        "forward_horizon_net_return_pct_2": [0.02],
+        "forward_horizon_net_return_pct_3": [0.04],
+    }, index=[day])
+    frame_b = pd.DataFrame({
+        "forward_horizon_net_return_pct_2": [0.08],
+        "forward_horizon_net_return_pct_3": [0.07],
+    }, index=[day])
+    frames = {"A": frame_a, "B": frame_b}
+    maturities = {1: {day: 2}}
+    assert fixed_horizon_value(
+        day=day, horizon=3, symbol="B",
+        frames=frames, maturity=maturities[1],
+    ) is None
+    selected = [{
+        "decision_date": day.isoformat(),
+        "fold_id": 1,
+        "incumbent": "A",
+        "best_candidate": "B",
+        "H2_pred_increment_pct_points": 5.0,
+        "H3_pred_increment_pct_points": 4.0,
+    }]
+    _, outputs = attach_fixed_horizon_outcomes(
+        [], selected, horizons=(2, 3), folds_maturity=maturities,
+        frames=frames, extra_switch_cost=0.005,
+    )
+    assert outputs[0]["H2_realized_increment_pp"] == pytest.approx(5.5)
+    assert outputs[0]["H3_realized_increment_pp"] is None
+    quality = summarize_selection_quality(outputs, (2, 3))
+    two = next(r for r in quality if r["fold_id"] == 1 and r["horizon"] == 2)
+    assert two["hit_rate"] == 1.0
+    assert two["prediction_mae_pp"] == pytest.approx(0.5)
+    three = next(r for r in quality if r["fold_id"] == 1 and r["horizon"] == 3)
+    assert three["matured_evaluable"] == 0
+
+
+def test_v106_longest_forecast_requires_a_causal_training_purge():
+    from pesquisar_persistencia_horizontes_spyder import (
+        ALL_RESEARCH_HORIZONS,
+        CAPTURE_HORIZONS,
+        EXTENDED_AUDIT_HORIZONS,
+    )
+    assert CAPTURE_HORIZONS == (2, 3, 5, 10)
+    assert 60 in EXTENDED_AUDIT_HORIZONS
+    assert max(ALL_RESEARCH_HORIZONS) <= 60
