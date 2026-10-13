@@ -2477,3 +2477,91 @@ experimental. O estudo e isolado de sistemas operacionais.
 
 **Status:** codigo versionado e testes automaticos de regressao,
 sem execucao completa com os historicos congelados do Spyder.
+
+
+#### 25.12.10.A Marco de encerramento da v1.0.10 (13/10/2026)
+
+**Status da campanha:** execucao Spyder completa, auditoria de
+artefatos realizada, resultados congelados como referencia de
+pesquisa exploratoria. **Nao promover** nenhuma politica; nao
+alterar a `main`, o Control ou a aplicacao operacional.
+
+**Artefato local imutavel recebido:**
+`pacote_persistencia_horizontes_u77_v110.zip`
+SHA-256:
+`c44d7b4c6fa7268afeefab4d6b8d82bc3673e2b57b5b4a83e63cd495e6ba7ad2`.
+O ZIP do usuario nao foi versionado no Git; o hash permite sua
+identificacao precisa apos transferencia externa.
+
+**Checkpoint:** 75 ativos, tres folds, Control reproduzido com
+capital US$ 587.165.941,1330212. As quatro politicas autonomas
+foram simuladas, cada uma com sua carteira independente. Todos
+os indicadores seguintes vem do pacote v1.0.10 e nao sao
+garantia de desempenho futuro.
+
+| Politica | Precisao H05 macro-fold | Trocas H05 maduras | Capital final (US$) | MaxDD |
+|---|---:|---:|---:|---:|
+| Control | 58,7604% | 352 | 587.165.941,13 | -41,68% |
+| Net gain | 51,9033% | 195 | 165.481,10 | -70,66% |
+| TOPSIS | 50,9317% | 187 | 120.939,50 | -75,47% |
+| Borda + Pareto | 50,1932% | 209 | 156.107,30 | -76,73% |
+| Consensus | 49,0961% | 200 | 216.923,00 | -65,43% |
+
+**Diagnostico do mecanismo Control, sem afirmacao causal:**
+`control_decision_reasons.csv` registra 1.560 decisoes:
+831 `HOLD_CURRENT_BEST`, 355 `MIN_HOLD_GUARD`,
+354 `ROTATE_TO_BEST_ASSET`, 19 `SWITCH_MARGIN_GUARD`
+e uma entrada inicial. Nas 355 sessoes do guard,
+em 193 o ativo atual continuava em primeiro no ranking
+bruto; em **162** o ranking indicava outro ativo, mas a
+permanencia minima impediu trocar.
+As margens efetivas de troca eram 0,0005 nos folds 1/3
+e 0,01 no fold 2, escolhidas no historico de calibracao.
+Control estima **utilidade ajustada ao risco**
+(`forward_risk_adjusted_utility`), incluindo penalidades
+de downside/drawdown e componentes de movimento/persistencia,
+enquanto as novas politicas ordenam previsoes de retornos
+percentuais H02/H03/H05/H10. Assim, diferem
+**o alvo da previsao e a politica**, e nao somente o hold.
+
+**Auditoria retrospectiva adicional sobre o guard:**
+para 161 dos 162 dias de bloqueio com rival na lideranca,
+foi possivel obter o retorno H05 dos dois ativos nos
+arquivos `ranking_all_assets.csv`.
+Se o melhor bruto fosse comprado imediatamente, seu
+retorno H05 superaria o retorno de manter em 85/161
+dias (52,8%), mas a diferenca media foi aproximadamente
+**-0,24 ponto percentual**, sem simular custos e
+trajetoria decorrentes da troca. Esse exercicio
+diagnostico nao prova que o guard cause a precisao
+maior; bloqueia tanto oportunidades positivas quanto
+negativas.
+
+**Conclusao:** nenhuma politica autonoma alcancou o
+Control em precisao de troca H05. Nao confundir
+`precisao condicional entre as trocas executadas` com
+qualidade de TODAS as decisoes de manter/rotacionar/caixa.
+O Control escolhe quando operar segundo utilidade de
+risco calibrada, favorecendo uma amostra selecionada
+de rotacoes. O motivo de sua maior precisao deve ser
+investigado mediante **ablacao controlada**, nao
+atribuido ao hold por inferencia.
+
+**Proposta subsequente, ainda NAO implementada:**
+comparar Control completo com ablacões de hold=0,
+margem fixa e mesmo sinal de utilidade; isolar
+efeito do alvo de previsao vs efeito da politica.
+Para reproduzir autonomia sem gates rigidamente fixos,
+pesquisar uma **meta-politica probabilistica de acao**
+que aprenda, somente no treino com previsoes OOF e
+labels maturos, a vantagem estimada de
+`manter / trocar / caixa`, condicionada ao estado
+atual, custos, incerteza e regimes. Validar por
+walk-forward purgado e posteriormente por janela nova.
+Nao escolher pesos/hyperparametros usando o OOS ja visto.
+
+**Governanca de fechamento:** esta secao e o
+registro versionado do marco. Recomenda-se criar a
+tag anotada local `research-v1.0.10-rotacoes-autonomas`
+apontando ao commit deste registro e enviá-la
+ao GitHub. Isso nao autoriza merge para `main`.
