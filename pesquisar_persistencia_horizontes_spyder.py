@@ -2236,9 +2236,12 @@ def main() -> dict[str, Any]:
             })
 
         # Referencia historica: mesmo Control, mas sem dados de teste.
+        # Na calibracao historica, nao usar margem cuja selecao
+        # dependeu de observacoes posteriores nessa mesma janela.
+        # A referencia proxy aplica somente a margem base ja fixada.
         historical_policy = _politica_utilidade(
             {}, frames, symbols, configuration,
-            float(fold_caches[fid]["margin"]),
+            float(configuration.rotation_switch_margin),
             utility_cache=fold_caches[fid]["calibration"],
         )
         historical_positions = historical_control_pair_context(
