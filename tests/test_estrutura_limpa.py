@@ -42,3 +42,28 @@ def test_snapshot_e_evidencias_sao_preservados() -> None:
     assert (ROOT / "dados" / "u67" / "manifest.json").is_file()
     assert (ROOT / "evidencias" / "eligibilidade_v1.22.0-dev.10.json").is_file()
     assert (ROOT / "figuras" / "procedencia_figuras.json").is_file()
+
+
+def test_busca_avisos_sonoros_diferenciam_sucesso_de_erro(monkeypatch) -> None:
+    import importlib.util
+    import sys
+    from types import SimpleNamespace
+
+    calls = []
+    monkeypatch.setitem(
+        sys.modules, "winsound",
+        SimpleNamespace(Beep=lambda frequency, duration: calls.append(
+            (frequency, duration)
+        )),
+    )
+    spec = importlib.util.spec_from_file_location(
+        "buscar_ativos", ROOT / "buscar_ativos.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.sinal_sonoro_busca(sucesso=True)
+    assert calls == [(880, 160), (1046, 220)]
+    calls.clear()
+    module.sinal_sonoro_busca(sucesso=False)
+    assert calls == [(440, 420), (330, 470)]
