@@ -3143,6 +3143,26 @@ def main() -> dict[str, Any]:
             f"kendall={record.get('mean_kendall')} "
             f"top1_gap={record.get('mean_top1_gap')}"
         )
+    ranking_by_horizon: list[dict[str, Any]] = []
+    for h in RANKING_EVALUATION_HORIZONS:
+        for item in summarise_ranking_methods([
+            row for row in ranking_quality if row["horizon"] == h
+        ]):
+            ranking_by_horizon.append({
+                "horizon": h,
+                **{key: value for key, value in item.items()
+                   if key != "fold_details"},
+            })
+        top = next(
+            (row for row in ranking_by_horizon
+             if row["horizon"] == h and row["descriptive_rank"] == 1),
+            None,
+        )
+        if top:
+            rank_log(
+                f"horizon=H{h:02d} best_ordering={top['method']} "
+                f"ndcg_at_5={top.get('mean_ndcg_at_5')}"
+            )
     log_stream.flush()
     log_stream.close()
 
@@ -3295,6 +3315,7 @@ def main() -> dict[str, Any]:
         for row in ranking_leaderboard
         for fold in row.get("fold_details", [])
     ])
+    write_csv("ranking_methods_by_horizon.csv", ranking_by_horizon)
     write_csv("horizon_model_training.csv", model_audit)
     write_csv("control_decision_reasons.csv", [
         {"decision_date": d.isoformat(), **row}
@@ -3338,6 +3359,7 @@ def main() -> dict[str, Any]:
             RANKING_EVALUATION_HORIZONS
         ),
         "ranking_method_leaderboard": ranking_leaderboard,
+        "ranking_method_leaderboard_by_horizon": ranking_by_horizon,
         "ranking_descriptive_top_method": (
             ranking_leaderboard[0]["method"]
             if ranking_leaderboard else None
