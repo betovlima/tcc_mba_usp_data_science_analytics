@@ -426,3 +426,53 @@ arquivos anteriores de auditoria. Nenhuma regra nova
 e promovida automaticamente. Os folds ja foram vistos
 em campanhas previas; o ranking obtido e exploratorio.
 Ver `MANIFEST.md` secao 25.12.9.
+
+### Pesquisa v1.0.10 — rotacao autonoma com rankings matematicos
+
+A versao padrao de `pesquisar_persistencia_horizontes_spyder.py`
+executa agora quatro politicas matematicas independentes,
+utilizando as mesmas previsoes H02/H03/H05/H10:
+`net_gain`, `borda_pareto`, `topsis`, `consensus`.
+Nenhum novo modelo de ORDENACAO e treinado. O Control
+e apenas a referencia financeira e de precisao ex post;
+nao fornece destino ou estado as politicas alternativas.
+
+Cada politica pode manter, rotacionar e ir para caixa;
+minimo de dois pregoes por posicao e regras fixas de
+melhoria marginal prevista, custos e risco.
+Sao realizados replays financeiros separados com o
+mesmo simulador, universo, fees e calendario. O checkpoint
+congelado do Control US$ 587.165.941,13 e verificado
+antes das alternativas.
+
+Alem de capital, Sharpe, drawdown e operacoes, sao
+reportadas precisao das trocas e vantagem observada
+versus manter o ativo, pelos horizontes H02/H03/H05/H10
+e pelos tres folds. A metrica primaria descritiva e
+precisao de troca H05, com pelo menos 10 resultados
+maturos em cada fold para obter posicao no ranking.
+Os folds OOS ja foram estudados repetidamente e nenhuma
+estrategia e promovida automaticamente.
+
+**Execucao no console do Spyder:**
+
+    !git fetch origin
+    !git switch research/horizon-persistence-oos-v1
+    !git pull --ff-only origin research/horizon-persistence-oos-v1
+    !git log -1 --oneline
+
+Reinicie o kernel e execute:
+
+    %run pesquisar_persistencia_horizontes_spyder.py
+
+**Resultados:**
+`output/persistencia_horizontes_u77_v110/pacote_persistencia_horizontes_u77_v110.zip`
+
+O pacote contem as tabelas de capital por politica,
+operacoes, qualidade de decisoes, leaderboard,
+rankings ja conhecidos e logs. `execution_full.log`
+captura a execucao completa. Na conclusao, o Windows
+produz um sinal sonoro curto de sucesso; em erros,
+dois tons diferentes e o trace ficam preservados no log.
+Nao ha chamadas de mercado ou operacoes reais.
+Consulte MANIFEST.md 25.12.10.
