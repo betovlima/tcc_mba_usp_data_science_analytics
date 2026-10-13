@@ -1599,9 +1599,20 @@ def assess_pairwise_fixed_outcomes(
                 row[key + "_realized_gap_fraction"] = None
                 row[key + "_hit"] = None
                 continue
-            gap = cand - base - float(row["incremental_cost_fraction"])
+            cost = float(row["incremental_cost_fraction"])
+            gap = cand - base - cost
             row[key + "_realized_gap_fraction"] = gap
             row[key + "_hit"] = bool(gap > 0.0)
+            current_asset = row.get("incumbent")
+            current_realized = (
+                float(frames[current_asset].at[day, source])
+                if current_asset in frames and day in frames[current_asset].index
+                else np.nan
+            )
+            row[key + "_realized_vs_incumbent_fraction"] = (
+                cand - current_realized - cost
+                if np.isfinite(current_realized) else None
+            )
             prediction_key = (
                 f"{key}_calibrated_pair_gap_fraction"
                 if f"{key}_calibrated_pair_gap_fraction" in row
@@ -1637,11 +1648,25 @@ def aggregate_pairwise_quality(
                     f"H{h}_prediction_error_fraction"
                 ) is not None
             ], dtype=float)
+            incumbent_realized = np.asarray([
+                float(r[f"H{h}_realized_vs_incumbent_fraction"])
+                for r in available
+                if r.get(f"H{h}_realized_vs_incumbent_fraction") is not None
+            ], dtype=float)
             rows.append({
                 "fold_id": fold,
                 "horizon": h,
                 "selected": len(selected),
                 "matured_evaluable": len(available),
+                "realized_vs_incumbent_count": len(incumbent_realized),
+                "mean_realized_vs_incumbent": (
+                    float(incumbent_realized.mean())
+                    if len(incumbent_realized) else None
+                ),
+                "incumbent_outperformance_rate": (
+                    float(np.mean(incumbent_realized > 0.0))
+                    if len(incumbent_realized) else None
+                ),
                 "realized_win_rate": (
                     float(np.mean(realized > 0)) if len(realized) else None
                 ),
@@ -2508,7 +2533,24 @@ def main() -> dict[str, Any]:
             })
 
     def write_csv(name: str, rows: list[dict[str, Any]]) -> None:
-        pd.DataFrame(rows).to_csv(OUT / name, index=False)
+        # CSVs vazios continuam legiveis e identificaveis por ferramentas
+        # externas, especialmente quando nenhuma escolha passa na confianca.
+        schema = {
+            "capture_direct_pair_confident_selected.csv": [
+                "fold_id", "decision_date", "incumbent", "control_target",
+                "candidate", "calibrated_qualifies",
+            ],
+            "capture_direct_pair_confident_quality.csv": [
+                "fold_id", "horizon", "selected", "matured_evaluable",
+                "realized_win_rate", "prediction_mae", "prediction_rmse",
+            ],
+            "capture_direct_pair_raw_selected.csv": [
+                "fold_id", "decision_date", "incumbent",
+                "control_target", "candidate", "raw_qualifies",
+            ],
+        }.get(name, ["fold_id", "decision_date"])
+        frame = pd.DataFrame(rows) if rows else pd.DataFrame(columns=schema)
+        frame.to_csv(OUT / name, index=False)
 
     write_csv("capture_direct_pair_ranked_top5.csv", pair_top5)
     write_csv("capture_direct_pair_raw_selected.csv", evaluated_raw)
@@ -2529,6 +2571,36 @@ def main() -> dict[str, Any]:
               ))
     write_csv("expanded_audit_best_per_horizon.csv", audit_per_horizon)
     write_csv("expanded_audit_best_horizon_quality.csv", audit_quality)
+    # Auditoria da correcao de cobertura por H, junto a cada fold.
+    label_coverage = []
+    for fid, fold in sorted(folds_by_id.items()):
+        fold_decisions = [
+            t for t, owner in decision_to_fold.items()
+            if int(owner) == fid and t in seen_oos_days
+        ]
+        for h in EXTENDED_AUDIT_HORIZONS:
+            potential = 0
+            mature = 0
+            for t in fold_decisions:
+                row = control_guard_audit[t]
+                current = str(row["current_asset"])
+                if current == "CASH":
+                    continue
+                if date_to_index[t] + h >= int(fold["test_end_index"]):
+                    continue
+                potential += 1
+                label = f"forward_horizon_net_return_pct_{h}"
+                if t in frames[current].index:
+                    observed = float(frames[current].at[t, label])
+                    mature += int(np.isfinite(observed))
+            label_coverage.append({
+                "fold_id": fid,
+                "horizon": h,
+                "eligible_reference_days": potential,
+                "valid_matured_incumbent_labels": mature,
+                "missing_labels": potential - mature,
+            })
+    write_csv("horizon_label_coverage.csv", label_coverage)
     write_csv("horizon_model_training.csv", model_audit)
     write_csv("control_decision_reasons.csv", [
         {"decision_date": d.isoformat(), **row}
