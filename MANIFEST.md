@@ -1,5 +1,18 @@
 # MANIFEST — TCC MBA USP Data Science & Analytics
 
+> **ATUALIZAÇÃO 13/10/2026 — referência vigente v1.22.3-dev.1.** A
+> limpeza v1.22.2-dev.1 havia apontado incorretamente para U67 com
+> US$ 76,93 milhões. O executor principal foi restaurado para o
+> **Control U67+10, 75 ativos, US$ 587.165.941,13 de referência
+> histórica**, conforme campanha v1.0.11. Os históricos de dez
+> ativos adicionais estão no cache local da campanha; sem eles,
+> não é possível reproduzir seu capital na máquina CI. **Hashes,
+> gates por checkpoint/branch e validações por identidade SHA foram
+> removidos dos fluxos ativos.** O único limite temporal obrigatório
+> de negociação é a permanência mínima de dois pregões do swing trade.
+> As seções abaixo são histórico científico, não configuração vigente.
+>
+
 ## 1. Finalidade deste documento
 
 Este arquivo consolida em um único lugar o histórico técnico, as decisões
@@ -2777,3 +2790,63 @@ de execução sejam reproduzíveis apenas com o snapshot U67.
 **Status de validação:** testar a estrutura limpa por CI;
 não afirmar reprodução integral de mercado sem execução
 Spyder com dados e ambiente científicos completos.
+
+
+## Atualização corretiva — v1.22.3-dev.1, 13/10/2026
+
+**Problema:** a limpeza que deixou apenas dois executáveis
+restaurou por engano o Control U67 antigo (65 ativos,
+US$ 76.927.051,39), apesar de a última campanha aprovada
+ser o U67+10 com **75 ativos e US$ 587.165.941,13**.
+A implementação mais recente existia no Git anterior ao
+commit de limpeza, em
+`pesquisar_persistencia_horizontes_spyder.py` (v1.0.11).
+Isso foi uma regressão de versão da minha consolidação,
+não uma alteração desejada da estratégia.
+
+**Correção:** `reproduzir_experimento.py` passa a chamar
+`reproducao.control_u77.executar_control_u77`. O módulo
+reutiliza os mesmos métodos de treino LightGBM por fold,
+preparação de séries, fusão de caches, margens calibradas
+no histórico e política de utilidade do Control U67+10.
+Sem o teste de ablações, hold=0, ranking de pares ou
+simulações auxiliares. Só existem os dois scripts
+de entrada na raiz (incluindo `buscar_ativos.py`).
+
+**Contrato de dados real:** os 65 ativos base vêm de
+`dados/u67/`. Os dez adicionais (CRT, NBR, CAPR,
+PNBK, PENN, JBL, STAG, MCHB, LAD e TOWN) vêm de
+`dados/.u67_expansion_cache/full_raw_20261006/`,
+com OHLCV e Corporate Actions locais. Esses arquivos
+foram utilizados na campanha v1.0.11 e não estão no
+snapshot U67 publicado. Não declarar que o Git sozinho
+reproduz US$ 587 milhões. O script apenas informa a
+ausência de arquivos indispensáveis e não altera o
+universo silenciosamente. A continuidade histórica
+e a identidade dos ativos são verificadas para evitar
+incorporação de séries estruturalmente problemáticas.
+
+**Remoções solicitadas pelo pesquisador:**
+- nenhum SHA-256 é calculado/validado pelo pipeline ativo;
+- os metadados legados `file_hashes` e `snapshot_sha256`
+  são ignorados durante a leitura;
+- não há bloqueio por divergência do capital de
+  US$ 587.165.941,13; essa cifra é referência descritiva;
+- nenhum gate por nome de branch, commit, schema/cutoff
+  histórico ou número fixo de ativos;
+- não criar outras restrições temporais. Preservar
+  SOMENTE a permanência mínima de dois pregões,
+  preexistente e expressamente aprovada.
+
+O código mantém controles necessários à validade de
+dados de negociação (arquivos presentes, OHLCV legível,
+preços finitos/positivos, continuidade de série e exclusões
+estruturais já definidas). Não interpretar tais cuidados
+como estratégia de restrição/otimização adicional.
+
+**Validação:** análise estática e testes do GitHub CI
+são necessários, porém não substituem a execução do
+backtest U67+10 no Spyder com as dez séries em cache.
+Registrar SHA do commit Git para rastrear versões é
+diferente de validar hashes de arquivos de dados,
+que foi removido por solicitação.
