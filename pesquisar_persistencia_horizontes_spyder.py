@@ -1426,7 +1426,7 @@ def rank_direct_pair_gap(
                for h in horizons},
         })
     rows.sort(key=lambda r: (-r["raw_pair_mean_daily_gap"], r["candidate"]))
-    return rows[:limit]
+    return rows[:limit] if limit > 0 else rows
 
 
 def train_pairwise_winner_calibration(
@@ -1889,7 +1889,7 @@ def main() -> dict[str, Any]:
             options = rank_direct_pair_gap(
                 day=day, incumbent=inc, control_target=base,
                 symbols=symbols, forecasts=forecast_cal,
-                frames=frames, config=configuration, limit=5,
+                frames=frames, config=configuration, limit=0,
             )
             if not options:
                 continue
@@ -2004,12 +2004,12 @@ def main() -> dict[str, Any]:
             pairs = rank_direct_pair_gap(
                 day=t, incumbent=incumbent, control_target=destination,
                 symbols=symbols, forecasts=forecast_oos,
-                frames=frames, config=configuration, limit=5,
+                frames=frames, config=configuration, limit=0,
             )
             selected, calibrated = calibrated_pair_choice(pairs, calibration)
             capture_ranked.extend([
                 {**metadata, "rank": rank, **entry}
-                for rank, entry in enumerate(calibrated, 1)
+                for rank, entry in enumerate(calibrated[:5], 1)
             ])
             raw = next(
                 (r for r in pairs if r["raw_qualifies"]), None
