@@ -3045,6 +3045,19 @@ def main() -> dict[str, Any]:
                         np.full(len(symbols), np.nan, dtype=float)
                     )
                 reference_id = symbols.index(reference)
+                # Mesmo conjunto de datas comparaveis em CADA H para
+                # todos os oito metodos. Nunca filtrar um metodo com
+                # o resultado futuro sem aplicar regra identica aos outros.
+                comparable_horizon = {
+                    h: bool(
+                        np.isfinite(observed[h][reference_id])
+                        and all(
+                            np.isfinite(observed[h][order[0][0]])
+                            for order in selections.values()
+                        )
+                    )
+                    for h in RANKING_EVALUATION_HORIZONS
+                }
                 for method, sorted_assets in selections.items():
                     for rank, (asset_idx, score) in enumerate(sorted_assets, 1):
                         detailed.writerow([
@@ -3059,12 +3072,25 @@ def main() -> dict[str, Any]:
                               for h in RANKING_EVALUATION_HORIZONS],
                         ])
                     for h in RANKING_EVALUATION_HORIZONS:
-                        quality = rank_quality_metrics(
-                            ranking=sorted_assets, realized=observed[h],
-                            reference_index=reference_id,
-                            costs=ranking_cost,
+                        quality = (
+                            rank_quality_metrics(
+                                ranking=sorted_assets,
+                                realized=observed[h],
+                                reference_index=reference_id,
+                                costs=ranking_cost,
+                            )
+                            if comparable_horizon[h] else {
+                                "evaluable_assets": int(
+                                    np.isfinite(observed[h]).sum()
+                                ),
+                                "spearman": None, "kendall": None,
+                                "ndcg_at_5": None, "top1_gap": None,
+                                "top5_gap": None, "top1_win": None,
+                                "top1_regret": None,
+                            }
                         )
                         ranking_quality.append({
+                            "common_top1_evaluable": comparable_horizon[h],
                             "decision_date": t.isoformat(),
                             "fold_id": fid, "method": method,
                             "horizon": h,
