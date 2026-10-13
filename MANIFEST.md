@@ -2128,6 +2128,14 @@ individuais. Uma vantagem prevista negativa não gera
 `best_candidate`, mas o ranking pode incluir pontuações
 negativas para auditoria.
 
+Na **selecao de captura**, o candidato somente e escolhido se
+pelo menos tres dos quatro horizontes apresentarem vantagem
+individual e as medias H02/H03 (curto) e H05/H10 (medio)
+forem ambas positivas. A **auditoria expandida** nao herda
+esse filtro, preservando uma amostra mais ampla para medir
+concordancia e divergencias entre horizontes. Essas regras
+foram fixadas antes do backtest v1.0.6.
+
 **Avaliação fora da amostra, separada da seleção:**
 após congelar os rankings, juntar retornos realizados
 do ativo atual e do candidato escolhido por H.
