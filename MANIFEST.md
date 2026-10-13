@@ -2275,3 +2275,21 @@ continua exploratória; confirmação externa exige novo
 período cronológico ainda não utilizado na pesquisa.
 Resultados financeiros da v1.0.7 pendentes de execução
 local com os históricos complementares congelados.
+
+#### 25.12.8 v1.0.8 — modelo direto de diferenças de retorno
+
+**Motivo:** na v1.0.7, a maior parte dos ganhos relativos previstos nao se confirmou e nenhuma troca passou pelo filtro de confianca. A v1.0.8 investiga o aprendizado supervisionado direto da diferenca de retorno entre candidato e ativo de referencia em H02/H03/H05/H10, preservando o Control como unica carteira simulada.
+
+**Correcao da cobertura:** todos os rotulos H01/H02/H03/H05/H10/H15/H20/H30/H40/H60 sao reconstruidos individualmente no calendario congelado a partir da abertura em t+1 e fechamento em t+H com custo-alvo round-trip. Um label curto pode amadurecer nas ultimas 60 sessoes mesmo quando H60 nao amadureceu. Lacunas permanecem ausentes. Esses rotulos somente alimentam treinos anteriores ao teste e verificacoes posteriores, nunca a escolha em t.
+
+**Modelo direto:** para cada horizonte curto, o LightGBM aprende R_candidato - R_referencia a partir de 13 indicadores disponiveis em t para cada ativo e suas 13 diferencas (39 colunas). Os pares de treinamento usam duas referencias rotativas deterministicas por data, sem conhecimento de rentabilidade futura, nas duas orientacoes. Treino cronologico em duas etapas por fold: antes da calibracao e antes do teste, sempre respeitando o embargo original de 60 sessoes. CPU deterministica e parametros congelados.
+
+**Calibracao:** os primeiros dois tercos da janela historica fornecem vencedores de ranking escolhidos apenas por previsao e rotulos plenamente maduros antes da divisao, para estimar vies mediano e erro absoluto p75 por H. O ultimo terco e destinado a verificacao historica, sem ajuste por resultados OOS. Nessa etapa a referencia historica usa a margem-base do Control, nao a margem selecionada a posteriori nessa janela.
+
+**Selecao:** comparar candidato simultaneamente com o ativo atual e com o destino escolhido pelo Control; exigir vantagem nos grupos H02/H03 e H05/H10, tres horizontes positivos contra Control e, para a variante conservadora, limite inferior corrigido por vies e erro historico positivo em ambos os grupos. As taxas incrementais estimadas por candidato incluem slippage, comissao, SEC, TAF e CAT conforme parametros e cotacao disponivel na data da decisao. Essa estimativa nao substitui execucao com liquidez e impacto de mercado.
+
+**Auditoria independente:** a mesma execucao treina modelos individuais H01 a H60 sem influenciar os modelos de pares. Exporta rank consolidado, lideres por H, ganhos realizados pos-selecao, qualidade por fold e completude de labels em horizon_label_coverage.csv. Decisoes de fronteira nao sao duplicadas; outcomes que atravessam o final do fold sao ignorados.
+
+**Saidas:** output/persistencia_horizontes_u77_v108/pacote_persistencia_horizontes_u77_v108.zip, incluindo captura de pares (ranking, escolhas brutas e confiantes, calibracao e qualidade historica/OOS), auditoria expandida, coverage, hashes do U67+10, experiment.json e trades/curva do Control.
+
+**Status:** somente branch research/horizon-persistence-oos-v1; main, experimento oficial e aplicacao operacional inalterados. Os folds OOS foram vistos em pesquisas anteriores: conclusoes sao exploratorias e exigem uma nova janela futura para confirmacao. O backtest completo da v1.0.8 permanece pendente no Spyder.
