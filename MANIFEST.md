@@ -2293,3 +2293,92 @@ local com os históricos complementares congelados.
 **Saidas:** output/persistencia_horizontes_u77_v108/pacote_persistencia_horizontes_u77_v108.zip, incluindo captura de pares (ranking, escolhas brutas e confiantes, calibracao e qualidade historica/OOS), auditoria expandida, coverage, hashes do U67+10, experiment.json e trades/curva do Control.
 
 **Status:** somente branch research/horizon-persistence-oos-v1; main, experimento oficial e aplicacao operacional inalterados. Os folds OOS foram vistos em pesquisas anteriores: conclusoes sao exploratorias e exigem uma nova janela futura para confirmacao. O backtest completo da v1.0.8 permanece pendente no Spyder.
+
+#### 25.12.9 v1.0.9 — comparacao integral de rankings, mesma execucao
+
+**Objetivo:** auditar a capacidade de ordenacao dos 75 ativos usando as
+previsoes e os historicos congelados, sem alterar o Control. Executar
+oito classificadores sobre exatamente o mesmo conjunto de ativos
+e datas elegiveis, com tie-break por simbolo, e produzir logs,
+ranking integral e metricas por horizonte e fold.
+
+**Metodos registrados ANTES de observar novos resultados:**
+1. predicted_return: media igualmente ponderada dos retornos previstos
+   por pregao em H02/H03/H05/H10;
+2. net_advantage: media por pregao das diferencas esperadas contra
+   destino Control, descontado custo incremental do ativo;
+3. borda: combinacao das quatro posicoes transversais, sem depender
+   das magnitudes extremas das previsoes;
+4. topsis: distancia normalizada entre solucao ideal e anti-ideal
+   com pesos fixos: H02/H03/H05/H10, cada qual 0,15; volatilidade
+   0,15; friccao 0,15; dispersao entre horizontes 0,10;
+5. pareto: fronteiras nao dominadas em quatro ganhos diarios
+   e menor volatilidade, com desempate deterministico;
+6. probabilistic: media das probabilidades aproximadas de vantagem
+   sobre o destino Control em H02/H03/H05/H10, com distribuicao
+   Normal de erro, medias e desvios estimados APENAS em previsoes
+   cronologicamente anteriores ao OOS. A independencia implicita
+   entre erros de ativos e apenas aproximacao; nao tratar como
+   probabilidade calibrada sem verificacao;
+7. robust: pior ganho previsto apos ajuste de vies e um desvio
+   historico aproximado, por horizonte e por pregao;
+8. learning_to_rank: comparador supervisionado adicional LambdaMART
+   (LGBMRanker) com features de mercado disponiveis em t e
+   relevancia historica H05 agrupada por sessao. Diferentemente
+   dos demais, este metodo treina novo modelo; seus labels
+   amadurecem integralmente antes do fold OOS e obedecem embargo.
+   Nao usa ganho OOS no treinamento.
+
+**Amostra e avaliacao:** os rankings e scores usam somente informacoes
+disponiveis no fechamento da sessao de decisao, modelos treinados
+anteriormente e calibracao historica anterior ao periodo OOS.
+Para cada metodo, usar a mesma lista de candidatos com previsoes
+finitas em todos os horizontes, dados completos de features e
+custos estimados. A politica Control e o benchmark fixo.
+Calcular retornos realizados e rankings verdadeiros apenas APOS
+congelar todas as ordenacoes por data. Nao substituir Top-1 por
+Top-2 quando o rotulo futuro do primeiro estiver ausente;
+marcar esse caso como nao avaliavel. Nao permitir outcomes
+que atravessem o final do fold.
+
+**Metricas:** correlacao de Spearman, Kendall, NDCG@5,
+retorno realizado do Top-1 e da media Top-5 relativo ao Control,
+taxa de acerto do Top-1 e arrependimento do Top-1 comparado
+ao melhor retorno observado. Relatar por dia/horizonte/fold,
+e agregar os resultados de modo macro (media dos 3 folds),
+sem selecionar pesos/limiares a partir do OOS.
+A metrica PRINCIPAL descritiva foi fixada como media macro-fold
+do NDCG@5 (medida de posicionamento no topo da lista).
+O metodo que obtiver o maior NDCG@5 sera chamado de melhor
+ordenacao OBSERVADA nesta amostra, nunca de vencedor
+confirmado e nunca sera promovido automaticamente.
+
+**Logs e arquivos:** manter no mesmo
+`output/persistencia_horizontes_u77_v109/`:
+`ranking_methods.log` (inicio, metodos, fold, lideres
+periodicos e leaderboard completo),
+`ranking_all_assets.csv` (cada posicao para todos os
+metodos e datas com previsoes e desfechos maduros),
+`ranking_oos_quality_by_session.csv`,
+`ranking_methods_by_fold.csv`,
+`ranking_methods_leaderboard.csv`,
+`ranking_historical_error_calibration.csv`, alem de toda
+a auditoria v1.0.8 e
+`pacote_persistencia_horizontes_u77_v109.zip`.
+O ZIP deve conter os logs e CSVs.
+
+**Governanca e limitacoes:** somente a branch
+`research/horizon-persistence-oos-v1`.
+A main, a reproducao Control congelada e o Market Cycle Trader
+operacional permanecem inalterados. O checkpoint do Control
+US$ 587.165.941,13 continua obrigatorio. Nenhuma nova
+politica e simulada financeiramente ou promovida.
+Como os folds OOS anteriores ja foram vistos muitas vezes,
+o leaderboard e exploratorio e nao constitui prova
+de generalizacao. Efeito de slippage real, liquidez,
+capacidade e descontinuidade de ativos nao e modelado
+pela ordenacao.
+
+**Status:** implementacao programatica concluida;
+backtest local Spyder e leaderboard financeiro v1.0.9
+pendentes de execucao com o cache historico U67+10.
