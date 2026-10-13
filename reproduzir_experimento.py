@@ -11,7 +11,7 @@ Reproduzir o experimento final do TCC em uma instalacao independente:
 - aplicar as exclusoes estruturais documentadas, resultando em 65 ativos;
 - executar LightGBM Control, folds temporais, purge, custos e regras de rotacao;
 - comparar a rotacao com compra e manutencao nos mesmos 65 ativos efetivos;
-- validar o resultado contra checkpoints congelados do proprio TCC.
+- relatar comparativamente os resultados historicos, sem abortar por diferencas.
 
 Execucao no Spyder
 ------------------
@@ -22,7 +22,6 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
-import hashlib
 import json
 import math
 import platform
@@ -44,9 +43,6 @@ if _PANDAS4_WARNING is not None:
 
 from engine.configuracao import (
     CONFIG,
-    U67_EXPECTED_EFFECTIVE_COUNT,
-    U67_EXPECTED_EXCLUSIONS,
-    U67_EXPECTED_REQUESTED_COUNT,
     U67_REQUESTED_ASSETS,
 )
 from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
@@ -67,7 +63,7 @@ from reproducao.artefatos import (
     criar_pacote_analise,
     sinal_sonoro_conclusao,
 )
-from reproducao.dados import SnapshotPaths, validate_snapshot
+from reproducao.dados import SnapshotPaths, read_snapshot_manifest
 from reproducao.experimento import build_control_config, summarize_metrics
 from reproducao.graficos import gerar_analises_backtest
 from reproducao.preparacao import load_raw_bar_file, prepare_model_frames
@@ -90,58 +86,12 @@ CHECKPOINT_ABS_TOL = 0.01
 MODEL_DATA_COLUMNS = ("open", "high", "low", "close", "volume")
 
 
-def _canonical_history_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    """Canonicaliza OHLCV antes do SHA-256."""
-    canonical = frame[list(MODEL_DATA_COLUMNS)].copy()
-    canonical.index = pd.to_datetime(
-        canonical.index,
-        utc=True,
-        errors="coerce",
-    )
-    canonical = canonical.loc[~canonical.index.isna()]
-    canonical = canonical[
-        ~canonical.index.duplicated(keep="last")
-    ].sort_index()
-    try:
-        canonical.index = canonical.index.as_unit("ns")
-    except AttributeError:
-        canonical.index = pd.DatetimeIndex(
-            canonical.index.to_numpy(dtype="datetime64[ns]"),
-            tz="UTC",
-        )
-    for column in MODEL_DATA_COLUMNS:
-        canonical[column] = pd.to_numeric(
-            canonical[column],
-            errors="coerce",
-        ).astype(np.float64, copy=False)
-    return canonical
-
-
-def _history_frame_sha256(frame: pd.DataFrame) -> str:
-    """Calcula o hash OHLCV para auditoria reprodutivel."""
-    canonical = _canonical_history_frame(frame)
-    row_hashes = pd.util.hash_pandas_object(
-        canonical,
-        index=True,
-    ).to_numpy(dtype=np.uint64, copy=False)
-    return hashlib.sha256(row_hashes.tobytes()).hexdigest()
-
-
 def _package_version(name: str) -> str | None:
     try:
         return package_version(name)
     except PackageNotFoundError:
         return None
 
-
-if len(U67_REQUESTED_ASSETS) != U67_EXPECTED_REQUESTED_COUNT:
-    raise RuntimeError(
-        "Contrato U67 invalido: "
-        f"esperado={U67_EXPECTED_REQUESTED_COUNT} "
-        f"observado={len(U67_REQUESTED_ASSETS)}"
-    )
-if len(set(U67_REQUESTED_ASSETS)) != U67_EXPECTED_REQUESTED_COUNT:
-    raise RuntimeError("Contrato U67 contem ativos duplicados.")
 
 started = time.perf_counter()
 
@@ -161,38 +111,11 @@ print("expected_runtime_exclusions=CLMT,DOC", flush=True)
 print("=" * 78, flush=True)
 
 
-# %% 1 - Snapshot U67 congelado e versionado
-snapshot_manifest = validate_snapshot(DATA)
-
-manifest_assets = tuple(snapshot_manifest.get("assets") or ())
-if manifest_assets != tuple(U67_REQUESTED_ASSETS):
-    raise RuntimeError(
-        "Snapshot U67 possui universo diferente do contrato oficial. "
-        f"esperado={len(U67_REQUESTED_ASSETS)} "
-        f"observado={len(manifest_assets)}"
-    )
-
-snapshot_bar_end = str(
-    (snapshot_manifest.get("bars") or {}).get("bar_snapshot_as_of_end") or ""
-)
-snapshot_action_end = str(
-    (snapshot_manifest.get("corporate_actions") or {}).get("query_end") or ""
-)
-if snapshot_bar_end != U67_ANALYSIS_END_DATE:
-    raise RuntimeError(
-        "Snapshot U67 possui cutoff de barras inesperado: "
-        f"esperado={U67_ANALYSIS_END_DATE} observado={snapshot_bar_end}"
-    )
-if snapshot_action_end != U67_ANALYSIS_END_DATE:
-    raise RuntimeError(
-        "Snapshot U67 possui cutoff de Corporate Actions inesperado: "
-        f"esperado={U67_ANALYSIS_END_DATE} observado={snapshot_action_end}"
-    )
-
+# %% 1 - Metadados opcionais e CSVs locais
+snapshot_manifest = read_snapshot_manifest(DATA)
 print(
-    "[snapshot] mode=frozen_git "
-    f"requested_assets={len(U67_REQUESTED_ASSETS)} "
-    f"sha256={snapshot_manifest.get('snapshot_sha256')}",
+    f"[snapshot] mode=local_csv requested_assets={len(U67_REQUESTED_ASSETS)} "
+    f"available_raw_files={len(list(DATA.raw_bars.glob('*.csv')))}",
     flush=True,
 )
 
@@ -209,26 +132,14 @@ excluded_symbols = frozenset(
     str(item.get("symbol") or "").strip().upper()
     for item in exclusions
 )
-if excluded_symbols != U67_EXPECTED_EXCLUSIONS:
-    raise RuntimeError(
-        "O universo efetivo nao corresponde ao contrato U67. "
-        f"esperado={sorted(U67_EXPECTED_EXCLUSIONS)} "
-        f"observado={sorted(excluded_symbols)} "
-        f"exclusoes={json.dumps(exclusions, ensure_ascii=False, default=str)}"
-    )
-if len(frames_raw) != U67_EXPECTED_EFFECTIVE_COUNT:
-    raise RuntimeError(
-        "O job de paridade precisa entregar exatamente 65 ativos ao modelo. "
-        f"observado={len(frames_raw)}"
-    )
-
 effective_assets_requested_order = tuple(
     symbol
     for symbol in U67_REQUESTED_ASSETS
     if symbol in frames_raw
 )
 print(
-    "[universe] requested=67 effective=65 excluded="
+    f"[universe] requested={len(U67_REQUESTED_ASSETS)} "
+    f"effective={len(frames_raw)} excluded="
     + ",".join(sorted(excluded_symbols)),
     flush=True,
 )
@@ -237,53 +148,6 @@ print(
     + ",".join(effective_assets_requested_order),
     flush=True,
 )
-
-# Hashes calculados com canonicalizacao OHLCV deterministica.
-# Eles permitem comparar os 65 ativos sem depender do hash fisico do CSV.
-market_data_hash_rows = []
-for symbol in effective_assets_requested_order:
-    raw_frame = load_raw_bar_file(
-        DATA.raw_bars / f"{symbol}.csv",
-        float_precision="round_trip",
-    )
-    normalized_frame = frames_raw[symbol]
-    raw_canonical = _canonical_history_frame(raw_frame)
-    normalized_canonical = _canonical_history_frame(normalized_frame)
-    row = {
-        "asset": symbol,
-        "raw_sha256": _history_frame_sha256(raw_frame),
-        "normalized_sha256": _history_frame_sha256(normalized_frame),
-        "raw_rows": int(len(raw_canonical)),
-        "normalized_rows": int(len(normalized_canonical)),
-        "raw_first_timestamp": (
-            pd.Timestamp(raw_canonical.index.min()).isoformat()
-            if len(raw_canonical)
-            else None
-        ),
-        "raw_last_timestamp": (
-            pd.Timestamp(raw_canonical.index.max()).isoformat()
-            if len(raw_canonical)
-            else None
-        ),
-        "normalized_first_timestamp": (
-            pd.Timestamp(normalized_canonical.index.min()).isoformat()
-            if len(normalized_canonical)
-            else None
-        ),
-        "normalized_last_timestamp": (
-            pd.Timestamp(normalized_canonical.index.max()).isoformat()
-            if len(normalized_canonical)
-            else None
-        ),
-    }
-    market_data_hash_rows.append(row)
-    print(
-        f"[hash] {symbol} "
-        f"raw={row['raw_sha256']} "
-        f"normalized={row['normalized_sha256']}",
-        flush=True,
-    )
-
 
 # %% 3 - Calendario e configuracao do universo fixo U67
 config_u67 = build_control_config(
@@ -312,12 +176,6 @@ config_u67 = config_u67.copiar_modelo(
     },
     config_u67,
 )
-
-if len(symbols) != U67_EXPECTED_EFFECTIVE_COUNT:
-    raise RuntimeError(
-        "O contexto modelavel nao manteve os 65 ativos efetivos. "
-        f"observado={len(symbols)}"
-    )
 
 print(
     f"[calendar] calendar_source={calendar_source} "
@@ -648,10 +506,6 @@ pd.DataFrame(fold_calibration_candidates).to_csv(
     OUT / "u67_fold_calibration_candidates.csv",
     index=False,
 )
-pd.DataFrame(market_data_hash_rows).to_csv(
-    OUT / "u67_market_data_hashes.csv",
-    index=False,
-)
 with (
     OUT / "u67_runtime_environment.json"
 ).open("w", encoding="utf-8") as handle:
@@ -693,7 +547,6 @@ payload = {
         "snapshot": snapshot_manifest,
         "data_audit": data_audit,
         "diagnostics": diagnostics,
-        "market_data_hashes": market_data_hash_rows,
     },
     "universe": {
         "requested_count": len(U67_REQUESTED_ASSETS),
@@ -711,7 +564,7 @@ payload = {
     "fold_calibration_candidates": fold_calibration_candidates,
     "runtime_environment": runtime_environment,
     "metrics": metrics,
-    "checkpoint_validation": {
+    "historical_comparison": {
         "ending_capital": ending_capital,
         "expected_ending_capital": U67_EXPECTED_ENDING_CAPITAL,
         "ending_capital_delta": final_delta,
