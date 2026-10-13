@@ -1,6 +1,6 @@
 """Prepara o snapshot congelado U67 usado pela reproducao oficial.
 
-Este arquivo e executado somente quando for necessario criar ou substituir o
+Modulo interno opcional executado com python -m reproducao.preparar_snapshot.\nEste arquivo e executado somente quando for necessario criar ou substituir o
 snapshot de pesquisa. A reproducao oficial nao acessa a Alpaca.
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ from reproducao.dados import (
 )
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 BUILD = SnapshotPaths.from_root(ROOT / "dados" / ".u67_build")
 TARGET = SnapshotPaths.u67(ROOT)
 

@@ -2704,3 +2704,76 @@ de apresentar essa hipótese como lei geral.
 **Status:** esclarecimento documental na mesma branch;
 sem alteração algorítmica e sem criação de estratégia
 operacional.
+
+
+## Limpeza consolidada v1.22.2-dev.1 — 13/10/2026
+
+**Motivo:** simplificar o projeto depois das campanhas de pesquisa,
+eliminando múltiplos executáveis na raiz e preservando apenas
+`buscar_ativos.py` (busca exploratória) e
+`reproduzir_experimento.py` (reprodução oficial).
+**Commit anterior à limpeza e ponto de recuperação:**
+`7bfaee55d4fe4d6cafc33607c8e0d901127b1e69` na branch de pesquisa; todo o conteúdo dos
+scripts experimentais permanece recuperável pelo histórico Git.
+**Escopo:** limpeza da estrutura, documentação e testes;
+NÃO altera a política de produção científica, checkpoint U67,
+margem histórica, LightGBM, dados versionados ou `main`.
+
+**Melhorias já aprovadas que permanecem funcionais:**
+1. Dados U67 congelados em CSV (67 requisitados, 65 elegíveis),
+   normalização de splits e verificação de hashes;
+   ativos estruturais CLMT e DOC excluídos sem interpolação.
+2. Correção da elegibilidade causal: decisão com atributos
+   conhecidos na sessão t, sem consultar abertura/fechamento
+   de t+1; execução nos preços efetivos da sessão seguinte.
+3. LightGBM de utilidade ajustada a risco, folds walk-forward,
+   purge, margens selecionadas somente nas janelas históricas
+   de calibração, execução determinística para reprodução.
+4. Restrição estrutural de swing trade:
+   `rotation_min_holding_days = 2` intocada;
+   permanência pode exceder dois pregões sem troca.
+5. Referência comprar/manter com capital dividido pelos
+   mesmos ativos e intervalo da rotação, custos consistentes,
+   métricas financeiras e relatórios versionados.
+6. Triagem de ativos baseada em características técnicas,
+   continuidade e exclusões, mapa de semelhança e
+   complementaridade; shortlist não é promoção automática.
+   A busca baixa candidatos para cache local separado
+   do snapshot U67 e não executa backtest financeiro
+   dos candidatos.
+7. Geração de artefatos auditáveis, testes unitários,
+   logs e aviso sonoro no runner de reprodução.
+
+**Resultados explicitamente NÃO incorporados à política
+oficial:** alterações de permanência mínima (H0), ranking
+autônomo por Borda/TOPSIS/Pareto, Learning-to-Rank,
+meta-políticas, otimizações sugeridas exclusivamente pelo
+OOS de campanhas repetidas, e expansão U67+10 sem seus
+dez ativos extras congelados integralmente neste Git.
+As campanhas v1.0.9, v1.0.10 e v1.0.11 ficam registradas
+como evidência histórica no histórico Git e nos pacotes
+já produzidos, não como nova política. O checkpoint de
+US$ 587.165.941,13 é exploratório, não o checkpoint
+oficial deste runner. Referência oficial v1.22.1:
+US$ 76.927.051,38897176.
+
+**Organização:** somente dois scripts de entrada na raiz;
+apoio técnico em `engine/` e `reproducao/`, snapshot
+`dados/u67/`, material `evidencias/` e `figuras/`.
+Os scripts antigos de execução de pesquisas, auditoria,
+geração de figuras e reconstrução de snapshot são removidos
+da raiz. A reconstrução do snapshot passa a ser módulo
+interno `reproducao.preparar_snapshot`, e continua separada
+da execução oficial.
+
+**Efeito na reexecução de pesquisas antigas:** o checkout
+desta branch após a limpeza não executará diretamente os
+programas v1.0.9–v1.0.11; para reexecutá-los é necessário
+consultar o commit anterior à limpeza e os dados de pesquisa
+locais correspondentes. Este trade-off é deliberado para
+preservar uma estrutura mínima, sem alegar que históricos
+de execução sejam reproduzíveis apenas com o snapshot U67.
+
+**Status de validação:** testar a estrutura limpa por CI;
+não afirmar reprodução integral de mercado sem execução
+Spyder com dados e ambiente científicos completos.

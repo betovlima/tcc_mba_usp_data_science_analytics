@@ -1,4 +1,11 @@
-"""Busca exploratória de novos ativos por semelhança e complementaridade.
+"""BUSCAR ATIVOS — único ponto de entrada para triagem de candidatos.
+
+Mantém o U67 oficial fixo. Os resultados são candidatos exploratórios;
+a shortlist NÃO modifica os dados congelados ou a carteira do Control.
+Busca usa Alpaca; reprodução financeira usa exclusivamente CSVs do Git.
+
+Implementação validada de descoberta por semelhança e complementaridade.
+
 
 Objetivo
 --------
@@ -70,8 +77,7 @@ U67 = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "candidate_cluster_search"
 CACHE = OUT / "cache_bars"
 
-SCRIPT_VERSION = "candidate-cluster-search-v1.0.6"
-EXPECTED_BRANCH = "research/universe-clustering-visualization-v1"
+SCRIPT_VERSION = "buscar-ativos-u67-v1.22.2-dev.1"
 
 ALLOWED_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
 SYMBOL_RE = re.compile(r"^[A-Z]{1,5}$")
@@ -962,11 +968,6 @@ def main() -> None:
     print(f"commit={commit}")
     print(f"arquivo={Path(__file__).resolve()}")
     print("=" * 78)
-
-    if branch not in (EXPECTED_BRANCH, "sem-git"):
-        raise RuntimeError(
-            f"Branch incorreta: esperado={EXPECTED_BRANCH} observado={branch}"
-        )
 
     _clear_generated_outputs()
     OUT.mkdir(parents=True, exist_ok=True)
