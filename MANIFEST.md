@@ -2169,3 +2169,109 @@ complementares, preservando exclusões estruturais.
 pendente no Spyder com o cache histórico privado.
 Sem downloads de corretora e sem alteração na main,
 na execução oficial ou na aplicação operacional.
+
+
+#### 25.12.7 v1.0.7 — pares de ativos, erro histórico e comparação com a decisão Control
+
+**Causa e hipótese:** a pesquisa v1.0.6 exibiu vantagens previstas
+em H02/H03/H05/H10 que não foram sustentadas, em média, pelos ganhos
+realizados. A escolha do maior valor entre dezenas de ativos pode
+produzir otimismo no vencedor do ranking. O novo experimento investiga
+se comparar diretamente o ganho percentual previsto do candidato
+com o ativo realmente mantido **e com o ativo que a política Control
+escolheria** produz oportunidades mais confiáveis.
+
+**Separação de evidências:** não se treina um modelo LightGBM dedicado
+a cada par, pois isso exigiria outro desenho computacional e temporal.
+A v1.0.7 usa as previsões de retorno percentual líquido das regressões
+por ativo/H e calcula o **delta de retorno entre pares**, estimando
+diretamente sobre os pares historicamente escolhidos um fator
+de contração `slope` em [0,1] e o quantil p75 do erro absoluto.
+Isso calibra a diferença condicionada ao procedimento de seleção
+e combate o otimismo do máximo de muitos candidatos, mas
+não garante nem demonstra superioridade causal.
+
+**Calibração cronológica:** em cada um dos três folds, modelos
+auxiliares H02/H03/H05/H10 são ajustados apenas no período de treino,
+separado da calibração por embargo. Produzem previsões inéditas para
+as datas da calibração. Simula-se a posição histórica do Control
+naquela janela para formar um conjunto de referências; candidatos
+são ordenados usando exclusivamente previsões contemporâneas.
+O primeiro 2/3 dessa janela fornece pares vencedores para
+estimar contração e erro. Um rótulo do período de ajuste só entra
+se o seu horizonte maturou estritamente ANTES do início do
+último 1/3 da calibração. O último 1/3 serve como
+**checagem histórica** e não é usado para determinar slope/p75.
+A margem do próprio Control foi anteriormente calibrada na
+janela histórica total; portanto essa checagem não deve ser
+tratada como holdout inteiramente independente.
+
+**Confiabilidade:** aplicar slope às diferenças projetadas
+candidato-Control e candidato-incumbente. Exigir ganho curto
+(H02/H03) e médio (H05/H10) positivo contra ambos, vantagem
+positiva em pelo menos 3 horizontes, e o score diário ajustado
+superior ao limite derivado exclusivamente dos erros p75 da
+primeira parte da calibração. Nenhum fator ou limiar é escolhido
+pelas métricas OOS. Se não houver ao menos 15 dias cronológicos
+distintos com pares maturados para cada horizonte, interromper
+com erro em vez de preencher estimativas. Exportar seleção
+bruta e seleção com confiança, mesmo que a última esteja vazia.
+
+**Custo:** uma estimativa incremental específica de cada par
+usa exclusivamente os fechamentos conhecidos na data da decisão,
+slippage, comissão, SEC, TAF e CAT configurados. Considera
+venda+compra quando Control mantém o ativo, e a diferença
+positiva de custo de compra quando Control já giraria para
+outro ativo. O proxy não substitui a contabilidade exata
+nem modela impacto de mercado, liquidez, quantidades e caps
+finais de taxas; quantidades futuras não são observadas.
+As métricas financeiras do Control são as da simulação
+original, jamais substituídas por essa estimativa.
+
+**Sem transações experimentais:** Control holding=2 é a
+única carteira simulada e deve reproduzir
+US$ 587.165.941,1330212 ao centavo. Toda oportunidade
+de troca é contrafactual em horizonte fixo, não operação
+executada nem estimativa automática de capital final.
+
+**Auditoria expandida independente:** H01/H02/H03/H05/H10/
+H15/H20/H30/H40/H60 continuam sendo avaliados na mesma
+execução, mas não participam do ajuste de slope, da seleção
+de confiança ou da escolha de horizontes da pesquisa
+de captura. Ranking consolidado e líder individual
+por horizonte são auditados com custos estimados
+específicos do candidato e retornos realizados apenas
+quando t+H termina dentro do próprio fold. O script
+usa `decision_to_fold` para não duplicar a data de
+fronteira entre folds contíguos. Limite máximo H60
+preserva o embargo original de 60 sessões.
+
+**Outputs separados:** `output/persistencia_horizontes_u77_v107/`,
+com `control_holding_2_equity.csv`,
+`control_holding_2_trades.csv`,
+`control_decision_reasons.csv`,
+`capture_pair_ranked_top5.csv`,
+`capture_pair_raw_selected.csv`,
+`capture_pair_confident_selected.csv`,
+`capture_pair_calibration_by_fold.csv`,
+`capture_pair_historical_validation.csv`,
+`capture_pair_validation_quality.csv`,
+`capture_pair_raw_quality.csv`,
+`capture_pair_confident_quality.csv`,
+`expanded_audit_ranked_top5.csv`,
+`expanded_audit_selected.csv`,
+`expanded_audit_quality_by_fold_horizon.csv`,
+`expanded_audit_best_per_horizon.csv`,
+`expanded_audit_per_horizon_quality.csv`,
+`horizon_model_training.csv`, `comparison.csv`,
+`experiment.json` e pacote
+`pacote_persistencia_horizontes_u77_v107.zip`.
+
+**Governança:** a main, a reprodução oficial e a aplicação
+operacional não são modificadas. Não há promoção automática
+de estratégia. Os mesmos folds já foram analisados nas
+campanhas v1.0.2–v1.0.6, de modo que esta avaliação
+continua exploratória; confirmação externa exige novo
+período cronológico ainda não utilizado na pesquisa.
+Resultados financeiros da v1.0.7 pendentes de execução
+local com os históricos complementares congelados.
