@@ -1134,6 +1134,12 @@ def select_horizon_candidates(
         ),
         "ranked_candidate_count": len(records),
     }
+    if selected is not None:
+        summary.update({
+            f"H{h}_pred_increment_pct_points":
+                selected[f"H{h}_pred_increment_pct_points"]
+            for h in horizons
+        })
     return records[:top_k], summary
 
 
@@ -1205,7 +1211,7 @@ def summarize_selection_quality(
                 if row.get(f"H{h}_realized_increment_pp") is not None
             ], dtype=float)
             pred = np.asarray([
-                float(row["best_pred_mean_daily_gap_pp"])
+                float(row[f"H{h}_pred_increment_pct_points"])
                 for row in fold_rows
                 if row.get(f"H{h}_realized_increment_pp") is not None
             ], dtype=float)
@@ -1219,8 +1225,19 @@ def summarize_selection_quality(
                 "mean_realized_increment_pp": (
                     float(deltas.mean()) if len(deltas) else None
                 ),
-                "mean_predicted_daily_gap_pp": (
+                "mean_predicted_increment_pp": (
                     float(pred.mean()) if len(pred) else None
+                ),
+                "prediction_mae_pp": (
+                    float(np.abs(pred - deltas).mean()) if len(pred) else None
+                ),
+                "prediction_rmse_pp": (
+                    float(np.sqrt(np.mean((pred - deltas) ** 2)))
+                    if len(pred) else None
+                ),
+                "sign_accuracy": (
+                    float(np.mean((pred > 0) == (deltas > 0)))
+                    if len(pred) else None
                 ),
             })
     return output
