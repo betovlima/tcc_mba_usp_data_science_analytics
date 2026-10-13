@@ -17,9 +17,13 @@ def test_reproducao_e_busca_nao_compartilham_ciclo_de_download() -> None:
     discovery = (ROOT / "buscar_ativos.py").read_text(
         encoding="utf-8"
     )
-    assert "SnapshotPaths.u67" in runner
-    assert "load_alpaca_credentials" not in runner
-    assert "download_raw_bars" not in runner
+    assert "executar_control_u77" in runner
+    implementation = (ROOT / "reproducao" / "control_u77.py").read_text(
+        encoding="utf-8"
+    )
+    assert "SnapshotPaths.u67" in implementation
+    assert "load_alpaca_credentials" not in implementation
+    assert "download_raw_bars" not in implementation
     assert "load_alpaca_credentials" in discovery
     assert "read_snapshot_manifest(U67)" in discovery
     assert "EXPECTED_BRANCH" not in discovery
