@@ -1064,6 +1064,7 @@ def select_horizon_candidates(
     extra_switch_cost: float,
     top_k: int = AUDIT_TOP_K,
     capture_require_short_medium_advantage: bool = False,
+    candidate_cost_fn: Any | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Ranking somente por previsoes da data t, nunca por label futuro."""
     if incumbent not in symbols:
@@ -1095,10 +1096,15 @@ def select_horizon_candidates(
         }
         per_session_advantages = []
         positive = 0
+        actual_cost = (
+            float(candidate_cost_fn(symbol))
+            if candidate_cost_fn is not None else float(extra_switch_cost)
+        )
+        row["extra_switch_cost_fraction"] = actual_cost
         for h in horizons:
             candidate = float(arrays[h][pos])
             current = float(arrays[h][i])
-            gap = candidate - current - extra_switch_cost
+            gap = candidate - current - actual_cost
             per_session_advantages.append(gap / float(h))
             positive += gap > 0.0
             row[f"H{h}_candidate_pred_pct"] = candidate
@@ -1145,6 +1151,9 @@ def select_horizon_candidates(
         "ranked_candidate_count": len(records),
     }
     if selected is not None:
+        summary["extra_switch_cost_fraction"] = selected[
+            "extra_switch_cost_fraction"
+        ]
         summary.update({
             f"H{h}_pred_increment_pct_points":
                 selected[f"H{h}_pred_increment_pct_points"]
@@ -1184,8 +1193,11 @@ def attach_fixed_horizon_outcomes(
             )
             enriched[key + "realized_incumbent_pct"] = now
             enriched[key + "realized_candidate_pct"] = new
+            row_cost = float(
+                row.get("extra_switch_cost_fraction", extra_switch_cost)
+            )
             enriched[key + "realized_increment_pp"] = (
-                (new - now - extra_switch_cost) * 100.0
+                (new - now - row_cost) * 100.0
                 if new is not None and now is not None else None
             )
             predicted = row.get(key + "pred_increment_pct_points")
@@ -1586,9 +1598,15 @@ def assess_pairwise_fixed_outcomes(
             gap = cand - base - float(row["incremental_cost_fraction"])
             row[key + "_realized_gap_fraction"] = gap
             row[key + "_hit"] = bool(gap > 0.0)
+            prediction_key = (
+                f"{key}_calibrated_pair_gap_fraction"
+                if f"{key}_calibrated_pair_gap_fraction" in row
+                else f"{key}_raw_pair_gap_fraction"
+            )
             row[key + "_prediction_error_fraction"] = (
-                float(row[f"{key}_calibrated_pair_gap_fraction"]) - gap
-            ) if f"{key}_calibrated_pair_gap_fraction" in row else None
+                float(row[prediction_key]) - gap
+                if prediction_key in row else None
+            )
         outcome.append(row)
     return outcome
 
@@ -1934,6 +1952,10 @@ def main() -> dict[str, Any]:
                 horizons=EXTENDED_AUDIT_HORIZONS,
                 extra_switch_cost=0.0,
                 capture_require_short_medium_advantage=False,
+                candidate_cost_fn=lambda symbol: estimated_incremental_pair_cost(
+                    day=t, incumbent=incumbent, control_target=incumbent,
+                    candidate=symbol, frames=frames, config=configuration,
+                ),
             )
             expanded_rankings.extend([
                 {**metadata, "rank": k, **r}
@@ -1944,8 +1966,16 @@ def main() -> dict[str, Any]:
             for h in EXTENDED_AUDIT_HORIZONS:
                 prediction = forecast_oos[h][t]
                 leader = sorted([
-                    (symbols[pos - 1],
-                     float(prediction[pos] - prediction[idx]))
+                    (
+                        symbols[pos - 1],
+                        float(prediction[pos] - prediction[idx])
+                        - estimated_incremental_pair_cost(
+                            day=t, incumbent=incumbent,
+                            control_target=incumbent,
+                            candidate=symbols[pos - 1],
+                            frames=frames, config=configuration,
+                        ),
+                    )
                     for pos in range(1, len(symbols) + 1)
                     if pos != idx and np.isfinite(prediction[pos])
                 ], key=lambda r: (-r[1], r[0]))
@@ -1957,6 +1987,13 @@ def main() -> dict[str, Any]:
                         "incumbent": incumbent,
                         "top_candidate": leader[0][0],
                         "pred_gap_fraction": leader[0][1],
+                        "estimated_incremental_cost_fraction":
+                            estimated_incremental_pair_cost(
+                                day=t, incumbent=incumbent,
+                                control_target=incumbent,
+                                candidate=leader[0][0], frames=frames,
+                                config=configuration,
+                            ),
                         "audit_only": True,
                     })
 
@@ -1994,6 +2031,61 @@ def main() -> dict[str, Any]:
             flush=True,
         )
 
+
+    # Mesmas observacoes dos folds do Control; nao somar fronteiras
+    # duplicadas nem resultados t+H fora do proprio fold.
+    folds_maturity: dict[int, dict[pd.Timestamp, int]] = {}
+    date_index = {pd.Timestamp(t): i for i, t in enumerate(common_dates)}
+    for fid, fold in folds_by_id.items():
+        folds_maturity[fid] = {
+            timestamp: int(fold["test_end_index"]) - 1 - date_index[timestamp]
+            for timestamp, assigned in decision_to_fold.items()
+            if int(assigned) == fid
+        }
+    expanded_ranked_eval, expanded_selected_eval = attach_fixed_horizon_outcomes(
+        expanded_rankings, expanded_selections,
+        horizons=EXTENDED_AUDIT_HORIZONS,
+        folds_maturity=folds_maturity,
+        frames=frames,
+        extra_switch_cost=0.0,
+    )
+    for row in expanded_per_horizon:
+        t = pd.Timestamp(row["decision_date"])
+        fid, h = int(row["fold_id"]), int(row["horizon"])
+        candidate, incumbent = row["top_candidate"], row["incumbent"]
+        realized = None
+        if folds_maturity[fid].get(t, 0) >= h:
+            label = f"forward_horizon_net_return_pct_{h}"
+            new = float(frames[candidate].at[t, label])
+            old = float(frames[incumbent].at[t, label])
+            if np.isfinite(new) and np.isfinite(old):
+                realized = new - old - float(
+                    row["estimated_incremental_cost_fraction"]
+                )
+        row["realized_gap_fraction"] = realized
+        row["realized_outperformance"] = (
+            bool(realized > 0.0) if realized is not None else None
+        )
+    expanded_quality = []
+    for fid in sorted(folds_by_id):
+        for h in EXTENDED_AUDIT_HORIZONS:
+            group = [
+                r["realized_gap_fraction"] for r in expanded_per_horizon
+                if int(r["fold_id"]) == fid and int(r["horizon"]) == h
+                and r["realized_gap_fraction"] is not None
+            ]
+            values = np.asarray(group, dtype=float)
+            expanded_quality.append({
+                "fold_id": fid,
+                "horizon": h,
+                "matured_evaluable": len(values),
+                "mean_realized_gap_fraction": (
+                    float(values.mean()) if len(values) else None
+                ),
+                "hit_rate": (
+                    float((values > 0).mean()) if len(values) else None
+                ),
+            })
     def export_rows(name: str, rows: list[dict[str, Any]]) -> None:
         pd.DataFrame(rows).to_csv(OUT / name, index=False)
 
@@ -2023,13 +2115,20 @@ def main() -> dict[str, Any]:
     export_rows("capture_pair_confident_selected.csv", evaluated_confident)
     export_rows("capture_pair_calibration_by_fold.csv", calibration_audit)
     export_rows("capture_pair_historical_validation.csv", validation_audit)
+    export_rows("capture_pair_validation_quality.csv",
+                aggregate_pairwise_quality(validation_audit))
     export_rows("capture_pair_raw_quality.csv",
                 aggregate_pairwise_quality(evaluated_raw))
     export_rows("capture_pair_confident_quality.csv",
                 aggregate_pairwise_quality(evaluated_confident))
-    export_rows("expanded_audit_ranked_top5.csv", expanded_rankings)
-    export_rows("expanded_audit_selected.csv", expanded_selections)
+    export_rows("expanded_audit_ranked_top5.csv", expanded_ranked_eval)
+    export_rows("expanded_audit_selected.csv", expanded_selected_eval)
+    export_rows("expanded_audit_quality_by_fold_horizon.csv",
+                summarize_selection_quality(
+                    expanded_selected_eval, EXTENDED_AUDIT_HORIZONS
+                ))
     export_rows("expanded_audit_best_per_horizon.csv", expanded_per_horizon)
+    export_rows("expanded_audit_per_horizon_quality.csv", expanded_quality)
     export_rows("horizon_model_training.csv", model_audit)
     export_rows("control_decision_reasons.csv", [
         {"decision_date": d.isoformat(), **r}
