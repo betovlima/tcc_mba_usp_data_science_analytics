@@ -333,7 +333,7 @@ def test_official_reproduction_uses_frozen_u67_snapshot() -> None:
         encoding="utf-8"
     ).lower()
     assert "snapshotpaths.u67(root)" in source
-    assert "validate_snapshot(data)" in source
+    assert "read_snapshot_manifest(data)" in source
     assert "download_raw_bars" not in source
     assert "download_corporate_actions" not in source
     assert "load_alpaca_credentials" not in source
