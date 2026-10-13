@@ -2432,13 +2432,24 @@ def rank_quality_metrics(
         current_dcg / ideal_dcg if ideal_dcg > 1e-12 else None
     )
     top1 = float(actual[0])
+    # Top-5 original: nao substituir um membro sem label pelo sexto
+    # colocado, pois isso altera a escolha depois de ver o futuro.
+    first_five = [int(i) for i, _ in ranking[:top_k]]
+    top5_complete = all(np.isfinite(observed[i]) for i in first_five)
+    top5 = (
+        float(np.mean([
+            observed[i] - observed[reference_index] - costs[i]
+            for i in first_five
+        ])) if top5_complete else None
+    )
     return {
         "evaluable_assets": len(ranked),
         "spearman": spear,
         "kendall": kend,
         "ndcg_at_5": ndcg,
         "top1_gap": top1,
-        "top5_gap": float(np.mean(actual[:k])),
+        "top5_gap": top5,
+        "top5_original_complete": top5_complete,
         "top1_win": int(top1 > 0.0),
         "top1_regret": float(np.max(actual) - top1),
     }
@@ -2481,9 +2492,14 @@ def summarise_ranking_methods(
                 "top1_win_rate": float(np.mean([
                     r["top1_win"] for r in grp
                 ])),
-                "mean_top5_gap": float(np.mean([
-                    r["top5_gap"] for r in grp
-                ])),
+                "mean_top5_gap": (
+                    float(np.mean([
+                        r["top5_gap"] for r in grp
+                        if r["top5_gap"] is not None
+                    ]))
+                    if any(r["top5_gap"] is not None for r in grp)
+                    else None
+                ),
                 "mean_top1_regret": float(np.mean([
                     r["top1_regret"] for r in grp
                 ])),
@@ -2506,7 +2522,13 @@ def summarise_ranking_methods(
             "evaluated_sessions": sum(r["sessions"] for r in per_fold),
             "evaluated_horizon_rows": sum(r["rows"] for r in per_fold),
             **{
-                key: float(np.mean([f[key] for f in per_fold]))
+                key: (
+                    float(np.mean([
+                        f[key] for f in per_fold if f[key] is not None
+                    ]))
+                    if any(f[key] is not None for f in per_fold)
+                    else None
+                )
                 for key in fields
             },
             "fold_details": per_fold,
