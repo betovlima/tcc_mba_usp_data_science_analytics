@@ -2155,174 +2155,200 @@ def main() -> dict[str, Any]:
 
 
 
-    # Nenhuma regra de pesquisa pode alterar a execucao financeira.
+
+    # Labels independentes H01..H60, reconstruidos sem corte global H60.
     build_horizon_return_labels(frames, common_dates, configuration)
-    model_audit: list[dict[str, Any]] = []
-    calibration_audit: list[dict[str, Any]] = []
-    validation_audit: list[dict[str, Any]] = []
-    capture_ranked: list[dict[str, Any]] = []
-    raw_selected: list[dict[str, Any]] = []
-    confident_selected: list[dict[str, Any]] = []
-    expanded_rankings: list[dict[str, Any]] = []
-    expanded_selections: list[dict[str, Any]] = []
-    expanded_per_horizon: list[dict[str, Any]] = []
-    used_decisions: set[pd.Timestamp] = set()
+    if not set(PAIR_TRAINING_FEATURES).issubset(ROTATION_FEATURES):
+        raise RuntimeError("Direct pair feature contract exceeds point-in-time features")
+    feature_cube = build_pair_feature_cube(frames, symbols, common_dates)
+    date_to_index = {
+        pd.Timestamp(day): idx for idx, day in enumerate(common_dates)
+    }
+    target_cubes: dict[int, np.ndarray] = {
+        h: np.stack([
+            frames[symbol].reindex(common_dates)[
+                f"forward_horizon_net_return_pct_{h}"
+            ].to_numpy(dtype=np.float32)
+            for symbol in symbols
+        ], axis=1)
+        for h in CAPTURE_HORIZONS
+    }
     folds_by_id = {int(f["fold_id"]): f for f in folds}
+    model_audit: list[dict[str, Any]] = []
+    calibrations: list[dict[str, Any]] = []
+    pair_validation: list[dict[str, Any]] = []
+    pair_raw: list[dict[str, Any]] = []
+    pair_confident: list[dict[str, Any]] = []
+    pair_top5: list[dict[str, Any]] = []
+    audit_ranked: list[dict[str, Any]] = []
+    audit_selected: list[dict[str, Any]] = []
+    audit_per_horizon: list[dict[str, Any]] = []
+    seen_oos_days: set[pd.Timestamp] = set()
 
     for state in states:
-        fold_id = int(state.fold_id)
-        fold = folds_by_id[fold_id]
+        fid = int(state.fold_id)
+        fold = folds_by_id[fid]
+        calibration_days = pd.DatetimeIndex(state.calibration_dates)
         decision_days = pd.DatetimeIndex(state.decision_dates)
-        cal_days = pd.DatetimeIndex(state.calibration_dates)
-        split_index = int(len(cal_days) * PAIR_CALIBRATION_FRACTION)
-        split_date = pd.Timestamp(cal_days[split_index])
-        # Exclui da calibracao de residuos labels que atravessariam
-        # a divisao treino/validacao. A validacao nao escolhe parametros.
-        forecast_cal: dict[int, dict[pd.Timestamp, np.ndarray]] = {}
-        forecast_oos: dict[int, dict[pd.Timestamp, np.ndarray]] = {}
-        for h in ALL_RESEARCH_HORIZONS:
-            target = f"forward_horizon_net_return_pct_{h}"
-            if h in CAPTURE_HORIZONS:
-                safe_initial = select_purged_horizon_training_dates(
-                    calendar=common_dates,
-                    training_end_index=int(fold["train_end_index"]),
-                    evaluation_start_index=int(fold["calibration_start_index"]),
-                    horizon=h,
-                    min_training_rows=int(configuration.rotation_minimum_training_rows),
-                )
-                first_models = _ajustar_modelos_lightgbm(
-                    frames, symbols, safe_initial, configuration,
-                    phase=f"v107_cal_H{h}_fold{fold_id}",
-                    target_column=target,
-                )
-                if len(first_models) != len(symbols):
-                    raise RuntimeError("Pair calibration models incomplete")
-                preds, _ = _precalcular_utilidades_modelo(
-                    first_models, frames, symbols, cal_days, configuration
-                )
-                forecast_cal[h] = preds
-                del first_models
+        split_index = int(len(calibration_days) * PAIR_CALIBRATION_FRACTION)
+        split_date = pd.Timestamp(calibration_days[split_index])
+        initial_indices = np.asarray([
+            date_to_index[pd.Timestamp(t)] for t in state.train_dates
+        ], dtype=np.int64)
+        final_indices = np.asarray([
+            date_to_index[pd.Timestamp(t)] for t in state.final_fit_dates
+        ], dtype=np.int64)
+        fold_models_cal: dict[int, Any] = {}
+        fold_models_oos: dict[int, Any] = {}
+        for h in CAPTURE_HORIZONS:
+            initial_x, initial_y, init_info = train_direct_pair_dataset(
+                feature_cube=feature_cube,
+                target_cube=target_cubes[h],
+                training_date_indices=initial_indices,
+                horizon=h,
+                evaluation_start_index=int(fold["calibration_start_index"]),
+            )
+            fold_models_cal[h] = fit_direct_pair_model(
+                initial_x, initial_y, configuration,
+                horizon=h, fold_id=fid, phase="historical_calibration",
+            )
+            del initial_x, initial_y
+            final_x, final_y, final_info = train_direct_pair_dataset(
+                feature_cube=feature_cube,
+                target_cube=target_cubes[h],
+                training_date_indices=final_indices,
+                horizon=h,
+                evaluation_start_index=int(fold["test_start_index"]),
+            )
+            fold_models_oos[h] = fit_direct_pair_model(
+                final_x, final_y, configuration,
+                horizon=h, fold_id=fid, phase="final_oos",
+            )
+            del final_x, final_y
+            model_audit.append({
+                "fold_id": fid,
+                "model_family": "direct_pairwise_lightgbm",
+                "horizon": h,
+                "calibration_training": init_info,
+                "final_training": final_info,
+                "features": pair_feature_columns(),
+                "target": "observed_percent_return_A_minus_B",
+            })
 
-            safe_final = select_purged_horizon_training_dates(
+        # Referencia historica: mesmo Control, mas sem dados de teste.
+        historical_policy = _politica_utilidade(
+            {}, frames, symbols, configuration,
+            float(fold_caches[fid]["margin"]),
+            utility_cache=fold_caches[fid]["calibration"],
+        )
+        historical_positions = historical_control_pair_context(
+            days=calibration_days, policy=historical_policy,
+        )
+        previous_pairs: list[dict[str, Any]] = []
+        later_pairs: list[dict[str, Any]] = []
+        for state_row in historical_positions:
+            t = pd.Timestamp(state_row["decision_date"])
+            current, target = (
+                int(state_row["incumbent_position"]),
+                int(state_row["control_position"]),
+            )
+            if (
+                current <= 0 or target <= 0
+                or int(state_row["holding_days"])
+                < int(configuration.rotation_min_holding_days)
+            ):
+                continue
+            ranked = predict_direct_pair_gaps(
+                fold_models_cal, feature_cube[date_to_index[t]],
+                symbols=symbols,
+                incumbent=symbols[current - 1],
+                control_target=symbols[target - 1],
+                day=t, frames=frames, config=configuration,
+            )
+            if ranked:
+                best = {"fold_id": fid, **ranked[0]}
+                if t < split_date:
+                    previous_pairs.append(best)
+                else:
+                    later_pairs.append(best)
+
+        confidence = calibrate_direct_pair_confidence(
+            previous_pairs, frames=frames, calendar=common_dates,
+            split_date=split_date,
+        )
+        calibrations.append({
+            "fold_id": fid,
+            "historical_train_pairs": len(previous_pairs),
+            "historical_validation_pairs": len(later_pairs),
+            **confidence,
+        })
+        validation_candidates: list[dict[str, Any]] = []
+        for raw in later_pairs:
+            choice, enriched = choose_confident_direct_pair([raw], confidence)
+            if enriched:
+                validation_candidates.append({
+                    **enriched[0],
+                    "fold_id": fid,
+                    "passes_confidence": choice is not None,
+                })
+        pair_validation.extend(assess_pairwise_fixed_outcomes(
+            validation_candidates, frames=frames, calendar=common_dates,
+            horizon_end_exclusive=pd.Timestamp(fold["test_start"]),
+        ))
+
+        # Auditoria ampliada independente do treino e da escolha dos pares.
+        individual_forecasts: dict[int, dict[pd.Timestamp, np.ndarray]] = {}
+        for h in EXTENDED_AUDIT_HORIZONS:
+            safe_dates = select_purged_horizon_training_dates(
                 calendar=common_dates,
                 training_end_index=int(fold["final_fit_end_index"]),
                 evaluation_start_index=int(fold["test_start_index"]),
                 horizon=h,
                 min_training_rows=int(configuration.rotation_minimum_training_rows),
             )
-            final_models = _ajustar_modelos_lightgbm(
-                frames, symbols, safe_final, configuration,
-                phase=f"v107_final_H{h}_fold{fold_id}",
-                target_column=target,
+            audit_models = _ajustar_modelos_lightgbm(
+                frames, symbols, safe_dates, configuration,
+                phase=f"v108_independent_audit_h{h}_fold{fid}",
+                target_column=f"forward_horizon_net_return_pct_{h}",
             )
-            if len(final_models) != len(symbols):
-                raise RuntimeError("Final horizon models incomplete")
-            forecast_oos[h], diagnostics = _precalcular_utilidades_modelo(
-                final_models, frames, symbols, decision_days, configuration,
+            if len(audit_models) != len(symbols):
+                raise RuntimeError(f"Audit H{h} fold={fid}: missing models")
+            individual_forecasts[h], diag = _precalcular_utilidades_modelo(
+                audit_models, frames, symbols, decision_days, configuration
             )
             model_audit.append({
-                "fold_id": fold_id,
+                "fold_id": fid,
+                "model_family": "independent_asset_audit",
                 "horizon": h,
-                "train_calibration_models": (
-                    len(symbols) if h in CAPTURE_HORIZONS else 0
-                ),
-                "train_final_models": len(final_models),
-                "calibration_start": cal_days[0].isoformat(),
-                "calibration_end": cal_days[-1].isoformat(),
-                "calibration_split": split_date.isoformat(),
-                "final_training_last_date": safe_final[-1].isoformat(),
-                "test_first": decision_days[0].isoformat(),
-                "diagnostics": diagnostics,
+                "training_last": safe_dates[-1].isoformat(),
+                "model_count": len(audit_models),
+                "prediction_diagnostics": diag,
             })
-            del final_models
-            print(
-                f"[v107] fold={fold_id} horizon=H{h} "
-                f"calibration={'yes' if h in CAPTURE_HORIZONS else 'no'}",
-                flush=True,
-            )
-
-        cal_policy = _politica_utilidade(
-            {}, frames, symbols, configuration,
-            float(fold_caches[fold_id]["margin"]),
-            utility_cache=fold_caches[fold_id]["calibration"],
-        )
-        historical_state = historical_control_pair_context(
-            days=cal_days, policy=cal_policy
-        )
-        training_pairs = []
-        validation_pairs = []
-        for state_row in historical_state:
-            if (state_row["incumbent_position"] == 0
-                or state_row["control_position"] == 0
-                or state_row["holding_days"]
-                < int(configuration.rotation_min_holding_days)):
-                continue
-            day = pd.Timestamp(state_row["decision_date"])
-            inc = symbols[state_row["incumbent_position"] - 1]
-            base = symbols[state_row["control_position"] - 1]
-            options = rank_direct_pair_gap(
-                day=day, incumbent=inc, control_target=base,
-                symbols=symbols, forecasts=forecast_cal,
-                frames=frames, config=configuration, limit=0,
-            )
-            if not options:
-                continue
-            leader = next(
-                (r for r in options if r["raw_qualifies"]), None
-            )
-            if leader is None:
-                continue
-            enriched = {"fold_id": fold_id, **leader}
-            if day < split_date:
-                training_pairs.append(enriched)
-            else:
-                validation_pairs.append(enriched)
-
-        calibration = train_pairwise_winner_calibration(
-            selected=training_pairs, frames=frames, calendar=common_dates,
-            split_date=split_date,
-            cutoff_date=pd.Timestamp(fold["test_start"]),
-        )
-        calibration_audit.append({
-            "fold_id": fold_id,
-            "train_selected_pair_days": len(training_pairs),
-            "validation_selected_pair_days": len(validation_pairs),
-            **calibration,
-        })
-        for vrow in validation_pairs:
-            picked, calibrated = calibrated_pair_choice(
-                [vrow], calibration
-            )
-            if not calibrated:
-                continue
-            r = {"fold_id": fold_id, **calibrated[0]}
-            r["would_pass_confidence"] = picked is not None
-            validation_audit.extend(assess_pairwise_fixed_outcomes(
-                [r], frames=frames, calendar=common_dates,
-                horizon_end_exclusive=pd.Timestamp(fold["test_start"]),
-            ))
+            del audit_models
+            print(f"[audit] fold={fid} H{h} ready", flush=True)
 
         for day in decision_days:
             t = pd.Timestamp(day)
-            if decision_to_fold.get(t) != fold_id:
+            if decision_to_fold.get(t) != fid:
                 continue
-            if t in used_decisions:
-                raise RuntimeError(f"Decision duplication across folds {t}")
-            used_decisions.add(t)
+            if t in seen_oos_days:
+                raise RuntimeError(f"Duplicated OOS decision: {t}")
+            seen_oos_days.add(t)
             control = control_guard_audit.get(t)
-            if control is None or control.get("current_asset") in (None, "CASH"):
-                continue
+            if control is None:
+                raise RuntimeError(f"Control decision not recorded: {t}")
             incumbent = str(control["current_asset"])
-            destination = str(control["final_action_asset"])
+            if incumbent == "CASH":
+                continue
+            reference = str(control["final_action_asset"])
             metadata = {
-                "fold_id": fold_id,
+                "fold_id": fid,
                 "holding_days": int(control["holding_days_at_decision"]),
                 "control_decision_reason": control["decision_reason"],
             }
-            # Auditoria expandida v1.0.6 permanece independente.
-            audit_rank, audit_choice = select_horizon_candidates(
+            audit_ranks, audit_best = select_horizon_candidates(
                 day=t, incumbent=incumbent, symbols=symbols,
-                forecast=forecast_oos,
+                forecast=individual_forecasts,
                 horizons=EXTENDED_AUDIT_HORIZONS,
                 extra_switch_cost=0.0,
                 capture_require_short_medium_advantage=False,
@@ -2331,188 +2357,185 @@ def main() -> dict[str, Any]:
                     candidate=symbol, frames=frames, config=configuration,
                 ),
             )
-            expanded_rankings.extend([
-                {**metadata, "rank": k, **r}
-                for k, r in enumerate(audit_rank, 1)
+            audit_ranked.extend([
+                {**metadata, "rank": rank, **row}
+                for rank, row in enumerate(audit_ranks, start=1)
             ])
-            expanded_selections.append({**metadata, **audit_choice})
-            idx = symbols.index(incumbent) + 1
+            audit_selected.append({**metadata, **audit_best})
+            incumbent_index = symbols.index(incumbent) + 1
             for h in EXTENDED_AUDIT_HORIZONS:
-                prediction = forecast_oos[h][t]
-                leader = sorted([
+                current_pred = individual_forecasts[h][t]
+                options = sorted([
                     (
-                        symbols[pos - 1],
-                        float(prediction[pos] - prediction[idx])
+                        sym, float(current_pred[index] - current_pred[incumbent_index])
                         - estimated_incremental_pair_cost(
-                            day=t, incumbent=incumbent,
-                            control_target=incumbent,
-                            candidate=symbols[pos - 1],
-                            frames=frames, config=configuration,
+                            day=t, incumbent=incumbent, control_target=incumbent,
+                            candidate=sym, frames=frames, config=configuration,
                         ),
                     )
-                    for pos in range(1, len(symbols) + 1)
-                    if pos != idx and np.isfinite(prediction[pos])
-                ], key=lambda r: (-r[1], r[0]))
-                if leader:
-                    expanded_per_horizon.append({
+                    for index, sym in enumerate(symbols, start=1)
+                    if sym != incumbent and np.isfinite(current_pred[index])
+                ], key=lambda row: (-row[1], row[0]))
+                if options:
+                    chosen = options[0]
+                    audit_per_horizon.append({
+                        **metadata,
                         "decision_date": t.isoformat(),
-                        "fold_id": fold_id,
-                        "horizon": h,
                         "incumbent": incumbent,
-                        "top_candidate": leader[0][0],
-                        "pred_gap_fraction": leader[0][1],
+                        "horizon": h,
+                        "top_candidate": chosen[0],
+                        "pred_gap_fraction": chosen[1],
                         "estimated_incremental_cost_fraction":
                             estimated_incremental_pair_cost(
                                 day=t, incumbent=incumbent,
                                 control_target=incumbent,
-                                candidate=leader[0][0], frames=frames,
+                                candidate=chosen[0], frames=frames,
                                 config=configuration,
                             ),
                         "audit_only": True,
                     })
 
-            if (destination == "CASH"
-                or int(control["holding_days_at_decision"])
-                < int(configuration.rotation_min_holding_days)):
+            if (
+                reference == "CASH" or
+                int(control["holding_days_at_decision"])
+                < int(configuration.rotation_min_holding_days)
+            ):
                 continue
-            pairs = rank_direct_pair_gap(
-                day=t, incumbent=incumbent, control_target=destination,
-                symbols=symbols, forecasts=forecast_oos,
-                frames=frames, config=configuration, limit=0,
+            full_ranking = predict_direct_pair_gaps(
+                fold_models_oos, feature_cube[date_to_index[t]],
+                symbols=symbols, incumbent=incumbent,
+                control_target=reference, day=t,
+                frames=frames, config=configuration,
             )
-            selected, calibrated = calibrated_pair_choice(pairs, calibration)
-            capture_ranked.extend([
-                {**metadata, "rank": rank, **entry}
-                for rank, entry in enumerate(calibrated[:5], 1)
+            selected, confidence_ranked = choose_confident_direct_pair(
+                full_ranking, confidence
+            )
+            pair_top5.extend([
+                {**metadata, "rank": rank, **row}
+                for rank, row in enumerate(confidence_ranked[:5], start=1)
             ])
-            raw = next(
-                (r for r in pairs if r["raw_qualifies"]), None
+            best_raw = next(
+                (row for row in full_ranking if row["raw_qualifies"]), None
             )
-            if raw is not None:
-                raw_selected.append({
-                    **metadata, "calibration_status": "raw_only",
-                    **raw,
+            if best_raw is not None:
+                pair_raw.append({
+                    **metadata, "selection_kind": "raw",
+                    **best_raw,
                 })
             if selected is not None:
-                confident_selected.append({
-                    **metadata, "calibration_status": "confidence_passed",
+                pair_confident.append({
+                    **metadata, "selection_kind": "confident",
                     **selected,
                 })
+        del fold_models_cal, fold_models_oos
         print(
-            f"[fold] {fold_id} train_pairs={len(training_pairs)} "
-            f"val_pairs={len(validation_pairs)} "
-            f"confidence_total={len(confident_selected)}",
+            f"[fold] {fid} historical_winners={len(previous_pairs)} "
+            f"validated={len(later_pairs)} "
+            f"OOS_confident={len([r for r in pair_confident if r['fold_id']==fid])}",
             flush=True,
         )
 
-
-    # Mesmas observacoes dos folds do Control; nao somar fronteiras
-    # duplicadas nem resultados t+H fora do proprio fold.
-    folds_maturity: dict[int, dict[pd.Timestamp, int]] = {}
-    date_index = {pd.Timestamp(t): i for i, t in enumerate(common_dates)}
+    # Joins dos outcomes APOS os rankings, somente se t+H amadureceu
+    # dentro do proprio fold. Nenhum retorno OOS treinou o modelo.
+    evaluated_raw: list[dict[str, Any]] = []
+    evaluated_confident: list[dict[str, Any]] = []
     for fid, fold in folds_by_id.items():
-        folds_maturity[fid] = {
-            timestamp: int(fold["test_end_index"]) - 1 - date_index[timestamp]
-            for timestamp, assigned in decision_to_fold.items()
+        boundary = (
+            common_dates[int(fold["test_end_index"])]
+            if int(fold["test_end_index"]) < len(common_dates)
+            else common_dates[-1] + pd.Timedelta(days=7)
+        )
+        evaluated_raw.extend(assess_pairwise_fixed_outcomes(
+            [r for r in pair_raw if r["fold_id"] == fid],
+            frames=frames, calendar=common_dates,
+            horizon_end_exclusive=boundary,
+        ))
+        evaluated_confident.extend(assess_pairwise_fixed_outcomes(
+            [r for r in pair_confident if r["fold_id"] == fid],
+            frames=frames, calendar=common_dates,
+            horizon_end_exclusive=boundary,
+        ))
+
+    folds_maturity = {
+        fid: {
+            t: int(fold["test_end_index"]) - 1 - date_to_index[t]
+            for t, assigned in decision_to_fold.items()
             if int(assigned) == fid
-        }
-    expanded_ranked_eval, expanded_selected_eval = attach_fixed_horizon_outcomes(
-        expanded_rankings, expanded_selections,
+        } for fid, fold in folds_by_id.items()
+    }
+    audit_ranked_eval, audit_selected_eval = attach_fixed_horizon_outcomes(
+        audit_ranked, audit_selected,
         horizons=EXTENDED_AUDIT_HORIZONS,
-        folds_maturity=folds_maturity,
-        frames=frames,
+        folds_maturity=folds_maturity, frames=frames,
         extra_switch_cost=0.0,
     )
-    for row in expanded_per_horizon:
+    for row in audit_per_horizon:
+        fid = int(row["fold_id"])
+        h = int(row["horizon"])
         t = pd.Timestamp(row["decision_date"])
-        fid, h = int(row["fold_id"]), int(row["horizon"])
-        candidate, incumbent = row["top_candidate"], row["incumbent"]
         realized = None
         if folds_maturity[fid].get(t, 0) >= h:
             label = f"forward_horizon_net_return_pct_{h}"
-            new = float(frames[candidate].at[t, label])
-            old = float(frames[incumbent].at[t, label])
-            if np.isfinite(new) and np.isfinite(old):
-                realized = new - old - float(
+            candidate = float(frames[row["top_candidate"]].at[t, label])
+            incumbent = float(frames[row["incumbent"]].at[t, label])
+            if np.isfinite(candidate) and np.isfinite(incumbent):
+                realized = candidate - incumbent - float(
                     row["estimated_incremental_cost_fraction"]
                 )
         row["realized_gap_fraction"] = realized
         row["realized_outperformance"] = (
-            bool(realized > 0.0) if realized is not None else None
+            bool(realized > 0) if realized is not None else None
         )
-    expanded_quality = []
+    audit_quality = []
     for fid in sorted(folds_by_id):
         for h in EXTENDED_AUDIT_HORIZONS:
-            group = [
-                r["realized_gap_fraction"] for r in expanded_per_horizon
-                if int(r["fold_id"]) == fid and int(r["horizon"]) == h
+            vals = np.asarray([
+                float(r["realized_gap_fraction"])
+                for r in audit_per_horizon
+                if r["fold_id"] == fid and r["horizon"] == h
                 and r["realized_gap_fraction"] is not None
-            ]
-            values = np.asarray(group, dtype=float)
-            expanded_quality.append({
-                "fold_id": fid,
-                "horizon": h,
-                "matured_evaluable": len(values),
+            ])
+            audit_quality.append({
+                "fold_id": fid, "horizon": h,
+                "matured_evaluable": len(vals),
                 "mean_realized_gap_fraction": (
-                    float(values.mean()) if len(values) else None
+                    float(vals.mean()) if len(vals) else None
                 ),
-                "hit_rate": (
-                    float((values > 0).mean()) if len(values) else None
-                ),
+                "hit_rate": float(np.mean(vals > 0)) if len(vals) else None,
             })
-    def export_rows(name: str, rows: list[dict[str, Any]]) -> None:
+
+    def write_csv(name: str, rows: list[dict[str, Any]]) -> None:
         pd.DataFrame(rows).to_csv(OUT / name, index=False)
 
-    # A avaliacao realizada entra SOMENTE depois da selecao congelada.
-    evaluated_raw: list[dict[str, Any]] = []
-    evaluated_confident: list[dict[str, Any]] = []
-    for fold_id, fold in folds_by_id.items():
-        raw_part = [r for r in raw_selected if r["fold_id"] == fold_id]
-        calibrated_part = [
-            r for r in confident_selected if r["fold_id"] == fold_id
-        ]
-        evaluated_raw.extend(assess_pairwise_fixed_outcomes(
-            raw_part, frames=frames, calendar=common_dates,
-            horizon_end_exclusive=common_dates[int(fold["test_end_index"])]
-            if int(fold["test_end_index"]) < len(common_dates)
-            else common_dates[-1] + pd.Timedelta(days=7),
-        ))
-        evaluated_confident.extend(assess_pairwise_fixed_outcomes(
-            calibrated_part, frames=frames, calendar=common_dates,
-            horizon_end_exclusive=common_dates[int(fold["test_end_index"])]
-            if int(fold["test_end_index"]) < len(common_dates)
-            else common_dates[-1] + pd.Timedelta(days=7),
-        ))
-
-    export_rows("capture_pair_ranked_top5.csv", capture_ranked)
-    export_rows("capture_pair_raw_selected.csv", evaluated_raw)
-    export_rows("capture_pair_confident_selected.csv", evaluated_confident)
-    export_rows("capture_pair_calibration_by_fold.csv", calibration_audit)
-    export_rows("capture_pair_historical_validation.csv", validation_audit)
-    export_rows("capture_pair_validation_quality.csv",
-                aggregate_pairwise_quality(validation_audit))
-    export_rows("capture_pair_raw_quality.csv",
-                aggregate_pairwise_quality(evaluated_raw))
-    export_rows("capture_pair_confident_quality.csv",
-                aggregate_pairwise_quality(evaluated_confident))
-    export_rows("expanded_audit_ranked_top5.csv", expanded_ranked_eval)
-    export_rows("expanded_audit_selected.csv", expanded_selected_eval)
-    export_rows("expanded_audit_quality_by_fold_horizon.csv",
-                summarize_selection_quality(
-                    expanded_selected_eval, EXTENDED_AUDIT_HORIZONS
-                ))
-    export_rows("expanded_audit_best_per_horizon.csv", expanded_per_horizon)
-    export_rows("expanded_audit_per_horizon_quality.csv", expanded_quality)
-    export_rows("horizon_model_training.csv", model_audit)
-    export_rows("control_decision_reasons.csv", [
-        {"decision_date": d.isoformat(), **r}
-        for d, r in sorted(control_guard_audit.items())
+    write_csv("capture_direct_pair_ranked_top5.csv", pair_top5)
+    write_csv("capture_direct_pair_raw_selected.csv", evaluated_raw)
+    write_csv("capture_direct_pair_confident_selected.csv", evaluated_confident)
+    write_csv("capture_direct_pair_calibration_by_fold.csv", calibrations)
+    write_csv("capture_direct_pair_historical_validation.csv", pair_validation)
+    write_csv("capture_direct_pair_validation_quality.csv",
+              aggregate_pairwise_quality(pair_validation))
+    write_csv("capture_direct_pair_raw_quality.csv",
+              aggregate_pairwise_quality(evaluated_raw))
+    write_csv("capture_direct_pair_confident_quality.csv",
+              aggregate_pairwise_quality(evaluated_confident))
+    write_csv("expanded_audit_ranked_top5.csv", audit_ranked_eval)
+    write_csv("expanded_audit_selected.csv", audit_selected_eval)
+    write_csv("expanded_audit_quality_by_fold_horizon.csv",
+              summarize_selection_quality(
+                  audit_selected_eval, EXTENDED_AUDIT_HORIZONS
+              ))
+    write_csv("expanded_audit_best_per_horizon.csv", audit_per_horizon)
+    write_csv("expanded_audit_best_horizon_quality.csv", audit_quality)
+    write_csv("horizon_model_training.csv", model_audit)
+    write_csv("control_decision_reasons.csv", [
+        {"decision_date": d.isoformat(), **row}
+        for d, row in sorted(control_guard_audit.items())
     ])
     result_2.predictions.to_csv(
         OUT / "control_holding_2_equity.csv", index_label="timestamp"
     )
     result_2.trades.to_csv(OUT / "control_holding_2_trades.csv", index=False)
-    export_rows("comparison.csv", [{
+    write_csv("comparison.csv", [{
         "variant": "control_holding_2",
         "ending_capital": metrics_2["ending_capital"],
         "sharpe": metrics_2.get("sharpe"),
@@ -2520,7 +2543,7 @@ def main() -> dict[str, Any]:
         "candidate_backtest_performed": False,
         "control_reproduced": True,
     }])
-    hashes = {
+    fixed_hashes = {
         sym: {
             "raw_sha256": sha256_file(FULL_DATA.raw_bars / f"{sym}.csv"),
             "actions_sha256": sha256_file(
@@ -2531,36 +2554,40 @@ def main() -> dict[str, Any]:
     payload = {
         "script_version": VERSION,
         "status": "completed",
-        "analysis_end": ANALYSIS_END_DATE,
+        "snapshot_u67_sha256": snapshot.get("snapshot_sha256"),
+        "external_asset_hashes": fixed_hashes,
         "effective_asset_count": len(symbols),
         "structural_exclusions": sorted(U67_EXPECTED_EXCLUSIONS),
-        "snapshot_u67_sha256": snapshot.get("snapshot_sha256"),
-        "external_asset_hashes": hashes,
         "capture_horizons": list(CAPTURE_HORIZONS),
         "audit_horizons": list(EXTENDED_AUDIT_HORIZONS),
-        "calibration_fit_fraction": PAIR_CALIBRATION_FRACTION,
-        "calibration_quantile": PAIR_ERROR_QUANTILE,
-        "calibration": calibration_audit,
-        "capture_raw_selected": len(raw_selected),
-        "capture_confident_selected": len(confident_selected),
-        "no_duplicate_oos_decisions": True,
-        "OOS_used_for_parameter_selection": False,
-        "control_capital": actual,
-        "control_checkpoint_reference": expected,
-        "reproduces_checkpoint_to_cent": True,
-        "operational_orders": False,
+        "pair_feature_columns": pair_feature_columns(),
+        "reference_sampling": "two deterministic rotating anchors per day, with reverse pairs",
+        "pair_models": 2 * len(CAPTURE_HORIZONS) * len(folds),
+        "historical_calibration": calibrations,
+        "capture_raw_selected": len(pair_raw),
+        "capture_confident_selected": len(pair_confident),
+        "audit_independent_of_pair_selection": True,
+        "unique_oos_decision_days": len(seen_oos_days),
+        "checkpoints": {
+            "control_capital": actual,
+            "control_checkpoint_reference": expected,
+            "reproduces_checkpoint_to_cent": True,
+        },
         "candidate_backtest_performed": False,
-        "scientific_limitation": (
-            "Pairwise shrinkage calibrates differences of independent "
-            "horizon forecasts on historical winning pairs. It is not "
-            "a separately trained pairwise LightGBM, nor a portfolio "
-            "backtest. Overlapping outcomes and repeatedly examined "
-            "OOS folds limit statistical independence."
+        "operational_orders": False,
+        "oos_used_for_parameter_selection": False,
+        "method_limitations": (
+            "Trained supervised pairwise differences are not an exact "
+            "market-impact simulation or deployable policy. Labels "
+            "reflect next-open to H-close price paths, with a frozen "
+            "round-trip cost convention; candidate switching costs "
+            "are estimated separately. Per-fold OOS results have "
+            "already been repeatedly examined in previous studies."
         ),
         "export_to_operational": False,
     }
     write_json(OUT / "experiment.json", payload)
-    package_path = OUT / "pacote_persistencia_horizontes_u77_v107.zip"
+    package_path = OUT / "pacote_persistencia_horizontes_u77_v108.zip"
     with zipfile.ZipFile(
         package_path, "w", compression=zipfile.ZIP_DEFLATED
     ) as archive:
@@ -2568,6 +2595,7 @@ def main() -> dict[str, Any]:
             if artifact.is_file() and artifact != package_path:
                 archive.write(artifact, arcname=artifact.name)
     print(f"[package] {package_path}", flush=True)
+    print(f"[output] {OUT}", flush=True)
     return payload
 
 
