@@ -3214,6 +3214,185 @@ def main() -> dict[str, Any]:
 
     # Labels independentes H01..H60, reconstruidos sem corte global H60.
     build_horizon_return_labels(frames, common_dates, configuration)
+
+    # v1.0.11: fatorial 2 x 3 sobre o MESMO cache de utilidade Control.
+    # Nao altera a politica oficial, nem refaz ajustes nos modelos.
+    ablation_variants: list[tuple[str, int, str]] = [
+        (f"utility_hold{hold}_margin_{mode}", hold, mode)
+        for hold in UTILITY_ABLATION_HOLD
+        for mode in UTILITY_ABLATION_MARGINS
+    ]
+    utility_ablation_financial: list[dict[str, Any]] = []
+    utility_ablation_decisions: list[dict[str, Any]] = []
+    utility_ablation_logs: list[str] = []
+    one_step_policies: dict[str, dict[int, Any]] = {}
+    ablation_decision_to_fold = {
+        pd.Timestamp(day): int(fid)
+        for day, fid in decision_to_fold.items()
+    }
+
+    def ablation_log(message: str) -> None:
+        line = "[utility-ablation-v111] " + message
+        print(line, flush=True)
+        utility_ablation_logs.append(line)
+
+    ablation_log(
+        "start same_pretrained_utility=TRUE "
+        "factorial_hold=0,2 factor_margin=zero,base,calibrated "
+        "primary_metric=H05_switch_precision_vs_hold"
+    )
+    for variant, hold, mode in ablation_variants:
+        if hold == 2 and mode == "calibrated":
+            result = result_2
+            diagnostics = control_guard_audit
+            ablation_log(
+                f"variant={variant} REUSE frozen verified Control run"
+            )
+        else:
+            diagnostics: dict[pd.Timestamp, dict[str, Any]] = {}
+            replay_policies = prepare_utility_ablation_policies(
+                config=configuration, frames=frames, symbols=symbols,
+                fold_caches=fold_caches, hold=hold, margin_mode=mode,
+                decision_diagnostics=diagnostics,
+            )
+            ablation_log(f"variant={variant} start replay")
+            result = _simular_exato(
+                f"utility_ablation_{variant}",
+                _politica_agendada(
+                    replay_policies, decision_to_fold,
+                ),
+                frames, symbols, all_decision_dates, configuration,
+                calcular_taxas_referencia, aplicar_deslizamento,
+                decision_metadata=decision_metadata,
+                model_label=f"Utility factor ablation {variant}",
+                method_line=(
+                    "Identical fold-specific Control utility forecasts "
+                    "with ONLY holding and switch margin factors changed."
+                ),
+            )
+        score = scenario_metrics(
+            result, folds, float(configuration.initial_capital)
+        )
+        audit_rows = [
+            {
+                "method": variant,
+                "decision_date": pd.Timestamp(day).isoformat(),
+                "fold_id": int(ablation_decision_to_fold[pd.Timestamp(day)]),
+                "current_asset": str(diag["current_asset"]),
+                "action_asset": str(diag["final_action_asset"]),
+                "reason": str(diag["decision_reason"]),
+                "holding_sessions": int(diag["holding_days_at_decision"]),
+                "best_asset": str(diag["raw_best_asset"]),
+                "best_vs_current_gap": diag.get("best_vs_current_gap"),
+                "effective_switch_margin": diag.get("effective_switch_margin"),
+                "minimum_hold_guard": bool(diag.get("min_hold_guard_applied")),
+            }
+            for day, diag in sorted(diagnostics.items())
+            if pd.Timestamp(day) in ablation_decision_to_fold
+        ]
+        expected_days = len(all_decision_dates) - 1
+        if len(audit_rows) != expected_days:
+            raise RuntimeError(
+                f"Incomplete ablation {variant}: "
+                f"{len(audit_rows)} != {expected_days}"
+            )
+        utility_ablation_decisions.extend(audit_rows)
+        utility_ablation_financial.append({
+            "method": variant,
+            "hold_sessions": hold,
+            "margin_mode": mode,
+            "same_control_utility_predictions": True,
+            "control_action_used_as_input": False,
+            "reused_official_control": bool(
+                hold == 2 and mode == "calibrated"
+            ),
+            "ending_capital": score["ending_capital"],
+            "sharpe": score["sharpe"],
+            "maximum_drawdown": score["maximum_drawdown"],
+            "worst_fold_return": score["worst_fold_return"],
+            "capital_rotations": score["capital_rotations"],
+            "fees": score["total_transaction_fees"],
+            "market_exposure": result.metrics["market_exposure"],
+            "relative_capital_vs_control": (
+                score["ending_capital"] / actual
+            ),
+            "folds": score["folds"],
+        })
+        result.predictions.to_csv(
+            OUT / f"{variant}_equity.csv", index_label="timestamp"
+        )
+        result.trades.to_csv(
+            OUT / f"{variant}_trades.csv", index=False
+        )
+        ablation_log(
+            f"variant={variant} done capital="
+            f"{score['ending_capital']:,.2f} "
+            f"sharpe={score['sharpe']:.4f} "
+            f"maxdd={score['maximum_drawdown']:.3%} "
+            f"rotations={score['capital_rotations']}"
+        )
+        if result is not result_2:
+            del result
+
+        one_step_policies[variant] = prepare_utility_ablation_policies(
+            config=configuration, frames=frames, symbols=symbols,
+            fold_caches=fold_caches, hold=hold, margin_mode=mode,
+            decision_diagnostics=None,
+        )
+
+    one_step_rows = one_step_utility_ablation(
+        baseline_decisions=control_guard_audit,
+        policies=one_step_policies,
+        symbols=symbols,
+        date_to_fold=ablation_decision_to_fold,
+    )
+    official_variant = "utility_hold2_margin_calibrated"
+    if any(
+        r["differs_from_control"]
+        for r in one_step_rows if r["method"] == official_variant
+    ):
+        raise RuntimeError(
+            "Official same-state Control must have identical decisions"
+        )
+    ablation_quality, ablation_quality_fold = (
+        summarize_ablation_decision_outcomes(
+            audit=utility_ablation_decisions,
+            frames=frames, calendar=common_dates,
+            folds=folds, config=configuration,
+            methods=tuple(v[0] for v in ablation_variants),
+        )
+    )
+    for row in utility_ablation_financial:
+        method = row["method"]
+        group = [
+            q for q in ablation_quality_fold
+            if q["method"] == method
+            and q["horizon"] == UTILITY_ABLATION_PRIMARY_HORIZON
+        ]
+        mature = [q for q in group if q["switch_precision"] is not None]
+        row["H05_precision_macro"] = (
+            float(np.mean([q["switch_precision"] for q in mature]))
+            if mature else None
+        )
+        row["H05_matured_rotations"] = sum(
+            int(q["matured_switches"]) for q in group
+        )
+        paired = [
+            r for r in one_step_rows if r["method"] == method
+        ]
+        row["one_step_action_disagreements_vs_control"] = sum(
+            bool(r["differs_from_control"]) for r in paired
+        )
+        row["one_step_dates"] = len(paired)
+        ablation_log(
+            f"variant={method} H05_precision={row['H05_precision_macro']} "
+            f"n_H05={row['H05_matured_rotations']} "
+            f"same_state_diff={row['one_step_action_disagreements_vs_control']}"
+        )
+    (OUT / "utility_ablation.log").write_text(
+        "\n".join(utility_ablation_logs) + "\n",
+        encoding="utf-8",
+    )
     if not set(PAIR_TRAINING_FEATURES).issubset(ROTATION_FEATURES):
         raise RuntimeError("Direct pair feature contract exceeds point-in-time features")
     feature_cube = build_pair_feature_cube(frames, symbols, common_dates)
