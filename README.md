@@ -1,115 +1,109 @@
-# TCC MBA USP — Rotação de Capital com Machine Learning
+# TCC MBA USP — Reprodução do Control U67+10
 
-**Estrutura consolidada de pesquisa:** v1.22.2-dev.1 (13/10/2026).  
-**Control oficial reproduzível:** v1.22.1, congelado, sem alterações de algoritmo.  
-**Pontos de entrada do projeto:** apenas `buscar_ativos.py` e `reproduzir_experimento.py`.
+**Versão de consolidação:** v1.22.3-dev.1  
+**Política de referência:** Control com 75 ativos, LightGBM de utilidade
+ajustada ao risco e swing trade com permanência mínima de dois pregões.
 
-## Instalação e execução no Spyder
+## Apenas dois programas de entrada no Spyder
 
-Requer Python 3.12 e `requirements.txt`:
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-**1. Reproduzir o experimento oficial** (não requer rede, conta externa nem credenciais):
+### 1. `reproduzir_experimento.py` — Control de US$ 587 milhões
 
 ```python
 %run reproduzir_experimento.py
 ```
 
-O Control usa `dados/u67/`, com barras CSV e ações corporativas
-congeladas no Git e hashes validados por `manifest.json`. São 67
-ativos requisitados e 65 elegíveis após as exclusões estruturais
-**CLMT** e **DOC**; esses ativos não são remendados ou reconstruídos.
-O checkpoint oficial deve reproduzir capital simulado
-**US$ 76.927.051,38897176**, com término em 06/10/2026,
-e checkpoint intermediário já documentado. O script aborta se
-os resultados divergirem do valor de referência.
+O script chama `reproducao/control_u77.py`, que utiliza o fluxo
+de treinamento e composição de previsões da campanha U67+10
+encerrada na v1.0.11. O experimento histórico registrou
+**US$ 587.165.941,13**, com 75 ativos, três folds OOS e
+margens calibradas historicamente. Esse valor é referência
+**descritiva**, não é validação obrigatória nem limite de resultado.
+Se o capital mudar, o programa informa a diferença em vez de
+abortar pela não coincidência.
 
-**2. Buscar ativos** (pesquisa separada; pode consultar a Alpaca):
+**Dados necessários para a mesma execução:**
+
+- `dados/u67/raw_bars/` e
+  `dados/u67/corporate_actions/` — universo U67 versionado;
+- `dados/.u67_expansion_cache/full_raw_20261006/raw_bars/` e
+  `dados/.u67_expansion_cache/full_raw_20261006/corporate_actions/`
+  — dez ativos adicionais `CRT, NBR, CAPR, PNBK, PENN, JBL,
+  STAG, MCHB, LAD, TOWN` usados na campanha original.
+
+**Importante:** os dez históricos adicionais não constam no
+snapshot U67 do Git. Na mesma máquina onde a campanha v1.0.11
+foi executada, o cache normalmente já existe. Se faltar,
+o script informa os arquivos ausentes; não finge reproduzir
+os US$ 587 milhões com outro universo. Esses arquivos de
+mercado são necessários ao cálculo, **não constituem uma
+restrição arbitrária**.
+
+A execução reproduz LightGBM individual por ativo,
+compõe previsões U67+10, aplica decisões com dois pregões
+mínimos, calibra a margem no histórico anterior a cada
+fold e gera operações, curva financeira, métricas, gráficos,
+planilhas e `output/reproducao/pacote_reproducao_u77.zip`.
+
+**Não há SHA-256, controle de hashes ou bloqueio por
+checkpoint, contagem antiga de ativos, branch ou metadados
+de versões passadas.** Os CSVs locais são lidos normalmente.
+São mantidas verificações indispensáveis de dados presentes,
+preços válidos e exclusões de séries com problemas estruturais;
+não se tenta reconstruir/mesclar identidades de ativos.
+
+### 2. `buscar_ativos.py` — busca independente
 
 ```python
 %run buscar_ativos.py
 ```
 
-A busca parte do universo U67, obtém candidatos por catálogo e
-histórico, aplica auditoria de continuidade, resume os mesmos
-52 atributos técnicos e faz classificação matemática/geométrica
-de semelhança ou complementaridade (PCA, clusters, distância).
-O escalonamento e a PCA são ajustados **somente na referência U67**;
-candidatos são projetados nessa referência. O método NÃO utiliza
-o capital final do backtest para selecionar candidatos e NÃO
-insere automaticamente nenhum ativo na reprodução oficial.
-Gera shortlist, CSVs e gráficos em
-`output/candidate_cluster_search/`; emite sinal sonoro distinto para
-conclusão ou falha; utiliza cache local em
-`output/`, ignorado pelo Git. Requer credenciais Alpaca no
-`.env` local:
+Faz triagem técnica e busca semelhança/complementaridade
+com PCA, agrupamento e geometria no universo de referência.
+Pode acessar Alpaca; os downloads de candidatos ficam no
+cache local `output/candidate_cluster_search/cache_bars/`.
+A shortlist não promove ativos automaticamente nem modifica
+o universo do Control. Possui som diferente para sucesso e
+erro.
 
-```text
-ALPACA_API_KEY=sua_api_key
-ALPACA_SECRET_KEY=sua_secret_key
-```
+Para consultas à Alpaca, configure localmente um arquivo
+`.env` com `ALPACA_API_KEY` e `ALPACA_SECRET_KEY`.
 
-## Contrato científico preservado
+## Regras aprovadas preservadas
 
-- **Swing trade:** mínimo obrigatório de **dois pregões** antes
-  de girar a posição. Isso não significa vender no terceiro dia:
-  a posição continua se não houver vantagem suficiente.
-- **Modelo:** LightGBM de utilidade ajustada ao risco, com
-  horizonte temporal, risco de queda, drawdown, persistência
-  e movimento incorporados ao objetivo.
-- **Decisões:** prever com informação observável até o fechamento
-  da sessão e executar mudanças na abertura seguinte; filtro de
-  elegibilidade sem informação da sessão seguinte.
-- **Validação:** folds walk-forward, purge temporal, margem de
-  troca calibrada somente no histórico pré-OOS, CPU e parâmetros
-  congelados para reprodução.
-- **Comparador:** compra e manutenção de pesos iguais exatamente
-  nos mesmos 65 ativos elegíveis e com a mesma janela/custos.
-- **Custos e resultados:** comissões, taxas, slippage, curva de
-  capital, drawdown, Sharpe, trades, planilhas e pacote ZIP.
-  Sinal sonoro ao concluir; os resultados são de backtest,
-  não promessas de lucratividade real.
+- Swing trade com **mínimo obrigatório de dois pregões**,
+  podendo manter a posição por mais tempo;
+- previsão LightGBM de utilidade ajustada ao risco, com
+  atributos conhecidos na data da decisão;
+- execução cronológica, folds walk-forward e histórico
+  de calibração separado do OOS;
+- exclusão explícita de ativos com problemas estruturais
+  de histórico, sem bridges ou correções manuais;
+- comparação financeira com compra/manutenção no mesmo
+  universo, taxas e slippage;
+- dados em CSV e resultados exportados; nenhum banco de dados;
+- aviso sonoro ao fim do backtest e da busca.
 
-## Dados, módulos e histórico
+O resultado anterior de **US$ 76,93 milhões** corresponde à
+reprodução histórica de apenas 65 ativos e não é o Control
+principal desta versão. Os oito rankings e as ablações
+v1.0.9–v1.0.11 foram experiências diagnósticas, sem
+promoção à estratégia atual.
 
-A raiz possui **dois scripts executáveis**. As pastas
-`engine/` e `reproducao/` contêm implementações de apoio;
-`dados/u67/` contém os snapshots imutáveis;
-`tests/` mantém verificações automatizadas; `evidencias/`
-e `figuras/` preservam os materiais verificáveis do TCC.
-`MANIFEST.md` é o registro de decisões, experimentos e
-limitações. Os executáveis exploratórios substituídos pela
-estrutura limpa permanecem recuperáveis pelo histórico Git.
+## Estrutura interna e testes
 
-**Separação de campanhas:** o checkpoint experimental
-**U67+10 / 75 ativos / US$ 587.165.941,13** foi estudado nas
-campanhas v1.0.9–v1.0.11, mas não substitui o Control oficial
-U67 neste repositório. Parte das dez séries extras estava em
-cache local, fora do snapshot Git; por isso não apresentamos
-esse checkpoint como reprodução oficial portátil. As técnicas
-Borda, TOPSIS, Pareto e as ablações sobre hold=0 são resultados
-exploratórios, **não políticas aprovadas** para o runner oficial.
-
-A literatura acadêmica específica que fundamenta a escolha
-original dos dois pregões ainda precisa ser citada explicitamente
-no texto do TCC; não se afirma ótimo universal.
-
-**Nota de segurança:** reconstruir o snapshot em vez de
-reproduzi-lo requer ação explícita e separada,
-`python -m reproducao.preparar_snapshot`; isso substitui o
-diretório congelado local e NÃO deve ser feito durante a
-reprodução oficial.
-
-## Validação de código
+As pastas `engine/` e `reproducao/` contêm as funções
+internas; `dados/` contém séries de mercado;
+`MANIFEST.md` guarda a cronologia das decisões.
+Só `buscar_ativos.py` e `reproduzir_experimento.py`
+são arquivos de execução na raiz.
 
 ```bash
 python -m pytest -q
 python -m ruff check engine reproducao buscar_ativos.py reproduzir_experimento.py tests --select F401,F811,F821,F841
 ```
 
-O TCC mantém apenas o Control aprovado em produção científica.
-Experimentações futuras só devem modificar essa configuração
-mediante nova validação e checkpoint versionado.
+O CI verifica sintaxe, contratos e testes unitários.
+**Não executa** os backtests completos com os dez
+históricos adicionais, ausentes do ambiente CI.
+Confirmação do capital de US$ 587 milhões exige execução
+local no Spyder com o mesmo cache de dados.
