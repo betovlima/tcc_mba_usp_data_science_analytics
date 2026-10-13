@@ -1120,6 +1120,17 @@ def test_v109_rank_quality_does_not_replace_missing_top1_using_future():
     assert 0 <= out2["ndcg_at_5"] <= 1.0
     assert out2["top1_regret"] == pytest.approx(0.0)
 
+    # Mesmo com Top-1 conhecido, nao substituir o segundo colocado
+    # por outro ativo se faltar o desfecho do ranking original.
+    missing_second = rank_quality_metrics(
+        ranking=ranking,
+        realized=np.array([0.0, np.nan, 0.07, -0.02]),
+        reference_index=0, costs=np.zeros(4),
+    )
+    assert missing_second["top1_gap"] == pytest.approx(0.07)
+    assert missing_second["top5_gap"] is None
+    assert missing_second["top5_original_complete"] is False
+
 
 def test_v109_probabilistic_error_calibration_matures_before_split():
     from pesquisar_persistencia_horizontes_spyder import (
