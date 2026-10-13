@@ -1187,3 +1187,171 @@ def test_v109_lambdarank_labels_must_be_mature_before_test():
             evaluation_start_index=28,
             config=cfg, fold_id=1,
         )
+
+
+def test_v110_independent_math_rotation_respects_holding_and_switch_edge():
+    from pesquisar_persistencia_horizontes_spyder import (
+        AUTONOMOUS_POLICY_METHODS, mathematical_rotation_choice,
+    )
+
+    symbols = ["AAPL", "MSFT", "NVDA", "TSLA"]
+    forecasts = np.array([
+        [0.01, 0.01, 0.01, 0.01],
+        [0.02, 0.03, 0.04, 0.04],
+        [0.06, 0.08, 0.11, 0.19],
+        [0.00, 0.03, 0.08, 0.20],
+    ])
+    opts = {
+        "symbols": symbols,
+        "predicted_returns": forecasts,
+        "volatility": np.array([0.02, 0.02, 0.03, 0.05]),
+        "switch_costs": np.array([0.0, 0.005, 0.005, 0.005]),
+        "current_position": 1,
+    }
+    for method in AUTONOMOUS_POLICY_METHODS:
+        pos, score, diag = mathematical_rotation_choice(
+            method=method, holding_sessions=1, **opts,
+        )
+        assert pos == 1
+        assert diag["reason"] == "MINIMUM_HOLD"
+        assert diag["uses_control_action_as_feature"] is False
+        assert score == 0.0
+    target, _, why = mathematical_rotation_choice(
+        method="net_gain", holding_sessions=2, **opts,
+    )
+    assert target == 3
+    assert why["reason"] == "MATH_ROTATION"
+    assert why["positive_horizons"] >= 3
+    assert "control" not in why
+
+
+def test_v110_net_gain_can_hold_and_exit_cash_without_control():
+    from pesquisar_persistencia_horizontes_spyder import (
+        mathematical_rotation_choice,
+    )
+
+    opts = dict(
+        method="net_gain", symbols=["AAPL", "NVDA", "MSFT"],
+        volatility=np.array([0.01, 0.02, 0.04]),
+        switch_costs=np.array([0.0, 0.1, 0.1]),
+        current_position=1, holding_sessions=3,
+    )
+    held = np.array([
+        [0.02, 0.02, 0.02, 0.02],
+        [0.03, 0.03, 0.03, 0.03],
+        [0.02, 0.03, 0.04, 0.05],
+    ])
+    target, _, diag = mathematical_rotation_choice(
+        predicted_returns=held, **opts,
+    )
+    assert target == 1
+    assert diag["reason"] == "RANKED_INCUMBENT"
+
+    negative = np.array([
+        [-0.03, -0.03, -0.03, -0.03],
+        [-0.07, -0.07, -0.07, -0.07],
+        [-0.05, -0.05, -0.05, -0.05],
+    ])
+    target, _, diag = mathematical_rotation_choice(
+        predicted_returns=negative, **opts,
+    )
+    assert target == 0
+    assert diag["reason"] == "NEGATIVE_POSITION_EXPECTATION"
+
+
+def test_v110_mathematical_rotation_switch_cost_uses_only_today():
+    from types import SimpleNamespace
+    from pesquisar_persistencia_horizontes_spyder import (
+        point_in_time_switch_cost,
+    )
+
+    dates = pd.date_range("2026-01-01", periods=5, freq="B", tz="UTC")
+    frames = {
+        sym: pd.DataFrame({"close": np.full(5, close)},
+                          index=dates)
+        for sym, close in [("AAPL", 100.0), ("NVDA", 50.0)]
+    }
+    config = SimpleNamespace(
+        slippage_bps=4.0, commission_rate=0.0001,
+        cat_fee_per_share=0.00003, sec_fee_rate=0.00002,
+        taf_fee_per_share=0.0001,
+    )
+    before = point_in_time_switch_cost(
+        day=dates[1], current_asset="AAPL", candidate="NVDA",
+        frames=frames, config=config,
+    )
+    assert before > 0
+    assert point_in_time_switch_cost(
+        day=dates[1], current_asset="AAPL", candidate="AAPL",
+        frames=frames, config=config,
+    ) == 0
+    frames["NVDA"].at[dates[2], "close"] = 1e10
+    after = point_in_time_switch_cost(
+        day=dates[1], current_asset="AAPL", candidate="NVDA",
+        frames=frames, config=config,
+    )
+    assert before == after
+
+
+def test_v110_realized_rotation_precision_only_uses_matured_fold_labels():
+    from types import SimpleNamespace
+    from pesquisar_persistencia_horizontes_spyder import (
+        autonomous_decision_quality,
+    )
+
+    dates = pd.date_range("2026-01-01", periods=12, freq="B", tz="UTC")
+    frames = {
+        sym: pd.DataFrame({
+            "close": np.full(len(dates), 100.0),
+            **{
+                f"forward_horizon_net_return_pct_{h}":
+                    np.full(len(dates), ret)
+                for h in (2, 3, 5, 10)
+            },
+        }, index=dates)
+        for sym, ret in (("AAPL", 0.01), ("NVDA", 0.04))
+    }
+    audit = [
+        {
+            "method": "net_gain",
+            "fold_id": 1,
+            "decision_date": day.isoformat(),
+            "current_asset": "AAPL", "action_asset": "NVDA",
+            "reason": "MATH_ROTATION",
+        } for day in (dates[1], dates[6])
+    ]
+    cfg = SimpleNamespace(
+        slippage_bps=0.0, commission_rate=0.0,
+        cat_fee_per_share=0.0, sec_fee_rate=0.0,
+        taf_fee_per_share=0.0,
+    )
+    quality, summary = autonomous_decision_quality(
+        audit=audit, frames=frames, calendar=dates,
+        folds=[{"fold_id": 1, "test_end_index": 8}],
+        config=cfg, methods=("net_gain",),
+    )
+    scored_h2 = [r for r in quality if r["horizon"] == 2]
+    assert len(scored_h2) == 1
+    assert scored_h2[0]["decision_date"] == dates[1].isoformat()
+    assert scored_h2[0]["realized_switch_vs_hold"] == pytest.approx(0.03)
+    stats = next(row for row in summary if row["horizon"] == 2)
+    assert stats["rotations_proposed"] == 2
+    assert stats["matured_switches"] == 1
+    assert stats["switch_precision"] == pytest.approx(1.0)
+
+
+def test_v110_beep_distinguishes_success_error(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from pesquisar_persistencia_horizontes_spyder import audible_completion
+
+    emitted = []
+    monkeypatch.setitem(
+        sys.modules, "winsound",
+        SimpleNamespace(Beep=lambda hz, duration: emitted.append((hz, duration))),
+    )
+    assert audible_completion(succeeded=True) == "windows_success_two_tones"
+    assert emitted == [(880, 160), (1046, 220)]
+    emitted.clear()
+    assert audible_completion(succeeded=False) == "windows_error_two_tones"
+    assert emitted == [(440, 420), (330, 470)]
