@@ -1,4 +1,4 @@
-"""Pesquisa U67+10 v1.0.8: regressao direta de pares e auditoria.
+"""Pesquisa U67+10 v1.0.9: auditoria integral de oito metodos de ranking.
 
 Control e unico backtest; selecao de candidatos e diagnostica.
 Reproduz o checkpoint, corrige cobertura de labels H01..H60, treina
@@ -7,6 +7,7 @@ Sem download, sem alteracao da reproducao oficial ou de sistemas externos.
 """
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import math
@@ -53,8 +54,8 @@ from pesquisar_expansao_u67_spyder import (
 )
 
 ROOT = Path(__file__).resolve().parent
-OUT = ROOT / "output" / "persistencia_horizontes_u77_v108"
-VERSION = "horizon-persistence-oos-v1.0.8"
+OUT = ROOT / "output" / "persistencia_horizontes_u77_v109"
+VERSION = "horizon-persistence-oos-v1.0.9"
 CONFIDENCE_MULTIPLIERS = (0.0, 0.5, 1.0)  # historico v1.0.3
 ANCHOR_BLEND = 0.5  # historico v1.0.3
 HOLDING_CANDIDATES = (1, 2, 3, 4)  # historico v1.0.4
@@ -69,6 +70,17 @@ EXTENDED_AUDIT_HORIZONS = (1, 2, 3, 5, 10, 15, 20, 30, 40, 60)
 AUDIT_ONLY_HORIZONS = (1, 15, 20, 30, 40, 60)
 ALL_RESEARCH_HORIZONS = EXTENDED_AUDIT_HORIZONS
 AUDIT_TOP_K = 5
+RANKING_METHODS = (
+    "predicted_return", "net_advantage", "borda",
+    "topsis", "pareto", "probabilistic", "robust",
+    "learning_to_rank",
+)
+RANKING_EVALUATION_HORIZONS = (2, 3, 5, 10)
+RANKING_PRIMARY_METRIC = "ndcg_at_5"
+RANKING_CALIBRATION_MIN_DAYS = 15
+RANKING_PROBABILITY_VARIANCE_FLOOR = 1e-6
+RANKING_LOG_EVERY_DAYS = 25
+
 PAIR_REFERENCE_COUNT = 2
 PAIR_SELECTED_TOP_K = 5
 PAIR_TRAINING_FEATURES = (
