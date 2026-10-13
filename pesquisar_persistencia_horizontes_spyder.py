@@ -77,6 +77,7 @@ AUTONOMOUS_POLICY_METHODS = ("net_gain", "borda_pareto", "topsis", "consensus")
 AUTONOMOUS_MIN_HOLD = 2
 AUTONOMOUS_SWITCH_MARGIN = 0.0  # nenhum ajuste no OOS
 AUTONOMOUS_CASH_EXIT_MARGIN = 0.0
+AUTONOMOUS_MIN_MATURE_SWITCHES_PER_FOLD = 10
 RANKING_METHODS = (
     "predicted_return", "net_advantage", "borda",
     "topsis", "pareto", "probabilistic", "robust",
@@ -3782,6 +3783,68 @@ def main() -> dict[str, Any]:
                 f"decision_quality method={method} H{h:02d} "
                 f"mean_fold_precision={macro_precision}"
             )
+
+    # Escala minima fixada antes da execucao: taxa perfeita baseada
+    # em 1 troca nao pode vencer dezenas de decisoes comparaveis.
+    rotation_leaderboard: list[dict[str, Any]] = []
+    for row in autonomous_financial:
+        method = row["method"]
+        fold_stats = [
+            r for r in rotation_quality_summary
+            if r["method"] == method and r["horizon"] == 5
+        ]
+        adequate = all(
+            r["matured_switches"] >= AUTONOMOUS_MIN_MATURE_SWITCHES_PER_FOLD
+            for r in fold_stats
+        ) and len(fold_stats) == len(folds)
+        total_switches = sum(r["matured_switches"] for r in fold_stats)
+        wins = sum(
+            (r["switch_precision"] or 0.0) * r["matured_switches"]
+            for r in fold_stats
+        )
+        macro = [
+            r["switch_precision"] for r in fold_stats
+            if r["switch_precision"] is not None
+        ]
+        rotation_leaderboard.append({
+            "method": method,
+            "evidence_adequate_each_fold": bool(adequate),
+            "minimum_matured_switches_per_fold":
+                AUTONOMOUS_MIN_MATURE_SWITCHES_PER_FOLD,
+            "total_matured_H05_switches": total_switches,
+            "macro_fold_H05_switch_precision": (
+                float(np.mean(macro)) if macro else None
+            ),
+            "pooled_H05_switch_precision": (
+                float(wins / total_switches)
+                if total_switches else None
+            ),
+            "ending_capital": row["ending_capital"],
+            "sharpe": row["sharpe"],
+            "maximum_drawdown": row["maximum_drawdown"],
+            "worst_fold_return": row["worst_fold_return"],
+            "total_financial_rotations": row["capital_rotations"],
+            "total_fees": row["fees"],
+            "is_exploratory": True,
+        })
+    rotation_leaderboard.sort(key=lambda r: (
+        not r["evidence_adequate_each_fold"],
+        -(r["macro_fold_H05_switch_precision"]
+          if r["macro_fold_H05_switch_precision"] is not None
+          else -1.0),
+        r["method"],
+    ))
+    for n, row in enumerate(rotation_leaderboard, 1):
+        row["descriptive_rank"] = (
+            n if row["evidence_adequate_each_fold"] else None
+        )
+        rotation_log(
+            f"quality_leaderboard rank={row['descriptive_rank']} "
+            f"method={row['method']} "
+            f"matured_H05={row['total_matured_H05_switches']} "
+            f"precision={row['macro_fold_H05_switch_precision']} "
+            f"sample_adequate={row['evidence_adequate_each_fold']}"
+        )
     (OUT / "rotation_policy.log").write_text(
         "\n".join(rotation_logs) + "\n", encoding="utf-8",
     )
@@ -3944,6 +4007,7 @@ def main() -> dict[str, Any]:
         {k: v for k, v in row.items() if k != "folds"}
         for row in autonomous_financial
     ])
+    write_csv("autonomous_quality_leaderboard.csv", rotation_leaderboard)
     write_csv("horizon_model_training.csv", model_audit)
     write_csv("control_decision_reasons.csv", [
         {"decision_date": d.isoformat(), **row}
@@ -3989,6 +4053,10 @@ def main() -> dict[str, Any]:
         "autonomous_policy_methods": list(AUTONOMOUS_POLICY_METHODS),
         "autonomous_financial_comparison": autonomous_financial,
         "autonomous_rotation_precision_by_fold": rotation_quality_summary,
+        "autonomous_quality_leaderboard": rotation_leaderboard,
+        "autonomous_primary_diagnostic": "H05_switch_precision_vs_hold",
+        "autonomous_min_matured_switches_per_fold":
+            AUTONOMOUS_MIN_MATURE_SWITCHES_PER_FOLD,
         "autonomous_no_control_action_in_policy": True,
         "autonomous_live_orders": False,
         "autonomous_reuses_frozen_individual_forecasts": True,
