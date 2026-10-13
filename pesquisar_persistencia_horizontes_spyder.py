@@ -4487,14 +4487,11 @@ def main() -> dict[str, Any]:
         "export_to_operational": False,
     }
     write_json(OUT / "experiment.json", payload)
-    package_path = OUT / "pacote_persistencia_horizontes_u77_v111.zip"
-    with zipfile.ZipFile(
-        package_path, "w", compression=zipfile.ZIP_DEFLATED
-    ) as archive:
-        for artifact in sorted(OUT.iterdir()):
-            if artifact.is_file() and artifact != package_path:
-                archive.write(artifact, arcname=artifact.name)
-    print(f"[package] {package_path}", flush=True)
+    print(
+        "[package] experiment files ready, waiting for final audio/log "
+        "before creating the ZIP",
+        flush=True,
+    )
     print(f"[output] {OUT}", flush=True)
     return payload
 
@@ -4536,6 +4533,40 @@ class ConsoleLogMirror:
         return bool(self.console.isatty())
 
 
+def finalize_experiment_package() -> Path:
+    """Cria ZIP depois que stdout/stderr e aviso sonoro foram gravados.
+
+    A troca atomica evita entregar um arquivo parcialmente montado.
+    Em caso de excecao, execution_full.log e preservado separadamente.
+    """
+    package_path = OUT / "pacote_persistencia_horizontes_u77_v111.zip"
+    temporary = package_path.with_suffix(".zip.tmp")
+    try:
+        with zipfile.ZipFile(
+            temporary, "w", compression=zipfile.ZIP_DEFLATED
+        ) as archive:
+            for artifact in sorted(OUT.iterdir()):
+                if (
+                    artifact.is_file()
+                    and artifact != package_path
+                    and artifact != temporary
+                ):
+                    archive.write(artifact, arcname=artifact.name)
+        temporary.replace(package_path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    with zipfile.ZipFile(package_path, "r") as archive:
+        if archive.testzip() is not None:
+            raise RuntimeError("ZIP integrity verification failed")
+        if "execution_full.log" not in archive.namelist():
+            raise RuntimeError("Final ZIP missing full execution log")
+        content = archive.read("execution_full.log").decode("utf-8")
+        if "[audio] SUCCESS" not in content:
+            raise RuntimeError("Final ZIP missing audible success marker")
+    return package_path
+
+
 def run_spyder_experiment() -> dict[str, Any]:
     """Captura logs tambem em falha; emite som ao concluir."""
     OUT.mkdir(parents=True, exist_ok=True)
@@ -4570,7 +4601,24 @@ def run_spyder_experiment() -> dict[str, Any]:
                 print(f"[audio] SUCCESS {mode}", flush=True)
             except Exception as audio_error:
                 print(f"[audio] SUCCESS beep failed: {audio_error}", flush=True)
-            return completed
+            print(
+                "[package] final audio recorded, closing execution log "
+                "before ZIP finalization",
+                flush=True,
+            )
+    try:
+        package = finalize_experiment_package()
+    except Exception:
+        with logfile.open("a", encoding="utf-8") as stream:
+            stream.write("[package] ERROR finalizing archive\n")
+            stream.write(traceback.format_exc())
+        try:
+            audible_completion(succeeded=False)
+        except Exception:
+            pass
+        raise
+    print(f"[package] finalized after audio/log: {package}", flush=True)
+    return completed
 
 
 if __name__ == "__main__":
