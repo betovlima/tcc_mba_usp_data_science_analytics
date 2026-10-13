@@ -2065,6 +2065,453 @@ def choose_confident_direct_pair(
     )
     return winner, enriched
 
+
+def fit_ranker_h05(
+    *,
+    feature_cube: np.ndarray,
+    targets: np.ndarray,
+    training_indices: np.ndarray,
+    evaluation_start_index: int,
+    config: Any,
+    fold_id: int,
+) -> tuple[Any, dict[str, Any]]:
+    """LambdaMART opcional como competidor supervisionado, nao pos-processo.
+
+    A relevancia vem SOMENTE de labels historicos plenamente maduros.
+    O objetivo e comparar com os rankings sem treinamento adicional.
+    """
+    from lightgbm import LGBMRanker
+
+    training_blocks: list[np.ndarray] = []
+    training_labels: list[np.ndarray] = []
+    groups: list[int] = []
+    for index in training_indices:
+        k = int(index)
+        if k + 5 >= int(evaluation_start_index):
+            raise RuntimeError("LTR label crosses chronological cutoff")
+        obs = feature_cube[k]
+        truth = targets[k]
+        valid = np.isfinite(obs).all(axis=1) & np.isfinite(truth)
+        selected = np.flatnonzero(valid)
+        if len(selected) < 5:
+            continue
+        expected = truth[selected]
+        order = np.argsort(expected, kind="stable")
+        relevance = np.empty(len(selected), dtype=np.int32)
+        relevance[order] = np.minimum(
+            4, np.floor(
+                np.arange(len(selected), dtype=float) * 5.0 / len(selected)
+            ).astype(np.int32)
+        )
+        training_blocks.append(obs[selected])
+        training_labels.append(relevance)
+        groups.append(len(selected))
+    if len(groups) < int(config.rotation_minimum_training_rows):
+        raise RuntimeError(
+            f"Too few historical LTR query days fold={fold_id}: {len(groups)}"
+        )
+    x = np.concatenate(training_blocks, axis=0)
+    y = np.concatenate(training_labels, axis=0)
+    model = LGBMRanker(
+        objective="lambdarank", metric="ndcg",
+        n_estimators=240, learning_rate=0.035, num_leaves=31,
+        min_child_samples=30, reg_alpha=0.05, reg_lambda=0.20,
+        random_state=int(config.random_state), n_jobs=1,
+        verbosity=-1, deterministic=True, force_col_wise=True,
+    )
+    model.fit(
+        pd.DataFrame(x, columns=list(PAIR_TRAINING_FEATURES)),
+        y, group=groups,
+    )
+    return model, {
+        "model": "LGBMRanker_LambdaMART",
+        "target_horizon": 5,
+        "training_query_days": len(groups),
+        "training_asset_rows": int(len(x)),
+        "last_training_date_index": int(training_indices[-1]),
+        "evaluation_start_index": int(evaluation_start_index),
+        "label_maturity_guard": True,
+    }
+
+
+def calibrate_asset_horizon_errors(
+    *,
+    forecasts: dict[int, dict[pd.Timestamp, np.ndarray]],
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    calibration_days: pd.DatetimeIndex,
+    calendar: pd.DatetimeIndex,
+    split_date: pd.Timestamp,
+    horizons: tuple[int, ...] = RANKING_EVALUATION_HORIZONS,
+) -> dict[int, dict[str, np.ndarray | int]]:
+    """Media e desvio dos erros OOF anteriores a validacao historica.
+
+    A estimativa probabilistica usa aproximacao gaussiana marginal.
+    A correlacao de erro entre ativos nao foi estimada.
+    """
+    dates = pd.DatetimeIndex(calendar)
+    lookup = {pd.Timestamp(d): i for i, d in enumerate(dates)}
+    end = lookup[pd.Timestamp(split_date)]
+    n = len(symbols)
+    summary: dict[int, dict[str, np.ndarray | int]] = {}
+    for h in horizons:
+        errors: list[list[float]] = [[] for _ in symbols]
+        effective_days = 0
+        for day in calibration_days:
+            t = pd.Timestamp(day)
+            k = lookup[t]
+            if k + h >= end:
+                continue
+            predicted = forecasts[h].get(t)
+            if predicted is None:
+                raise RuntimeError(f"Missing historical forecast H{h} {t}")
+            predicted = np.asarray(predicted, dtype=float)
+            if len(predicted) != n + 1:
+                raise RuntimeError("Historical calibration universe drift")
+            daily = 0
+            for i, sym in enumerate(symbols):
+                if t not in frames[sym].index:
+                    continue
+                observed = float(
+                    frames[sym].at[t, f"forward_horizon_net_return_pct_{h}"]
+                )
+                estimate = float(predicted[i + 1])
+                if np.isfinite(observed) and np.isfinite(estimate):
+                    errors[i].append(observed - estimate)
+                    daily += 1
+            effective_days += int(daily > 0)
+        if effective_days < RANKING_CALIBRATION_MIN_DAYS:
+            raise RuntimeError(
+                f"Not enough matured calibration days for H{h}: {effective_days}"
+            )
+        pooled = np.asarray(
+            [e for asset in errors for e in asset], dtype=float
+        )
+        if len(pooled) < 20:
+            raise RuntimeError("Insufficient calibration observations")
+        pooled_std = max(
+            RANKING_PROBABILITY_VARIANCE_FLOOR,
+            float(np.std(pooled, ddof=1)),
+        )
+        center = np.empty(n, dtype=float)
+        scale = np.empty(n, dtype=float)
+        for i, items in enumerate(errors):
+            if len(items) < RANKING_CALIBRATION_MIN_DAYS:
+                center[i] = float(np.mean(pooled))
+                scale[i] = pooled_std
+            else:
+                vec = np.asarray(items, dtype=float)
+                center[i] = float(np.mean(vec))
+                scale[i] = max(
+                    RANKING_PROBABILITY_VARIANCE_FLOOR,
+                    float(np.std(vec, ddof=1)),
+                )
+        summary[h] = {
+            "center": center,
+            "scale": scale,
+            "effective_days": effective_days,
+            "min_asset_samples": int(min(map(len, errors))),
+            "pooled_error_std": pooled_std,
+        }
+    return summary
+
+
+def nondominated_layers(values: np.ndarray) -> np.ndarray:
+    """Pareto fronts, O(n^2) por sessao, sem usar retornos observados."""
+    values = np.asarray(values, dtype=float)
+    if values.ndim != 2 or not np.isfinite(values).all():
+        raise ValueError("Pareto input must be a finite 2D matrix")
+    count = len(values)
+    domination_count = np.zeros(count, dtype=np.int32)
+    dominates: list[list[int]] = [[] for _ in range(count)]
+    for i in range(count):
+        better_equal = np.all(values[i] >= values, axis=1)
+        better_strict = np.any(values[i] > values, axis=1)
+        inferior = np.flatnonzero(better_equal & better_strict)
+        dominates[i] = inferior.tolist()
+        domination_count[inferior] += 1
+    fronts = np.full(count, -1, dtype=np.int32)
+    active = np.flatnonzero(domination_count == 0).tolist()
+    level = 0
+    while active:
+        remaining = []
+        for i in active:
+            fronts[i] = level
+            for j in dominates[i]:
+                domination_count[j] -= 1
+                if domination_count[j] == 0:
+                    remaining.append(j)
+        active = sorted(set(remaining))
+        level += 1
+    if np.any(fronts < 0):
+        raise RuntimeError("Pareto ranking not fully assigned")
+    return fronts
+
+
+def rank_with_all_methods(
+    *,
+    forecasts: dict[int, np.ndarray],
+    symbols: list[str],
+    reference_symbol: str,
+    incremental_cost: np.ndarray,
+    volatility: np.ndarray,
+    historical_error: dict[int, dict[str, np.ndarray | int]],
+    ltr_scores: np.ndarray,
+    horizons: tuple[int, ...] = RANKING_EVALUATION_HORIZONS,
+) -> dict[str, list[tuple[int, float]]]:
+    """Oito rankings independentes sobre o MESMO universo da sessao.
+
+    Somente previsoes, atributos presentes, custos estimados e
+    calibracoes historicas; nunca inclui labels OOS no score.
+    """
+    n = len(symbols)
+    ref = symbols.index(reference_symbol)
+    predicted = np.column_stack([
+        np.asarray(forecasts[h], dtype=float) for h in horizons
+    ])
+    costs = np.asarray(incremental_cost, dtype=float)
+    risk = np.asarray(volatility, dtype=float)
+    learned = np.asarray(ltr_scores, dtype=float)
+    if (
+        predicted.shape != (n, len(horizons))
+        or costs.shape != (n,) or risk.shape != (n,)
+        or learned.shape != (n,)
+    ):
+        raise ValueError("Rank methods universe mismatch")
+    eligible = (
+        np.isfinite(predicted).all(axis=1)
+        & np.isfinite(costs) & np.isfinite(risk)
+        & np.isfinite(learned)
+    )
+    if not eligible[ref]:
+        return {}
+    ids = np.flatnonzero(eligible)
+    if len(ids) < 3:
+        return {}
+    horizons_arr = np.asarray(horizons, dtype=float)
+    forecasts_by_h = predicted[ids]
+    advantage = forecasts_by_h - predicted[ref] - costs[ids, None]
+    daily = advantage / horizons_arr
+    normalized_gain = daily.mean(axis=1)
+    index_map = {int(v): j for j, v in enumerate(ids)}
+
+    scores: dict[str, np.ndarray] = {
+        "predicted_return": (forecasts_by_h / horizons_arr).mean(axis=1),
+        "net_advantage": normalized_gain,
+        "learning_to_rank": learned[ids],
+    }
+    # Borda: cada horizonte vota por posicao, e nao por magnitude extrema.
+    ranks = np.empty_like(forecasts_by_h)
+    for column in range(len(horizons)):
+        order = sorted(
+            range(len(ids)),
+            key=lambda j: (-advantage[j, column], symbols[int(ids[j])]),
+        )
+        for rank, row_id in enumerate(order):
+            ranks[row_id, column] = rank
+    scores["borda"] = 1.0 - ranks.mean(axis=1) / max(1, len(ids) - 1)
+
+    # TOPSIS: 4 retornos diarios, volatilidade, friccao, divergencia.
+    criterion = np.column_stack([
+        daily, -risk[ids], -costs[ids],
+        -np.std(daily, axis=1),
+    ])
+    weights = np.asarray([0.15]*len(horizons)+[0.15, 0.15, 0.10])
+    if len(weights) != criterion.shape[1]:
+        raise RuntimeError("TOPSIS locked criteria dimension changed")
+    den = np.maximum(
+        np.linalg.norm(criterion, axis=0), 1e-12
+    )
+    scaled = criterion / den * weights
+    ideal, anti = np.max(scaled, axis=0), np.min(scaled, axis=0)
+    dplus = np.linalg.norm(scaled - ideal, axis=1)
+    dminus = np.linalg.norm(scaled - anti, axis=1)
+    scores["topsis"] = np.divide(
+        dminus, dplus + dminus,
+        out=np.full(len(ids), 0.5), where=(dplus + dminus) > 0,
+    )
+
+    # Pareto nao dominado: ganhos em 4 H e volatilidade menor.
+    fronts = nondominated_layers(
+        np.column_stack([daily, -risk[ids]])
+    )
+    scores["pareto"] = -fronts.astype(float) + (
+        (ranks.shape[0] - ranks.mean(axis=1)) / max(2, len(ids))
+    ) * 1e-2
+
+    # Probabilistico e robusto: apenas erros maturados pre-OOS.
+    relative_mean = np.column_stack([
+        np.asarray(historical_error[h]["center"], dtype=float)[ids]
+        - float(np.asarray(historical_error[h]["center"])[ref])
+        for h in horizons
+    ])
+    relative_sigma = np.column_stack([
+        np.sqrt(
+            np.asarray(historical_error[h]["scale"], dtype=float)[ids] ** 2
+            + float(np.asarray(historical_error[h]["scale"])[ref]) ** 2
+        )
+        for h in horizons
+    ])
+    relative_sigma = np.maximum(
+        relative_sigma, RANKING_PROBABILITY_VARIANCE_FLOOR
+    )
+    from scipy.special import ndtr
+    win_probability = ndtr(
+        (advantage + relative_mean) / relative_sigma
+    )
+    scores["probabilistic"] = win_probability.mean(axis=1)
+    scores["robust"] = np.min(
+        (advantage + relative_mean - relative_sigma) / horizons_arr,
+        axis=1,
+    )
+
+    return {
+        method: [
+            (int(ids[index]), float(value[index]))
+            for index in sorted(
+                range(len(ids)),
+                key=lambda j: (-float(value[j]), symbols[int(ids[j])]),
+            )
+        ]
+        for method, value in scores.items()
+    }
+
+
+def rank_quality_metrics(
+    *,
+    ranking: list[tuple[int, float]],
+    realized: np.ndarray,
+    reference_index: int,
+    costs: np.ndarray,
+    top_k: int = 5,
+) -> dict[str, Any]:
+    """Metricas post-hoc, nunca usadas para formar rankings em t."""
+    from scipy.stats import kendalltau, spearmanr
+
+    observed = np.asarray(realized, dtype=float)
+    ranked = [
+        index for index, _ in ranking if np.isfinite(observed[index])
+    ]
+    if len(ranked) < 3 or not np.isfinite(observed[reference_index]):
+        return {
+            "evaluable_assets": len(ranked),
+            "spearman": None, "kendall": None,
+            "ndcg_at_5": None, "top1_gap": None,
+            "top5_gap": None, "top1_win": None,
+            "top1_regret": None,
+        }
+    forecast_order = np.asarray([
+        score for index, score in ranking
+        if np.isfinite(observed[index])
+    ], dtype=float)
+    actual = np.asarray([
+        observed[i] - observed[reference_index] - costs[i]
+        for i in ranked
+    ], dtype=float)
+    spear = float(spearmanr(forecast_order, actual).statistic)
+    kend = float(kendalltau(forecast_order, actual).statistic)
+    spear = spear if np.isfinite(spear) else None
+    kend = kend if np.isfinite(kend) else None
+    # Usar DCG sobre relevancia nao negativa mantendo a ordenacao real.
+    relevance = np.maximum(
+        0.0, actual - np.min(actual) + 1e-9
+    )
+    weights = 1.0 / np.log2(np.arange(2, len(actual) + 2))
+    k = min(top_k, len(actual))
+    ideal = np.sort(relevance)[::-1]
+    ideal_dcg = float(np.dot(ideal[:k], weights[:k]))
+    current_dcg = float(np.dot(relevance[:k], weights[:k]))
+    ndcg = (
+        current_dcg / ideal_dcg if ideal_dcg > 1e-12 else None
+    )
+    top1 = float(actual[0])
+    return {
+        "evaluable_assets": len(ranked),
+        "spearman": spear,
+        "kendall": kend,
+        "ndcg_at_5": ndcg,
+        "top1_gap": top1,
+        "top5_gap": float(np.mean(actual[:k])),
+        "top1_win": int(top1 > 0.0),
+        "top1_regret": float(np.max(actual) - top1),
+    }
+
+
+def summarise_ranking_methods(
+    quality_rows: list[dict[str, Any]],
+    methods: tuple[str, ...] = RANKING_METHODS,
+) -> list[dict[str, Any]]:
+    """Macro-folds descritivos: nenhum criterio reotimizado no OOS."""
+    rows = []
+    for method in methods:
+        eligible = [
+            r for r in quality_rows
+            if r["method"] == method and r["ndcg_at_5"] is not None
+        ]
+        per_fold = []
+        for fid in sorted({int(r["fold_id"]) for r in eligible}):
+            grp = [r for r in eligible if int(r["fold_id"]) == fid]
+            if not grp:
+                continue
+            per_fold.append({
+                "fold_id": fid,
+                "sessions": len({r["decision_date"] for r in grp}),
+                "rows": len(grp),
+                "mean_ndcg_at_5": float(np.mean([
+                    r["ndcg_at_5"] for r in grp
+                ])),
+                "mean_spearman": float(np.mean([
+                    r["spearman"] for r in grp
+                    if r["spearman"] is not None
+                ])),
+                "mean_kendall": float(np.mean([
+                    r["kendall"] for r in grp
+                    if r["kendall"] is not None
+                ])),
+                "mean_top1_gap": float(np.mean([
+                    r["top1_gap"] for r in grp
+                ])),
+                "top1_win_rate": float(np.mean([
+                    r["top1_win"] for r in grp
+                ])),
+                "mean_top5_gap": float(np.mean([
+                    r["top5_gap"] for r in grp
+                ])),
+                "mean_top1_regret": float(np.mean([
+                    r["top1_regret"] for r in grp
+                ])),
+            })
+        if not per_fold:
+            rows.append({
+                "method": method, "primary_metric": RANKING_PRIMARY_METRIC,
+                "mean_ndcg_at_5": None, "folds": 0,
+            })
+            continue
+        fields = (
+            "mean_ndcg_at_5", "mean_spearman", "mean_kendall",
+            "mean_top1_gap", "top1_win_rate", "mean_top5_gap",
+            "mean_top1_regret",
+        )
+        rows.append({
+            "method": method,
+            "primary_metric": RANKING_PRIMARY_METRIC,
+            "folds": len(per_fold),
+            "evaluated_sessions": sum(r["sessions"] for r in per_fold),
+            "evaluated_horizon_rows": sum(r["rows"] for r in per_fold),
+            **{
+                key: float(np.mean([f[key] for f in per_fold]))
+                for key in fields
+            },
+            "fold_details": per_fold,
+        })
+    rows.sort(key=lambda r: (
+        -(r.get("mean_ndcg_at_5") or -1.0), r["method"]
+    ))
+    for rank, row in enumerate(rows, 1):
+        row["descriptive_rank"] = rank
+    return rows
+
+
 def main() -> dict[str, Any]:
     OUT.mkdir(parents=True, exist_ok=True)
     data = SnapshotPaths.u67(ROOT)
