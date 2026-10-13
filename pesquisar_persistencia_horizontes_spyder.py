@@ -1658,6 +1658,376 @@ def aggregate_pairwise_quality(
     return rows
 
 
+
+def pair_feature_columns() -> list[str]:
+    """Contrato de features direto, com orientacao candidato/referencia."""
+    return [
+        f"{prefix}_{feature}"
+        for prefix in ("candidate", "reference", "difference")
+        for feature in PAIR_TRAINING_FEATURES
+    ]
+
+
+def build_pair_feature_cube(
+    frames: dict[str, pd.DataFrame],
+    symbols: list[str],
+    calendar: pd.DatetimeIndex,
+) -> np.ndarray:
+    """Feature(t) compartilhada, sem labels futuros ou preco de t+1."""
+    return np.stack([
+        frame.reindex(calendar)[list(PAIR_TRAINING_FEATURES)].to_numpy(
+            dtype=np.float32
+        )
+        for symbol in symbols
+        for frame in [frames[symbol]]
+    ], axis=1)
+
+
+def direct_pair_feature_block(
+    candidate: np.ndarray,
+    reference: np.ndarray,
+) -> np.ndarray:
+    """A ordem importa: (A,B,A-B) difere de (B,A,B-A)."""
+    a, b = np.asarray(candidate, dtype=np.float32), np.asarray(
+        reference, dtype=np.float32
+    )
+    if a.shape != b.shape or a.ndim != 2:
+        raise ValueError("Candidate/reference feature matrices must match")
+    return np.concatenate((a, b, a - b), axis=1)
+
+
+def train_direct_pair_dataset(
+    *,
+    feature_cube: np.ndarray,
+    target_cube: np.ndarray,
+    training_date_indices: np.ndarray,
+    horizon: int,
+    evaluation_start_index: int,
+    reference_count: int = PAIR_REFERENCE_COUNT,
+) -> tuple[pd.DataFrame, np.ndarray, dict[str, Any]]:
+    """Pares elegiveis por features e labels maturos antes da avaliacao.
+
+    References sao rotativas e deterministicas, sem ranking por retorno
+    realizado; produz A-B e B-A para simetria dos exemplos.
+    """
+    if reference_count < 1:
+        raise ValueError("Need at least one historical reference")
+    if feature_cube.ndim != 3 or target_cube.ndim != 2:
+        raise ValueError("Invalid market arrays for pair training")
+    n_dates, n_symbols, n_features = feature_cube.shape
+    if target_cube.shape != (n_dates, n_symbols):
+        raise ValueError("Target calendar or universe mismatch")
+    if n_features != len(PAIR_TRAINING_FEATURES):
+        raise ValueError("Feature count mismatch")
+    if reference_count >= n_symbols:
+        raise ValueError("Reference count must be smaller than universe")
+    train_x: list[np.ndarray] = []
+    train_y: list[np.ndarray] = []
+    unique_days = 0
+    for day_index in training_date_indices:
+        k = int(day_index)
+        if not (0 <= k < n_dates) or k + int(horizon) >= evaluation_start_index:
+            raise RuntimeError("Pair training target crosses evaluation boundary")
+        row_features = feature_cube[k]
+        label = target_cube[k]
+        valid = np.isfinite(label) & np.isfinite(row_features).all(axis=1)
+        references = [
+            (k * 7 + j * max(1, n_symbols // reference_count)) % n_symbols
+            for j in range(reference_count)
+        ]
+        if len(set(references)) != len(references):
+            raise RuntimeError("Duplicate pair training references")
+        added = 0
+        for ref in references:
+            if not valid[ref]:
+                continue
+            candidates = np.flatnonzero(valid)
+            candidates = candidates[candidates != ref]
+            if not len(candidates):
+                continue
+            cand = row_features[candidates]
+            base = np.broadcast_to(
+                row_features[ref], cand.shape
+            )
+            x = direct_pair_feature_block(cand, base)
+            y = label[candidates] - label[ref]
+            train_x.extend((x, direct_pair_feature_block(base, cand)))
+            train_y.extend((y, -y))
+            added += len(candidates)
+        unique_days += int(added > 0)
+    if unique_days < PAIR_MIN_TRAIN_DAYS or not train_x:
+        raise RuntimeError(
+            f"Pair training insufficient matured days={unique_days}"
+        )
+    values = np.concatenate(train_x, axis=0)
+    labels = np.concatenate(train_y, axis=0)
+    if not np.isfinite(values).all() or not np.isfinite(labels).all():
+        raise RuntimeError("Invalid direct-pair training numeric values")
+    return (
+        pd.DataFrame(values, columns=pair_feature_columns()),
+        labels.astype(np.float32),
+        {
+            "training_unique_days": unique_days,
+            "examples": len(labels),
+            "reference_count": reference_count,
+            "horizon": horizon,
+            "training_calendar_first_index": int(training_date_indices[0]),
+            "training_calendar_last_index": int(training_date_indices[-1]),
+            "evaluation_start_index": int(evaluation_start_index),
+        },
+    )
+
+
+def fit_direct_pair_model(
+    features: pd.DataFrame,
+    labels: np.ndarray,
+    config: Any,
+    *,
+    horizon: int,
+    fold_id: int,
+    phase: str,
+) -> Any:
+    """LightGBM de delta relativo, sem usar regressao individual."""
+    from lightgbm import LGBMRegressor
+
+    setting = _configuracoes_lightgbm(config)
+    if len(features) != len(labels):
+        raise ValueError("Direct-pair label/features length mismatch")
+    if len(features) < int(config.rotation_minimum_training_rows):
+        raise RuntimeError("Pair learning insufficient training examples")
+    model = LGBMRegressor(
+        objective="regression",
+        boosting_type="gbdt",
+        n_estimators=int(setting["n_estimators"]),
+        learning_rate=float(setting["learning_rate"]),
+        max_depth=int(setting["max_depth"]),
+        num_leaves=int(setting["num_leaves"]),
+        min_child_samples=int(setting["min_child_samples"]),
+        min_child_weight=float(setting["min_child_weight"]),
+        subsample=float(setting["subsample"]),
+        subsample_freq=int(setting["subsample_freq"]),
+        colsample_bytree=float(setting["colsample_bytree"]),
+        reg_alpha=float(setting["reg_alpha"]),
+        reg_lambda=float(setting["reg_lambda"]),
+        max_bin=int(setting["max_bin"]),
+        random_state=int(config.random_state),
+        n_jobs=1,
+        device_type="cpu",
+        deterministic=True,
+        force_col_wise=True,
+        verbosity=-1,
+    )
+    model.fit(features, labels)
+    print(
+        f"[pair-direct] fold={fold_id} H{horizon} phase={phase} "
+        f"train_examples={len(labels)}",
+        flush=True,
+    )
+    return model
+
+
+def predict_direct_pair_gaps(
+    models: dict[int, Any],
+    row_features: np.ndarray,
+    *,
+    symbols: list[str],
+    incumbent: str,
+    control_target: str,
+    day: pd.Timestamp,
+    frames: dict[str, pd.DataFrame],
+    config: Any,
+    top_k: int = 0,
+) -> list[dict[str, Any]]:
+    """Prevê A-Control e A-incumbent para TODOS os candidatos elegiveis."""
+    if (incumbent == "CASH" or control_target == "CASH"
+        or incumbent not in symbols or control_target not in symbols):
+        return []
+    n = len(symbols)
+    if row_features.shape != (n, len(PAIR_TRAINING_FEATURES)):
+        raise ValueError("Pair daily features shape mismatch")
+    positions = [
+        pos for pos in range(n)
+        if symbols[pos] not in (incumbent, control_target)
+        and np.isfinite(row_features[pos]).all()
+    ]
+    if not positions:
+        return []
+    reference_index = symbols.index(control_target)
+    current_index = symbols.index(incumbent)
+    if not (
+        np.isfinite(row_features[reference_index]).all()
+        and np.isfinite(row_features[current_index]).all()
+    ):
+        return []
+    candidate_features = row_features[positions]
+    control_features = np.broadcast_to(
+        row_features[reference_index], candidate_features.shape
+    )
+    incumbent_features = np.broadcast_to(
+        row_features[current_index], candidate_features.shape
+    )
+    block_control = pd.DataFrame(
+        direct_pair_feature_block(candidate_features, control_features),
+        columns=pair_feature_columns(),
+    )
+    block_incumbent = pd.DataFrame(
+        direct_pair_feature_block(candidate_features, incumbent_features),
+        columns=pair_feature_columns(),
+    )
+    predicted = {
+        h: np.asarray(model.predict(block_control), dtype=float)
+        for h, model in models.items()
+    }
+    predicted_current = {
+        h: np.asarray(model.predict(block_incumbent), dtype=float)
+        for h, model in models.items()
+    }
+    rows = []
+    for i, pos in enumerate(positions):
+        symbol = symbols[pos]
+        cost = estimated_incremental_pair_cost(
+            day=day, incumbent=incumbent, control_target=control_target,
+            candidate=symbol, frames=frames, config=config,
+        )
+        if not np.isfinite(cost):
+            continue
+        by_h = {h: float(predicted[h][i]) - cost for h in CAPTURE_HORIZONS}
+        by_current = {
+            h: float(predicted_current[h][i]) - cost for h in CAPTURE_HORIZONS
+        }
+        if any(not np.isfinite(v) for v in [*by_h.values(), *by_current.values()]):
+            continue
+        score = float(np.mean([by_h[h] / h for h in CAPTURE_HORIZONS]))
+        qualifies = (
+            float(np.mean([by_h[h] for h in (2, 3)])) > 0
+            and float(np.mean([by_h[h] for h in (5, 10)])) > 0
+            and float(np.mean([by_current[h] for h in (2, 3)])) > 0
+            and float(np.mean([by_current[h] for h in (5, 10)])) > 0
+            and sum(by_h[h] > 0 for h in CAPTURE_HORIZONS) >= 3
+        )
+        rows.append({
+            "decision_date": pd.Timestamp(day).isoformat(),
+            "incumbent": incumbent,
+            "control_target": control_target,
+            "candidate": symbol,
+            "incremental_cost_fraction": cost,
+            "raw_pair_mean_daily_gap": score,
+            "raw_qualifies": bool(qualifies),
+            **{f"H{h}_raw_pair_gap_fraction": by_h[h]
+               for h in CAPTURE_HORIZONS},
+            **{f"H{h}_raw_incumbent_gap_fraction": by_current[h]
+               for h in CAPTURE_HORIZONS},
+        })
+    rows.sort(key=lambda r: (-r["raw_pair_mean_daily_gap"], r["candidate"]))
+    return rows[:top_k] if top_k > 0 else rows
+
+
+def calibrate_direct_pair_confidence(
+    training_rows: list[dict[str, Any]],
+    *,
+    frames: dict[str, pd.DataFrame],
+    calendar: pd.DatetimeIndex,
+    split_date: pd.Timestamp,
+    min_distinct_days: int = PAIR_MIN_TRAIN_DAYS,
+) -> dict[str, Any]:
+    """Estima vies e erro das previsoes do VENCEDOR, apenas dados maduros."""
+    calendar_index = {pd.Timestamp(t): i for i, t in enumerate(calendar)}
+    split_index = calendar_index[pd.Timestamp(split_date)]
+    evidence: dict[int, list[tuple[float, float, str]]] = {
+        h: [] for h in CAPTURE_HORIZONS
+    }
+    for row in training_rows:
+        day = pd.Timestamp(row["decision_date"])
+        index = calendar_index[day]
+        if index >= split_index:
+            continue
+        for h in CAPTURE_HORIZONS:
+            if index + h >= split_index:
+                continue
+            label = f"forward_horizon_net_return_pct_{h}"
+            candidate = float(frames[row["candidate"]].at[day, label])
+            baseline = float(frames[row["control_target"]].at[day, label])
+            if not (np.isfinite(candidate) and np.isfinite(baseline)):
+                continue
+            actual = candidate - baseline - float(
+                row["incremental_cost_fraction"]
+            )
+            pred = float(row[f"H{h}_raw_pair_gap_fraction"])
+            evidence[h].append((pred, actual, day.isoformat()))
+    calibration: dict[str, Any] = {
+        "split_date": pd.Timestamp(split_date).isoformat(),
+        "by_horizon": {},
+        "method": "winner_pair_median_bias_and_p75_absolute_residual",
+    }
+    for h, sample in evidence.items():
+        days_count = len({v[2] for v in sample})
+        if days_count < min_distinct_days:
+            raise RuntimeError(
+                f"Insufficient mature winner-pair days H{h}: {days_count}"
+            )
+        errors = np.asarray([v[1] - v[0] for v in sample], dtype=float)
+        bias = float(np.median(errors))
+        dispersion = float(np.quantile(
+            np.abs(errors - bias), PAIR_ERROR_QUANTILE
+        ))
+        calibration["by_horizon"][str(h)] = {
+            "bias_correction": bias,
+            "abs_residual_p75": dispersion,
+            "training_unique_days": days_count,
+            "mean_raw_gap": float(np.mean([v[0] for v in sample])),
+            "mean_actual_gap": float(np.mean([v[1] for v in sample])),
+        }
+    return calibration
+
+
+def choose_confident_direct_pair(
+    ranking: list[dict[str, Any]],
+    calibration: dict[str, Any],
+    *,
+    require_confidence: bool = True,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Mesmo filtro previamente registrado para todos os folds."""
+    enriched: list[dict[str, Any]] = []
+    for base in ranking:
+        row = dict(base)
+        corrected, current, lower = {}, {}, {}
+        for h in CAPTURE_HORIZONS:
+            params = calibration["by_horizon"][str(h)]
+            correction = float(params["bias_correction"])
+            error = float(params["abs_residual_p75"])
+            corrected[h] = float(row[f"H{h}_raw_pair_gap_fraction"]) + correction
+            current[h] = float(row[f"H{h}_raw_incumbent_gap_fraction"]) + correction
+            lower[h] = corrected[h] - error
+            row[f"H{h}_corrected_pair_gap_fraction"] = corrected[h]
+            row[f"H{h}_calibrated_pair_gap_fraction"] = corrected[h]
+            row[f"H{h}_pair_lower_bound_fraction"] = lower[h]
+        row["corrected_mean_daily_gap"] = float(np.mean([
+            corrected[h] / h for h in CAPTURE_HORIZONS
+        ]))
+        row["mean_lower_daily_gap"] = float(np.mean([
+            lower[h] / h for h in CAPTURE_HORIZONS
+        ]))
+        row["calibrated_qualifies"] = bool(
+            row["raw_qualifies"]
+            and float(np.mean([corrected[h] for h in (2, 3)])) > 0
+            and float(np.mean([corrected[h] for h in (5, 10)])) > 0
+            and float(np.mean([current[h] for h in (2, 3)])) > 0
+            and float(np.mean([current[h] for h in (5, 10)])) > 0
+            and (
+                not require_confidence
+                or (
+                    float(np.mean([lower[h] for h in (2, 3)])) > 0
+                    and float(np.mean([lower[h] for h in (5, 10)])) > 0
+                )
+            )
+        )
+        enriched.append(row)
+    enriched.sort(key=lambda r: (-r["mean_lower_daily_gap"], r["candidate"]))
+    winner = next(
+        (row for row in enriched if row["calibrated_qualifies"]), None
+    )
+    return winner, enriched
+
 def main() -> dict[str, Any]:
     OUT.mkdir(parents=True, exist_ok=True)
     data = SnapshotPaths.u67(ROOT)
