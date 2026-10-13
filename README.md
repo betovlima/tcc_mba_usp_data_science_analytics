@@ -479,3 +479,54 @@ produz um sinal sonoro curto de sucesso; em erros,
 dois tons diferentes e o trace ficam preservados no log.
 Nao ha chamadas de mercado ou operacoes reais.
 Consulte MANIFEST.md 25.12.10.
+
+
+### Pesquisa v1.0.11 — explicar a precisão do Control por ablação
+
+A v1.0.11 conserva o **Control congelado** (capital
+US$ 587.165.941,13; 75 ativos, 3 folds) e testa
+seis variantes da MESMA previsão de utilidade:
+permanência mínima de 0 ou 2 pregões, cruzada com
+margem zero, margem base ou margem calibrada pelo
+histórico pré-OOS. A variante H2/margem calibrada
+é o Control reproduzido e não é reexecutada.
+Não há novos modelos de decisão probabilística.
+
+Para diferenciar o bloqueio imediato dos efeitos
+indiretos de mudar a carteira, geramos duas análises:
+`utility_ablation_one_step.csv` aplica as seis regras
+ao MESMO ativo e tempo de permanência do Control em
+cada data, e seis simulações completas com estado
+independente gravam operações, capital e qualidade
+das rotações. A métrica diagnóstica principal é
+precisão de trocas H05 versus manter, por fold.
+O OOS existente não será usado para tuning.
+
+A v1.0.11 ainda executa as auditorias anteriores.
+A ordenação autônoma matemática da v1.0.10
+continua separada; o comparador Learning to Rank
+v1.0.9 permanece somente no diagnóstico histórico.
+Todos os custos e as execuções continuam simulados,
+sem ordens reais e sem alteração do Control.
+
+**Atualização do Spyder:**
+
+    !git fetch origin
+    !git switch research/horizon-persistence-oos-v1
+    !git pull --ff-only origin research/horizon-persistence-oos-v1
+    !git log -1 --oneline
+
+Reinicie o kernel:
+
+    %run pesquisar_persistencia_horizontes_spyder.py
+
+**Pacote para análise:**
+`output/persistencia_horizontes_u77_v111/pacote_persistencia_horizontes_u77_v111.zip`
+
+O ZIP é finalizado após a conclusão do script, o
+registro dos logs completos e o sinal sonoro do
+Windows. Em caso de falha, envie
+`output/persistencia_horizontes_u77_v111/execution_full.log`.
+O sinal de sucesso usa tons diferentes do alerta
+de erro. Ver o protocolo e as limitações da
+seção 25.12.11 em `MANIFEST.md`.
