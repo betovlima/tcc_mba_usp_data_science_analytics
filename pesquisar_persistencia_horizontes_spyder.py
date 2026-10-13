@@ -1562,7 +1562,7 @@ def assess_pairwise_fixed_outcomes(
     """
     days = pd.DatetimeIndex(calendar)
     index = {pd.Timestamp(t): i for i, t in enumerate(days)}
-    cutoff = index[pd.Timestamp(horizon_end_exclusive)]
+    cutoff = int(days.searchsorted(pd.Timestamp(horizon_end_exclusive), side="left"))
     outcome = []
     for record in records:
         row = dict(record)
