@@ -688,3 +688,33 @@ def test_v106_longest_forecast_requires_a_causal_training_purge():
     assert CAPTURE_HORIZONS == (2, 3, 5, 10)
     assert 60 in EXTENDED_AUDIT_HORIZONS
     assert max(ALL_RESEARCH_HORIZONS) <= 60
+
+
+def test_v106_capture_requires_advantage_in_short_and_medium():
+    from pesquisar_persistencia_horizontes_spyder import select_horizon_candidates
+
+    day = pd.Timestamp("2025-05-01", tz="UTC")
+    data = {
+        2: np.array([0.0, 0.01, -0.03]),
+        3: np.array([0.0, 0.01, -0.03]),
+        5: np.array([0.0, 0.01, 0.16]),
+        10: np.array([0.0, 0.01, 0.16]),
+    }
+    forecasts = {h: {day: v} for h, v in data.items()}
+    ranked, capture = select_horizon_candidates(
+        day=day, incumbent="AAPL", symbols=["AAPL", "NVDA"],
+        forecast=forecasts, horizons=(2, 3, 5, 10),
+        extra_switch_cost=0.005,
+        capture_require_short_medium_advantage=True,
+    )
+    assert ranked[0]["candidate"] == "NVDA"
+    assert capture["best_candidate"] is None
+    assert capture["eligible_candidate_count"] == 0
+
+    _, audit = select_horizon_candidates(
+        day=day, incumbent="AAPL", symbols=["AAPL", "NVDA"],
+        forecast=forecasts, horizons=(2, 3, 5, 10),
+        extra_switch_cost=0.005,
+        capture_require_short_medium_advantage=False,
+    )
+    assert audit["best_candidate"] == "NVDA"
