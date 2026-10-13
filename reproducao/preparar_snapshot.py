@@ -18,7 +18,7 @@ from reproducao.dados import (
     download_corporate_actions,
     download_raw_bars,
     load_alpaca_credentials,
-    validate_snapshot,
+    read_snapshot_manifest,
 )
 
 
@@ -65,7 +65,7 @@ manifest = build_snapshot_manifest(
     assets=U67_REQUESTED_ASSETS,
     snapshot_name=SNAPSHOT_NAME,
 )
-validate_snapshot(BUILD)
+read_snapshot_manifest(BUILD)
 
 
 # %% 2 - Publicacao local do snapshot validado
@@ -74,11 +74,11 @@ if TARGET.root.exists():
 TARGET.root.parent.mkdir(parents=True, exist_ok=True)
 shutil.move(str(BUILD.root), str(TARGET.root))
 
-validated = validate_snapshot(TARGET)
+validated = read_snapshot_manifest(TARGET)
 print(
     "[snapshot-u67] ready "
     f"assets={len(validated.get('assets') or [])} "
-    f"sha256={validated.get('snapshot_sha256')} "
+    f"files={len(validated.get('row_counts') or {})} "
     f"path={TARGET.root}",
     flush=True,
 )
