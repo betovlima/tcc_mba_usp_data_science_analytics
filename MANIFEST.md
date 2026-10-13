@@ -2660,3 +2660,47 @@ um vencedor histórico não é melhoria confirmada.
 **Estado:** implementação versionada no ramo isolado;
 execução completa Spyder com snapshot congelado pendente
 de resultados. O Control e a main seguem intocados.
+
+
+#### 25.12.11.A Esclarecimento metodológico: permanência mínima do swing trade
+
+**Decisão de governança confirmada em 13/10/2026:** a
+permanência mínima de **dois pregões** constitui restrição
+original e intencional do desenho da estratégia de *swing
+trade*. É **regra estrutural**, não hiperparâmetro livre
+a ser otimizado, removido ou ajustado com base no capital
+final ou na precisão observada nos folds de pesquisa.
+A margem de troca permanece uma regra distinta,
+calibrada apenas nas janelas históricas próprias.
+
+**Leitura correta da v1.0.11:** os cenários com
+`rotation_min_holding_days=0` são **contrafactuais
+diagnósticos**, fora da família de políticas admissíveis
+para o desenho pretendido. Eles ajudam a entender a
+sensibilidade do mecanismo, mas NÃO são candidatos para
+substituir o Control e NÃO justificam retirar a restrição.
+Manter como referência metodológica o cenário
+`utility_hold2_margin_calibrated`, equivalente ao Control
+congelado. Nenhuma alteração no código da política oficial,
+em seu checkpoint ou em `main`.
+
+**Pesquisas futuras:** preservar `rotation_min_holding_days=2`
+em todas as políticas elegíveis de swing trade;
+separar qualidade do sinal preditivo, precisão das
+trocas admissíveis, custos, risco e calibração histórica
+da margem, sem tentar novamente otimizar o tempo mínimo.
+Uma política pode manter a posição **por mais** de dois
+pregões sempre que não existir vantagem suficiente
+para rotacionar; cumprir o mínimo não obriga trocar.
+
+**Evidência bibliográfica:** há menção do pesquisador a
+estudos históricos que motivaram o desenho swing trade.
+As referências específicas e sua abrangência não foram
+identificadas/validadas neste registro; não se afirma
+que dois pregões sejam um ótimo universal do mercado de ações.
+A decisão metodológica de manter a restrição independe
+de apresentar essa hipótese como lei geral.
+
+**Status:** esclarecimento documental na mesma branch;
+sem alteração algorítmica e sem criação de estratégia
+operacional.
