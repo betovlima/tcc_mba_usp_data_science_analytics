@@ -892,3 +892,158 @@ def test_v107_expanded_audit_has_candidate_specific_friction():
     assert chosen["best_candidate"] == "NVDA"
     assert chosen["extra_switch_cost_fraction"] == 0.01
     assert ranks[0]["H1_pred_increment_pct_points"] == pytest.approx(1.0)
+
+
+def test_v108_independent_horizon_labels_mature_near_end():
+    from types import SimpleNamespace
+    from pesquisar_persistencia_horizontes_spyder import (
+        build_horizon_return_labels,
+    )
+
+    dates = pd.date_range("2026-01-01", periods=90, freq="B", tz="UTC")
+    frame = pd.DataFrame({
+        "open": np.full(90, 100.0),
+        "close": 100.0 + np.arange(90, dtype=float),
+        "forward_horizon_net_log_return_5": np.full(90, np.nan),
+    }, index=dates)
+    frames = {"AAPL": frame}
+    config = SimpleNamespace(slippage_bps=0.0, commission_rate=0.0)
+    build_horizon_return_labels(frames, dates, config, (2, 5, 60))
+    assert frames["AAPL"].loc[dates[-3], "forward_horizon_net_return_pct_2"] == pytest.approx(
+        (100.0 + 89.0) / 100.0 - 1.0
+    )
+    assert pd.isna(
+        frames["AAPL"].loc[dates[-3], "forward_horizon_net_return_pct_5"]
+    )
+    assert pd.isna(
+        frames["AAPL"].loc[dates[-2], "forward_horizon_net_return_pct_2"]
+    )
+    assert np.isfinite(
+        frames["AAPL"].loc[dates[0], "forward_horizon_net_return_pct_60"]
+    )
+
+
+def test_v108_pair_block_is_oriented_and_uses_only_present_features():
+    from pesquisar_persistencia_horizontes_spyder import (
+        PAIR_TRAINING_FEATURES,
+        direct_pair_feature_block,
+        pair_feature_columns,
+    )
+
+    n = len(PAIR_TRAINING_FEATURES)
+    a = np.full((2, n), 0.12, dtype=float)
+    b = np.full((2, n), 0.04, dtype=float)
+    forward = direct_pair_feature_block(a, b)
+    reverse = direct_pair_feature_block(b, a)
+    assert forward.shape == (2, 3*n)
+    assert len(pair_feature_columns()) == 3*n
+    assert np.allclose(forward[:, 2*n:], 0.08)
+    assert np.allclose(reverse[:, 2*n:], -0.08)
+
+
+def test_v108_pair_training_enforces_maturity_and_balanced_directions():
+    from pesquisar_persistencia_horizontes_spyder import (
+        PAIR_TRAINING_FEATURES,
+        train_direct_pair_dataset,
+    )
+
+    n = len(PAIR_TRAINING_FEATURES)
+    features = np.ones((35, 4, n), dtype=np.float32)
+    target = np.tile(np.array([0.02, 0.1, -0.04, 0.2]), (35, 1))
+    x, y, metadata = train_direct_pair_dataset(
+        feature_cube=features, target_cube=target,
+        training_date_indices=np.arange(20),
+        horizon=5, evaluation_start_index=25,
+        reference_count=2,
+    )
+    assert metadata["training_unique_days"] == 20
+    assert metadata["examples"] == len(y)
+    assert len(x) == len(y)
+    assert np.sum(y) == pytest.approx(0.0)
+    with pytest.raises(RuntimeError, match="crosses evaluation boundary"):
+        train_direct_pair_dataset(
+            feature_cube=features, target_cube=target,
+            training_date_indices=np.arange(21),
+            horizon=5, evaluation_start_index=25,
+            reference_count=2,
+        )
+
+
+def test_v108_direct_pair_predictions_compare_with_control_and_incumbent():
+    from types import SimpleNamespace
+    from pesquisar_persistencia_horizontes_spyder import (
+        PAIR_TRAINING_FEATURES,
+        predict_direct_pair_gaps,
+    )
+
+    day = pd.Timestamp("2026-01-01", tz="UTC")
+    n = len(PAIR_TRAINING_FEATURES)
+    features = np.ones((3, n), dtype=np.float32)
+    prices = {"AAPL": 100.0, "MSFT": 200.0, "NVDA": 30.0}
+    frames = {
+        symbol: pd.DataFrame({"close": [price]}, index=[day])
+        for symbol, price in prices.items()
+    }
+    cfg = SimpleNamespace(
+        slippage_bps=0.0, commission_rate=0.0,
+        cat_fee_per_share=0.0, sec_fee_rate=0.0,
+        taf_fee_per_share=0.0,
+    )
+
+    class FixedPairModel:
+        def __init__(self, value):
+            self.value = value
+
+        def predict(self, matrix):
+            assert len(matrix.columns) == n * 3
+            return np.full(len(matrix), self.value)
+
+    models = {h: FixedPairModel(0.05) for h in (2, 3, 5, 10)}
+    rows = predict_direct_pair_gaps(
+        models, features, symbols=["AAPL", "MSFT", "NVDA"],
+        incumbent="AAPL", control_target="MSFT", day=day,
+        frames=frames, config=cfg,
+    )
+    assert len(rows) == 1
+    assert rows[0]["candidate"] == "NVDA"
+    assert rows[0]["raw_pair_short_gap_fraction"] if (
+        "raw_pair_short_gap_fraction" in rows[0]
+    ) else rows[0]["H2_raw_pair_gap_fraction"] > 0
+
+
+def test_v108_winner_pair_calibration_excludes_unmatured_future():
+    from pesquisar_persistencia_horizontes_spyder import (
+        calibrate_direct_pair_confidence,
+        choose_confident_direct_pair,
+    )
+
+    dates = pd.date_range("2026-01-01", periods=125, freq="B", tz="UTC")
+    frame_b = pd.DataFrame({
+        f"forward_horizon_net_return_pct_{h}": np.zeros(len(dates))
+        for h in (2, 3, 5, 10)
+    }, index=dates)
+    frame_a = pd.DataFrame({
+        f"forward_horizon_net_return_pct_{h}": np.array(
+            [0.03]*70 + [200.0]*(len(dates)-70)
+        )
+        for h in (2, 3, 5, 10)
+    }, index=dates)
+    rows = [{
+        "decision_date": day.isoformat(),
+        "incumbent": "AAPL",
+        "control_target": "AAPL",
+        "candidate": "NVDA",
+        "incremental_cost_fraction": 0.0,
+        "raw_qualifies": True,
+        **{f"H{h}_raw_pair_gap_fraction": 0.03 for h in (2, 3, 5, 10)},
+        **{f"H{h}_raw_incumbent_gap_fraction": 0.03 for h in (2, 3, 5, 10)},
+    } for day in dates[:104]]
+    params = calibrate_direct_pair_confidence(
+        rows, frames={"AAPL": frame_b, "NVDA": frame_a},
+        calendar=dates, split_date=dates[80],
+    )
+    assert params["by_horizon"]["10"]["training_unique_days"] == 70
+    assert params["by_horizon"]["10"]["abs_residual_p75"] == pytest.approx(0.0)
+    winner, rows = choose_confident_direct_pair(rows[:1], params)
+    assert winner is not None
+    assert winner["candidate"] == "NVDA"
