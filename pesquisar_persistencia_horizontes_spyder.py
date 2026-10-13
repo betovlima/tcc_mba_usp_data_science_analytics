@@ -1,4 +1,4 @@
-"""Pesquisa U67+10 v1.0.10: politicas matematicas autonomas de rotacao.
+"""Pesquisa U67+10 v1.0.11: ablacoes causais de permanencia e margem.
 
 Control e unico backtest; selecao de candidatos e diagnostica.
 Reproduz o checkpoint, corrige cobertura de labels H01..H60, treina
@@ -57,8 +57,8 @@ from pesquisar_expansao_u67_spyder import (
 )
 
 ROOT = Path(__file__).resolve().parent
-OUT = ROOT / "output" / "persistencia_horizontes_u77_v110"
-VERSION = "horizon-persistence-oos-v1.0.10"
+OUT = ROOT / "output" / "persistencia_horizontes_u77_v111"
+VERSION = "horizon-persistence-oos-v1.0.11"
 CONFIDENCE_MULTIPLIERS = (0.0, 0.5, 1.0)  # historico v1.0.3
 ANCHOR_BLEND = 0.5  # historico v1.0.3
 HOLDING_CANDIDATES = (1, 2, 3, 4)  # historico v1.0.4
@@ -73,6 +73,11 @@ EXTENDED_AUDIT_HORIZONS = (1, 2, 3, 5, 10, 15, 20, 30, 40, 60)
 AUDIT_ONLY_HORIZONS = (1, 15, 20, 30, 40, 60)
 ALL_RESEARCH_HORIZONS = EXTENDED_AUDIT_HORIZONS
 AUDIT_TOP_K = 5
+# Ablacao pre-registrada: mesmo sinal de utilidade, uma alteracao por vez.
+UTILITY_ABLATION_HOLD = (0, 2)
+UTILITY_ABLATION_MARGINS = ("zero", "base", "calibrated")
+UTILITY_ABLATION_PRIMARY_HORIZON = 5
+UTILITY_ABLATION_PRIMARY_METRIC = "H05_switch_precision_vs_hold"
 AUTONOMOUS_POLICY_METHODS = ("net_gain", "borda_pareto", "topsis", "consensus")
 AUTONOMOUS_MIN_HOLD = 2
 AUTONOMOUS_SWITCH_MARGIN = 0.0  # nenhum ajuste no OOS
@@ -4104,7 +4109,7 @@ def main() -> dict[str, Any]:
         "export_to_operational": False,
     }
     write_json(OUT / "experiment.json", payload)
-    package_path = OUT / "pacote_persistencia_horizontes_u77_v110.zip"
+    package_path = OUT / "pacote_persistencia_horizontes_u77_v111.zip"
     with zipfile.ZipFile(
         package_path, "w", compression=zipfile.ZIP_DEFLATED
     ) as archive:
