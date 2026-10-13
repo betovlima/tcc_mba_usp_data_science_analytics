@@ -375,3 +375,54 @@ O checkpoint obrigatorio e US$ 587.165.941,13. Esta versao adiciona ate 24 ajust
     output/persistencia_horizontes_u77_v108/pacote_persistencia_horizontes_u77_v108.zip
 
 Resultados da v1.0.8 ainda aguardam execucao. Para o protocolo cientifico e as limitacoes, consulte a secao 25.12.8 de `MANIFEST.md`.
+
+### Pesquisa v1.0.9 — todos os rankings em uma mesma execucao com logs
+
+A versao padrao de `pesquisar_persistencia_horizontes_spyder.py`
+e agora v1.0.9. Executa e compara **oito metodos**:
+retorno previsto, vantagem liquida contra Control, Borda,
+TOPSIS, fronteiras de Pareto, ranking probabilistico,
+ranking robusto e Learning to Rank (LambdaMART).
+Somente Learning to Rank treina um modelo de ordenacao
+adicional; os outros sete sao pos-processamentos de
+previsoes congeladas. Todos compartilham o mesmo
+universo elegivel e os mesmos horizontes H02/H03/H05/H10.
+
+O criterio descritivo PRINCIPAL e **NDCG@5**, com
+agregacao macro dos folds. Tambem sao gerados Spearman,
+Kendall, top-1, top-5, taxa de vitoria sobre Control
+e top-1 regret. A auditoria separada H01–H60,
+o modelo direto de pares e o Control permanecem
+na mesma execucao, sem alteracao da politica financeira.
+
+No console do Spyder:
+
+    !git fetch origin
+    !git switch research/horizon-persistence-oos-v1
+    !git pull --ff-only origin research/horizon-persistence-oos-v1
+
+Depois de reiniciar o kernel, execute:
+
+    %run pesquisar_persistencia_horizontes_spyder.py
+
+O script usa apenas snapshots congelados U67+10, sem
+download de mercado, e deve reproduzir o Control ao
+centavo antes do estudo. Podera consumir bastante tempo
+para treinar os modelos de previsao anteriores, os
+modelos de calibracao e um LambdaMART por fold.
+
+Artefatos da execucao:
+
+    output/persistencia_horizontes_u77_v109/pacote_persistencia_horizontes_u77_v109.zip
+
+O ZIP inclui `ranking_methods.log` e
+`ranking_all_assets.csv` com todos os candidatos e
+oito rankings por dia, alem de
+`ranking_methods_leaderboard.csv`,
+`ranking_methods_by_fold.csv`,
+`ranking_oos_quality_by_session.csv`,
+`ranking_historical_error_calibration.csv` e
+arquivos anteriores de auditoria. Nenhuma regra nova
+e promovida automaticamente. Os folds ja foram vistos
+em campanhas previas; o ranking obtido e exploratorio.
+Ver `MANIFEST.md` secao 25.12.9.
