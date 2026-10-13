@@ -1093,7 +1093,7 @@ def test_v109_pareto_fronts_are_nondominated_then_recursive():
         [2., 2.], [1., 1.], [0., 0.], [2., 1.],
     ])
     layers = nondominated_layers(values)
-    assert layers.tolist() == [0, 1, 2, 1]
+    assert layers.tolist() == [0, 2, 3, 1]
     with pytest.raises(ValueError, match="finite"):
         nondominated_layers(np.array([[0.0, np.nan]]))
 
