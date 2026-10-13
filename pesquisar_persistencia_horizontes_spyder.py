@@ -2866,6 +2866,7 @@ def autonomous_decision_quality(
     audit: list[dict[str, Any]], frames: dict[str, pd.DataFrame],
     calendar: pd.DatetimeIndex, folds: list[dict[str, Any]],
     config: Any,
+    methods: tuple[str, ...] = AUTONOMOUS_POLICY_METHODS,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Atribui labels APOS simular; nenhuma pre-visao usa esses labels."""
     loc = {pd.Timestamp(t): i for i, t in enumerate(calendar)}
@@ -2921,7 +2922,7 @@ def autonomous_decision_quality(
                 "reason": decision["reason"],
             })
     summary: list[dict[str, Any]] = []
-    for method in AUTONOMOUS_POLICY_METHODS:
+    for method in methods:
         for fid in sorted(boundaries):
             subset = [
                 d for d in audit
@@ -3116,6 +3117,9 @@ def main() -> dict[str, Any]:
     audit_selected: list[dict[str, Any]] = []
     audit_per_horizon: list[dict[str, Any]] = []
     seen_oos_days: set[pd.Timestamp] = set()
+    autonomous_forecast_by_fold: dict[
+        int, dict[int, dict[pd.Timestamp, np.ndarray]]
+    ] = {}
     ranking_quality: list[dict[str, Any]] = []
     ranking_calibrations: list[dict[str, Any]] = []
     ranking_output = OUT / "ranking_all_assets.csv"
@@ -3351,6 +3355,11 @@ def main() -> dict[str, Any]:
             del audit_models
             print(f"[audit] fold={fid} H{h} ready", flush=True)
 
+        # Cache estritamente fora da amostra para as quatro
+        # politicas matematicas independentes do Control.
+        autonomous_forecast_by_fold[fid] = {
+            h: individual_forecasts[h] for h in CAPTURE_HORIZONS
+        }
         for day in decision_days:
             t = pd.Timestamp(day)
             if decision_to_fold.get(t) != fid:
@@ -3633,6 +3642,147 @@ def main() -> dict[str, Any]:
     log_stream.flush()
     log_stream.close()
 
+    # SIMULACOES AUTONOMAS: cada politica utiliza estado/proprio
+    # portfolio, previsoes OOS e custos em t. A acao Control nao
+    # entra nas regras matematicas.
+    autonomous_audit: list[dict[str, Any]] = []
+    autonomous_financial: list[dict[str, Any]] = []
+    rotation_logs: list[str] = []
+
+    def rotation_log(message: str) -> None:
+        line = f"[autonomous-v110] {message}"
+        print(line, flush=True)
+        rotation_logs.append(line)
+
+    rotation_log(
+        "begin independent policies=" + ",".join(AUTONOMOUS_POLICY_METHODS)
+    )
+    for method in AUTONOMOUS_POLICY_METHODS:
+        diagnostics: dict[pd.Timestamp, dict[str, Any]] = {}
+        policy_rows: list[dict[str, Any]] = []
+        policy = AutonomousMathematicalPolicy(
+            method=method, symbols=symbols,
+            forecast_by_fold=autonomous_forecast_by_fold,
+            decision_to_fold=decision_to_fold,
+            frames=frames, config=configuration,
+            audit=policy_rows, diagnostics=diagnostics,
+        )
+        rotation_log(f"start policy={method}")
+        def progress(fraction: float, stage: str) -> None:
+            if fraction >= 0.999 or abs(fraction - 0.12) < 1e-4:
+                rotation_log(
+                    f"policy={method} progress={fraction:.1%} stage={stage}"
+                )
+
+        result = _simular_exato(
+            f"autonomous_math_{method}",
+            policy,
+            frames, symbols, all_decision_dates, configuration,
+            calcular_taxas_referencia, aplicar_deslizamento,
+            decision_metadata=decision_metadata,
+            policy_decision_diagnostics=diagnostics,
+            model_label=f"Autonomous mathematical rotation: {method}",
+            method_line=(
+                "Deterministic rotation from separately trained "
+                "horizon forecasts; no Control decisions as policy inputs"
+            ),
+            simulation_progress_callback=progress,
+        )
+        figures = scenario_metrics(
+            result, folds, float(configuration.initial_capital)
+        )
+        independent_score = {
+            "method": method, "variant": f"math_{method}",
+            "ending_capital": figures["ending_capital"],
+            "sharpe": figures["sharpe"],
+            "maximum_drawdown": figures["maximum_drawdown"],
+            "worst_fold_return": figures["worst_fold_return"],
+            "capital_rotations": figures["capital_rotations"],
+            "fees": figures["total_transaction_fees"],
+            "market_exposure": result.metrics["market_exposure"],
+            "avg_holding_sessions": result.metrics["average_holding_days"],
+            "folds": figures["folds"],
+            "relative_to_control_capital_ratio": (
+                figures["ending_capital"] / actual
+            ),
+            "uses_control_action_as_policy_input": False,
+            "is_exploratory_repeated_oos": True,
+        }
+        autonomous_financial.append(independent_score)
+        autonomous_audit.extend(policy_rows)
+        result.predictions.to_csv(
+            OUT / f"autonomous_{method}_equity.csv",
+            index_label="timestamp",
+        )
+        result.trades.to_csv(
+            OUT / f"autonomous_{method}_trades.csv", index=False
+        )
+        rotation_log(
+            f"completed policy={method} capital="
+            f"{figures['ending_capital']:,.2f} "
+            f"sharpe={figures['sharpe']:.4f} "
+            f"max_dd={figures['maximum_drawdown']:.3%} "
+            f"rotations={figures['capital_rotations']} "
+            f"fees={figures['total_transaction_fees']:,.2f}"
+        )
+        del result, policy
+
+    # O Control e avaliado pela mesma definicao de melhoria/erro
+    # de trocar vs manter, sem interferir nas politicas alternativas.
+    control_audit = [{
+        "method": "control", "decision_date": t.isoformat(),
+        "fold_id": int(decision_to_fold[t]),
+        "current_asset": str(record["current_asset"]),
+        "action_asset": str(record["final_action_asset"]),
+        "reason": str(record["decision_reason"]),
+    } for t, record in sorted(control_guard_audit.items())
+        if t in decision_to_fold and t in seen_oos_days
+    ]
+    rotation_quality, rotation_quality_summary = autonomous_decision_quality(
+        audit=autonomous_audit + control_audit,
+        frames=frames, calendar=common_dates,
+        folds=folds, config=configuration,
+        methods=("control", *AUTONOMOUS_POLICY_METHODS),
+    )
+    autonomous_financial.insert(0, {
+        "method": "control", "variant": "control_holding_2",
+        "ending_capital": actual, "sharpe": metrics_2["sharpe"],
+        "maximum_drawdown": metrics_2["maximum_drawdown"],
+        "worst_fold_return": metrics_2["worst_fold_return"],
+        "capital_rotations": metrics_2["capital_rotations"],
+        "fees": metrics_2["total_transaction_fees"],
+        "market_exposure": result_2.metrics["market_exposure"],
+        "avg_holding_sessions": result_2.metrics["average_holding_days"],
+        "folds": metrics_2["folds"],
+        "relative_to_control_capital_ratio": 1.0,
+        "uses_control_action_as_policy_input": False,
+        "is_exploratory_repeated_oos": True,
+    })
+    for row in autonomous_financial:
+        rotation_log(
+            f"comparison method={row['method']} "
+            f"ending_capital={row['ending_capital']:,.2f} "
+            f"rotations={row['capital_rotations']}"
+        )
+    for method in ("control", *AUTONOMOUS_POLICY_METHODS):
+        for h in CAPTURE_HORIZONS:
+            stats = [
+                r for r in rotation_quality_summary
+                if r["method"] == method and r["horizon"] == h
+            ]
+            observed = [r for r in stats if r["switch_precision"] is not None]
+            macro_precision = (
+                float(np.mean([r["switch_precision"] for r in observed]))
+                if observed else None
+            )
+            rotation_log(
+                f"decision_quality method={method} H{h:02d} "
+                f"mean_fold_precision={macro_precision}"
+            )
+    (OUT / "rotation_policy.log").write_text(
+        "\n".join(rotation_logs) + "\n", encoding="utf-8",
+    )
+
     # Joins dos outcomes APOS os rankings, somente se t+H amadureceu
     # dentro do proprio fold. Nenhum retorno OOS treinou o modelo.
     evaluated_raw: list[dict[str, Any]] = []
@@ -3783,6 +3933,14 @@ def main() -> dict[str, Any]:
         for fold in row.get("fold_details", [])
     ])
     write_csv("ranking_methods_by_horizon.csv", ranking_by_horizon)
+    write_csv("autonomous_rotation_decisions.csv", autonomous_audit)
+    write_csv("autonomous_rotation_realized_quality.csv", rotation_quality)
+    write_csv("autonomous_rotation_quality_by_fold.csv",
+              rotation_quality_summary)
+    write_csv("autonomous_financial_summary.csv", [
+        {k: v for k, v in row.items() if k != "folds"}
+        for row in autonomous_financial
+    ])
     write_csv("horizon_model_training.csv", model_audit)
     write_csv("control_decision_reasons.csv", [
         {"decision_date": d.isoformat(), **row}
@@ -3792,14 +3950,19 @@ def main() -> dict[str, Any]:
         OUT / "control_holding_2_equity.csv", index_label="timestamp"
     )
     result_2.trades.to_csv(OUT / "control_holding_2_trades.csv", index=False)
-    write_csv("comparison.csv", [{
-        "variant": "control_holding_2",
-        "ending_capital": metrics_2["ending_capital"],
-        "sharpe": metrics_2.get("sharpe"),
-        "maximum_drawdown": metrics_2.get("maximum_drawdown"),
-        "candidate_backtest_performed": False,
-        "control_reproduced": True,
-    }])
+    write_csv("comparison.csv", [
+        {
+            "variant": row["variant"],
+            "ending_capital": row["ending_capital"],
+            "sharpe": row["sharpe"],
+            "maximum_drawdown": row["maximum_drawdown"],
+            "capital_rotations": row["capital_rotations"],
+            "fees": row["fees"],
+            "control_reproduced": True,
+            "policy_uses_control_action": False,
+        }
+        for row in autonomous_financial
+    ])
     fixed_hashes = {
         sym: {
             "raw_sha256": sha256_file(FULL_DATA.raw_bars / f"{sym}.csv"),
@@ -3820,6 +3983,14 @@ def main() -> dict[str, Any]:
         "pair_feature_columns": pair_feature_columns(),
         "reference_sampling": "two deterministic rotating anchors per day, with reverse pairs",
         "pair_models": 2 * len(CAPTURE_HORIZONS) * len(folds),
+        "autonomous_policy_methods": list(AUTONOMOUS_POLICY_METHODS),
+        "autonomous_financial_comparison": autonomous_financial,
+        "autonomous_rotation_precision_by_fold": rotation_quality_summary,
+        "autonomous_no_control_action_in_policy": True,
+        "autonomous_live_orders": False,
+        "autonomous_reuses_frozen_individual_forecasts": True,
+        "autonomous_cash_option": True,
+        "autonomous_minimum_holding_sessions": AUTONOMOUS_MIN_HOLD,
         "ranking_methods": list(RANKING_METHODS),
         "ranking_primary_metric": RANKING_PRIMARY_METRIC,
         "ranking_evaluation_horizons": list(
@@ -3845,7 +4016,8 @@ def main() -> dict[str, Any]:
             "control_checkpoint_reference": expected,
             "reproduces_checkpoint_to_cent": True,
         },
-        "candidate_backtest_performed": False,
+        "candidate_backtest_performed": True,
+        "candidate_backtest_methods": list(AUTONOMOUS_POLICY_METHODS),
         "operational_orders": False,
         "oos_used_for_parameter_selection": False,
         "method_limitations": (
