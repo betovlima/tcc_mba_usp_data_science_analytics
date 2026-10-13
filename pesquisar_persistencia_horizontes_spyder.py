@@ -1063,6 +1063,7 @@ def select_horizon_candidates(
     horizons: tuple[int, ...],
     extra_switch_cost: float,
     top_k: int = AUDIT_TOP_K,
+    capture_require_short_medium_advantage: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Ranking somente por previsoes da data t, nunca por label futuro."""
     if incumbent not in symbols:
@@ -1112,11 +1113,23 @@ def select_horizon_candidates(
         -float(r["mean_daily_pred_increment_pct_points"]),
         -int(r["positive_horizon_count"]), r["candidate"],
     ))
-    selected = next(
-        (r for r in records
-         if r["mean_daily_pred_increment_pct_points"] > 0.0),
-        None,
-    )
+    def qualifies(row: dict[str, Any]) -> bool:
+        if row["mean_daily_pred_increment_pct_points"] <= 0.0:
+            return False
+        if not capture_require_short_medium_advantage:
+            return True
+        short_mean = float(np.mean([
+            row[f"H{h}_pred_increment_pct_points"] for h in (2, 3)
+        ]))
+        medium_mean = float(np.mean([
+            row[f"H{h}_pred_increment_pct_points"] for h in (5, 10)
+        ]))
+        return bool(
+            row["positive_horizon_count"] >= 3
+            and short_mean > 0.0 and medium_mean > 0.0
+        )
+
+    selected = next((r for r in records if qualifies(r)), None)
     summary = {
         "decision_date": timestamp.isoformat(),
         "incumbent": incumbent,
@@ -1128,10 +1141,7 @@ def select_horizon_candidates(
         "positive_horizon_count": (
             selected["positive_horizon_count"] if selected else 0
         ),
-        "eligible_candidate_count": sum(
-            float(r["mean_daily_pred_increment_pct_points"]) > 0.0
-            for r in records
-        ),
+        "eligible_candidate_count": sum(qualifies(r) for r in records),
         "ranked_candidate_count": len(records),
     }
     if selected is not None:
@@ -1453,6 +1463,9 @@ def main() -> dict[str, Any]:
                     day=key, incumbent=incumbent, symbols=symbols,
                     forecast=all_forecasts, horizons=horizons,
                     extra_switch_cost=cost_per_rotation,
+                    capture_require_short_medium_advantage=(
+                        name == "capture"
+                    ),
                 )
                 common_info = {
                     "fold_id": fold_id,
