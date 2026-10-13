@@ -2382,3 +2382,95 @@ pela ordenacao.
 **Status:** implementacao programatica concluida;
 backtest local Spyder e leaderboard financeiro v1.0.9
 pendentes de execucao com o cache historico U67+10.
+
+#### 25.12.10 v1.0.10 — rotacoes matematicas autonomas
+
+**Questao da pesquisa:** nao e obrigatorio superar o capital final
+do Control; pretende-se testar politicas mais autonomas, precisas,
+reproduziveis e robustas que realizem rotacoes com menos decisoes
+desfavoraveis. O Control permanece como comparador congelado, nunca
+como entrada para a decisao das novas politicas.
+
+**Previsoes:** reutilizar as mesmas estimativas LightGBM individuais
+e cronologicas para H02/H03/H05/H10 da pesquisa v1.0.9.
+Nao se treina um novo modelo de ordenacao. Os modelos de previsao
+continuam existindo; a ordenacao e exclusivamente matematica.
+
+**Quatro politicas de decisao independentes**, cada uma com sua
+propria carteira simulada, estado e duracao de permanencia:
+- `net_gain`: ordenar pela media de retorno diario previsto,
+  descontando custo de entrada/troca em t;
+- `borda_pareto`: combinar posicoes nos quatro horizontes e
+  favorecer candidatos na fronteira de Pareto, incluindo menor risco;
+- `topsis`: combinar ganhos previstos, risco, custo e dispersao,
+  com pesos fixos e normalizacao transversal;
+- `consensus`: exigir intersecao do Top 5 de Borda, TOPSIS e ganho
+  liquido, mais nao dominancia de Pareto.
+
+**Decisao:** permanecer pelo menos dois pregoes antes de trocar ou
+sair para caixa; abrir posicao somente se a vantagem esperada for
+positiva. Troca entre ativos requer melhoria liquida prevista
+positiva contra a POSICAO ATUAL e vantagem prevista positiva nos
+grupos H02/H03 e H05/H10. Consenso exige tambem tres de quatro
+horizontes positivos. Se a expectativa media diaria do ativo atual
+for negativa e a permanencia minima tiver sido cumprida, e permitido
+sair para caixa. Nao escolher parametros com resultados dos folds
+OOS. Os custos estimados na decisao usam apenas fechamento presente
+e parametros de slippage/comissao/SEC/TAF/CAT conhecidos;
+a contabilidade das simulacoes usa as funcoes originais de taxas
+e execucao do Control.
+
+**Experimento financeiro:** apos reproduzir o checkpoint do Control
+US$ 587.165.941,13 ao centavo, executar quatro replays separados
+via `_simular_exato` sobre o MESMO calendario OOS, universo de 75
+ativos e modelo de custos; nenhuma operacao real. Comparar capital
+final, Sharpe, drawdown, pior fold, fees, quantidade de trocas,
+exposicao, tempo de permanencia e politica original.
+Manter o Control como checkpoint, sem alteracao na implementacao
+`engine/rotacao.py` nem na branch `main`.
+
+**Precisao das rotacoes:** depois da simulacao, usar somente
+retornos futuros ja maturados no mesmo fold e medir se cada
+acao de TROCAR (incluindo caixa) teria apresentado retorno
+liquido superior a permanecer no ativo anterior em H02/H03/H05/H10.
+Nao permitir desfechos atravessando o final do fold; esses
+retornos sao apenas diagnostico ex post de qualidade da decisao,
+nao resultados financeiros de uma politica nem insumos da escolha.
+Avaliar mesma definicao tambem sobre as decisoes do Control.
+A metrica primaria diagnostica pre-fixada e precisao H05 por fold,
+calculando a media macro dos folds. Para evitar falsas vitorias
+com pouquissimas trocas, rankings de qualidade so recebem posicao
+quando ha pelo menos 10 trocas com H05 maduro em CADA fold.
+Metodos sem amostra suficiente permanecem reportados sem rank.
+Desempate alfabetico; nenhuma promocao por resultados OOS.
+
+**Artefatos v1.0.10:**
+`output/persistencia_horizontes_u77_v110/` com as trilhas
+v1.0.9 preservadas e novos
+`autonomous_<metodo>_equity.csv`,
+`autonomous_<metodo>_trades.csv`,
+`autonomous_rotation_decisions.csv`,
+`autonomous_rotation_realized_quality.csv`,
+`autonomous_rotation_quality_by_fold.csv`,
+`autonomous_financial_summary.csv`,
+`autonomous_quality_leaderboard.csv`,
+`rotation_policy.log`, `execution_full.log`, `experiment.json`
+e `pacote_persistencia_horizontes_u77_v110.zip`.
+Logs completos de stdout e stderr aparecem no console Spyder
+e sao gravados no arquivo. Aviso sonoro no fim em Windows
+por `winsound.Beep`: sucesso com dois tons altos, erro com
+dois tons baixos. Fora de Windows usa fallback ASCII bell,
+dependendo do terminal. Em caso de erro, `execution_full.log`
+contem stack trace e deve ser enviado mesmo se nao gerar ZIP.
+
+**Limitacoes importantes:** a simulacao nao inclui impacto real de
+mercado, spread e restricoes de capacidade proporcionais ao
+capital acumulado. O universo inclui ativos de liquidez variavel.
+Os tres folds OOS ja foram vistos em varias pesquisas; todos
+os resultados desta versao sao exploratorios e exigem uma nova
+janela temporal intocada para confirmacao. Precisao positiva
+H05 nao prova melhor curva de capital. A saida para caixa e
+experimental. O estudo e isolado de sistemas operacionais.
+
+**Status:** codigo versionado e testes automaticos de regressao,
+sem execucao completa com os historicos congelados do Spyder.
