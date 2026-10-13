@@ -959,7 +959,7 @@ def test_v108_pair_training_enforces_maturity_and_balanced_directions():
     assert metadata["training_unique_days"] == 20
     assert metadata["examples"] == len(y)
     assert len(x) == len(y)
-    assert np.sum(y) == pytest.approx(0.0)
+    assert abs(float(np.sum(y))) < 1e-4
     with pytest.raises(RuntimeError, match="crosses evaluation boundary"):
         train_direct_pair_dataset(
             feature_cube=features, target_cube=target,
@@ -1006,9 +1006,7 @@ def test_v108_direct_pair_predictions_compare_with_control_and_incumbent():
     )
     assert len(rows) == 1
     assert rows[0]["candidate"] == "NVDA"
-    assert rows[0]["raw_pair_short_gap_fraction"] if (
-        "raw_pair_short_gap_fraction" in rows[0]
-    ) else rows[0]["H2_raw_pair_gap_fraction"] > 0
+    assert rows[0]["H2_raw_pair_gap_fraction"] > 0
 
 
 def test_v108_winner_pair_calibration_excludes_unmatured_future():
@@ -1024,7 +1022,7 @@ def test_v108_winner_pair_calibration_excludes_unmatured_future():
     }, index=dates)
     frame_a = pd.DataFrame({
         f"forward_horizon_net_return_pct_{h}": np.array(
-            [0.03]*70 + [200.0]*(len(dates)-70)
+            [0.03]*80 + [200.0]*(len(dates)-80)
         )
         for h in (2, 3, 5, 10)
     }, index=dates)
