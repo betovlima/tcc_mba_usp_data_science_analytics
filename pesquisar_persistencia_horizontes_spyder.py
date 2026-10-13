@@ -1,4 +1,4 @@
-"""Pesquisa U67+10 v1.0.9: auditoria integral de oito metodos de ranking.
+"""Pesquisa U67+10 v1.0.10: politicas matematicas autonomas de rotacao.
 
 Control e unico backtest; selecao de candidatos e diagnostica.
 Reproduz o checkpoint, corrige cobertura de labels H01..H60, treina
@@ -54,8 +54,8 @@ from pesquisar_expansao_u67_spyder import (
 )
 
 ROOT = Path(__file__).resolve().parent
-OUT = ROOT / "output" / "persistencia_horizontes_u77_v109"
-VERSION = "horizon-persistence-oos-v1.0.9"
+OUT = ROOT / "output" / "persistencia_horizontes_u77_v110"
+VERSION = "horizon-persistence-oos-v1.0.10"
 CONFIDENCE_MULTIPLIERS = (0.0, 0.5, 1.0)  # historico v1.0.3
 ANCHOR_BLEND = 0.5  # historico v1.0.3
 HOLDING_CANDIDATES = (1, 2, 3, 4)  # historico v1.0.4
@@ -70,6 +70,10 @@ EXTENDED_AUDIT_HORIZONS = (1, 2, 3, 5, 10, 15, 20, 30, 40, 60)
 AUDIT_ONLY_HORIZONS = (1, 15, 20, 30, 40, 60)
 ALL_RESEARCH_HORIZONS = EXTENDED_AUDIT_HORIZONS
 AUDIT_TOP_K = 5
+AUTONOMOUS_POLICY_METHODS = ("net_gain", "borda_pareto", "topsis", "consensus")
+AUTONOMOUS_MIN_HOLD = 2
+AUTONOMOUS_SWITCH_MARGIN = 0.0  # nenhum ajuste no OOS
+AUTONOMOUS_CASH_EXIT_MARGIN = 0.0
 RANKING_METHODS = (
     "predicted_return", "net_advantage", "borda",
     "topsis", "pareto", "probabilistic", "robust",
@@ -3440,7 +3444,7 @@ def main() -> dict[str, Any]:
         "export_to_operational": False,
     }
     write_json(OUT / "experiment.json", payload)
-    package_path = OUT / "pacote_persistencia_horizontes_u77_v109.zip"
+    package_path = OUT / "pacote_persistencia_horizontes_u77_v110.zip"
     with zipfile.ZipFile(
         package_path, "w", compression=zipfile.ZIP_DEFLATED
     ) as archive:
