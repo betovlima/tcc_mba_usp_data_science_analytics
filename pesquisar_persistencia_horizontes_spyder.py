@@ -2545,6 +2545,421 @@ def summarise_ranking_methods(
     return rows
 
 
+
+def point_in_time_switch_cost(
+    *, day: pd.Timestamp, current_asset: str, candidate: str,
+    frames: dict[str, pd.DataFrame], config: Any,
+) -> float:
+    """Friccao pre-negociacao: apenas close em t, nunca t+1."""
+    if current_asset == candidate:
+        return 0.0
+
+    def side_fee(symbol: str, side: str) -> float:
+        if symbol == "CASH":
+            return 0.0
+        price = float(frames[symbol].at[day, "close"])
+        if not np.isfinite(price) or price <= 0:
+            return float("inf")
+        result = (
+            max(0.0, float(config.slippage_bps)) / 10000.0
+            + max(0.0, float(config.commission_rate))
+            + max(0.0, float(config.cat_fee_per_share)) / price
+        )
+        if side == "SELL":
+            result += (
+                max(0.0, float(config.sec_fee_rate))
+                + max(0.0, float(config.taf_fee_per_share)) / price
+            )
+        return float(result)
+
+    return (
+        side_fee(current_asset, "SELL")
+        + side_fee(candidate, "BUY")
+    )
+
+
+def mathematical_rotation_choice(
+    *,
+    method: str,
+    symbols: list[str],
+    predicted_returns: np.ndarray,
+    volatility: np.ndarray,
+    switch_costs: np.ndarray,
+    current_position: int,
+    holding_sessions: int,
+    minimum_holding: int = AUTONOMOUS_MIN_HOLD,
+    switch_margin: float = AUTONOMOUS_SWITCH_MARGIN,
+) -> tuple[int, float, dict[str, Any]]:
+    """Politica sem Control e sem ML de ordenacao.
+
+    Input: somente quatro retornos previstos, risco conhecido, custo
+    estimado em t e estado da propria carteira. Atribui um score
+    deterministico por metodo e aplica um filtro de troca versus manter.
+    """
+    if method not in AUTONOMOUS_POLICY_METHODS:
+        raise ValueError(f"Unknown autonomous method: {method}")
+    n = len(symbols)
+    prediction = np.asarray(predicted_returns, dtype=float)
+    risks = np.asarray(volatility, dtype=float)
+    costs = np.asarray(switch_costs, dtype=float)
+    if (
+        prediction.shape != (n, len(CAPTURE_HORIZONS))
+        or risks.shape != (n,) or costs.shape != (n,)
+        or not 0 <= current_position <= n
+    ):
+        raise ValueError("Autonomous rotation input shape/index drift")
+    current_id = current_position - 1
+    current_valid = (
+        current_position == 0 or (
+            np.isfinite(prediction[current_id]).all()
+            and np.isfinite(risks[current_id])
+        )
+    )
+    base = {
+        "method": method,
+        "incumbent": (
+            "CASH" if current_position == 0
+            else symbols[current_id]
+        ),
+        "holding_sessions": int(holding_sessions),
+        "uses_control_action_as_feature": False,
+    }
+    if not current_valid:
+        return current_position, 0.0, {
+            **base, "reason": "UNKNOWN_INCUMBENT_FAIL_CLOSED"
+        }
+    if (
+        current_position > 0
+        and holding_sessions < minimum_holding
+    ):
+        return current_position, 0.0, {
+            **base, "reason": "MINIMUM_HOLD"
+        }
+    valid = (
+        np.isfinite(prediction).all(axis=1)
+        & np.isfinite(risks) & np.isfinite(costs)
+    )
+    ids = np.flatnonzero(valid)
+    if not len(ids):
+        return current_position, 0.0, {
+            **base, "reason": "NO_ELIGIBLE_ASSET"
+        }
+    horizon = np.asarray(CAPTURE_HORIZONS, dtype=float)
+    daily = (prediction[ids] - costs[ids, None]) / horizon
+    forecast_score = np.mean(daily, axis=1)
+    # Borda nao depende da escala do retorno previsto.
+    horizon_rank = np.empty_like(daily)
+    for j in range(len(horizon)):
+        ordering = sorted(
+            range(len(ids)),
+            key=lambda k: (-daily[k, j], symbols[int(ids[k])]),
+        )
+        for rank, local_id in enumerate(ordering):
+            horizon_rank[local_id, j] = rank
+    borda = 1.0 - horizon_rank.mean(axis=1) / max(1, len(ids) - 1)
+    front = nondominated_layers(
+        np.column_stack([daily, -risks[ids]])
+    )
+    # TOPSIS normalizado com pesos PREDEFINIDOS.
+    criteria = np.column_stack([
+        daily, -risks[ids], -costs[ids],
+        -np.std(daily, axis=1),
+    ])
+    weights = np.asarray([0.15]*len(horizon)+[0.15, 0.15, 0.10])
+    scaled = criteria / np.maximum(
+        np.linalg.norm(criteria, axis=0), 1e-12
+    ) * weights
+    ideal, anti = np.max(scaled, axis=0), np.min(scaled, axis=0)
+    positive_dist = np.linalg.norm(scaled - ideal, axis=1)
+    negative_dist = np.linalg.norm(scaled - anti, axis=1)
+    topsis = np.divide(
+        negative_dist, positive_dist + negative_dist,
+        out=np.full(len(ids), 0.5),
+        where=(positive_dist + negative_dist) > 0,
+    )
+    net_ranks = sorted(
+        range(len(ids)),
+        key=lambda j: (-forecast_score[j], symbols[int(ids[j])]),
+    )
+    borda_ranks = sorted(
+        range(len(ids)),
+        key=lambda j: (-borda[j], symbols[int(ids[j])]),
+    )
+    topsis_ranks = sorted(
+        range(len(ids)),
+        key=lambda j: (-topsis[j], symbols[int(ids[j])]),
+    )
+    if method == "net_gain":
+        choices = net_ranks
+    elif method == "borda_pareto":
+        choices = sorted(
+            range(len(ids)),
+            key=lambda j: (
+                int(front[j]), -float(borda[j]), symbols[int(ids[j])]
+            ),
+        )
+    elif method == "topsis":
+        choices = topsis_ranks
+    else:
+        # Consenso estrito: Borda, TOPSIS e score liquido devem
+        # concordar no conjunto Top 5, e ativo deve ser nao dominado.
+        group_size = min(5, len(ids))
+        intersect = (
+            set(borda_ranks[:group_size])
+            & set(net_ranks[:group_size])
+            & set(topsis_ranks[:group_size])
+        )
+        choices = [
+            j for j in borda_ranks
+            if j in intersect and front[j] == 0
+        ]
+        if not choices:
+            return current_position, 0.0, {
+                **base, "reason": "NO_MATH_CONSENSUS",
+                "eligible_count": int(len(ids)),
+            }
+    leader = int(ids[choices[0]])
+    raw_lead = float(forecast_score[choices[0]])
+    current_forecast = (
+        np.asarray(prediction[current_id], dtype=float)
+        if current_position > 0 else
+        np.zeros(len(horizon), dtype=float)
+    )
+    total_net_relative = (
+        prediction[leader] - current_forecast - costs[leader]
+    )
+    daily_net_relative = total_net_relative / horizon
+    net_advantage = float(np.mean(daily_net_relative))
+    group_short = float(np.mean(daily_net_relative[:2]))
+    group_medium = float(np.mean(daily_net_relative[2:]))
+    capture_consistent = int((total_net_relative > 0).sum())
+    score = raw_lead
+    if leader == current_id:
+        action, reason = current_position, "RANKED_INCUMBENT"
+    elif not (
+        net_advantage > switch_margin
+        and group_short > 0.0 and group_medium > 0.0
+    ):
+        action, reason = current_position, "INSUFFICIENT_NET_EDGE"
+    elif method == "consensus" and capture_consistent < 3:
+        action, reason = current_position, "INSUFFICIENT_CONSENSUS_HORIZONS"
+    elif current_position == 0 and raw_lead <= 0:
+        action, reason = 0, "CASH_ENTRY_NOT_ATTRACTIVE"
+    else:
+        action, reason = leader + 1, "MATH_ROTATION"
+    # A saida para caixa depende SOMENTE da propria previsao atual;
+    # nao usa destino Control ou retorno realizado depois de t.
+    current_daily = (
+        float(np.mean(current_forecast / horizon))
+        if current_position > 0 else 0.0
+    )
+    if (
+        action == current_position and current_position > 0
+        and current_daily < -AUTONOMOUS_CASH_EXIT_MARGIN
+    ):
+        action, reason = 0, "NEGATIVE_POSITION_EXPECTATION"
+    return action, score, {
+        **base,
+        "reason": reason,
+        "top_candidate": symbols[leader],
+        "eligible_count": int(len(ids)),
+        "predicted_net_advantage_per_day": net_advantage,
+        "short_edge": group_short,
+        "medium_edge": group_medium,
+        "positive_horizons": capture_consistent,
+        "ranking_score": raw_lead,
+        "action": "CASH" if action == 0 else symbols[action - 1],
+    }
+
+
+class AutonomousMathematicalPolicy:
+    """O simulador injeta posicao/progressao, nao a acao Control."""
+
+    def __init__(
+        self, *, method: str, symbols: list[str],
+        forecast_by_fold: dict[int, dict[int, dict[pd.Timestamp, np.ndarray]]],
+        decision_to_fold: dict[pd.Timestamp, int],
+        frames: dict[str, pd.DataFrame],
+        config: Any,
+        audit: list[dict[str, Any]],
+        diagnostics: dict[pd.Timestamp, dict[str, Any]],
+    ) -> None:
+        if method not in AUTONOMOUS_POLICY_METHODS:
+            raise ValueError("Unregistered autonomous policy")
+        self.method = method
+        self.symbols = symbols
+        self.forecast_by_fold = forecast_by_fold
+        self.decision_to_fold = decision_to_fold
+        self.frames = frames
+        self.config = config
+        self.audit = audit
+        self.diagnostics = diagnostics
+
+    def __call__(
+        self, timestamp: pd.Timestamp, current: int, holding: int,
+    ) -> tuple[int, float]:
+        day = pd.Timestamp(timestamp)
+        fid = int(self.decision_to_fold[day])
+        forecast = np.column_stack([
+            np.asarray(self.forecast_by_fold[fid][h][day], dtype=float)[1:]
+            for h in CAPTURE_HORIZONS
+        ])
+        n = len(self.symbols)
+        if forecast.shape != (n, len(CAPTURE_HORIZONS)):
+            raise RuntimeError("Autonomous daily forecast shape drift")
+        risks = np.asarray([
+            float(self.frames[s].at[day, "vol_20"])
+            if day in self.frames[s].index else np.nan
+            for s in self.symbols
+        ])
+        current_asset = (
+            self.symbols[current - 1] if current > 0 else "CASH"
+        )
+        costs = np.asarray([
+            point_in_time_switch_cost(
+                day=day, current_asset=current_asset,
+                candidate=s, frames=self.frames, config=self.config,
+            ) if day in self.frames[s].index else np.inf
+            for s in self.symbols
+        ], dtype=float)
+        target, score, evidence = mathematical_rotation_choice(
+            method=self.method, symbols=self.symbols,
+            predicted_returns=forecast, volatility=risks,
+            switch_costs=costs, current_position=current,
+            holding_sessions=holding,
+        )
+        log = {
+            "decision_date": day.isoformat(), "fold_id": fid,
+            "current_asset": current_asset,
+            "action_asset": (
+                "CASH" if target == 0 else self.symbols[target - 1]
+            ),
+            "switch_cost_estimated_fraction": (
+                float(costs[target-1]) if target > 0
+                else point_in_time_switch_cost(
+                    day=day, current_asset=current_asset,
+                    candidate="CASH", frames=self.frames,
+                    config=self.config,
+                )
+            ),
+            **evidence,
+        }
+        self.audit.append(log)
+        self.diagnostics[day] = {
+            "decision_diagnostics_schema_version": 1,
+            "current_asset": current_asset,
+            "holding_days_at_decision": holding,
+            "raw_best_asset": evidence.get("top_candidate"),
+            "best_asset": evidence.get("top_candidate"),
+            "best_score": evidence.get("ranking_score"),
+            "final_action_asset": log["action_asset"],
+            "final_action_score": score,
+            "decision_reason": evidence["reason"],
+            "min_hold_guard_applied": evidence["reason"] == "MINIMUM_HOLD",
+            "effective_switch_margin": AUTONOMOUS_SWITCH_MARGIN,
+        }
+        return target, float(score)
+
+
+def autonomous_decision_quality(
+    *,
+    audit: list[dict[str, Any]], frames: dict[str, pd.DataFrame],
+    calendar: pd.DatetimeIndex, folds: list[dict[str, Any]],
+    config: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Atribui labels APOS simular; nenhuma pre-visao usa esses labels."""
+    loc = {pd.Timestamp(t): i for i, t in enumerate(calendar)}
+    boundaries = {
+        int(f["fold_id"]): int(f["test_end_index"])
+        for f in folds
+    }
+    quality = []
+    for decision in audit:
+        day = pd.Timestamp(decision["decision_date"])
+        fid = int(decision["fold_id"])
+        current = str(decision["current_asset"])
+        action = str(decision["action_asset"])
+        if day not in loc:
+            raise RuntimeError("Decision calendar absent in post-hoc scoring")
+        for h in CAPTURE_HORIZONS:
+            if loc[day] + h >= boundaries[fid]:
+                continue
+            label = f"forward_horizon_net_return_pct_{h}"
+
+            def label_at(asset: str) -> float:
+                if asset == "CASH":
+                    return 0.0
+                frame = frames[asset]
+                if day not in frame.index:
+                    return float("nan")
+                return float(frame.at[day, label])
+
+            base = label_at(current)
+            candidate = label_at(action)
+            if not (np.isfinite(base) and np.isfinite(candidate)):
+                continue
+            cost = point_in_time_switch_cost(
+                day=day, current_asset=current, candidate=action,
+                frames=frames, config=config,
+            )
+            if not np.isfinite(cost):
+                continue
+            delta = float(candidate - base - cost)
+            quality.append({
+                "fold_id": fid,
+                "decision_date": day.isoformat(),
+                "method": decision["method"],
+                "horizon": h,
+                "current_asset": current,
+                "target_asset": action,
+                "executed_switch": action != current,
+                "realized_switch_vs_hold": delta,
+                "switch_positive": (
+                    bool(delta > 0) if action != current else None
+                ),
+                "switch_fee_proxy": float(cost),
+                "reason": decision["reason"],
+            })
+    summary: list[dict[str, Any]] = []
+    for method in AUTONOMOUS_POLICY_METHODS:
+        for fid in sorted(boundaries):
+            subset = [
+                d for d in audit
+                if d["method"] == method and int(d["fold_id"]) == fid
+            ]
+            eligible = [
+                r for r in quality if r["method"] == method
+                and r["fold_id"] == fid
+            ]
+            for h in CAPTURE_HORIZONS:
+                mature = [r for r in eligible if r["horizon"] == h]
+                swaps = [
+                    r for r in mature if r["executed_switch"]
+                ]
+                gains = [
+                    r["realized_switch_vs_hold"] for r in swaps
+                ]
+                summary.append({
+                    "method": method, "fold_id": fid,
+                    "horizon": h, "decisions": len(subset),
+                    "rotations_proposed": sum(
+                        d["action_asset"] != d["current_asset"]
+                        for d in subset
+                    ),
+                    "matured_switches": len(swaps),
+                    "switch_precision": (
+                        float(np.mean(np.asarray(gains) > 0))
+                        if gains else None
+                    ),
+                    "mean_switch_gain_vs_hold": (
+                        float(np.mean(gains)) if gains else None
+                    ),
+                    "cash_decisions": sum(
+                        d["action_asset"] == "CASH" for d in subset
+                    ),
+                })
+    return quality, summary
+
 def main() -> dict[str, Any]:
     OUT.mkdir(parents=True, exist_ok=True)
     data = SnapshotPaths.u67(ROOT)
