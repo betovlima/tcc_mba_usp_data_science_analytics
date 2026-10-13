@@ -42,7 +42,8 @@ candidatos são projetados nessa referência. O método NÃO utiliza
 o capital final do backtest para selecionar candidatos e NÃO
 insere automaticamente nenhum ativo na reprodução oficial.
 Gera shortlist, CSVs e gráficos em
-`output/candidate_cluster_search/`; utiliza cache local em
+`output/candidate_cluster_search/`; emite sinal sonoro distinto para
+conclusão ou falha; utiliza cache local em
 `output/`, ignorado pelo Git. Requer credenciais Alpaca no
 `.env` local:
 
