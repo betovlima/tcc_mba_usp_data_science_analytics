@@ -2393,8 +2393,11 @@ como entrada para a decisao das novas politicas.
 
 **Previsoes:** reutilizar as mesmas estimativas LightGBM individuais
 e cronologicas para H02/H03/H05/H10 da pesquisa v1.0.9.
-Nao se treina um novo modelo de ordenacao. Os modelos de previsao
-continuam existindo; a ordenacao e exclusivamente matematica.
+Nenhuma politica AUTONOMA treina um modelo de ordenacao.
+A auditoria legada v1.0.9 ainda executa seu comparador LambdaMART
+em separado, sem participar das novas escolhas; isso prolonga
+o tempo total de execucao. Os modelos de previsao continuam
+existindo, mas a ordenacao das novas politicas e matematica.
 
 **Quatro politicas de decisao independentes**, cada uma com sua
 propria carteira simulada, estado e duracao de permanencia:
