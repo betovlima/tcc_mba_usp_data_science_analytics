@@ -433,7 +433,10 @@ A versao padrao de `pesquisar_persistencia_horizontes_spyder.py`
 executa agora quatro politicas matematicas independentes,
 utilizando as mesmas previsoes H02/H03/H05/H10:
 `net_gain`, `borda_pareto`, `topsis`, `consensus`.
-Nenhum novo modelo de ORDENACAO e treinado. O Control
+As politicas novas nao treinam modelos de ordenacao;
+a auditoria legada v1.0.9 continua treinando LambdaMART
+separadamente, sem usar suas previsoes nas rotacoes autonomas.
+Essa auditoria faz a execucao demorar mais. O Control
 e apenas a referencia financeira e de precisao ex post;
 nao fornece destino ou estado as politicas alternativas.
 
