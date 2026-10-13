@@ -2850,3 +2850,202 @@ backtest U67+10 no Spyder com as dez séries em cache.
 Registrar SHA do commit Git para rastrear versões é
 diferente de validar hashes de arquivos de dados,
 que foi removido por solicitação.
+
+
+## 26. Auditoria de continuidade e autonomia apos a limpeza — 13/10/2026
+
+**Tipo da entrega:** resgate historico e inventario de estado,
+**sem alteracao de codigo, estrategia, limites ou configuracao**.
+Branch `research/horizon-persistence-oos-v1`; base de codigo auditada
+`af7ee7b256f40e0548c9e60c6e1601fbe39bf7ee`.
+A `main` nao e alterada.
+O Control U67+10 e referencia primaria da linha de pesquisa;
+a reproducao local completa da versao de consolidacao ainda
+deve ser confirmada usando os dez historicos adicionais.
+
+### 26.1 O que a branch EXECUTA atualmente
+
+- `reproduzir_experimento.py` e a unica entrada financeira na
+  raiz, delegando para `reproducao/control_u77.py`.
+- `buscar_ativos.py` e a outra entrada; produz shortlist
+  exploratoria com dados externos, sem alterar a carteira.
+- Control com 75 ativos = U67 solicitado, exclusao estrutural
+  CLMT/DOC, mais `CRT,NBR,CAPR,PNBK,PENN,JBL,STAG,MCHB,LAD,TOWN`.
+  O conjunto de dez esta **fixo** no codigo, sem dinamica temporal
+  de entrada e saida de ativos elegiveis.
+- LightGBM separado por ativo e fold, objetivo
+  `forward_risk_adjusted_utility`, caracteristicas disponiveis
+  na sessao da decisao, embargo de 60 sessoes e margens
+  selecionadas no passado de cada fold; mesmas features
+  e politica `_politica_utilidade` do Control historico.
+- Restricao de swing trade: permanencia minima de **dois
+  pregoes**, preservada como decisao do pesquisador, nao
+  hiperparametro a ser reotimizado. Permanencia prolongada
+  continua possivel se a utilidade do atual ou a margem assim
+  determinarem. Ha possibilidade de caixa segundo o
+  mecanismo original do Control.
+- Registrados `control_decisions.csv` (scores do incumbente,
+  melhor e segundo ativo, posicoes, gaps e motivo), folds,
+  margem por fold, curva, trades, graficos e analiticos.
+- Sem validacao ativa por checksum de arquivo ou veto por
+  diferenca do capital historico. US$ 587.165.941,13 e
+  REFERENCIA, nao gate.
+- Dados dos dez candidatos externos usados no maior backtest
+  estao em `dados/.u67_expansion_cache/full_raw_20261006/`
+  e **nao** constam do snapshot U67 Git. Sem esses CSVs,
+  o checkout sozinho nao reproduz a campanha.
+- CI de codigo validado com 85 testes. Isso nao significa
+  backtest financeiro completo reexecutado no Spyder apos
+  a limpeza.
+
+### 26.2 Descobertas ja realizadas, POR ORIGEM
+
+1. **Pesquisa de universo U67+n v1.1 a v1.3.**
+   Foram testadas contribuicoes marginais de candidatos,
+   15 positivos e 180 combinacoes de subconjuntos.
+   O Challenger fixo de dez ativos foi observado em
+   US$ 587.165.941,13 versus US$ 76.927.051,39 no U67
+   base, ambos simulados. A selecao foi feita com
+   informacao da janela historica pesquisada; nao e
+   ganho prospectivo demonstrado.
+2. **Assurance e v1.4.** A contribuicao individual de
+   NBR, CRT, CAPR, LEU, EML e outros varia muito por
+   fold; o piloto de decisao `ADICIONAR / MANTER /
+   REMOVER` mudou a composicao entre folds. O estudo
+   indicou necessidade de **pertencimento temporal**
+   e de redescoberta nested do universo, ainda pendente.
+   CSCV/PBO: 53,57% por log-growth e 59,52% por Sharpe
+   para o processo de escolha de subconjuntos.
+   Nao confundir isso com probabilidade de fracasso
+   da politica fixa.
+3. **Estresse de custos.** Challenger U67+10 caiu de
+   US$ 587,17 mi para US$ 411,67 mi com 5 bps
+   adicionais de slippage e US$ 288,63 mi com 10 bps.
+   Isso e evidencia de sensibilidade operacional, nao
+   criterio automatico de exclusao/promocao.
+4. **Captura e horizontes v1.0.2 a v1.0.8.**
+   O Control usa utilidade agregada multi-horizonte;
+   horizontes previstos individualmente e estimadores
+   de confianca nao demonstraram melhor politica no
+   OOS pesquisado. A primeira heuristica completa
+   terminou em US$ 473.069,88 e o override v1.0.3
+   em US$ 353.355.356,01, inferiores ao Control.
+   Ganhos relativos projetados por pares foram
+   excessivamente otimistas, e a v1.0.8 investigou
+   calibracao de vies e erro usando treinamento causal.
+   Esses scripts exploratorios foram retirados da
+   estrutura ativa, mas estao no commit anterior
+   a limpeza `7bfaee55d4fe4d6cafc33607c8e0d901127b1e69`.
+5. **Ranking v1.0.9.** Oito metodos foram comparados,
+   incluindo vantagem prevista, Borda, TOPSIS, Pareto,
+   robustez, aproximacao probabilistica e LambdaMART.
+   A classificacao transversal teve apenas sinal
+   pequeno frente ao acaso, e nao justificou
+   substituir a previsao de utilidade do Control.
+   Auditoria de ranking removida do runner ativo.
+6. **Politicas matematicas v1.0.10.** Entre quatro
+   politicas independentes, a melhor precisao de
+   rotacao H05 foi vantagem liquida (51,90%),
+   abaixo do Control (58,76%). Consenso teve o
+   melhor capital dentre as alternativas
+   (US$ 216.922,97), muito inferior ao Control.
+   Menos trocas isoladamente nao significou
+   decisoes melhores. Nenhuma politica foi promovida.
+7. **Ablacao v1.0.11.** Mesmas previsoes de utilidade
+   e margens/holding variados: Control H2 +
+   calibrada ficou em US$ 587,17 mi; H0 +
+   calibrada em US$ 59,06 mi; H2 + margem
+   base em US$ 316,52 mi (resultados relatados
+   no pacote analisado). A permanencia minima
+   H2 foi reafirmada pelo pesquisador como
+   **regra estrutural de swing trade**, nao
+   algo a ser modificado para otimizar o OOS.
+
+### 26.3 Lacunas reais da branch atual
+
+| Capacidade | Situacao |
+|---|---|
+| Control U67+10 recuperado no codigo | PRESENTE |
+| Utilidade ajustada ao risco e margem calibrada | PRESENTE |
+| Minimo H2 do swing trade | PRESENTE |
+| Decisoes com scores/gaps e trade logs | PRESENTE |
+| Buy-and-hold e graficos de rotacao | PRESENTE |
+| Busca independente por PCA/agrupamento | PRESENTE, MAS ISOLADA |
+| Avaliacao financeira marginal dos novos candidatos | AUSENTE DO FLUXO ATIVO |
+| Selecionar ativos por contribuicao segundo regime/data | NAO IMPLEMENTADO |
+| Inclusao/manutencao/remocao temporais no universo OOS | NAO IMPLEMENTADO |
+| Redescoberta nested, usando somente dados anteriores | PENDENTE |
+| Analise OOS da precisao de trocar VERSUS manter | AUSENTE DO RUNNER ATIVO |
+| Auditoria multi-horizonte e de erros de ranking | APENAS HISTORICO GIT |
+| Estresse de custos e selecao PBO/CSCV no runner | APENAS HISTORICO GIT |
+| Cache U67+10 portatil e completo no proprio Git | INCOMPLETO |
+
+**Atenção: regressoes do buscador apos limpeza.** O arquivo
+`buscar_ativos.py` usa `CANDIDATE_POOL_SIZE=500`,
+atribuindo `stable_key=symbol` e ordenando por essa
+coluna; isso significa que os 500 selecionados sao
+os primeiros alfabeticamente, e nao uma amostra
+equilibrada nem a lista marginal que produziu o
+Challenger. Ha ainda filtros como `marginable=True`,
+exchanges definidos, historico >=2400 observacoes,
+minimo de 20 candidatos e selecao nominal de
+12 semelhantes + 12 complementares, alem de thresholds
+geometricos P75-P95. Essas escolhas NAO devem ser
+apresentadas como condicoes de negocio aprovadas nem
+como requisitos de reproducao do Control.
+Precisam ser revisitadas antes de tratar o
+buscador como fonte automatica de candidatos.
+
+O cutoff do buscador vem do manifesto U67 e nao
+necessariamente coincide com o cutoff da campanha
+U67+10 ate 2026-10-06. Isso deve ser explicitado
+quando comparados os dois programas.
+
+### 26.4 Caminho de autonomia sem alterar o Control
+
+**Primeiro, confirmar a reproducao do maior backtest no
+Spyder** com os mesmos CSVs. Nao reivindicar resultado
+novo sem essa verificacao.
+
+**Depois, restaurar componentes de PESQUISA, nao gates:**
+- Usar candidatos de `buscar_ativos.py` como universo
+  amplo de opcoes; corrigir amostragem alfabetica
+  e evitar filtros operacionais nao solicitados.
+- Gerar contribuicoes economicas marginais por
+  janela passada e por ativo, comparadas com o
+  universo ja disponivel naquela data. Nao usar o
+  capital final do periodo de teste para escolher
+  ativos no inicio dele.
+- Testar lista elegivel dinamica com estados
+  `ADICIONAR / MANTER / REMOVER`, mantendo
+  2 pregoes de permanencia minima APENAS na
+  politica de operacao. A lista dinamica nao
+  representa venda obrigatoria na data em que
+  um candidato deixa de ser sugerido.
+- Manter a previsao LightGBM de utilidade e a
+  decisao Control INALTERADAS numa primeira
+  comparacao; variar somente o universo de
+  oportunidades para atribuir o efeito da
+  autonomia ao componente correto.
+- Medir precisao H05 de rotacoes concretas,
+  oportunidades perdidas de permanencia, custo,
+  capital e estabilidade por fold. A rotulagem
+  de retornos futuros sera feita apenas APOS
+  cada decisao, nunca como feature ou selecao OOS.
+- Usar estresse de custo e risco como DIAGNOSTICO,
+  nao como restricao de promocao inventada.
+  Nao criar verificacoes de checksum nem um
+  novo modelo probabilistico sem necessidade.
+
+**Limitacao:** o Challenger fixo de dez ativos
+foi selecionado analisando a janela historica
+ja vista. Um universo dinamico treinado/selecionado
+nesse mesmo OOS continuara exploratorio; para
+confirmacao prospectiva sera preciso periodo
+cronologico que ainda nao tenha orientado a
+escolha dos metodos.
+
+**Governanca:** este registro e APENAS auditoria.
+Nenhum codigo de busca, decisao, modelo, universo,
+margem, configuracao ou restricao foi alterado.
+Reutilizar os dois programas de entrada existentes.
