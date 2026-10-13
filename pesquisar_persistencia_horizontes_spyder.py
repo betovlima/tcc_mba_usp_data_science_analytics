@@ -7,11 +7,14 @@ Sem download, sem alteracao da reproducao oficial ou de sistemas externos.
 """
 from __future__ import annotations
 
+import contextlib
 import csv
 import hashlib
 import json
 import math
 from pathlib import Path
+import sys
+import traceback
 import zipfile
 from typing import Any
 
@@ -4043,5 +4046,80 @@ def main() -> dict[str, Any]:
     return payload
 
 
+
+def audible_completion(*, succeeded: bool) -> str:
+    """Sinal sonoro no Spyder/Windows; em outros SO tenta bell ASCII."""
+    try:
+        import winsound
+    except ImportError:
+        print("\\a", end="", flush=True)
+        return "terminal_bell_fallback"
+    if succeeded:
+        winsound.Beep(880, 160)
+        winsound.Beep(1046, 220)
+        return "windows_success_two_tones"
+    winsound.Beep(440, 420)
+    winsound.Beep(330, 470)
+    return "windows_error_two_tones"
+
+
+class ConsoleLogMirror:
+    """Captura stdout/stderr completo sem ocultar logs no Spyder."""
+
+    def __init__(self, console: Any, stream: Any) -> None:
+        self.console = console
+        self.stream = stream
+
+    def write(self, value: str) -> int:
+        self.console.write(value)
+        self.stream.write(value)
+        return len(value)
+
+    def flush(self) -> None:
+        self.console.flush()
+        self.stream.flush()
+
+    def isatty(self) -> bool:
+        return bool(self.console.isatty())
+
+
+def run_spyder_experiment() -> dict[str, Any]:
+    """Captura logs tambem em falha; emite som ao concluir."""
+    OUT.mkdir(parents=True, exist_ok=True)
+    for stale in OUT.iterdir():
+        if stale.is_file() and stale.suffix.lower() in {
+            ".csv", ".json", ".zip", ".log",
+        }:
+            stale.unlink()
+    logfile = OUT / "execution_full.log"
+    with logfile.open("w", encoding="utf-8") as stream:
+        stdout = ConsoleLogMirror(sys.stdout, stream)
+        stderr = ConsoleLogMirror(sys.stderr, stream)
+        with (
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            print(f"[experiment] START {VERSION}", flush=True)
+            try:
+                completed = main()
+            except BaseException:
+                print(f"[experiment] ERROR {VERSION}", flush=True)
+                traceback.print_exc()
+                try:
+                    mode = audible_completion(succeeded=False)
+                    print(f"[audio] ERROR {mode}", flush=True)
+                except Exception as audio_error:
+                    print(f"[audio] ERROR beep failed: {audio_error}", flush=True)
+                raise
+            print(f"[experiment] COMPLETED {VERSION}", flush=True)
+            try:
+                mode = audible_completion(succeeded=True)
+                print(f"[audio] SUCCESS {mode}", flush=True)
+            except Exception as audio_error:
+                print(f"[audio] SUCCESS beep failed: {audio_error}", flush=True)
+            return completed
+
+
 if __name__ == "__main__":
-    main()
+    run_spyder_experiment()
+
