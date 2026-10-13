@@ -718,3 +718,177 @@ def test_v106_capture_requires_advantage_in_short_and_medium():
         capture_require_short_medium_advantage=False,
     )
     assert audit["best_candidate"] == "NVDA"
+
+
+def test_v107_pair_ranking_compares_control_target_not_only_current():
+    from types import SimpleNamespace
+    from pesquisar_persistencia_horizontes_spyder import rank_direct_pair_gap
+
+    day = pd.Timestamp("2025-05-06", tz="UTC")
+    frames = {
+        asset: pd.DataFrame({"close": [100.0]}, index=[day])
+        for asset in ("AAPL", "MSFT", "NVDA")
+    }
+    # AAPL current=2%, MSFT Control target=10%, NVDA candidate=8%.
+    preds = {
+        h: {day: np.asarray([0.0, 0.02, 0.10, 0.08])}
+        for h in (2, 3, 5, 10)
+    }
+    cfg = SimpleNamespace(
+        slippage_bps=0.0, commission_rate=0.0, cat_fee_per_share=0.0,
+        sec_fee_rate=0.0, taf_fee_per_share=0.0,
+    )
+    options = rank_direct_pair_gap(
+        day=day, incumbent="AAPL", control_target="MSFT",
+        symbols=["AAPL", "MSFT", "NVDA"],
+        forecasts=preds, frames=frames, config=cfg,
+    )
+    assert options[0]["candidate"] == "NVDA"
+    assert options[0]["raw_incumbent_short_gap"] > 0
+    assert options[0]["raw_pair_short_gap"] < 0
+    assert not options[0]["raw_qualifies"]
+
+
+def test_v107_cost_proxy_uses_same_day_prices_and_nonzero_fees():
+    from types import SimpleNamespace
+    from pesquisar_persistencia_horizontes_spyder import (
+        estimated_incremental_pair_cost,
+    )
+
+    day = pd.Timestamp("2025-05-06", tz="UTC")
+    frames = {
+        "AAPL": pd.DataFrame({"close": [100.0]}, index=[day]),
+        "NVDA": pd.DataFrame({"close": [30.0]}, index=[day]),
+        "MSFT": pd.DataFrame({"close": [200.0]}, index=[day]),
+    }
+    cfg = SimpleNamespace(
+        slippage_bps=0.0,
+        commission_rate=0.0,
+        sec_fee_rate=0.0000206,
+        taf_fee_per_share=0.000195,
+        cat_fee_per_share=0.000003,
+    )
+    switching = estimated_incremental_pair_cost(
+        day=day, incumbent="AAPL", control_target="AAPL",
+        candidate="NVDA", frames=frames, config=cfg,
+    )
+    assert switching > 0.0000206
+    replacing = estimated_incremental_pair_cost(
+        day=day, incumbent="AAPL", control_target="MSFT",
+        candidate="NVDA", frames=frames, config=cfg,
+    )
+    assert replacing > 0
+    assert replacing < switching
+
+
+def test_v107_pair_calibration_has_fully_purged_split_and_ignores_validation():
+    from pesquisar_persistencia_horizontes_spyder import (
+        train_pairwise_winner_calibration,
+    )
+
+    calendar = pd.date_range("2025-01-01", periods=140, freq="B", tz="UTC")
+    values = np.full(140, 0.02)
+    values[91:] = 5.0
+    frames = {
+        "AAPL": pd.DataFrame({
+            f"forward_horizon_net_return_pct_{h}": np.zeros(140)
+            for h in (2, 3, 5, 10)
+        }, index=calendar),
+        "NVDA": pd.DataFrame({
+            f"forward_horizon_net_return_pct_{h}": values
+            for h in (2, 3, 5, 10)
+        }, index=calendar),
+    }
+    samples = [{
+        "decision_date": d.isoformat(),
+        "control_target": "AAPL",
+        "candidate": "NVDA",
+        "incremental_cost_fraction": 0.0,
+        **{f"H{h}_raw_pair_gap_fraction": 0.05 for h in (2, 3, 5, 10)},
+    } for d in calendar[:116]]
+    params = train_pairwise_winner_calibration(
+        selected=samples, frames=frames, calendar=calendar,
+        split_date=calendar[90], cutoff_date=calendar[135],
+    )
+    for h in (2, 3, 5, 10):
+        row = params["by_horizon"][str(h)]
+        assert row["slope"] == pytest.approx(0.4)
+        assert row["abs_residual_p75"] < 1e-10
+        assert row["training_unique_days"] <= 90 - h
+    assert params["by_horizon"]["10"]["training_unique_days"] == 80
+
+
+def test_v107_confident_pair_requires_robust_calibrated_gap():
+    from pesquisar_persistencia_horizontes_spyder import calibrated_pair_choice
+
+    raw = {
+        "candidate": "NVDA",
+        "raw_qualifies": True,
+        **{f"H{h}_raw_pair_gap_fraction": 0.04 for h in (2, 3, 5, 10)},
+        **{f"H{h}_raw_incumbent_gap_fraction": 0.04 for h in (2, 3, 5, 10)},
+    }
+    data = {"by_horizon": {
+        str(h): {"slope": 0.0, "abs_residual_p75": 0.015}
+        for h in (2, 3, 5, 10)
+    }}
+    winner, ranked = calibrated_pair_choice([raw], data)
+    assert winner is None
+    assert len(ranked) == 1
+    data = {"by_horizon": {
+        str(h): {"slope": 0.8, "abs_residual_p75": 0.0001}
+        for h in (2, 3, 5, 10)
+    }}
+    winner, ranked = calibrated_pair_choice([raw], data)
+    assert winner is not None
+    assert ranked[0]["calibrated_short_gap"] == pytest.approx(0.032)
+
+
+def test_v107_fold_boundary_and_evaluation_maturity_do_not_leak():
+    from pesquisar_persistencia_horizontes_spyder import (
+        assess_pairwise_fixed_outcomes,
+    )
+
+    dates = pd.date_range("2025-01-01", periods=15, freq="B", tz="UTC")
+    frames = {
+        "AAPL": pd.DataFrame({
+            f"forward_horizon_net_return_pct_{h}": np.zeros(15)
+            for h in (2, 3, 5, 10)
+        }, index=dates),
+        "NVDA": pd.DataFrame({
+            f"forward_horizon_net_return_pct_{h}": np.full(15, 0.2)
+            for h in (2, 3, 5, 10)
+        }, index=dates),
+    }
+    pairs = [{
+        "decision_date": dates[9].isoformat(),
+        "control_target": "AAPL",
+        "candidate": "NVDA",
+        "incremental_cost_fraction": 0.002,
+        **{f"H{h}_raw_pair_gap_fraction": 0.02 for h in (2, 3, 5, 10)},
+    }]
+    observed = assess_pairwise_fixed_outcomes(
+        pairs, frames=frames, calendar=dates,
+        horizon_end_exclusive=dates[11],
+    )
+    assert observed[0]["H2_realized_gap_fraction"] is None
+    assert observed[0]["H3_realized_gap_fraction"] is None
+    observed = assess_pairwise_fixed_outcomes(
+        pairs, frames=frames, calendar=dates,
+        horizon_end_exclusive=dates[-1] + pd.Timedelta(days=7),
+    )
+    assert observed[0]["H2_realized_gap_fraction"] == pytest.approx(0.198)
+
+
+def test_v107_expanded_audit_has_candidate_specific_friction():
+    from pesquisar_persistencia_horizontes_spyder import select_horizon_candidates
+
+    day = pd.Timestamp("2025-05-06", tz="UTC")
+    forecasts = {h: {day: np.array([0.0, 0.03, 0.05])} for h in (1, 2)}
+    ranks, chosen = select_horizon_candidates(
+        day=day, incumbent="AAPL", symbols=["AAPL", "NVDA"],
+        forecast=forecasts, horizons=(1, 2), extra_switch_cost=0.0,
+        candidate_cost_fn=lambda symbol: 0.01,
+    )
+    assert chosen["best_candidate"] == "NVDA"
+    assert chosen["extra_switch_cost_fraction"] == 0.01
+    assert ranks[0]["H1_pred_increment_pct_points"] == pytest.approx(1.0)
