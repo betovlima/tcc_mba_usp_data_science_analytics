@@ -2293,7 +2293,6 @@ def rank_with_all_methods(
     advantage = forecasts_by_h - predicted[ref] - costs[ids, None]
     daily = advantage / horizons_arr
     normalized_gain = daily.mean(axis=1)
-    index_map = {int(v): j for j, v in enumerate(ids)}
 
     scores: dict[str, np.ndarray] = {
         "predicted_return": (forecasts_by_h / horizons_arr).mean(axis=1),
@@ -2668,6 +2667,32 @@ def main() -> dict[str, Any]:
     audit_selected: list[dict[str, Any]] = []
     audit_per_horizon: list[dict[str, Any]] = []
     seen_oos_days: set[pd.Timestamp] = set()
+    ranking_quality: list[dict[str, Any]] = []
+    ranking_calibrations: list[dict[str, Any]] = []
+    ranking_output = OUT / "ranking_all_assets.csv"
+    ranking_log = OUT / "ranking_methods.log"
+    output_stream = ranking_output.open("w", newline="", encoding="utf-8")
+    log_stream = ranking_log.open("w", encoding="utf-8")
+    detailed = csv.writer(output_stream)
+    detailed.writerow([
+        "decision_date", "fold_id", "method", "rank", "asset",
+        "ranking_score", "current_asset", "control_target",
+        "incremental_cost_fraction",
+        *[f"H{h}_predicted_net_fraction" for h in RANKING_EVALUATION_HORIZONS],
+        *[f"H{h}_realized_net_fraction" for h in RANKING_EVALUATION_HORIZONS],
+    ])
+
+    def rank_log(message: str) -> None:
+        text = f"[ranking-v109] {message}"
+        print(text, flush=True)
+        log_stream.write(text + "\n")
+        log_stream.flush()
+
+    rank_log(
+        "start methods=" + ",".join(RANKING_METHODS)
+        + " primary_metric=" + RANKING_PRIMARY_METRIC
+        + " - diagnostic comparison, NOT OOS promotion"
+    )
 
     for state in states:
         fid = int(state.fold_id)
@@ -2783,6 +2808,69 @@ def main() -> dict[str, Any]:
             horizon_end_exclusive=pd.Timestamp(fold["test_start"]),
         ))
 
+        # Calibracao probabilistica: forecasts OOF exclusivamente na
+        # janela historica anterior a OOS, sem inspecao de labels futuros.
+        historical_asset_forecasts = {}
+        for h in RANKING_EVALUATION_HORIZONS:
+            safe_hist = select_purged_horizon_training_dates(
+                calendar=common_dates,
+                training_end_index=int(fold["train_end_index"]),
+                evaluation_start_index=int(fold["calibration_start_index"]),
+                horizon=h,
+                min_training_rows=int(
+                    configuration.rotation_minimum_training_rows
+                ),
+            )
+            hist_models = _ajustar_modelos_lightgbm(
+                frames, symbols, safe_hist, configuration,
+                phase=f"v109_historical_ranking_h{h}_fold{fid}",
+                target_column=f"forward_horizon_net_return_pct_{h}",
+            )
+            if len(hist_models) != len(symbols):
+                raise RuntimeError(
+                    f"Ranking historical models incomplete fold={fid} H{h}"
+                )
+            predictions, _ = _precalcular_utilidades_modelo(
+                hist_models, frames, symbols, calibration_days, configuration
+            )
+            historical_asset_forecasts[h] = predictions
+            del hist_models
+        historical_errors = calibrate_asset_horizon_errors(
+            forecasts=historical_asset_forecasts,
+            frames=frames, symbols=symbols,
+            calibration_days=calibration_days,
+            calendar=common_dates, split_date=split_date,
+        )
+        for h, summary in historical_errors.items():
+            ranking_calibrations.append({
+                "fold_id": fid, "horizon": h,
+                "calibration_split": split_date.isoformat(),
+                "calibration_matured_days": summary["effective_days"],
+                "asset_min_observations": summary["min_asset_samples"],
+                "pooled_residual_std": summary["pooled_error_std"],
+                "approximation": "Gaussian marginal residual, "
+                                 "zero cross-asset residual covariance",
+            })
+        del historical_asset_forecasts
+        ltr_model, ltr_fit = fit_ranker_h05(
+            feature_cube=feature_cube,
+            targets=target_cubes[5],
+            training_indices=final_indices,
+            evaluation_start_index=int(fold["test_start_index"]),
+            config=configuration, fold_id=fid,
+        )
+        model_audit.append({
+            "fold_id": fid,
+            "model_family": "ranking_supervised_LambdaMART",
+            **ltr_fit,
+        })
+        rank_log(
+            f"fold={fid} hist_calib="
+            f"{len(calibration_days)}days "
+            f"confidence_window_end={split_date.date()} "
+            f"ltr_queries={ltr_fit['training_query_days']}"
+        )
+
         # Auditoria ampliada independente do treino e da escolha dos pares.
         individual_forecasts: dict[int, dict[pd.Timestamp, np.ndarray]] = {}
         for h in EXTENDED_AUDIT_HORIZONS:
@@ -2882,6 +2970,108 @@ def main() -> dict[str, Any]:
                         "audit_only": True,
                     })
 
+            # Comparacao de TODOS os metodos sobre os mesmos arrays
+            # congelados e universo elegivel. Todos os scores sao
+            # construidos ANTES de consultar os retornos t+H.
+            if reference != "CASH":
+                present = feature_cube[date_to_index[t]]
+                eligible = np.isfinite(present).all(axis=1)
+                daily_vol = np.asarray([
+                    float(frames[sym].at[t, "vol_20"])
+                    if t in frames[sym].index else np.nan
+                    for sym in symbols
+                ], dtype=float)
+                ranking_cost = np.full(
+                    len(symbols), np.nan, dtype=float
+                )
+                for pos, sym in enumerate(symbols):
+                    if not eligible[pos] or not np.isfinite(daily_vol[pos]):
+                        continue
+                    if sym in (reference, incumbent):
+                        ranking_cost[pos] = 0.0
+                    else:
+                        ranking_cost[pos] = estimated_incremental_pair_cost(
+                            day=t, incumbent=incumbent,
+                            control_target=reference, candidate=sym,
+                            frames=frames, config=configuration,
+                        )
+                ltr_predictions = np.full(
+                    len(symbols), np.nan, dtype=float
+                )
+                valid = np.flatnonzero(eligible)
+                if len(valid):
+                    ltr_predictions[valid] = np.asarray(
+                        ltr_model.predict(pd.DataFrame(
+                            present[valid], columns=list(PAIR_TRAINING_FEATURES)
+                        )), dtype=float
+                    )
+                daily_forecasts = {
+                    h: np.asarray(
+                        individual_forecasts[h][t], dtype=float
+                    )[1:]
+                    for h in RANKING_EVALUATION_HORIZONS
+                }
+                selections = rank_with_all_methods(
+                    forecasts=daily_forecasts,
+                    symbols=symbols,
+                    reference_symbol=reference,
+                    incremental_cost=ranking_cost,
+                    volatility=daily_vol,
+                    historical_error=historical_errors,
+                    ltr_scores=ltr_predictions,
+                )
+                if len(selections) != len(RANKING_METHODS):
+                    raise RuntimeError(
+                        f"Incomplete ranking methods at fold={fid} date={t}: "
+                        f"{list(selections)}"
+                    )
+                observed = {}
+                for h in RANKING_EVALUATION_HORIZONS:
+                    matured = (
+                        date_to_index[t] + h
+                        < int(fold["test_end_index"])
+                    )
+                    observed[h] = (
+                        np.asarray(target_cubes[h][date_to_index[t]], dtype=float)
+                        if matured else
+                        np.full(len(symbols), np.nan, dtype=float)
+                    )
+                reference_id = symbols.index(reference)
+                for method, sorted_assets in selections.items():
+                    for rank, (asset_idx, score) in enumerate(sorted_assets, 1):
+                        detailed.writerow([
+                            t.isoformat(), fid, method, rank,
+                            symbols[asset_idx], score,
+                            incumbent, reference, ranking_cost[asset_idx],
+                            *[daily_forecasts[h][asset_idx]
+                              for h in RANKING_EVALUATION_HORIZONS],
+                            *[observed[h][asset_idx]
+                              if np.isfinite(observed[h][asset_idx])
+                              else ""
+                              for h in RANKING_EVALUATION_HORIZONS],
+                        ])
+                    for h in RANKING_EVALUATION_HORIZONS:
+                        quality = rank_quality_metrics(
+                            ranking=sorted_assets, realized=observed[h],
+                            reference_index=reference_id,
+                            costs=ranking_cost,
+                        )
+                        ranking_quality.append({
+                            "decision_date": t.isoformat(),
+                            "fold_id": fid, "method": method,
+                            "horizon": h,
+                            "asset_universe": len(sorted_assets),
+                            "reference": reference,
+                            "top1_asset": symbols[sorted_assets[0][0]],
+                            **quality,
+                        })
+                if len(seen_oos_days) % RANKING_LOG_EVERY_DAYS == 0:
+                    leaders = " ".join(
+                        f"{method}={symbols[values[0][0]]}"
+                        for method, values in selections.items()
+                    )
+                    rank_log(f"fold={fid} day={t.date()} {leaders}")
+
             if (
                 reference == "CASH" or
                 int(control["holding_days_at_decision"])
@@ -2914,13 +3104,39 @@ def main() -> dict[str, Any]:
                     **metadata, "selection_kind": "confident",
                     **selected,
                 })
-        del fold_models_cal, fold_models_oos
+        del fold_models_cal, fold_models_oos, ltr_model
+        fold_metrics = summarise_ranking_methods([
+            row for row in ranking_quality if row["fold_id"] == fid
+        ])
+        if fold_metrics:
+            rank_log(
+                f"fold={fid} descriptive_best_ndcg5="
+                f"{fold_metrics[0]['method']} "
+                f"ndcg5={fold_metrics[0].get('mean_ndcg_at_5')}"
+            )
         print(
             f"[fold] {fid} historical_winners={len(previous_pairs)} "
             f"validated={len(later_pairs)} "
             f"OOS_confident={len([r for r in pair_confident if r['fold_id']==fid])}",
             flush=True,
         )
+
+    output_stream.flush()
+    output_stream.close()
+    rank_log("all candidate rows written, computing macro-fold leaderboard")
+    ranking_leaderboard = summarise_ranking_methods(ranking_quality)
+    for record in ranking_leaderboard:
+        rank_log(
+            "leaderboard "
+            f"rank={record['descriptive_rank']} "
+            f"method={record['method']} "
+            f"ndcg5={record.get('mean_ndcg_at_5')} "
+            f"spearman={record.get('mean_spearman')} "
+            f"kendall={record.get('mean_kendall')} "
+            f"top1_gap={record.get('mean_top1_gap')}"
+        )
+    log_stream.flush()
+    log_stream.close()
 
     # Joins dos outcomes APOS os rankings, somente se t+H amadureceu
     # dentro do proprio fold. Nenhum retorno OOS treinou o modelo.
@@ -3060,6 +3276,17 @@ def main() -> dict[str, Any]:
                 "missing_labels": potential - mature,
             })
     write_csv("horizon_label_coverage.csv", label_coverage)
+    write_csv("ranking_oos_quality_by_session.csv", ranking_quality)
+    write_csv("ranking_historical_error_calibration.csv", ranking_calibrations)
+    write_csv("ranking_methods_leaderboard.csv", [
+        {key: val for key, val in row.items() if key != "fold_details"}
+        for row in ranking_leaderboard
+    ])
+    write_csv("ranking_methods_by_fold.csv", [
+        {"method": row["method"], **fold}
+        for row in ranking_leaderboard
+        for fold in row.get("fold_details", [])
+    ])
     write_csv("horizon_model_training.csv", model_audit)
     write_csv("control_decision_reasons.csv", [
         {"decision_date": d.isoformat(), **row}
@@ -3097,6 +3324,20 @@ def main() -> dict[str, Any]:
         "pair_feature_columns": pair_feature_columns(),
         "reference_sampling": "two deterministic rotating anchors per day, with reverse pairs",
         "pair_models": 2 * len(CAPTURE_HORIZONS) * len(folds),
+        "ranking_methods": list(RANKING_METHODS),
+        "ranking_primary_metric": RANKING_PRIMARY_METRIC,
+        "ranking_evaluation_horizons": list(
+            RANKING_EVALUATION_HORIZONS
+        ),
+        "ranking_method_leaderboard": ranking_leaderboard,
+        "ranking_descriptive_top_method": (
+            ranking_leaderboard[0]["method"]
+            if ranking_leaderboard else None
+        ),
+        "ranking_candidates_full_export": "ranking_all_assets.csv",
+        "ranking_diagnostics_log": "ranking_methods.log",
+        "rankings_do_not_promote_strategy": True,
+        "learning_to_rank_is_extra_supervised_training": True,
         "historical_calibration": calibrations,
         "capture_raw_selected": len(pair_raw),
         "capture_confident_selected": len(pair_confident),
@@ -3121,7 +3362,7 @@ def main() -> dict[str, Any]:
         "export_to_operational": False,
     }
     write_json(OUT / "experiment.json", payload)
-    package_path = OUT / "pacote_persistencia_horizontes_u77_v108.zip"
+    package_path = OUT / "pacote_persistencia_horizontes_u77_v109.zip"
     with zipfile.ZipFile(
         package_path, "w", compression=zipfile.ZIP_DEFLATED
     ) as archive:
