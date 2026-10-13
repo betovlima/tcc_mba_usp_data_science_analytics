@@ -1,8 +1,8 @@
-"""Pesquisa U67+10 v1.0.7: comparacao de pares calibrada sem lookahead.
+"""Pesquisa U67+10 v1.0.8: regressao direta de pares e auditoria.
 
 Control e unico backtest; selecao de candidatos e diagnostica.
-Reproduz o checkpoint, calibra diferencas de retorno em historico
-anterior ao teste e preserva auditoria independente H01..H60.
+Reproduz o checkpoint, corrige cobertura de labels H01..H60, treina
+modelo direto de diferencas e preserva auditoria independente.
 Sem download, sem alteracao da reproducao oficial ou de sistemas externos.
 """
 from __future__ import annotations
@@ -26,10 +26,12 @@ from engine.configuracao import (
 from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 from engine.modelo_lightgbm import (
     _ajustar_modelos_lightgbm,
+    _configuracoes_lightgbm,
     _construir_contexto_execucao,
     selecionar_switch_margin,
 )
 from engine.rotacao import (
+    ROTATION_FEATURES,
     _crescimento_politica_simples,
     _politica_agendada,
     _politica_utilidade,
@@ -51,8 +53,8 @@ from pesquisar_expansao_u67_spyder import (
 )
 
 ROOT = Path(__file__).resolve().parent
-OUT = ROOT / "output" / "persistencia_horizontes_u77_v107"
-VERSION = "horizon-persistence-oos-v1.0.7"
+OUT = ROOT / "output" / "persistencia_horizontes_u77_v108"
+VERSION = "horizon-persistence-oos-v1.0.8"
 CONFIDENCE_MULTIPLIERS = (0.0, 0.5, 1.0)  # historico v1.0.3
 ANCHOR_BLEND = 0.5  # historico v1.0.3
 HOLDING_CANDIDATES = (1, 2, 3, 4)  # historico v1.0.4
@@ -67,6 +69,14 @@ EXTENDED_AUDIT_HORIZONS = (1, 2, 3, 5, 10, 15, 20, 30, 40, 60)
 AUDIT_ONLY_HORIZONS = (1, 15, 20, 30, 40, 60)
 ALL_RESEARCH_HORIZONS = EXTENDED_AUDIT_HORIZONS
 AUDIT_TOP_K = 5
+PAIR_REFERENCE_COUNT = 2
+PAIR_SELECTED_TOP_K = 5
+PAIR_TRAINING_FEATURES = (
+    "return_2", "return_5", "return_10", "return_20",
+    "vol_5", "vol_20", "ema_distance_20", "ema_distance_50",
+    "trend_efficiency_20", "distance_from_high_20",
+    "rsi_14", "atr_pct_14", "volume_zscore_20",
+)
 
 
 def sha256_file(path: Path) -> str:
@@ -992,47 +1002,41 @@ def build_horizon_return_labels(
     config: Any,
     horizons: tuple[int, ...] = ALL_RESEARCH_HORIZONS,
 ) -> None:
-    """Label futuro SOMENTE para ajuste/auditoria pos-hoc; nunca para ranking.
+    """Recalcula TODOS os H independentemente do horizonte maximo.
 
-    Todos os saltos usam o calendario congelado, sem pular lacunas por ativo.
-    H5/H10/H20/H40/H60 preservam os targets originais do pipeline.
+    Precos e features de t conhecidos; rotulos t+H servem APENAS
+    ao treinamento pre-OOS e avaliacao posterior. Nunca a selecao.
+    Reindexar primeiro evita encolher H quando ativo perde dias.
     """
     cost = min(
-        0.25,
-        2.0 * (
+        0.25, 2.0 * (
             max(0.0, float(config.slippage_bps)) / 10000.0
             + max(0.0, float(config.commission_rate))
-        ),
+        )
     )
     calendar = pd.DatetimeIndex(common_dates)
+    if not calendar.is_unique or not calendar.is_monotonic_increasing:
+        raise ValueError("Fixed calendar must be ordered and unique")
     for symbol, frame in frames.items():
-        entry = pd.to_numeric(
+        if not frame.index.is_unique:
+            raise RuntimeError(f"{symbol}: duplicated price index")
+        open_prices = pd.to_numeric(
             frame["open"].reindex(calendar), errors="coerce"
-        ).shift(-1)
-        close = pd.to_numeric(
+        )
+        closes = pd.to_numeric(
             frame["close"].reindex(calendar), errors="coerce"
         )
+        entry = open_prices.shift(-1)
         for h in horizons:
-            log_name = f"forward_horizon_net_log_return_{h}"
+            exit_price = closes.shift(-int(h))
+            valid = (
+                np.isfinite(entry) & (entry > 0)
+                & np.isfinite(exit_price) & (exit_price > 0)
+            )
+            net_log = np.log((exit_price / entry).where(valid)) + math.log1p(-cost)
             target = f"forward_horizon_net_return_pct_{h}"
-            if log_name in frame:
-                net_log = pd.to_numeric(frame[log_name], errors="coerce")
-            else:
-                exit_price = close.shift(-h)
-                valid = (
-                    np.isfinite(entry) & (entry > 0)
-                    & np.isfinite(exit_price) & (exit_price > 0)
-                )
-                ratio = (exit_price / entry).where(valid)
-                net_log = (
-                    np.log(ratio) + math.log1p(-cost)
-                ).reindex(frame.index)
-            net_log = net_log.where(np.isfinite(net_log))
-            frame[target] = np.expm1(net_log)
-            frame.loc[
-                ~np.isfinite(frame[target]), target
-            ] = np.nan
-
+            frame[target] = np.expm1(net_log.reindex(frame.index))
+            frame.loc[~np.isfinite(frame[target]), target] = np.nan
 
 def fixed_horizon_value(
     *,
