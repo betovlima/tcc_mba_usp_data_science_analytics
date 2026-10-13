@@ -1218,5 +1218,29 @@ def main() -> None:
     print(f"\nSaídas: {OUT}")
 
 
+def sinal_sonoro_busca(*, sucesso: bool) -> None:
+    """Sinaliza a conclusão da triagem, inclusive quando ocorrer uma falha."""
+    try:
+        import winsound
+    except ImportError:
+        print("\a", end="", flush=True)
+        return
+    try:
+        if sucesso:
+            winsound.Beep(880, 160)
+            winsound.Beep(1046, 220)
+        else:
+            winsound.Beep(440, 420)
+            winsound.Beep(330, 470)
+    except (OSError, RuntimeError, ValueError):
+        print("\a", end="", flush=True)
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException:
+        sinal_sonoro_busca(sucesso=False)
+        raise
+    else:
+        sinal_sonoro_busca(sucesso=True)
