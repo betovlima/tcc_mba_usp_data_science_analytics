@@ -2565,3 +2565,98 @@ registro versionado do marco. Recomenda-se criar a
 tag anotada local `research-v1.0.10-rotacoes-autonomas`
 apontando ao commit deste registro e enviá-la
 ao GitHub. Isso nao autoriza merge para `main`.
+
+
+#### 25.12.11 v1.0.11 — ablação fatorial da utilidade Control
+
+**Pergunta:** a maior precisão das rotações do Control decorre
+predominantemente do seu sinal de utilidade ajustado ao risco,
+da permanência obrigatória ou da margem de troca? A v1.0.10
+testou modelos de retornos percentuais e regras matemáticas
+diferentes ao mesmo tempo; portanto não isolou tais efeitos.
+
+**Pré-registro:** o Control congelado H2 + margem calibrada
+é o checkpoint obrigatório de US$ 587.165.941,13.
+Nenhuma previsão LightGBM do Control será re-treinada
+ou ajustada para as variantes. Cada fold reutiliza o MESMO
+cache preditivo OOS de utilidade ajustada ao risco,
+o MESMO universo de 75 ativos, custos, calendário,
+configurações de risco e simulador.
+
+**Fatorial 2 x 3** (seis cenários, sem varredura de
+parâmetros a posteriori):
+- Fator hold = 0 ou 2 pregões;
+- Fator margem = zero (ambas as margens zeradas),
+  base de configuração fixa, ou calibrada no histórico
+  anterior ao teste, igual à escolha oficial do fold.
+
+O cenário H2 + calibrada **reutiliza diretamente a
+simulação do Control**; não cria uma segunda versão
+potencialmente divergente do checkpoint. Para as outras
+cinco combinações, o código produz novas decisões
+pela própria `_politica_utilidade` usando exatamente
+as mesmas previsões: NUNCA copia a ação final do Control
+para executar a estratégia alternativa.
+
+**Dois tipos de avaliação complementares:**
+1. *Ablação pareada de uma decisão*: todas as combinações
+   são reaplicadas à MESMA data, ao MESMO ativo atual
+   e ao MESMO holding observado no Control; mede quantas
+   ações mudariam ao retirar apenas a margem ou o bloqueio.
+   O cenário oficial deve concordar 100% ou o experimento
+   aborta. Os desfechos H05 das ações alternativas são
+   auditados somente quando já maturados dentro do fold.
+   Esta é uma comparação pontual; NÃO é backtest alternativo.
+2. *Replay financeiro completo*: cada combinação possui
+   sua própria sequência de ativos, contador de permanência,
+   ordens simuladas e carteira; compara a trajetória real
+   da política frente ao checkpoint, conservando fees,
+   execução no próximo pregão e folds. Como o estado
+   diverge ao longo do tempo, diferenças finais refletem
+   efeitos acumulados, não somente um bloqueio isolado.
+
+**Métricas predefinidas:** precisão de rotações H05
+contra permanecer no ativo anterior (primária descritiva),
+também H02/H03/H10, número de rotações, média do ganho
+relativo realizado por troca, Sharpe, capital, MaxDD,
+pior fold, custos e diferenças de ação no mesmo estado.
+O aprendizado de ranking da v1.0.9 e as políticas de
+retorno da v1.0.10 seguem como auditorias separadas,
+não entram na escolha por utilidade.
+Resultados OOS pré-examinados são exploratórios:
+NENHUMA seleção/promocão automática; validação
+confirmatória exige nova janela não explorada.
+
+**Arquivos:** `output/persistencia_horizontes_u77_v111/`,
+contendo `utility_ablation_financial.csv`,
+`utility_ablation_quality_by_fold.csv`,
+`utility_ablation_quality_by_decision.csv`,
+`utility_ablation_policy_decisions.csv`,
+`utility_ablation_one_step.csv`,
+`utility_ablation.log`, seis curvas de capital e arquivos
+de operações `utility_hold*_margin_*_equity.csv` e
+`utility_hold*_margin_*_trades.csv`, todos os artefatos
+de auditoria anteriores, `comparison.csv`,
+`experiment.json`, `execution_full.log` e
+`pacote_persistencia_horizontes_u77_v111.zip`.
+
+**Correção do pacote:** o ZIP agora é criado SOMENTE
+depois de gravar no log a conclusão e o aviso sonoro,
+após fechar stdout/stderr, e validado integralmente.
+O sinal sonoro continua diferenciado entre sucesso
+e erro. Em erros, guardar `execution_full.log`
+independentemente de haver ZIP.
+
+**Limitações:** a função de utilidade Control contém
+ganho/riscos futuros apenas NOS LABELS de treinamento,
+não nas features OOS. Sua otimização de margens utiliza
+histórico de calibração, não o OOS atual. O backtest
+de capital composto não modela completamente liquidez,
+impacto real e capacidade. O contrafactual de uma
+única sessão H05 não mede o resultado de mudar toda
+a trajetória. Os mesmos folds já foram examinados;
+um vencedor histórico não é melhoria confirmada.
+
+**Estado:** implementação versionada no ramo isolado;
+execução completa Spyder com snapshot congelado pendente
+de resultados. O Control e a main seguem intocados.
