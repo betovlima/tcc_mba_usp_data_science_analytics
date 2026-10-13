@@ -1045,3 +1045,134 @@ def test_v108_winner_pair_calibration_excludes_unmatured_future():
     winner, rows = choose_confident_direct_pair(rows[:1], params)
     assert winner is not None
     assert winner["candidate"] == "NVDA"
+
+
+def test_v109_all_eight_methods_use_same_universe_and_frozen_inputs():
+    from pesquisar_persistencia_horizontes_spyder import (
+        RANKING_METHODS, rank_with_all_methods,
+    )
+
+    symbols = ["AAPL", "AMD", "MSFT", "NVDA"]
+    preds = {
+        2: np.array([0.01, 0.06, 0.02, 0.04]),
+        3: np.array([0.01, 0.05, 0.03, 0.04]),
+        5: np.array([0.01, 0.04, 0.03, 0.06]),
+        10: np.array([0.01, 0.03, 0.02, 0.07]),
+    }
+    errors = {
+        h: {
+            "center": np.zeros(4),
+            "scale": np.full(4, 0.04),
+            "effective_days": 30,
+        }
+        for h in (2, 3, 5, 10)
+    }
+    kwargs = {
+        "forecasts": preds, "symbols": symbols,
+        "reference_symbol": "AAPL",
+        "incremental_cost": np.array([0.0, 0.001, 0.001, 0.001]),
+        "volatility": np.array([0.03, 0.07, 0.015, 0.1]),
+        "historical_error": errors,
+        "ltr_scores": np.array([0.1, 0.6, 0.4, 0.8]),
+    }
+    scores1 = rank_with_all_methods(**kwargs)
+    scores2 = rank_with_all_methods(**kwargs)
+    assert set(scores1) == set(RANKING_METHODS)
+    assert scores1 == scores2
+    for ordered in scores1.values():
+        assert [index for index, _ in sorted(ordered)] == list(range(4))
+        assert len(ordered) == 4
+    assert scores1["predicted_return"][0][0] == 1
+    assert scores1["learning_to_rank"][0][0] == 3
+
+
+def test_v109_pareto_fronts_are_nondominated_then_recursive():
+    from pesquisar_persistencia_horizontes_spyder import nondominated_layers
+
+    values = np.array([
+        [2., 2.], [1., 1.], [0., 0.], [2., 1.],
+    ])
+    layers = nondominated_layers(values)
+    assert layers.tolist() == [0, 1, 2, 1]
+    with pytest.raises(ValueError, match="finite"):
+        nondominated_layers(np.array([[0.0, np.nan]]))
+
+
+def test_v109_rank_quality_does_not_replace_missing_top1_using_future():
+    from pesquisar_persistencia_horizontes_spyder import rank_quality_metrics
+
+    ranking = [(2, 9.0), (1, 6.0), (0, 0.0), (3, -1.0)]
+    out = rank_quality_metrics(
+        ranking=ranking,
+        realized=np.array([0., 0.04, np.nan, -0.02]),
+        reference_index=0, costs=np.zeros(4),
+    )
+    assert out["ndcg_at_5"] is None
+    assert out["top1_gap"] is None
+
+    out2 = rank_quality_metrics(
+        ranking=ranking,
+        realized=np.array([0.0, 0.04, 0.07, -0.02]),
+        reference_index=0, costs=np.zeros(4),
+    )
+    assert out2["top1_gap"] == pytest.approx(0.07)
+    assert out2["top1_win"] == 1
+    assert 0 <= out2["ndcg_at_5"] <= 1.0
+    assert out2["top1_regret"] == pytest.approx(0.0)
+
+
+def test_v109_probabilistic_error_calibration_matures_before_split():
+    from pesquisar_persistencia_horizontes_spyder import (
+        calibrate_asset_horizon_errors,
+    )
+
+    dates = pd.date_range("2025-01-01", periods=85, freq="B", tz="UTC")
+    frames = {
+        sym: pd.DataFrame({
+            f"forward_horizon_net_return_pct_{h}": np.concatenate([
+                np.full(55, 0.02 + i * 0.01),
+                np.full(30, 500.0),
+            ])
+            for h in (2, 3, 5, 10)
+        }, index=dates)
+        for i, sym in enumerate(("AAPL", "NVDA"))
+    }
+    pred = {
+        h: {
+            pd.Timestamp(day): np.array([0.0, 0.0, 0.0])
+            for day in dates[10:70]
+        } for h in (2, 3, 5, 10)
+    }
+    cal = calibrate_asset_horizon_errors(
+        forecasts=pred, frames=frames,
+        symbols=["AAPL", "NVDA"],
+        calibration_days=dates[10:70],
+        calendar=dates,
+        split_date=dates[55],
+    )
+    for h in (2, 3, 5, 10):
+        assert cal[h]["effective_days"] == 45 - h
+        assert cal[h]["center"][0] == pytest.approx(0.02)
+        assert cal[h]["center"][1] == pytest.approx(0.03)
+        assert cal[h]["pooled_error_std"] < 0.02
+
+
+def test_v109_lambdarank_labels_must_be_mature_before_test():
+    from types import SimpleNamespace
+    from pesquisar_persistencia_horizontes_spyder import (
+        PAIR_TRAINING_FEATURES, fit_ranker_h05,
+    )
+
+    data = np.ones((50, 6, len(PAIR_TRAINING_FEATURES)), dtype=float)
+    labels = np.tile(np.linspace(-0.1, 0.1, 6), (50, 1))
+    cfg = SimpleNamespace(
+        random_state=123,
+        rotation_minimum_training_rows=10,
+    )
+    with pytest.raises(RuntimeError, match="chronological cutoff"):
+        fit_ranker_h05(
+            feature_cube=data, targets=labels,
+            training_indices=np.arange(25),
+            evaluation_start_index=28,
+            config=cfg, fold_id=1,
+        )
