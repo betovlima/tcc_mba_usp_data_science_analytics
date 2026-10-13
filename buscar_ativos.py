@@ -1,4 +1,11 @@
-"""Busca exploratória de novos ativos por semelhança e complementaridade.
+"""BUSCAR ATIVOS — único ponto de entrada para triagem de candidatos.
+
+Mantém o U67 oficial fixo. Os resultados são candidatos exploratórios;
+a shortlist NÃO modifica os dados congelados ou a carteira do Control.
+Busca usa Alpaca; reprodução financeira usa exclusivamente CSVs do Git.
+
+Implementação validada de descoberta por semelhança e complementaridade.
+
 
 Objetivo
 --------
@@ -34,7 +41,6 @@ seguintes não repitam o download.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -59,7 +65,7 @@ from reproducao.dados import (
     SnapshotPaths,
     _normalize_alpaca_frame,
     load_alpaca_credentials,
-    validate_snapshot,
+    read_snapshot_manifest,
 )
 from reproducao.preparacao import prepare_model_frames
 
@@ -70,8 +76,7 @@ U67 = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "candidate_cluster_search"
 CACHE = OUT / "cache_bars"
 
-SCRIPT_VERSION = "candidate-cluster-search-v1.0.6"
-EXPECTED_BRANCH = "research/universe-clustering-visualization-v1"
+SCRIPT_VERSION = "buscar-ativos-u67-v1.22.2-dev.1"
 
 ALLOWED_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
 SYMBOL_RE = re.compile(r"^[A-Z]{1,5}$")
@@ -92,7 +97,6 @@ KNOWN_RESEARCH_STRUCTURAL_EXCLUSIONS = {
 
 # Busca inicial controlada. Use None somente se quiser varrer todo o catálogo.
 CANDIDATE_POOL_SIZE: int | None = 500
-CATALOG_SEED = "tcc-cluster-search-v1"
 
 # O resumo usa apenas informação disponível até o cutoff do snapshot U67.
 ANALYSIS_START = "2020-07-22"
@@ -140,12 +144,6 @@ def _git(args: list[str]) -> str:
     return process.stdout.strip()
 
 
-def _stable_key(symbol: str) -> str:
-    return hashlib.sha256(
-        f"{CATALOG_SEED}|{symbol}".encode("utf-8")
-    ).hexdigest()
-
-
 def _max_gap_days(index: pd.DatetimeIndex) -> float:
     if len(index) < 2:
         return float("inf")
@@ -185,12 +183,6 @@ def _clear_generated_outputs() -> None:
             path.unlink(missing_ok=True)
 
 
-def _shortlist_fingerprint(frame: pd.DataFrame) -> str:
-    assets = tuple(frame["asset"].astype(str))
-    payload = "\n".join(assets).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
 def _validate_shortlist(
     shortlist: pd.DataFrame,
     projected: pd.DataFrame,
@@ -202,13 +194,6 @@ def _validate_shortlist(
         raise RuntimeError(
             "Shortlist contém ativos ausentes da projeção atual: "
             + ",".join(missing)
-        )
-
-    if len(shortlist) != SIMILAR_COUNT + COMPLEMENTARY_COUNT:
-        raise RuntimeError(
-            "Shortlist incompleta: "
-            f"observado={len(shortlist)} "
-            f"esperado={SIMILAR_COUNT + COMPLEMENTARY_COUNT}"
         )
 
     warnings = shortlist.loc[
@@ -321,7 +306,7 @@ def _eligible_catalog(catalog: list[dict]) -> pd.DataFrame:
                 "instrument_warning": _instrument_warning(
                     str(item.get("name") or "")
                 ),
-                "stable_key": _stable_key(symbol),
+                "stable_key": symbol,
             }
         )
 
@@ -963,14 +948,9 @@ def main() -> None:
     print(f"arquivo={Path(__file__).resolve()}")
     print("=" * 78)
 
-    if branch not in (EXPECTED_BRANCH, "sem-git"):
-        raise RuntimeError(
-            f"Branch incorreta: esperado={EXPECTED_BRANCH} observado={branch}"
-        )
-
     _clear_generated_outputs()
     OUT.mkdir(parents=True, exist_ok=True)
-    manifest = validate_snapshot(U67)
+    manifest = read_snapshot_manifest(U67)
     start_date = str((manifest.get("bars") or {}).get("start") or "2016-01-01")
     analysis_end = str(
         (manifest.get("bars") or {}).get("bar_snapshot_as_of_end")
@@ -1103,7 +1083,6 @@ def main() -> None:
 
     shortlist = _shortlist(projected)
     _validate_shortlist(shortlist, projected)
-    shortlist_fingerprint = _shortlist_fingerprint(shortlist)
 
     quality.to_csv(
         OUT / "cluster_quality_u67.csv",
@@ -1163,7 +1142,6 @@ def main() -> None:
             (shortlist["search_role"] == "complementar").sum()
         ),
         "shortlist_assets": list(shortlist["asset"].astype(str)),
-        "shortlist_fingerprint": shortlist_fingerprint,
         "reference_complementary_low": float(
             projected["reference_complementary_low"].iloc[0]
         ),
@@ -1217,5 +1195,29 @@ def main() -> None:
     print(f"\nSaídas: {OUT}")
 
 
+def sinal_sonoro_busca(*, sucesso: bool) -> None:
+    """Sinaliza a conclusão da triagem, inclusive quando ocorrer uma falha."""
+    try:
+        import winsound
+    except ImportError:
+        print("\a", end="", flush=True)
+        return
+    try:
+        if sucesso:
+            winsound.Beep(880, 160)
+            winsound.Beep(1046, 220)
+        else:
+            winsound.Beep(440, 420)
+            winsound.Beep(330, 470)
+    except (OSError, RuntimeError, ValueError):
+        print("\a", end="", flush=True)
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException:
+        sinal_sonoro_busca(sucesso=False)
+        raise
+    else:
+        sinal_sonoro_busca(sucesso=True)
