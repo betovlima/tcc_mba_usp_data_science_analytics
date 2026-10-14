@@ -1376,3 +1376,10 @@ o arquivo DOCX atualizado; ele deve ser incorporado separadamente
 ao repositório, se desejado, antes de considerar o Git como local
 de distribuição do manuscrito. Não mesclar esta branch com a
 `main` automaticamente.
+
+
+### 25.4 Ajuste tipográfico do exemplo TSLA (13/10/2026)
+
+A pedido do autor, a exposição numérica na subseção **"Exemplo prático da construção da utilidade"** foi reorganizada no manuscrito acadêmico (página 10) para separar texto explicativo das expressões matemáticas. Ficaram em linhas próprias: utilidade nos horizontes 5 e 60, soma ponderada dos cinco horizontes, componentes A e P, alvo da TSLA e erro quadrático individual. O índice TSLA foi formatado como subscrito no Word. Foram preservados todos os valores numéricos, datas, interpretação, resultados e a configuração científica.
+
+**Artefato:** mesmo arquivo da Biblioteca `rotacao de capital orientada por utilidade ajustada ao risco.docx` (substituição da versão anterior). Esta branch documenta a alteração, mas **não contém o binário DOCX**. A revisão local renderizou 35 páginas, sem alteração no total de páginas, e confirmou 11 tabelas e identidade dos componentes internos de imagens, gráficos e planilhas; somente `word/document.xml` foi alterado. Não houve nova simulação, modificação de estratégia ou alteração da `main`.
