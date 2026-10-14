@@ -1383,3 +1383,35 @@ de distribuição do manuscrito. Não mesclar esta branch com a
 A pedido do autor, a exposição numérica na subseção **"Exemplo prático da construção da utilidade"** foi reorganizada no manuscrito acadêmico (página 10) para separar texto explicativo das expressões matemáticas. Ficaram em linhas próprias: utilidade nos horizontes 5 e 60, soma ponderada dos cinco horizontes, componentes A e P, alvo da TSLA e erro quadrático individual. O índice TSLA foi formatado como subscrito no Word. Foram preservados todos os valores numéricos, datas, interpretação, resultados e a configuração científica.
 
 **Artefato:** mesmo arquivo da Biblioteca `rotacao de capital orientada por utilidade ajustada ao risco.docx` (substituição da versão anterior). Esta branch documenta a alteração, mas **não contém o binário DOCX**. A revisão local renderizou 35 páginas, sem alteração no total de páginas, e confirmou 11 tabelas e identidade dos componentes internos de imagens, gráficos e planilhas; somente `word/document.xml` foi alterado. Não houve nova simulação, modificação de estratégia ou alteração da `main`.
+
+
+### 25.5 Tabela comparativa das decisões da operação TSLA (13/10/2026)
+
+**Motivo:** o parágrafo corrido sobre a operação de TSLA entre dezembro de 2020
+e janeiro de 2021 dificultava a comparação entre as utilidades estimadas para
+TSLA e NVDA nas duas sessões de decisão.
+
+**Ajuste editorial aplicado:** na seção "Interpretação das decisões em relação
+ao movimento realizado", a exposição foi dividida em apresentação,
+**Tabela 9** de utilidades previstas e ativo preferido por data, explicação
+da execução de entrada e saída e síntese do retorno/captura realizado.
+A Tabela 9 contrapõe as decisões de **29 dez. 2020** e **08 jan. 2021**,
+com TSLA 0,580261 / 0,016892; NVDA 0,446206 / 0,470664; ativos
+preferidos TSLA / NVDA. As execuções ocorreram em **30 dez. 2020**
+(US$ 224,00) e **11 jan. 2021** (US$ 283,13). Foram preservadas
+a máxima valorização favorável de **31,6205%**, o retorno de
+**26,3988%** e a captura de **83,4863%**. Não são resultados novos.
+
+**Conformidade:** a nova tabela segue Arial 11 e linhas horizontais
+da versão anterior; as antigas tabelas 9 a 11 foram renumeradas como
+10 a 12, incluindo a referência textual no Apêndice B. O documento
+renderizou em **35 páginas**, com **12 tabelas**. Os **25 componentes
+internos de mídia, gráficos e planilhas** mantiveram os mesmos bytes.
+O único membro pré-existente do pacote DOCX modificado foi
+`word/document.xml`.
+
+**Entrega:** mesma entrada de arquivo Word da Biblioteca,
+`rotacao de capital orientada por utilidade ajustada ao risco.docx`.
+Este commit atualiza apenas a memória documental `MANIFEST.md`:
+**não anexa o DOCX binário ao Git**. Sem alterações no modelo, na
+pesquisa científica, em `main` ou na aplicação operacional.
