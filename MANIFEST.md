@@ -1283,3 +1283,217 @@ execução, incluindo liquidez e participação no volume, com desenho e dados
 documentados antes de apresentar resultados. A contribuição individual dos
 componentes da utilidade também permanece sem experimentos de isolamento.
 Não transformar essas pendências em resultados já disponíveis.
+
+
+---
+
+## 25. Revisão do manuscrito acadêmico (13/10/2026)
+
+**Natureza:** revisão exclusivamente documental do TCC, sem novo treinamento,
+sem alterar a política oficial, o snapshot U67, o simulador ou a `main`.
+**Versão do manuscrito:** `1.22.1-doc.2`. A versão científica oficial
+permanece `v1.22.1` para as evidências U67 (67 solicitados, 65 efetivos).
+O DOCX principal foi atualizado na Biblioteca, no mesmo arquivo
+`rotacao de capital orientada por utilidade ajustada ao risco.docx`;
+**o DOCX binário não faz parte deste commit Git**.
+
+### 25.1 O que foi incorporado ao texto
+
+- Resumo: conserva como resultado principal a comparação no universo
+  fixo de 65 ativos, encerrada em US$ 76.927.051,39 (Control) e
+  US$ 33.295,28 (compra e manutenção). Indica sem quantificar
+  conclusões prospectivas que pesquisas posteriores identificaram
+  sensibilidade à composição do universo, às regras e aos custos.
+- Resultados e Discussão: acrescenta a seção
+  "Pesquisas exploratórias posteriores e sensibilidade das decisões".
+  O Challenger U67+10 tem 75 ativos efetivos e capital histórico
+  simulado de US$ 587.165.941,13. Resultou da seleção de dez ativos
+  entre 180 subconjuntos testados depois de observar a janela
+  histórica. Não é um resultado OOS independente, não substitui a
+  comparação principal do TCC e não prova superioridade prospectiva.
+- Seleção de subconjuntos: registra CSCV/PBO de 53,57% pelo
+  crescimento logarítmico e 59,52% por Sharpe. Os percentuais
+  caracterizam o **processo de escolha** pesquisado; não são a
+  probabilidade de fracasso da política fixa.
+- Execução/custos: a política expandida passou de US$ 587,17 milhões
+  para US$ 411,67 milhões com 5 pontos-base adicionais de slippage
+  e US$ 288,63 milhões com 10 pontos-base. Liquidez efetiva e
+  capacidade das ordens não foram comprovadas.
+- Comparação de políticas matemáticas v1.0.10: precisão de rotações
+  H05 do Control de 58,76%, acima da melhor variante (51,90%).
+  Essas variantes modificam simultaneamente sinal e regra decisória;
+  portanto, esse contraste não isola efeitos causais.
+- Ablação de mecanismos v1.0.11: sob as mesmas previsões de
+  utilidade, H2 com margem calibrada permaneceu em
+  US$ 587.165.941,13; H0 com margem calibrada teve
+  US$ 59.060.362,54; H2 com margem de base, cerca de
+  US$ 316,52 milhões. Cada replay altera a trajetória subsequente,
+  razão pela qual as diferenças de capital não devem ser tratadas
+  como efeitos isolados de uma única operação.
+- A permanência mínima H2, de dois pregões, é uma regra estrutural
+  do swing trade. O cenário H0 é contrafactual diagnóstico,
+  não recomendação para retirar a regra.
+- Limitações e Conclusão: distinguem explicitamente a ausência
+  de estimação de PBO na avaliação principal e a PBO calculada
+  apenas na expansão. Não inferem contribuição causal de cada
+  parcela da função de utilidade; reafirmam a necessidade de
+  avaliação em período ainda não utilizado para descoberta.
+
+### 25.2 Proveniência e fronteiras de reprodução
+
+O Control principal reproduzido está documentado na release `v1.22.1`,
+com snapshot `dados/u67/`, 134 arquivos auditados e 674 operações.
+Os experimentos do Challenger foram registrados na branch
+`research/horizon-persistence-oos-v1` e em seu MANIFEST; incluem
+os pacotes históricos v1.0.10 e v1.0.11. Os dez históricos adicionais
+(CRT, NBR, CAPR, PNBK, PENN, JBL, STAG, MCHB, LAD e TOWN)
+ficaram no cache de pesquisa `dados/.u67_expansion_cache/full_raw_20261006/`,
+não no snapshot U67 publicado. Logo, baixar a `main` da release
+não basta para reproduzir de modo independente os US$ 587,17 milhões.
+
+A branch de pesquisa teve consolidação posterior v1.22.3-dev.1,
+que restaurou o executor de U67+10 e retirou verificações ativas
+de hashes/gates; isso não altera retrospectivamente a identidade
+auditada nem os resultados históricos da release principal.
+Nenhuma dessas alterações é mesclada por esta revisão documental.
+
+### 25.3 Verificação e pendências
+
+O manuscrito passou por renderização visual em 35 páginas, dentro
+do limite de 50 páginas facultado pelo manual USP/Esalq para
+implementação de algoritmos de Machine Learning. Permaneceram 11
+tabelas e sete imagens; os 25 arquivos internos de mídia, gráficos
+e planilhas do DOCX tiveram conteúdo idêntico ao documento anterior.
+O Resumo contém 208 palavras, abaixo do limite de 250.
+
+Continuam identificados no texto os dados pessoais/acadêmicos
+a preencher pelo autor. O texto distingue evidência histórica
+e resultados exploratórios. Não foi produzido novo backtest
+para esta revisão e nenhuma política foi promovida.
+
+**Condição de integração:** esta branch documental não inclui
+o arquivo DOCX atualizado; ele deve ser incorporado separadamente
+ao repositório, se desejado, antes de considerar o Git como local
+de distribuição do manuscrito. Não mesclar esta branch com a
+`main` automaticamente.
+
+
+### 25.4 Ajuste tipográfico do exemplo TSLA (13/10/2026)
+
+A pedido do autor, a exposição numérica na subseção **"Exemplo prático da construção da utilidade"** foi reorganizada no manuscrito acadêmico (página 10) para separar texto explicativo das expressões matemáticas. Ficaram em linhas próprias: utilidade nos horizontes 5 e 60, soma ponderada dos cinco horizontes, componentes A e P, alvo da TSLA e erro quadrático individual. O índice TSLA foi formatado como subscrito no Word. Foram preservados todos os valores numéricos, datas, interpretação, resultados e a configuração científica.
+
+**Artefato:** mesmo arquivo da Biblioteca `rotacao de capital orientada por utilidade ajustada ao risco.docx` (substituição da versão anterior). Esta branch documenta a alteração, mas **não contém o binário DOCX**. A revisão local renderizou 35 páginas, sem alteração no total de páginas, e confirmou 11 tabelas e identidade dos componentes internos de imagens, gráficos e planilhas; somente `word/document.xml` foi alterado. Não houve nova simulação, modificação de estratégia ou alteração da `main`.
+
+
+### 25.5 Tabela comparativa das decisões da operação TSLA (13/10/2026)
+
+**Motivo:** o parágrafo corrido sobre a operação de TSLA entre dezembro de 2020
+e janeiro de 2021 dificultava a comparação entre as utilidades estimadas para
+TSLA e NVDA nas duas sessões de decisão.
+
+**Ajuste editorial aplicado:** na seção "Interpretação das decisões em relação
+ao movimento realizado", a exposição foi dividida em apresentação,
+**Tabela 9** de utilidades previstas e ativo preferido por data, explicação
+da execução de entrada e saída e síntese do retorno/captura realizado.
+A Tabela 9 contrapõe as decisões de **29 dez. 2020** e **08 jan. 2021**,
+com TSLA 0,580261 / 0,016892; NVDA 0,446206 / 0,470664; ativos
+preferidos TSLA / NVDA. As execuções ocorreram em **30 dez. 2020**
+(US$ 224,00) e **11 jan. 2021** (US$ 283,13). Foram preservadas
+a máxima valorização favorável de **31,6205%**, o retorno de
+**26,3988%** e a captura de **83,4863%**. Não são resultados novos.
+
+**Conformidade:** a nova tabela segue Arial 11 e linhas horizontais
+da versão anterior; as antigas tabelas 9 a 11 foram renumeradas como
+10 a 12, incluindo a referência textual no Apêndice B. O documento
+renderizou em **35 páginas**, com **12 tabelas**. Os **25 componentes
+internos de mídia, gráficos e planilhas** mantiveram os mesmos bytes.
+O único membro pré-existente do pacote DOCX modificado foi
+`word/document.xml`.
+
+**Entrega:** mesma entrada de arquivo Word da Biblioteca,
+`rotacao de capital orientada por utilidade ajustada ao risco.docx`.
+Este commit atualiza apenas a memória documental `MANIFEST.md`:
+**não anexa o DOCX binário ao Git**. Sem alterações no modelo, na
+pesquisa científica, em `main` ou na aplicação operacional.
+
+
+### 25.6 Correção da metodologia de tratamento de dados (14/10/2026)
+
+**Motivo:** o manuscrito ainda apresentava `float_precision="round_trip"`
+como evidência de limpeza e descrevia verificações de SHA-256 e 134 hashes
+como parte do tratamento e da reprodução. Essas descrições misturavam
+detalhes técnicos de uma release histórica com o procedimento científico
+narrado no artigo e estavam desatualizadas em relação à branch de pesquisa
+`research/horizon-persistence-oos-v1`.
+
+**Verificação no código atual da pesquisa:** em `reproducao/dados.py`,
+a leitura do manifesto descarta as chaves legadas
+`snapshot_sha256` e `file_hashes`, sem recalcular ou validar hashes.
+Em `reproducao/preparacao.py`, o pipeline lê e ordena os registros
+cronologicamente, padroniza timestamps em UTC, resolve duplicações,
+converte preços/volume para tipos numéricos, aplica ajustes de
+splits em memória e exclui ativos com problemas estruturais.
+A seleção da precisão numérica na leitura continua existindo como
+detalhe interno, mas não constitui procedimento de limpeza a
+descrever por nome de parâmetro no texto acadêmico.
+O MANIFEST da branch de pesquisa registra expressamente a retirada
+de validações SHA-256 no fluxo ativo, na seção v1.22.3-dev.1.
+
+**Correções no manuscrito Word:** descreveu-se a preparação pelas
+transformações efetuadas, sem parâmetros de biblioteca nem hashes.
+Foram revisadas ainda as passagens sobre diagnósticos, reprodução,
+limitações, universo e Apêndice C, removendo alegações de
+conferência dos 134 hashes, identidade SHA-256 e validação de
+arquivos por hashes. Mantiveram-se os resultados históricos
+efetivamente relatados nas repetições dos modelos e nas curvas,
+sem atribuir seu sucesso a uma verificação de integridade removida.
+Os detalhes técnicos de ambiente foram resumidos sem nomes de
+parâmetros de execução desnecessários.
+
+**Preservação e validação:** documento renderizado com **35 páginas**,
+**12 tabelas** e **7 figuras**. Apenas `word/document.xml` mudou;
+os demais membros do pacote DOCX (incluindo imagens, gráficos e
+planilhas incorporadas) permaneceram byte a byte iguais. Sem novo
+treinamento, sem mudanças no código, nos dados ou no resultado científico.
+Esta atualização foi aplicada ao mesmo documento da Biblioteca;
+o DOCX binário não foi incorporado ao repositório. A `main` não
+foi alterada. As referências a hashes em seções históricas deste
+MANIFEST referem-se a métodos e releases anteriores, não ao fluxo
+ativo da pesquisa.
+
+
+### 25.7 Contextualização das exclusões DOC e CLMT no manuscrito (14/10/2026)
+
+**Motivo:** o texto descrevia a exclusão de DOC por relação com PEAK e
+a exclusão de CLMT por alteração de identidade jurídica sem explicar
+as entidades e as diferenças entre os dois eventos.
+
+**Mudança editorial:** na seção "Origem dos dados e universo", o
+manuscrito passou a identificar a Physicians Realty Trust, que usava
+DOC antes de sua incorporação pela Healthpeak Properties (então PEAK),
+e a adoção posterior do código DOC pela Healthpeak em março de 2024.
+Explicou-se separadamente a reorganização de Calumet Specialty Products
+Partners, L.P. em Calumet, Inc. em julho de 2024, com manutenção do
+ticker CLMT e alteração do identificador do título. A redação
+esclarece que essa mudança de identificador, isoladamente, não
+comprova descontinuidade econômica dos preços e que a exclusão foi
+um critério metodológico conservador. Ambos os ativos permanecem
+fora da modelagem e da simulação, sem reconstrução artificial
+dos históricos, enquanto os dados originais e as datas dos eventos
+seguem preservados.
+
+**Fundamentação interna:** o código de `reproducao/preparacao.py`
+contém a regra de exclusão estrutural; os arquivos
+`dados/u67/corporate_actions/DOC.csv` e `CLMT.csv` registram
+os eventos societários, incluindo a incorporação de DOC por PEAK
+e a alteração do identificador CUSIP de CLMT em 2024.
+
+**Escopo e verificação:** apenas a redação do Word foi alterada.
+Na comparação dos pacotes DOCX, somente `word/document.xml`
+mudou; as 12 tabelas e todos os arquivos internos de imagens,
+gráficos e planilhas permaneceram preservados. Renderização
+visual conferida. O texto ampliado produziu 36 páginas,
+dentro do limite institucional aplicável. Não houve alteração
+do código, universo, dados, modelos, resultados ou `main`.
+O arquivo Word atualizado foi substituído na mesma entrada da
+Biblioteca e **não integra o commit Git**.
