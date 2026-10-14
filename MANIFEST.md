@@ -1415,3 +1415,48 @@ O único membro pré-existente do pacote DOCX modificado foi
 Este commit atualiza apenas a memória documental `MANIFEST.md`:
 **não anexa o DOCX binário ao Git**. Sem alterações no modelo, na
 pesquisa científica, em `main` ou na aplicação operacional.
+
+
+### 25.6 Correção da metodologia de tratamento de dados (14/10/2026)
+
+**Motivo:** o manuscrito ainda apresentava `float_precision="round_trip"`
+como evidência de limpeza e descrevia verificações de SHA-256 e 134 hashes
+como parte do tratamento e da reprodução. Essas descrições misturavam
+detalhes técnicos de uma release histórica com o procedimento científico
+narrado no artigo e estavam desatualizadas em relação à branch de pesquisa
+`research/horizon-persistence-oos-v1`.
+
+**Verificação no código atual da pesquisa:** em `reproducao/dados.py`,
+a leitura do manifesto descarta as chaves legadas
+`snapshot_sha256` e `file_hashes`, sem recalcular ou validar hashes.
+Em `reproducao/preparacao.py`, o pipeline lê e ordena os registros
+cronologicamente, padroniza timestamps em UTC, resolve duplicações,
+converte preços/volume para tipos numéricos, aplica ajustes de
+splits em memória e exclui ativos com problemas estruturais.
+A seleção da precisão numérica na leitura continua existindo como
+detalhe interno, mas não constitui procedimento de limpeza a
+descrever por nome de parâmetro no texto acadêmico.
+O MANIFEST da branch de pesquisa registra expressamente a retirada
+de validações SHA-256 no fluxo ativo, na seção v1.22.3-dev.1.
+
+**Correções no manuscrito Word:** descreveu-se a preparação pelas
+transformações efetuadas, sem parâmetros de biblioteca nem hashes.
+Foram revisadas ainda as passagens sobre diagnósticos, reprodução,
+limitações, universo e Apêndice C, removendo alegações de
+conferência dos 134 hashes, identidade SHA-256 e validação de
+arquivos por hashes. Mantiveram-se os resultados históricos
+efetivamente relatados nas repetições dos modelos e nas curvas,
+sem atribuir seu sucesso a uma verificação de integridade removida.
+Os detalhes técnicos de ambiente foram resumidos sem nomes de
+parâmetros de execução desnecessários.
+
+**Preservação e validação:** documento renderizado com **35 páginas**,
+**12 tabelas** e **7 figuras**. Apenas `word/document.xml` mudou;
+os demais membros do pacote DOCX (incluindo imagens, gráficos e
+planilhas incorporadas) permaneceram byte a byte iguais. Sem novo
+treinamento, sem mudanças no código, nos dados ou no resultado científico.
+Esta atualização foi aplicada ao mesmo documento da Biblioteca;
+o DOCX binário não foi incorporado ao repositório. A `main` não
+foi alterada. As referências a hashes em seções históricas deste
+MANIFEST referem-se a métodos e releases anteriores, não ao fluxo
+ativo da pesquisa.
