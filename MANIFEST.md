@@ -1460,3 +1460,40 @@ o DOCX binário não foi incorporado ao repositório. A `main` não
 foi alterada. As referências a hashes em seções históricas deste
 MANIFEST referem-se a métodos e releases anteriores, não ao fluxo
 ativo da pesquisa.
+
+
+### 25.7 Contextualização das exclusões DOC e CLMT no manuscrito (14/10/2026)
+
+**Motivo:** o texto descrevia a exclusão de DOC por relação com PEAK e
+a exclusão de CLMT por alteração de identidade jurídica sem explicar
+as entidades e as diferenças entre os dois eventos.
+
+**Mudança editorial:** na seção "Origem dos dados e universo", o
+manuscrito passou a identificar a Physicians Realty Trust, que usava
+DOC antes de sua incorporação pela Healthpeak Properties (então PEAK),
+e a adoção posterior do código DOC pela Healthpeak em março de 2024.
+Explicou-se separadamente a reorganização de Calumet Specialty Products
+Partners, L.P. em Calumet, Inc. em julho de 2024, com manutenção do
+ticker CLMT e alteração do identificador do título. A redação
+esclarece que essa mudança de identificador, isoladamente, não
+comprova descontinuidade econômica dos preços e que a exclusão foi
+um critério metodológico conservador. Ambos os ativos permanecem
+fora da modelagem e da simulação, sem reconstrução artificial
+dos históricos, enquanto os dados originais e as datas dos eventos
+seguem preservados.
+
+**Fundamentação interna:** o código de `reproducao/preparacao.py`
+contém a regra de exclusão estrutural; os arquivos
+`dados/u67/corporate_actions/DOC.csv` e `CLMT.csv` registram
+os eventos societários, incluindo a incorporação de DOC por PEAK
+e a alteração do identificador CUSIP de CLMT em 2024.
+
+**Escopo e verificação:** apenas a redação do Word foi alterada.
+Na comparação dos pacotes DOCX, somente `word/document.xml`
+mudou; as 12 tabelas e todos os arquivos internos de imagens,
+gráficos e planilhas permaneceram preservados. Renderização
+visual conferida. O texto ampliado produziu 36 páginas,
+dentro do limite institucional aplicável. Não houve alteração
+do código, universo, dados, modelos, resultados ou `main`.
+O arquivo Word atualizado foi substituído na mesma entrada da
+Biblioteca e **não integra o commit Git**.
