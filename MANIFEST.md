@@ -1283,3 +1283,96 @@ execução, incluindo liquidez e participação no volume, com desenho e dados
 documentados antes de apresentar resultados. A contribuição individual dos
 componentes da utilidade também permanece sem experimentos de isolamento.
 Não transformar essas pendências em resultados já disponíveis.
+
+
+---
+
+## 25. Revisão do manuscrito acadêmico (13/10/2026)
+
+**Natureza:** revisão exclusivamente documental do TCC, sem novo treinamento,
+sem alterar a política oficial, o snapshot U67, o simulador ou a `main`.
+**Versão do manuscrito:** `1.22.1-doc.2`. A versão científica oficial
+permanece `v1.22.1` para as evidências U67 (67 solicitados, 65 efetivos).
+O DOCX principal foi atualizado na Biblioteca, no mesmo arquivo
+`rotacao de capital orientada por utilidade ajustada ao risco.docx`;
+**o DOCX binário não faz parte deste commit Git**.
+
+### 25.1 O que foi incorporado ao texto
+
+- Resumo: conserva como resultado principal a comparação no universo
+  fixo de 65 ativos, encerrada em US$ 76.927.051,39 (Control) e
+  US$ 33.295,28 (compra e manutenção). Indica sem quantificar
+  conclusões prospectivas que pesquisas posteriores identificaram
+  sensibilidade à composição do universo, às regras e aos custos.
+- Resultados e Discussão: acrescenta a seção
+  "Pesquisas exploratórias posteriores e sensibilidade das decisões".
+  O Challenger U67+10 tem 75 ativos efetivos e capital histórico
+  simulado de US$ 587.165.941,13. Resultou da seleção de dez ativos
+  entre 180 subconjuntos testados depois de observar a janela
+  histórica. Não é um resultado OOS independente, não substitui a
+  comparação principal do TCC e não prova superioridade prospectiva.
+- Seleção de subconjuntos: registra CSCV/PBO de 53,57% pelo
+  crescimento logarítmico e 59,52% por Sharpe. Os percentuais
+  caracterizam o **processo de escolha** pesquisado; não são a
+  probabilidade de fracasso da política fixa.
+- Execução/custos: a política expandida passou de US$ 587,17 milhões
+  para US$ 411,67 milhões com 5 pontos-base adicionais de slippage
+  e US$ 288,63 milhões com 10 pontos-base. Liquidez efetiva e
+  capacidade das ordens não foram comprovadas.
+- Comparação de políticas matemáticas v1.0.10: precisão de rotações
+  H05 do Control de 58,76%, acima da melhor variante (51,90%).
+  Essas variantes modificam simultaneamente sinal e regra decisória;
+  portanto, esse contraste não isola efeitos causais.
+- Ablação de mecanismos v1.0.11: sob as mesmas previsões de
+  utilidade, H2 com margem calibrada permaneceu em
+  US$ 587.165.941,13; H0 com margem calibrada teve
+  US$ 59.060.362,54; H2 com margem de base, cerca de
+  US$ 316,52 milhões. Cada replay altera a trajetória subsequente,
+  razão pela qual as diferenças de capital não devem ser tratadas
+  como efeitos isolados de uma única operação.
+- A permanência mínima H2, de dois pregões, é uma regra estrutural
+  do swing trade. O cenário H0 é contrafactual diagnóstico,
+  não recomendação para retirar a regra.
+- Limitações e Conclusão: distinguem explicitamente a ausência
+  de estimação de PBO na avaliação principal e a PBO calculada
+  apenas na expansão. Não inferem contribuição causal de cada
+  parcela da função de utilidade; reafirmam a necessidade de
+  avaliação em período ainda não utilizado para descoberta.
+
+### 25.2 Proveniência e fronteiras de reprodução
+
+O Control principal reproduzido está documentado na release `v1.22.1`,
+com snapshot `dados/u67/`, 134 arquivos auditados e 674 operações.
+Os experimentos do Challenger foram registrados na branch
+`research/horizon-persistence-oos-v1` e em seu MANIFEST; incluem
+os pacotes históricos v1.0.10 e v1.0.11. Os dez históricos adicionais
+(CRT, NBR, CAPR, PNBK, PENN, JBL, STAG, MCHB, LAD e TOWN)
+ficaram no cache de pesquisa `dados/.u67_expansion_cache/full_raw_20261006/`,
+não no snapshot U67 publicado. Logo, baixar a `main` da release
+não basta para reproduzir de modo independente os US$ 587,17 milhões.
+
+A branch de pesquisa teve consolidação posterior v1.22.3-dev.1,
+que restaurou o executor de U67+10 e retirou verificações ativas
+de hashes/gates; isso não altera retrospectivamente a identidade
+auditada nem os resultados históricos da release principal.
+Nenhuma dessas alterações é mesclada por esta revisão documental.
+
+### 25.3 Verificação e pendências
+
+O manuscrito passou por renderização visual em 35 páginas, dentro
+do limite de 50 páginas facultado pelo manual USP/Esalq para
+implementação de algoritmos de Machine Learning. Permaneceram 11
+tabelas e sete imagens; os 25 arquivos internos de mídia, gráficos
+e planilhas do DOCX tiveram conteúdo idêntico ao documento anterior.
+O Resumo contém 208 palavras, abaixo do limite de 250.
+
+Continuam identificados no texto os dados pessoais/acadêmicos
+a preencher pelo autor. O texto distingue evidência histórica
+e resultados exploratórios. Não foi produzido novo backtest
+para esta revisão e nenhuma política foi promovida.
+
+**Condição de integração:** esta branch documental não inclui
+o arquivo DOCX atualizado; ele deve ser incorporado separadamente
+ao repositório, se desejado, antes de considerar o Git como local
+de distribuição do manuscrito. Não mesclar esta branch com a
+`main` automaticamente.
