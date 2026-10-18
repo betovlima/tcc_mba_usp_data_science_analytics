@@ -169,7 +169,7 @@ e executar na raiz do TCC:
 
 ```powershell
 python -m pip install -r requirements.txt
-python -m unittest tests.test_u77_paper_replay -v
+python -m unittest discover -s tests -p "test_u77_paper_replay.py" -v
 python reproduzir_u77_paper_20260804_spyder.py
 ```
 
