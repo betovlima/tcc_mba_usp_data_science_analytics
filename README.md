@@ -99,3 +99,54 @@ otimização bayesiana que selecionou os hiperparâmetros.
 
 A documentação técnica, histórica e a avaliação completa do projeto estão em
 `MANIFEST.md`.
+
+
+## 6. Pesquisa de expansão incremental U67+n
+
+A pesquisa que mantém o U67 fixo e testa somente a adição de novos ativos está
+em:
+
+```text
+pesquisar_expansao_u67_spyder.py
+```
+
+A versão 1.4.1 usa por padrão o modo `decision_validation`. Ela preserva
+os checkpoints da assurance e mede qualidade de ranking/decisão, Deflated
+Sharpe Ratio, Probability of Backtest Overfitting e um piloto temporal de
+`ADICIONAR / MANTER / REMOVER` ativos. Os modos `assurance_validation`,
+`subset_optimization` e `direct_marginal` permanecem disponíveis para
+reproduzir as etapas anteriores.
+
+Ela exige as credenciais locais da Alpaca no arquivo `.env`, mas não recria nem
+altera `dados/u67`. Os dados dos candidatos são mantidos em cache local
+ignorado pelo Git.
+
+No terminal:
+
+```bash
+python pesquisar_expansao_u67_spyder.py
+```
+
+No Spyder, abra `pesquisar_expansao_u67_spyder.py`, reinicie o kernel e execute
+o arquivo completo com F5.
+
+No modo padrão de validação da decisão, os resultados ficam em:
+
+```text
+output/u67_decision_validation/
+```
+
+Os modos anteriores continuam usando `output/u67_assurance_validation/`,
+`output/u67_subset_optimization/` e `output/u67_asset_expansion/`.
+
+O desenho e as limitações da campanha estão documentados em
+`PESQUISA_EXPANSAO_U67.md`.
+
+Se uma execução v1.4.0 já concluiu os cálculos e falhou somente ao serializar
+`NaN` no JSON final, não repita o backtest. Preserve a pasta de output e rode:
+
+```bash
+python finalizar_u67_decision_validation_spyder.py
+```
+
+No Spyder, abra esse arquivo e execute com F5.

@@ -1283,3 +1283,337 @@ execução, incluindo liquidez e participação no volume, com desenho e dados
 documentados antes de apresentar resultados. A contribuição individual dos
 componentes da utilidade também permanece sem experimentos de isolamento.
 Não transformar essas pendências em resultados já disponíveis.
+
+
+---
+
+## 25. Pesquisa pós-release de universo dinâmico U67+n (2026-10-12)
+
+### 25.1 Escopo e separação da entrega acadêmica oficial
+
+Esta seção registra uma linha exploratória posterior à release `v1.22.1`.
+Ela não reescreve os resultados oficiais preservados nas seções anteriores e
+não altera a `main`. A pesquisa permanece na branch
+a branch de pesquisa atual.
+
+O U67 congelado continua sendo a bancada experimental. A pergunta desta linha
+não é encontrar uma lista fixa definitiva, mas estimar quando um ativo agrega
+valor como opção disponível no universo. O objetivo operacional futuro é uma
+política de estado dinâmico:
+
+```text
+ADICIONAR
+MANTER
+REMOVER
+```
+
+usando somente informação disponível no momento da decisão. Portanto, um ativo
+pode ser útil em uma janela e deixar de ser útil em outra. A lista não deve ser
+interpretada como permanente.
+
+### 25.2 Campanha direta e otimização do subconjunto
+
+A v1.1.0 removeu como gates os filtros de preço, liquidez, volume e o
+Learning-to-Rank. Dos 500 símbolos congelados, somente condições estruturais de
+dados puderam impedir o replay financeiro. A comparação econômica passou a ser
+direta:
+
+```text
+U67 + candidato versus U67
+```
+
+A campanha produziu 15 candidatos com delta marginal positivo. A v1.2.0
+reproduziu `U67 + 15` em US$ 290.727.954,41339606 e aplicou forward selection
+e backward elimination. O Challenger resultante contém 10 ativos:
+
+```text
+CRT, NBR, CAPR, PNBK, PENN, JBL, STAG, MCHB, LAD, TOWN
+```
+
+e reproduziu capital final de US$ 587.165.941,1330212. A busca avaliou 180
+subconjuntos únicos. Esse valor é um resultado de descoberta/otimização, não
+uma estimativa prospectiva independente.
+
+### 25.3 Assurance v1.3.0
+
+A execução `u67-asset-expansion-v1.3.0` reproduziu exatamente os três
+checkpoints:
+
+```text
+U67                         = US$ 76.927.051,38897176
+U67 + 15 positivos          = US$ 290.727.954,41339606
+U67 + 10 Challenger         = US$ 587.165.941,1330212
+```
+
+A reexecução do Challenger preservou o capital até o centavo, a sequência de
+`selected_asset` e a curva de capital, com diferença máxima absoluta igual a
+zero.
+
+Os diagnósticos preditivos registraram 45 combinações candidato-fold. Houve 38
+warnings de overfitting, nenhum warning de underfitting e apenas 7 combinações
+com skill OOS positivo contra o preditor ingênuo da média. No próprio U67,
+171 das 195 combinações ativo-fold também receberam warning de overfitting e
+24 tiveram skill OOS positivo. Portanto, o alerta não é exclusivo dos novos
+ativos e deve ser investigado na dimensão de ranking/decisão, não apenas por
+MAE/RMSE de magnitude absoluta.
+
+A validação temporal do subconjunto, ainda usando o pool fixo de 15 candidatos,
+produziu:
+
+```text
+seleção com fold 1
+    NBR, PENN, EML
+holdout fold 2
+    retorno 77,917619 contra 77,898220 do U67
+
+seleção com folds 1+2
+    CRT, NBR, PNBK, PENN, JBL, STAG, MCHB, TOWN
+holdout fold 3
+    retorno 35,536979 contra 24,484656 do U67
+```
+
+A similaridade de Jaccard com os 10 do Challenger foi 0,181818 na primeira
+etapa e 0,80 na segunda. Isso é compatível com a hipótese de universo variável
+no tempo, mas ainda não constitui redescoberta nested dos 500 ativos.
+
+O leave-one-asset-out dos 10 não encontrou remoção individual que aumentasse o
+capital. As perdas relativas ao retirar cada ativo foram aproximadamente:
+CRT -42,90%, NBR -36,10%, CAPR -27,26%, PNBK -20,73%, JBL -17,51%, PENN
+-16,69%, MCHB -4,13%, LAD -3,28%, TOWN -2,84% e STAG -1,25%.
+
+O stress de custos manteve o resultado acima do U67, mas mostrou sensibilidade
+material a slippage:
+
+```text
+base                 US$ 587,17 mi
+slippage 5 bps       US$ 411,67 mi
+slippage 10 bps      US$ 288,63 mi
+taxas regulatórias 2x: -0,90% versus base
+taxas regulatórias 3x: -1,80% versus base
+```
+
+### 25.4 Interpretação metodológica após a assurance
+
+O contraste entre MAE/RMSE OOS fracos e forte desempenho econômico sugere que
+a qualidade relevante pode estar na ordenação relativa entre ativos, não na
+previsão precisa da magnitude de `forward_risk_adjusted_utility`.
+
+Por isso, a próxima validação não deve procurar mais capital. Ela deve medir:
+
+- Information Coefficient/Spearman cross-sectional por sessão;
+- NDCG@5 e NDCG@10;
+- acerto do top-1 e presença do top-1 previsto no top-3/top-5 realizado;
+- overlap de top-3;
+- percentil realizado do ativo previsto e do ativo efetivamente selecionado;
+- regret da escolha prevista frente ao melhor ativo realizado;
+- sign accuracy como diagnóstico secundário.
+
+A avaliação usa a utility realizada posterior somente como rótulo de avaliação.
+Ela não pode entrar na decisão histórica.
+
+### 25.5 Selection overfitting e v1.4.0
+
+A v1.4.0 introduz `RUN_MODE = "decision_validation"` e mantém os checkpoints
+anteriores congelados. Ela refaz de forma determinística a paisagem de 180
+subconjuntos da v1.2 para gerar séries diárias comparáveis.
+
+Serão calculados:
+
+```text
+Deflated Sharpe Ratio
+    - 180 trials brutos da busca de subconjuntos
+    - número efetivo de trials via dimensão efetiva da matriz de correlação
+    - sensibilidade conservadora usando 146 testes marginais + 180 subconjuntos
+
+Probability of Backtest Overfitting / CSCV
+    - 10 blocos
+    - 252 divisões simétricas
+    - métrica log-growth, alinhada ao objetivo de capital
+    - métrica Sharpe, como diagnóstico complementar
+```
+
+O cálculo com 326 trials é explicitamente uma análise de sensibilidade:
+os testes são correlacionados e pertencem a famílias diferentes, portanto não
+devem ser tratados como 326 experimentos independentes.
+
+A v1.4.0 também repete a seleção temporal em fronteiras de fold e grava a
+transição entre universos como `ADICIONAR`, `MANTER` ou `REMOVER`. Isso é
+um piloto em baixa frequência. Ainda não é a política diária final.
+
+### 25.6 Próxima fronteira científica
+
+Após a v1.4.0, o passo seguinte é uma redescoberta nested do universo externo:
+em cada data de atualização, candidatos e ativos internos devem ser avaliados
+somente com histórico disponível até aquela data. A política deverá decidir
+adição, permanência e remoção, congelar o universo resultante e medir o efeito
+somente no período posterior.
+
+A regra de universo dinâmico deverá incluir controles contra churn, como
+histerese, evidência mínima e/ou permanência mínima. Esses controles ainda não
+foram calibrados e não devem ser descritos como resultados disponíveis.
+
+Esta seção é a memória técnica da pesquisa exploratória pós-release. As
+alterações concretas continuam versionadas na mesma branch de pesquisa; a
+`main` e a tag `v1.22.1` permanecem referências imutáveis da entrega
+acadêmica consolidada.
+
+
+### 25.7 Hotfix de serialização v1.4.1
+
+Na primeira execução completa da v1.4.0, os cálculos da validação de decisão
+foram concluídos, mas a escrita de
+`pesquisa_u67_decision_validation.json` falhou porque um campo diagnóstico
+continha `NaN` e o serializador estava configurado com `allow_nan=False`.
+
+O problema é exclusivamente de artefato. Não há evidência de falha no treino,
+replay, checkpoints, ranking, DSR, PBO ou seleção temporal anterior ao ponto de
+serialização.
+
+A v1.4.1 introduz conversão recursiva de valores não finitos para `null`.
+Também inclui `finalizar_u67_decision_validation_spyder.py`, que finaliza uma
+execução v1.4.0 já calculada a partir dos arquivos existentes, sem repetir os
+backtests. O recovery exige os artefatos intermediários, confere os 180
+subconjuntos e os checkpoints de US$ 290.727.954,41339606 e
+US$ 587.165.941,1330212, recompõe os hashes dos candidatos e então cria o JSON
+e o pacote ZIP final.
+
+A orientação para a execução afetada é preservar
+`output/u67_decision_validation/`, atualizar a branch e executar somente o
+script de finalização. Rodar novamente o runner principal apagaria esse output
+no início e repetiria desnecessariamente a campanha.
+
+
+### 25.8 Resultado da validação de decisão v1.4
+
+A v1.4.0 foi concluída e o pacote final foi recuperado pela v1.4.1 sem repetir
+modelos ou backtests. Os 180 subconjuntos da busca full-window e os checkpoints
+de US$ 290.727.954,41339606 e US$ 587.165.941,1330212 foram preservados.
+
+O diagnóstico de ranking no Challenger U67+10 mostrou IC cross-sectional médio
+de 0,03419, NDCG@5 de 0,52660, NDCG@10 de 0,53826, sign accuracy de 63,10%,
+top-1 exato de 2,26%, top-1 dentro do top-3 realizado em 8,25% e dentro do
+top-5 em 12,71%. O sinal de ordenação global é pequeno, mas há enriquecimento
+no topo em relação à expectativa combinatória.
+
+O Deflated Sharpe Ratio permaneceu praticamente igual a 1 tanto com 180 trials
+quanto na sensibilidade conservadora de 326 trials. A dimensão efetiva de
+trials foi 1,2792, resultado de correlação média aproximada de 0,879 entre as
+180 séries. Por isso, a dimensão efetiva não deve ser usada isoladamente como
+prova de robustez.
+
+O CSCV/PBO produziu 53,57% para log-growth e 59,52% para Sharpe. Isso indica
+instabilidade material do processo de escolher o melhor cenário dentro da
+amostra. Em contraste, o Challenger fixo de 10 ativos teve percentil OOS
+mediano de 93,92% por log-growth e 82,04% por Sharpe nas mesmas 252 divisões,
+ficando abaixo da mediana em 0% e 7,54% dos casos, respectivamente. A leitura
+correta é que o cenário fixo é forte, mas o processo de seleção entre muitos
+subconjuntos ainda apresenta selection overfitting.
+
+O piloto temporal confirmou mudança de composição. Com apenas o fold 1,
+NBR/PENN/EML foram escolhidos e praticamente empataram com o U67 no fold 2.
+Com folds 1+2, a seleção passou para CRT/NBR/PNBK/PENN/JBL/STAG/MCHB/TOWN e
+superou materialmente o U67 no fold 3. Na transição, NBR e PENN foram mantidos,
+EML removido e CRT/PNBK/JBL/STAG/MCHB/TOWN adicionados.
+
+Estado da evidência após v1.4:
+
+```text
+reprodutibilidade                 PASS
+integridade dos checkpoints       PASS
+stress de custos                  PASS com sensibilidade a slippage
+leave-one-asset-out               PASS local
+ranking cross-sectional           SINAL FRACO/MODERADO NO TOPO
+Deflated Sharpe Ratio             PASS
+PBO da rotina de seleção          WARNING
+universo temporal                 PARTIAL PASS
+redescoberta nested completa      PENDENTE
+```
+
+O Challenger de US$ 587,17 milhões permanece uma referência forte de
+descoberta, não um resultado prospectivo final. A próxima fronteira científica
+é a redescoberta nested de candidatos e a decisão temporal de
+ADICIONAR/MANTER/REMOVER sem usar a janela futura.
+
+
+### 25.9 Foco científico consolidado após v1.4
+
+O ranking global não é objetivo da linha de expansão. Ele foi usado somente
+para diagnosticar por que o modelo podia apresentar erro absoluto OOS elevado
+e ainda gerar decisões econômicas úteis. O alvo científico consolidado é
+pertencimento dinâmico ao universo.
+
+A partir das séries diárias já preservadas, foi recuperada a contribuição
+individual por fold dos 15 positivos. Os casos mais informativos foram:
+
+```text
+NBR   fold1 +41,24% | fold2 ~0%    | fold3 +5,66%
+CRT   fold1 -0,98%  | fold2 +69,49%| fold3 ~0%
+CAPR  fold1 -0,98%  | fold2 ~0%    | fold3 +36,91%
+LEU   fold1 -15,35% | fold2 -39,29%| fold3 +102,90%
+EML   fold1 +2,52%  | fold2 ~0%    | fold3 ~0%
+LAD   fold1 -0,98%  | fold2 -3,24% | fold3 +6,58%
+```
+
+Isso demonstra diretamente que o sinal de pertencimento é temporal e que um
+rótulo estático de ativo bom/ruim é inadequado. A positividade full-window é
+somente evidência de descoberta dentro da janela controlada.
+
+A linha ainda não mediu remoção contrafactual dos 65 ativos efetivos do U67.
+Logo, não existe evidência para afirmar quais ativos do baseline deveriam sair.
+Também não existe ainda densidade temporal suficiente para calibrar frequência
+diária, histerese ou permanência mínima.
+
+Os dados congelados enviados para a campanha são suficientes para continuar
+sem novo download de candidatos; a próxima necessidade é gerar rótulos
+contrafactuais temporais mais densos e nested, não coletar mais OHLCV.
+
+
+### 25.10 Congelamento do Challenger U67+10 para integração operacional
+
+Solicitação do autor em 2026-10-12: encerrar esta etapa de pesquisa com a tag
+`research-u67plus10-challenger-v1.4.1` e transferir ao ambiente operacional
+uma **nova estratégia de universo fixo**, sem substituir a política atualmente
+vencedora.
+
+A composição requisitada para a estratégia operacional é o universo U67
+original, preservado em sua ordem e identidade, mais dez ativos, exatamente
+nesta ordem:
+
+```text
+CRT,NBR,CAPR,PNBK,PENN,JBL,STAG,MCHB,LAD,TOWN
+```
+
+A fonte científica documentada tem 77 ativos solicitados e 75 efetivos
+na janela controlada, com exclusões estruturais DOC e CLMT. O checkpoint
+congelado de descoberta é US$ 587.165.941,1330212 para o cutoff 2026-10-06.
+
+Condições da transferência:
+
+- O universo fixo solicitado é apenas uma fotografia operacional da pesquisa,
+  sem substituir a hipótese científica futura de ADICIONAR/MANTER/REMOVER.
+- O ambiente operacional utiliza dados da Alpaca atualizados; o checkpoint
+  congelado é referência histórica, não uma meta de capital futura.
+- A nova estratégia é distinta da versão U67 preexistente, para preservar
+  o histórico e permitir comparações.
+- O autor escolhe quando utilizar o backtest para decidir a adoção no catálogo
+  operacional; a pesquisa não estabelece homologações adicionais, vetos por
+  PBO, etapas extras de aprovação nem requisito de novo estudo antes da escolha.
+- Capital, Sharpe, MaxDD, pior fold, trades, exclusões e hashes permanecem
+  artefatos de análise, e não bloqueios administrativos introduzidos nesta linha.
+
+O histórico da v1.4.1 registra PBO de 53,57% (log-growth) e 59,52% (Sharpe)
+como diagnósticos científicos, não como impedimentos automáticos de adoção.
+
+O fechamento acadêmico oficial `v1.22.1` permanece independente. A tag
+de pesquisa solicitada deve apontar para o commit de encerramento desta
+branch, não para a `main`. A criação/push da tag anotada deve ocorrer via Git
+após conferir o HEAD, pois os conectores usados para esta entrega só expõem
+operações de escrita em branches, não criação de refs de tag.
+
+### 25.11 Correção de escopo de transferência
+
+Em 2026-10-12, o autor reiterou que não autorizou restrições adicionais de
+pesquisa sobre o cadastro, o backtest nem a possibilidade de adotar o
+Challenger como Winner no ambiente operacional. A redação anterior sobre
+etapas extras de homologação foi retirada. Esta alteração de documentação
+não modifica os resultados numéricos nem a política de universo congelada.
