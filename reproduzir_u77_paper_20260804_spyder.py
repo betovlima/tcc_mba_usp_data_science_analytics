@@ -346,7 +346,7 @@ def recover_partial_run(run_id: str) -> Path:
     if predictions.empty:
         raise RuntimeError("CSV de decisoes esta vazio.")
     dates = pd.to_datetime(predictions["timestamp"], utc=True, errors="raise")
-    if dates.isna().any() or not dates.is_monotonic_increasing or dates.has_duplicates:
+    if dates.isna().any() or not dates.is_monotonic_increasing or dates.duplicated().any():
         raise RuntimeError("Datas de decisoes duplicadas ou fora de ordem.")
     first_date, last_date = _iso_date(dates.iloc[0]), _iso_date(dates.iloc[-1])
     if (first_date, last_date) != (EXECUTION_START, EXECUTION_END):
