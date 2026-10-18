@@ -150,3 +150,64 @@ python finalizar_u67_decision_validation_spyder.py
 ```
 
 No Spyder, abra esse arquivo e execute com F5.
+
+
+## Replay isolado U67+10 versus Paper (branch de pesquisa)
+
+Script: `reproduzir_u77_paper_20260804_spyder.py` (versao
+`u77-paper-replay-v1.0.0`). Esta pesquisa nao modifica o experimento oficial
+`v1.22.1` nem conecta a conta Paper/Live, MongoDB ou qualquer executor de ordens.
+
+**Pergunta respondida:** qual seria o capital e quais seriam as posicoes
+simuladas se o Challenger U67+10 (77 ativos pedidos, 75 efetivos)
+comecasse com US$ 10.000 em CASH na abertura de **04/08/2026** e
+terminasse na sexta-feira **16/10/2026**?
+
+**Requisitos:** instalar `requirements.txt`, configurar `.env`
+local com `ALPACA_API_KEY` e `ALPACA_SECRET_KEY` (SIP historico)
+e executar na raiz do TCC:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m unittest tests.test_u77_paper_replay -v
+python reproduzir_u77_paper_20260804_spyder.py
+```
+
+No Spyder, abrir o script e executar F5. O script baixa novamente barras
+RAW/SIP de 2016-01-01 a 2026-10-16 e Corporate Actions ate 16/10;
+nao reutiliza o cache da campanha dos US$ 587 milhoes, nao usa banco e
+nao escreve em `dados/u67`.
+
+Como DOC e CLMT possuem exclusoes estruturais documentadas, seus
+historicos nao sao reconstruidos. Qualquer nova exclusao estrutural ou
+ausencia dos 75 ativos exigidos aborta a pesquisa, em vez de produzir
+um resultado com universo diferente.
+
+Cada execucao cria um novo `run_id`, gravando:
+
+- `dados/.u77_paper_replay/<run_id>/`: snapshot bruto, eventos e hashes
+- `output/u77_paper_replay/<run_id>/resultado.json`: capital e metadados
+- `output/u77_paper_replay/<run_id>/decisoes_e_patrimonio.csv`:
+  uma linha por sessao, ranking e capital
+- `output/u77_paper_replay/<run_id>/operacoes.csv`:
+  operacoes, quantidade, preco, custos, lucro realizado
+- `output/u77_paper_replay/<run_id>/margens_calibracao.csv`
+- `output/u77_paper_replay/<run_id>/auditoria_dados.csv`
+- `output/u77_paper_replay/<run_id>/snapshot_manifest.json`
+- `output/u77_paper_replay/<run_id>/pacote_analise_u77_paper_replay_*.zip`:
+  os artefatos para comparacao com a auditoria Paper
+
+**Envie somente o ZIP gerado em `output/` para a comparacao inicial.**
+Preserve localmente o snapshot sob `dados/.u77_paper_replay` para
+reproducao posterior. Nenhum dado nem ZIP e enviado automaticamente ao Git.
+
+**Limitacoes:** o motor e a politica cientifica walk-forward do TCC
+nao recriam automaticamente o treinamento diario/intradiario do Paper.
+Os precos atualizados podem divergir do snapshot congelado de outubro.
+A ultima operacao `FINAL_SELL` corresponde somente a liquidacao
+contabil no backtest; ela nao e uma venda que o robo teria enviado.
+O universo U77 foi escolhido retrospectivamente; nao e evidencia
+prospectiva nem promessa de lucro.
+
+**Branch:** `research/u77-paper-replay-20260804-20261016`. A `main`
+permanece intocada.
