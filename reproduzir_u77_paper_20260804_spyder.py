@@ -43,7 +43,7 @@ from reproducao.dados import (
 from reproducao.preparacao import prepare_model_frames
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "u77-paper-replay-v1.0.0"
+VERSION = "u77-paper-replay-v1.0.1"
 EXECUTION_START = "2026-08-04"
 EXECUTION_END = "2026-10-16"
 HISTORY_START = "2016-01-01"
@@ -262,7 +262,7 @@ def run() -> Path:
         "requested_assets": list(REQUESTED_ASSETS),
         "effective_assets": list(EFFECTIVE_ASSETS),
         "structural_exclusions": sorted(STRUCTURAL_EXCLUSIONS),
-        "snapshot_path": str(snapshot.relative_to(ROOT)),
+        "snapshot_path": str(snapshot.root.relative_to(ROOT)),
         "snapshot_sha256": manifest["snapshot_sha256"],
         "market_data": {"provider": "alpaca", "feed": "sip", "adjustment": "raw",
                         "corporate_actions_end": EXECUTION_END, "historical_start": HISTORY_START},
