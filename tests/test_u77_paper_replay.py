@@ -2,6 +2,11 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+import json
+import zipfile
 import pandas as pd
 
 import reproduzir_u77_paper_20260804_spyder as replay
@@ -43,6 +48,68 @@ class U77PaperReplayContractTests(unittest.TestCase):
             replay._json_safe({"x": float("nan"), "date": pd.Timestamp("2026-10-16")}),
             {"x": None, "date": "2026-10-16T00:00:00"}
         )
+
+
+    def test_recover_csv_without_alpaca_or_training(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_id = "20261018T061600_abcdef01"
+            folder = root / "output" / "u77_paper_replay" / run_id
+            folder.mkdir(parents=True)
+            snapshot = root / "dados" / ".u77_paper_replay" / run_id
+            snapshot.mkdir(parents=True)
+
+            pd.DataFrame({
+                "timestamp": ["2026-08-04T04:00:00Z", "2026-10-16T04:00:00Z"],
+                "strategy_equity": [10020.0, 10100.0],
+                "selected_asset": ["ADEA", "ADEA"],
+                "previous_asset": ["CASH", "ADEA"],
+                "trade_action": ["BUY", "FINAL_SELL"],
+                "buy_hold_equity": [10015.0, 10077.0],
+            }).to_csv(folder / "decisoes_e_patrimonio.csv", index=False)
+            pd.DataFrame({
+                "timestamp": ["2026-08-04T04:00:00Z", "2026-10-16T04:00:00Z"],
+                "action": ["BUY", "FINAL_SELL"], "total_fee": [0.0, 0.05],
+            }).to_csv(folder / "operacoes.csv", index=False)
+            pd.DataFrame({
+                "fold_id": [1], "candidate_margin": [0.0005],
+                "calibration_score": [0.1], "selected": [True],
+            }).to_csv(folder / "margens_calibracao.csv", index=False)
+            pd.DataFrame({"symbol": ["ADEA"], "raw_rows": [2100],
+                          "splits_applied": [0]}).to_csv(
+                folder / "auditoria_dados.csv", index=False
+            )
+            (folder / "resumo_motor.txt").write_text("Simulacao concluida.", encoding="utf-8")
+            original_csv = (folder / "operacoes.csv").read_bytes()
+            manifest = {
+                "bar_snapshot_as_of_end": replay.EXECUTION_END,
+                "assets": list(replay.EFFECTIVE_ASSETS),
+                "snapshot_sha256": "abc123",
+            }
+            with patch.object(replay, "ROOT", root), patch.object(
+                replay, "validate_snapshot", return_value=manifest
+            ), patch.object(replay, "load_alpaca_credentials", side_effect=AssertionError("NO ALPACA")):
+                archive = replay.recover_partial_run(run_id)
+            self.assertTrue(archive.is_file())
+            self.assertEqual((folder / "operacoes.csv").read_bytes(), original_csv)
+            report = json.loads((folder / "resultado.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["ending_capital"], 10100.0)
+            self.assertEqual(report["profit"], 100.0)
+            self.assertEqual(report["first_execution_date"], "2026-08-04")
+            self.assertEqual(report["final_execution_date"], "2026-10-16")
+            self.assertTrue(report["recovered_from_partial_export"])
+            with zipfile.ZipFile(archive) as zf:
+                self.assertIn("decisoes_e_patrimonio.csv", zf.namelist())
+                self.assertIn("operacoes.csv", zf.namelist())
+                self.assertIn("resultado.json", zf.namelist())
+
+    def test_recover_missing_csv_fails_before_snapshot(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folder = root / "output" / "u77_paper_replay" / "partial"
+            folder.mkdir(parents=True)
+            with patch.object(replay, "ROOT", root), self.assertRaises(FileNotFoundError):
+                replay.recover_partial_run("partial")
 
 
 if __name__ == "__main__":
