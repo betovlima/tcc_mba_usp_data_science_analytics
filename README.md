@@ -197,6 +197,29 @@ Cada execucao cria um novo `run_id`, gravando:
 - `output/u77_paper_replay/<run_id>/pacote_analise_u77_paper_replay_*.zip`:
   os artefatos para comparacao com a auditoria Paper
 
+
+### Recuperacao de execucao ja concluida (erro `SnapshotPaths.relative_to`)
+
+Versao corrigida: `u77-paper-replay-v1.0.1`. Se a rodada anterior
+terminou com `AttributeError: 'SnapshotPaths' object has no attribute
+'relative_to'` apos gravar CSVs, **nao execute o backtest novamente**.
+O erro aconteceu somente durante a geracao do `resultado.json`.
+Atualize a mesma branch e recupere o pacote:
+
+```powershell
+git pull --ff-only origin research/u77-paper-replay-20260804-20261016
+python reproduzir_u77_paper_20260804_spyder.py --recover-latest
+```
+
+Tambem pode selecionar um ID exato com
+`--recover-run-id 20261018T000000_aaaaaaaa`.
+O modo recovery valida o snapshot RAW/SIP por SHA-256 e o periodo dos CSVs,
+reconstitui as metricas disponiveis, gera `resultado.json`,
+`snapshot_manifest.json` e o ZIP sem acesso a rede/broker/banco e sem
+novo treino. Mantem os CSVs originais sem alteracao. Caso falte algum
+arquivo, aborta explicitamente. As metricas reconstituidas sao marcadas
+separadamente das metricas completas que existiam somente em memoria.
+
 **Envie somente o ZIP gerado em `output/` para a comparacao inicial.**
 Preserve localmente o snapshot sob `dados/.u77_paper_replay` para
 reproducao posterior. Nenhum dado nem ZIP e enviado automaticamente ao Git.
