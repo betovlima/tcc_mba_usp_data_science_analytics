@@ -1617,3 +1617,49 @@ pesquisa sobre o cadastro, o backtest nem a possibilidade de adotar o
 Challenger como Winner no ambiente operacional. A redação anterior sobre
 etapas extras de homologação foi retirada. Esta alteração de documentação
 não modifica os resultados numéricos nem a política de universo congelada.
+
+
+---
+
+## 26. Replay contrafactual isolado U77 a partir de caixa (2026-10-17)
+
+**Branch:** `research/u77-paper-replay-20260804-20261016`.
+**Versao do script:** `u77-paper-replay-v1.0.0`.
+**Motivacao:** comparar, em futura auditoria, escolhas simuladas de 04/08/2026 a
+16/10/2026 com o historico da conta Paper, que foi executado durante testes
+e variacoes de configuracao. A `main` e a release `v1.22.1` nao mudam.
+
+**Contrato:** universo U67+10 (77 solicitados, 75 efetivos, exclusoes DOC/CLMT),
+capital inicial US$ 10.000 em CASH; primeira compra simulada em 04/08,
+decisao baseada na sessao anterior, ultima sessao em 16/10, liquidacao
+contabil final. Treinos anteriores a cada janela, mesmo LightGBM Control,
+margem cronologicamente calibrada; nenhuma otimizacao nova de universo.
+
+**Dados:** nova consulta Alpaca RAW/SIP 1Day desde 2016-01-01, corporate
+actions ate o cutoff 2026-10-16. Sem MongoDB, sem brokerage/order path.
+Cada rodada usa diretorio novo e hashes SHA-256. Dados congelados oficiais
+nao sao sobrescritos. Falha explicita se faltar algum dos 75 ativos ou
+se forem descobertas outras quebras estruturais.
+
+**Artefatos:** `operacoes.csv`, `decisoes_e_patrimonio.csv`,
+`margens_calibracao.csv`, `auditoria_dados.csv`, `resultado.json`,
+`snapshot_manifest.json`, hashes e ZIP de analise. A exportacao pode
+ser cruzada com auditoria Paper posteriormente, sem declarar paridade
+automaticamente nem alterar resultado do TCC ja publicado.
+
+**Testes:** `tests/test_u77_paper_replay.py` valida contrato de universo,
+capital/janela, decisao anterior a compra e serializacao. A CI executa
+`pytest -q` e Ruff. Testes de CI nao significam replay de mercado:
+a campanha com Alpaca depende de execucao local e artefatos enviados
+para analise.
+
+**Limites:** backtest por folds nao equivale a reestimacao diaria/intradiaria
+do Paper. O Challenger foi descoberto olhando a janela historica, portanto
+a selecao retrospectiva e o risco de overfitting permanecem. Custos e
+precos de fechamento do replay nao garantem preenchimentos executaveis
+na corretora.
+
+**Proximo passo:** executar localmente em Spyder ou terminal e enviar o
+`pacote_analise_u77_paper_replay_*.zip` para reconciliar as escolhas,
+operacoes, retorno e drawdown com o pacote Paper, observando a natureza
+hipotetica do estudo.
