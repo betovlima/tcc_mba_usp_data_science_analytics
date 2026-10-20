@@ -99,5 +99,5 @@ def test_codigos_ativos_nao_exigem_identificador_de_cardinalidade() -> None:
         "reproduzir_experimento.py",
     ):
         source = (ROOT / relative).read_text(encoding="utf-8").lower()
-        assert "u67" not in source, relative
-        assert "u77" not in source, relative
+        for legacy in ("u67", "u75", "u77"):
+            assert legacy not in source, (relative, legacy)
