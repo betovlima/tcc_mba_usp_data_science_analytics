@@ -7,7 +7,7 @@ Este repositório mantém **somente dois scripts de execução na raiz**:
 | Arquivo | Finalidade |
 | --- | --- |
 | `buscar_ativos.py` | Pesquisa exploratória de ativos (PCA, agrupamentos e, opcionalmente, investigação U67+n) sem alterar a composição do universo oficial |
-| `reproduzir_experimento.py` | Reproduz o experimento científico oficial usando o snapshot congelado versionado em `dados/u67/`, sem baixar dados ou consultar o MCT |
+| `reproduzir_experimento.py` | Reproduz o experimento científico oficial usando o snapshot congelado versionado em `dados/u67/`, sem baixar dados nem consultar outra aplicação operacional |
 
 A metodologia, os resultados e o histórico científico continuam em
 [MANIFEST.md](MANIFEST.md). A reorganização não altera os modelos, parâmetros,
@@ -91,5 +91,4 @@ python -m pytest -q
 python -m ruff check engine reproducao buscar_ativos.py reproduzir_experimento.py tests --select F401,F811,F821,F841
 ```
 
-O código oficial não depende de banco de dados nem do ambiente operacional
-Market Cycle Trader.
+O código oficial não depende de banco de dados nem de outra aplicação operacional.
