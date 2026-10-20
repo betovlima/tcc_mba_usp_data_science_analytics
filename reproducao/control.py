@@ -48,7 +48,7 @@ SELECTION_FILE = ROOT / "dados" / "selecao_ativos.json"
 OUT = ROOT / "output" / "reproducao"
 VERSION = "1.22.4-dev.1"
 EXECUTION_SCHEMA = "control-selected-universe-swing"
-ANALYSIS_END_DATE = "2026-10-06"
+ANALYSIS_END_DATE = "2026-10-20"
 HISTORY_START_TOLERANCE_DAYS = 10
 
 
@@ -492,6 +492,18 @@ def executar_control() -> dict[str, Any]:
     # A leitura do manifesto não faz comparações por hash nem restringe
     # a execução a uma identidade/versionamento antigos.
     metadata = read_snapshot_manifest(BASE_DATA)
+    # A data do experimento deve corresponder ao snapshot efetivamente coletado.
+    # Nunca ampliar apenas o cutoff do modelo sobre CSVs antigos.
+    bar_cutoff = str((metadata.get("bars") or {}).get("bar_snapshot_as_of_end") or "")
+    actions_cutoff = str((metadata.get("corporate_actions") or {}).get("query_end") or "")
+    if bar_cutoff != ANALYSIS_END_DATE or actions_cutoff != ANALYSIS_END_DATE:
+        raise RuntimeError(
+            "Snapshot da pesquisa desatualizado para a data de corte selecionada: "
+            f"esperado={ANALYSIS_END_DATE}, barras={bar_cutoff or 'ausente'}, "
+            f"corporate_actions={actions_cutoff or 'ausente'}. "
+            "Atualize os CSVs pela Alpaca e reconstrua o manifesto antes da reproducao; "
+            "nao modifique apenas as datas do manifesto."
+        )
     base_raw, exclusions, preparation, data_audit = prepare_model_frames(
         BASE_DATA,
         assets=ASSETS,
