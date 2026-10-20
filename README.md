@@ -42,7 +42,7 @@ A busca pode consultar a Alpaca, mediante credenciais locais `.env`; a reproduç
 
 ## Validação temporal e evidências
 
-A reprodução histórica conserva os três folds walk-forward, treinamento/calibração sobre dados passados e purge de 60 pregões. A janela de replay de **04/08/2026 a 16/10/2026** é uma avaliação temporal distinta da campanha histórica até **06/10/2026**. Não se devem confundir as duas ou reutilizar os resultados históricos como prova de teste prospectivo independente.
+A campanha em preparação tem **data de corte de 20/10/2026**. O arquivo de referência ainda precisa ser coletado e versionado para essa data, assim como o histórico dos candidatos adicionais. Os dados existentes com corte anterior continuam sendo evidência histórica e não devem ser renomeados ou tratados como dados de 20/10. A validação walk-forward, a calibração por fold e o purge de 60 pregões permanecem no método. A nova campanha ainda não foi executada ou validada.
 
 Os resultados, versões antigas, arquivos de evidências, figuras e decisões científicas permanecem documentados no `MANIFEST.md`. Identificadores com quantidades de ativos em seções históricas são registros de procedência, não regras da implementação atual.
 
