@@ -953,9 +953,10 @@ def main() -> None:
     manifest = read_snapshot_manifest(REFERENCE_DATA)
     start_date = str((manifest.get("bars") or {}).get("start") or "2016-01-01")
     analysis_end = str(
-        (manifest.get("bars") or {}).get("bar_snapshot_as_of_end")
-        or "2026-10-06"
+        (manifest.get("bars") or {}).get("bar_snapshot_as_of_end") or ""
     )
+    if not analysis_end:
+        raise ValueError("Data de corte ausente no manifesto do snapshot de referência.")
 
     print(
         f"[reference] start={start_date} analysis_end={analysis_end}",
