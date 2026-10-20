@@ -325,7 +325,7 @@ def test_analysis_end_date_is_inclusive_for_nyse_utc_timestamp() -> None:
 def test_control_reuses_local_market_data_and_does_not_require_hashes() -> None:
     source = (ROOT / "reproducao" / "control.py").read_text(encoding="utf-8")
     assert "SnapshotPaths.referencia(ROOT)" in source
-    assert "localizar_dados_adicionais" in source
+    assert "carregar_etapas_treinamento" in source
     assert "read_snapshot_manifest(BASE_DATA)" in source
     assert 'csv_float_precision="round_trip"' in source
     assert "validate_snapshot" not in source
@@ -699,7 +699,7 @@ def test_reference_data_is_versioned_and_build_area_is_ignored() -> None:
 def test_current_reproduction_control_uses_75_assets_and_swing_minimum() -> None:
     source = (ROOT / "reproducao" / "control.py").read_text(encoding="utf-8")
     cfg = (ROOT / "engine" / "configuracao.py").read_text(encoding="utf-8")
-    assert "carregar_selecao()" in source
+    assert "carregar_etapas_treinamento()" in source
     assert "historical_reference_capital" in source
     assert "config.rotation_switch_margin_candidates" in source
     assert 'rotation_min_holding_days: int = 2' in cfg
