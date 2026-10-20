@@ -18,6 +18,15 @@ Os demais códigos científicos ficam em `engine/` e `reproducao/`.
 O arquivo `dados/universo.json` define os símbolos solicitados. O tamanho é calculado
 pela lista, sem limites fixos nem grupos de referência ou candidatos adicionais.
 
+Para preservar a lógica matemática da campanha histórica, o mesmo arquivo contém
+`staged_training_assets`: uma **ordem interna de treinamento** para alguns ativos,
+sem constituir outro universo de investimentos. O Control estabelece o calendário,
+os folds e as margens da etapa inicial, treina individualmente os ativos dessa
+sequência nos mesmos folds e une os scores antes da rotação sobre todo o universo.
+Alterar essa ordem ou treinar tudo conjuntamente define outro experimento.
+O capital histórico de US$ 587.165.941,13 foi obtido com dados anteriores;
+**não** é resultado validado para o novo corte de 16/10/2026.
+
 A coleta com `python -m reproducao.preparar_snapshot` consulta a Alpaca para todos
 os símbolos declarados. Os CSVs são salvos em `dados/referencia/` por compatibilidade
 de caminhos (o nome do diretório **não** define um grupo de ativos).
