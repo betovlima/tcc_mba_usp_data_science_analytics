@@ -17,15 +17,15 @@ def test_reproducao_e_busca_nao_compartilham_ciclo_de_download() -> None:
     discovery = (ROOT / "buscar_ativos.py").read_text(
         encoding="utf-8"
     )
-    assert "executar_control_u77" in runner
-    implementation = (ROOT / "reproducao" / "control_u77.py").read_text(
+    assert "executar_control" in runner
+    implementation = (ROOT / "reproducao" / "control.py").read_text(
         encoding="utf-8"
     )
-    assert "SnapshotPaths.u67" in implementation
+    assert "SnapshotPaths.referencia" in implementation
     assert "load_alpaca_credentials" not in implementation
     assert "download_raw_bars" not in implementation
     assert "load_alpaca_credentials" in discovery
-    assert "read_snapshot_manifest(U67)" in discovery
+    assert "read_snapshot_manifest(REFERENCE_DATA)" in discovery
     assert "EXPECTED_BRANCH" not in discovery
     assert "if __name__ == \"__main__\":" in discovery
 
@@ -43,7 +43,7 @@ def test_regras_aprovadas_ficam_no_motor_congelado() -> None:
 
 
 def test_snapshot_e_evidencias_sao_preservados() -> None:
-    assert (ROOT / "dados" / "u67" / "manifest.json").is_file()
+    assert (ROOT / "dados" / "referencia" / "manifest.json").is_file()
     assert (ROOT / "evidencias" / "eligibilidade_v1.22.0-dev.10.json").is_file()
     assert (ROOT / "figuras" / "procedencia_figuras.json").is_file()
 
