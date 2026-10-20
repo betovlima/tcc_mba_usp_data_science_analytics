@@ -43,49 +43,18 @@ ANALYSIS_END_DATE = "2026-10-16"
 HISTORY_START_TOLERANCE_DAYS = 10
 
 
-def carregar_selecao() -> tuple[list[str], float | None]:
-    """Carrega a seleção versionada sem uma cardinalidade no código."""
-    if not SELECTION_FILE.is_file():
-        raise FileNotFoundError(f"Seleção de ativos não encontrada: {SELECTION_FILE}")
-    payload = json.loads(SELECTION_FILE.read_text(encoding="utf-8"))
-    names = [str(item).strip().upper() for item in (payload.get("selected_candidates") or [])]
-    if len(set(names)) != len(names) or any(not item for item in names):
-        raise ValueError("Seleção de ativos com símbolos duplicados ou inválidos.")
-    if set(names).intersection(ASSETS):
-        raise ValueError("Seleção adicional contém símbolos que já existem na referência.")
-    historical = payload.get("reference_capital_usd")
-    return names, float(historical) if historical is not None else None
+def carregar_etapas_treinamento() -> list[str]:
+    """Lê a sequência de treinamento preservada da campanha histórica.
 
-
-def localizar_dados_adicionais(symbols: list[str]) -> SnapshotPaths | None:
-    """Encontra o cache completo pelo conteúdo ou por diretório informado."""
-    if not symbols:
-        return None
-    configured = os.getenv("TCC_CANDIDATE_DATA_ROOT")
-    if configured:
-        roots = [SnapshotPaths.from_root(Path(configured).expanduser().resolve())]
-    else:
-        roots = [
-            SnapshotPaths.from_root(p.parent)
-            for p in sorted((ROOT / "dados").glob("**/raw_bars"))
-            if p.parent.resolve() != BASE_DATA.root.resolve()
-        ]
-    valid = [
-        item for item in roots
-        if all(
-            (item.raw_bars / f"{symbol}.csv").is_file()
-            and (item.corporate_actions / f"{symbol}.csv").is_file()
-            for symbol in symbols
-        )
-    ]
-    if len(valid) != 1:
-        raise FileNotFoundError(
-            "Dados adicionais ausentes ou com múltiplas fontes compatíveis. "
-            "Defina TCC_CANDIDATE_DATA_ROOT para a pasta de dados com "
-            "raw_bars/ e corporate_actions/. "
-            f"Fontes completas encontradas: {len(valid)}."
-        )
-    return valid[0]
+    Ela não define outro universo: todos os ativos pertencem à mesma seleção
+    para decisão e podem competir pelas mesmas posições na carteira.
+    """
+    path = ROOT / "dados" / "universo.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    staged = [str(x).strip().upper() for x in payload.get("staged_training_assets", [])]
+    if len(staged) != len(set(staged)) or set(staged) - set(ASSETS):
+        raise ValueError("Sequência de treinamento inválida ou fora do universo.")
+    return staged
 
 
 @dataclass(frozen=True)
@@ -474,9 +443,8 @@ def executar_control() -> dict[str, Any]:
 
     started = time.perf_counter()
     OUT.mkdir(parents=True, exist_ok=True)
-    needed: list[str] = []
+    needed = carregar_etapas_treinamento()
     historical_reference_capital = None
-    candidate_data = None
     print(f"[TCC] versão={VERSION} modo=Control", flush=True)
     print(f"[TCC] dados={BASE_DATA.root} universo_solicitado={len(ASSETS)}", flush=True)
 
@@ -504,12 +472,13 @@ def executar_control() -> dict[str, Any]:
             f"extras={sorted(set(collected) - set(ASSETS))}. "
             "Atualize o snapshot completo antes da reprodução."
         )
+    baseline_requested = [symbol for symbol in ASSETS if symbol not in needed]
     base_raw, exclusions, preparation, data_audit = prepare_model_frames(
         BASE_DATA,
-        assets=ASSETS,
+        assets=tuple(baseline_requested),
         csv_float_precision="round_trip",
     )
-    baseline = [symbol for symbol in ASSETS if symbol in base_raw]
+    baseline = [symbol for symbol in baseline_requested if symbol in base_raw]
     configuration_reference = build_control_config(
         {symbol: base_raw[symbol] for symbol in baseline}, CONFIG
     ).copiar_modelo(update={"analysis_end_date": ANALYSIS_END_DATE})
@@ -523,7 +492,7 @@ def executar_control() -> dict[str, Any]:
     if needed:
         candidate_frames, continuity = _prepare_candidate_frames(
             needed, common_dates, all_decision_dates, configuration_reference,
-            candidate_data,
+            BASE_DATA,
         )
     else:
         candidate_frames, continuity = {}, pd.DataFrame(
@@ -538,7 +507,7 @@ def executar_control() -> dict[str, Any]:
             + ". Confira continuity_audit.csv para conhecer a causa."
         )
 
-    # Mesmo fluxo numérico da campanha v1.0.11:
+    # Método numérico histórico:
     # treina modelos por ativo e por fold separados, funde caches na
     # ordem CASH + todos os símbolos e calibra margens só no treino.
     states, _, baseline_margins = _train_baseline_states(
@@ -671,7 +640,7 @@ def executar_control() -> dict[str, Any]:
         "snapshot_metadata": metadata,
         "structural_exclusions": exclusions,
         "runtime_seconds": time.perf_counter() - started,
-        "origin": "selection_manifest",
+        "origin": "single_universe_with_historical_training_sequence",
     }
     (OUT / "reproducao_control.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, default=str),
