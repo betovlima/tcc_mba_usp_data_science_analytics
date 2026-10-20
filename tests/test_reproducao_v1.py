@@ -340,7 +340,7 @@ def test_reference_snapshot_preparation_is_separate_from_reproduction() -> None:
     assert "download_raw_bars" in source
     assert "download_corporate_actions" in source
     assert "load_alpaca_credentials" in source
-    assert "snapshot_end_date = \"2026-10-20\"" in source
+    assert "snapshot_end_date = \"2026-10-16\"" in source
     assert "dados" in source and ".reference_build" in source
 
 def test_capital_rotations_follow_backtest_analytics_semantics() -> None:
