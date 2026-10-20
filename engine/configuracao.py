@@ -20,28 +20,20 @@ START_DATE = "2016-01-01"
 ANALYSIS_END_DATE = "2026-10-16"
 BAR_SNAPSHOT_AS_OF_END = "2026-10-16"
 
-def carregar_ativos_referencia() -> tuple[str, ...]:
-    """Lê o universo solicitado no manifesto versionado, sem cardinalidade fixa.
+def carregar_universo() -> tuple[str, ...]:
+    """Carrega exclusivamente o universo declarado para a campanha.
 
-    Não altera nem reconstrói preços. A lista do manifesto é a fonte do
-    universo de referência; problemas estruturais serão excluídos pelo
-    pipeline existente e registrados explicitamente.
+    O manifesto de mercado registra dados coletados, não define a seleção.
     """
-    path = Path(__file__).resolve().parents[1] / "dados" / "referencia" / "manifest.json"
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"Snapshot de referência ausente: {path}. "
-            "Os dados devem ser versionados antes da reprodução."
-        )
+    path = Path(__file__).resolve().parents[1] / "dados" / "universo.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
-    names = tuple(str(name).strip().upper() for name in (payload.get("assets") or ()))
-    if not names or any(not name for name in names) or len(set(names)) != len(names):
-        raise ValueError("Manifesto de referência sem ativos ou com símbolos duplicados.")
+    names = tuple(str(x).strip().upper() for x in payload.get("assets", []))
+    if not names or any(not x for x in names) or len(names) != len(set(names)):
+        raise ValueError("Universo inválido: símbolos ausentes ou duplicados.")
     return names
 
 
-ASSETS = carregar_ativos_referencia()
-
+ASSETS = carregar_universo()
 
 
 def _configuracoes_lightgbm() -> dict[str, Any]:
