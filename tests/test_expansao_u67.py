@@ -2,9 +2,9 @@
 import numpy as np
 import pandas as pd
 import pytest
-import pesquisar_expansao_u67_spyder as expansion
+from reproducao import expansao_u67 as expansion
 
-from pesquisar_expansao_u67_spyder import (
+from reproducao.expansao_u67 import (
     _capital_delta,
     _continuity_audit,
     _merge_utility_caches,

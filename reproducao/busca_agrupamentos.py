@@ -65,7 +65,7 @@ from reproducao.preparacao import prepare_model_frames
 
 
 # %% 0 - Configuração
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 U67 = SnapshotPaths.u67(ROOT)
 OUT = ROOT / "output" / "candidate_cluster_search"
 CACHE = OUT / "cache_bars"
@@ -963,12 +963,9 @@ def main() -> None:
     print(f"arquivo={Path(__file__).resolve()}")
     print("=" * 78)
 
-    if branch not in (EXPECTED_BRANCH, "sem-git"):
-        raise RuntimeError(
-            f"Branch incorreta: esperado={EXPECTED_BRANCH} observado={branch}"
-        )
+    # A busca exploratória pode ser executada de qualquer branch.
 
-    _clear_generated_outputs()
+   _clear_generated_outputs()
     OUT.mkdir(parents=True, exist_ok=True)
     manifest = validate_snapshot(U67)
     start_date = str((manifest.get("bars") or {}).get("start") or "2016-01-01")

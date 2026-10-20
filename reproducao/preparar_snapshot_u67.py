@@ -22,7 +22,7 @@ from reproducao.dados import (
 )
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 BUILD = SnapshotPaths.from_root(ROOT / "dados" / ".u67_build")
 TARGET = SnapshotPaths.u67(ROOT)
 

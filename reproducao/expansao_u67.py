@@ -83,7 +83,7 @@ from reproducao.preparacao import (
 
 
 # %% 0 - Parametros da campanha
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 RUN_MODE = "decision_validation"
 BASE_DATA = SnapshotPaths.u67(ROOT)
 CACHE_ROOT = ROOT / "dados" / ".u67_expansion_cache"

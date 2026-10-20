@@ -1,152 +1,95 @@
 # TCC MBA USP — Rotação de Capital com Machine Learning
 
-Release: **v1.22.1**, integrada à `main` a partir de
-`fix/u67-eligibilidade-sem-futuro`. A memória da release, as evidências e as
-pendências estão na seção 24 de [MANIFEST.md](MANIFEST.md).
+## Entradas do projeto
 
-## Requisitos
+Este repositório mantém **somente dois scripts de execução na raiz**:
 
-- Python 3.12
-- dependências de `requirements.txt`
+| Arquivo | Finalidade |
+| --- | --- |
+| `buscar_ativos.py` | Pesquisa exploratória de ativos (PCA, agrupamentos e, opcionalmente, investigação U67+n) sem alterar a composição do universo oficial |
+| `reproduzir_experimento.py` | Reproduz o experimento científico oficial usando o snapshot congelado versionado em `dados/u67/`, sem baixar dados ou consultar o MCT |
 
-Instale:
+A metodologia, os resultados e o histórico científico continuam em
+[MANIFEST.md](MANIFEST.md). A reorganização não altera os modelos, parâmetros,
+configurações científicas nem os dados congelados.
+
+### Instalação
+
+Python 3.12:
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-## 1. Verifique os dados
-
-A reprodução usa:
-
-```text
-dados/u67/
-├── raw_bars/
-├── corporate_actions/
-└── manifest.json
-```
-
-A release inclui o snapshot congelado em `dados/u67/`. Vá direto para a
-execução; os hashes são conferidos antes do treinamento.
-
-Se o snapshot ainda não existir, crie um arquivo `.env` local com:
-
-```text
-ALPACA_API_KEY=sua_api_key
-ALPACA_SECRET_KEY=sua_secret_key
-```
-
-e execute:
-
-```bash
-python preparar_snapshot_u67.py
-```
-
-## 2. Execute a reprodução
-
-No terminal:
+### Reprodução oficial
 
 ```bash
 python reproduzir_experimento.py
 ```
 
-No Spyder, abra `reproduzir_experimento.py`, reinicie o kernel e execute o
-arquivo completo.
+No Spyder, abra `reproduzir_experimento.py` e execute com F5 após reiniciar
+o kernel. O resultado é salvo em `output/reproducao/` e o script valida o
+snapshot local `dados/u67/` antes de iniciar o treinamento.
 
-## 3. Resultados
-
-Os artefatos são gravados em:
-
-```text
-output/reproducao/
-```
-
-## 4. Confira o efeito da correção de elegibilidade
-
-No terminal:
+### Busca de ativos
 
 ```bash
-python avaliar_elegibilidade_u67.py
+python buscar_ativos.py
 ```
 
-No Spyder, abra `avaliar_elegibilidade_u67.py` e execute o arquivo completo
-com F5. O script compara o filtro antigo e o corrigido com os mesmos modelos
-ajustados, sem baixar dados ou alterar os parâmetros. Os resultados ficam em
-`output/elegibilidade/`. O controle com o filtro antigo serve à auditoria;
-`reproduzir_experimento.py` usa a regra corrigida.
+No Spyder, execute `buscar_ativos.py` com F5. No início do script, selecione:
 
-## 5. Gere as figuras do TCC
+- `MODO_BUSCA = "agrupamentos"`: explora o catálogo Alpaca e produz
+  shortlist por atributos técnicos, PCA e clusters; **não incorpora candidatos
+  automaticamente** ao universo científico.
+- `MODO_BUSCA = "expansao_u67"`: mantém a investigação incremental U67+n e seus
+  checkpoints históricos. O módulo preservado usa por padrão
+  `RUN_MODE = "decision_validation"`. Os outros modos de pesquisa são
+  documentados em [PESQUISA_EXPANSAO_U67.md](PESQUISA_EXPANSAO_U67.md).
 
-No terminal:
+A busca consulta a Alpaca e exige credenciais locais. Use `.env` conforme
+`.env.example`. Diferentemente da reprodução, a busca pode coletar dados
+de candidatos e gravar cache em `output/` ou `dados/` ignorados pelo Git.
+Ela não altera `dados/u67/`.
+
+**Distinção de resultados:** a referência reproduzida no contrato científico
+U67 é de aproximadamente US$ 76,93 milhões. A campanha exploratória
+U67+10 registrou um cenário de aproximadamente US$ 587,17 milhões.
+Este último não é promovido automaticamente a novo resultado oficial;
+a metodologia e suas limitações estão no `MANIFEST.md`.
+
+## Módulos internos e manutenção
+
+As rotinas auxiliares de auditoria, preparação do snapshot e figuras foram
+movidas para `reproducao/`, sem virar novos scripts na raiz. Quando necessário:
 
 ```bash
-python gerar_figuras_tcc.py
+python -m reproducao.avaliar_elegibilidade_u67
+python -m reproducao.gerar_figuras_tcc
 ```
 
-No console do Spyder, com a pasta do projeto como diretório de trabalho:
-
-```python
-%run gerar_figuras_tcc.py
-```
-
-As sete figuras em PNG e SVG, as tabelas derivadas e sua procedência ficam em
-`figuras/`. O comando usa as evidências preservadas da execução dev.10; não
-treina modelos nem executa outro backtest. Ele é separado da reprodução.
-
-A reprodução usa os hiperparâmetros fixados pela campanha histórica e calibra
-a margem de troca por busca em grade em cada janela temporal. Ela não repete a
-otimização bayesiana que selecionou os hiperparâmetros.
-
-A documentação técnica, histórica e a avaliação completa do projeto estão em
-`MANIFEST.md`.
-
-
-## 6. Pesquisa de expansão incremental U67+n
-
-A pesquisa que mantém o U67 fixo e testa somente a adição de novos ativos está
-em:
-
-```text
-pesquisar_expansao_u67_spyder.py
-```
-
-A versão 1.4.1 usa por padrão o modo `decision_validation`. Ela preserva
-os checkpoints da assurance e mede qualidade de ranking/decisão, Deflated
-Sharpe Ratio, Probability of Backtest Overfitting e um piloto temporal de
-`ADICIONAR / MANTER / REMOVER` ativos. Os modos `assurance_validation`,
-`subset_optimization` e `direct_marginal` permanecem disponíveis para
-reproduzir as etapas anteriores.
-
-Ela exige as credenciais locais da Alpaca no arquivo `.env`, mas não recria nem
-altera `dados/u67`. Os dados dos candidatos são mantidos em cache local
-ignorado pelo Git.
-
-No terminal:
+A preparação do snapshot é **separada e explícita**; a reprodução oficial
+nunca a executa. Apenas para uma nova campanha de coleta, com credenciais
+Alpaca e posterior revisão e versionamento dos dados:
 
 ```bash
-python pesquisar_expansao_u67_spyder.py
+python -m reproducao.preparar_snapshot_u67
 ```
 
-No Spyder, abra `pesquisar_expansao_u67_spyder.py`, reinicie o kernel e execute
-o arquivo completo com F5.
+Há também `python -m reproducao.finalizar_decision_validation` para recuperar
+a serialização de uma campanha histórica já calculada.
 
-No modo padrão de validação da decisão, os resultados ficam em:
+Os arquivos de `engine/`, `reproducao/`, `dados/u67/`, `evidencias/`,
+`figuras/`, `documento/` e os testes preservam a verificabilidade do estudo.
+Scripts exploratórios redundantes foram retirados da versão corrente;
+continuam recuperáveis no histórico Git.
 
-```text
-output/u67_decision_validation/
-```
-
-Os modos anteriores continuam usando `output/u67_assurance_validation/`,
-`output/u67_subset_optimization/` e `output/u67_asset_expansion/`.
-
-O desenho e as limitações da campanha estão documentados em
-`PESQUISA_EXPANSAO_U67.md`.
-
-Se uma execução v1.4.0 já concluiu os cálculos e falhou somente ao serializar
-`NaN` no JSON final, não repita o backtest. Preserve a pasta de output e rode:
+## Testes
 
 ```bash
-python finalizar_u67_decision_validation_spyder.py
+python -m pytest -q
+python -m ruff check engine reproducao buscar_ativos.py reproduzir_experimento.py tests --select F401,F811,F821,F841
 ```
 
-No Spyder, abra esse arquivo e execute com F5.
+O código oficial não depende de banco de dados nem do ambiente operacional
+Market Cycle Trader.

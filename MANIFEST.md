@@ -1,3 +1,15 @@
+> **Organização do repositório — 2026-10-20:** a raiz expõe somente
+> `buscar_ativos.py` e `reproduzir_experimento.py` como scripts de entrada,
+> de acordo com a simplificação do projeto. Preparação do snapshot,
+> auditoria da elegibilidade, geração de figuras, validação U67+n e busca
+> por PCA/agrupamentos foram mantidas como módulos internos em
+> `reproducao/`. Os dados científicos congelados, testes, a documentação
+> Word, as figuras e as evidências foram preservados. A reprodução oficial
+> não foi modificada. O cenário exploratório U67+10 de US$ 587,17 milhões
+> permanece documentado separadamente do Control U67 de US$ 76,93 milhões.
+> As referências a caminhos antigos nas seções históricas abaixo descrevem
+> o estado da época; as instruções atuais estão no `README.md`.
+
 # MANIFEST — TCC MBA USP Data Science & Analytics
 
 ## 1. Finalidade deste documento

@@ -1,6 +1,6 @@
 """Finaliza uma v1.4.0 concluida que falhou apenas na serializacao JSON.
 
-Use este arquivo somente quando pesquisar_expansao_u67_spyder.py ja terminou
+Use este arquivo somente quando buscar_ativos.py (modo expansao_u67) ja terminou
 todos os cenarios da decision validation e falhou em
 pesquisa_u67_decision_validation.json por conter NaN.
 
@@ -17,7 +17,7 @@ from typing import Any
 
 import pandas as pd
 
-from pesquisar_expansao_u67_spyder import (
+from reproducao.expansao_u67 import (
     ANALYSIS_END_DATE,
     EXPECTED_ALL_POSITIVE_ENDING_CAPITAL,
     EXPECTED_DISCOVERY_SELECTED_ENDING_CAPITAL,
@@ -32,7 +32,7 @@ from pesquisar_expansao_u67_spyder import (
 from reproducao.artefatos import criar_pacote_analise, sinal_sonoro_conclusao
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "output" / "u67_decision_validation"
 RECOVERY_VERSION = "u67-asset-expansion-v1.4.1"
 RECOVERED_EXECUTION_VERSION = "u67-asset-expansion-v1.4.0"

@@ -1,6 +1,6 @@
 """Mede o efeito da elegibilidade causal com os mesmos dados e modelos.
 
-Execute no Spyder com F5 ou no terminal: python avaliar_elegibilidade_u67.py.
+Execute no Spyder com F5 ou no terminal: python -m reproducao.avaliar_elegibilidade_u67.
 Não baixa dados nem altera parâmetros. A máscara antiga existe somente neste
 controle histórico; o fluxo oficial utiliza sempre a elegibilidade corrigida.
 """
@@ -36,7 +36,7 @@ from reproducao.dados import SnapshotPaths, validate_snapshot
 from reproducao.experimento import build_control_config, summarize_metrics
 from reproducao.preparacao import prepare_model_frames
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 BASELINE_COMMIT = "192dc7bd457beed66a62a13c368b20865da748c9"
 SNAPSHOT_SHA256 = "e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575"
 HISTORICAL_ENDING_CAPITAL = 76_927_051.38897176

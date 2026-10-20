@@ -342,7 +342,7 @@ def test_official_reproduction_uses_frozen_u67_snapshot() -> None:
 
 
 def test_u67_snapshot_preparation_is_separate_from_reproduction() -> None:
-    source = (ROOT / "preparar_snapshot_u67.py").read_text(
+    source = (ROOT / "reproducao" / "preparar_snapshot_u67.py").read_text(
         encoding="utf-8"
     ).lower()
     assert "download_raw_bars" in source

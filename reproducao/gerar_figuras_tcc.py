@@ -17,7 +17,7 @@ import pandas as pd
 from matplotlib.patches import FancyArrowPatch, Rectangle
 from matplotlib.ticker import FuncFormatter
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "figuras"
 COLORS = ["#1764A2", "#C57719", "#397B4B"]
 GROUPS = [
