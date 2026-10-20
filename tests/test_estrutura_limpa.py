@@ -73,20 +73,22 @@ def test_busca_avisos_sonoros_diferenciam_sucesso_de_erro(monkeypatch) -> None:
     assert calls == [(440, 420), (330, 470)]
 
 
-def test_selecao_independente_de_cardinalidade(tmp_path, monkeypatch) -> None:
+def test_universo_independente_de_cardinalidade(tmp_path, monkeypatch) -> None:
     import json
-    import reproducao.control as control
+    import engine.configuracao as configuracao
 
     names = ["AAA", "BBB", "CCC"]
-    selection = tmp_path / "selecao.json"
-    selection.write_text(
-        json.dumps({"selected_candidates": names, "reference_capital_usd": None}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(control, "SELECTION_FILE", selection)
-    selected, reference_capital = control.carregar_selecao()
-    assert selected == names
-    assert reference_capital is None
+    path = tmp_path / "universo.json"
+    path.write_text(json.dumps({"assets": names}), encoding="utf-8")
+    original_read_text = Path.read_text
+
+    def fake_read_text(self, *args, **kwargs):
+        if self.name == "universo.json":
+            return path.read_text(encoding="utf-8")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+    assert configuracao.carregar_universo() == tuple(names)
 
 
 def test_codigos_ativos_nao_exigem_identificador_de_cardinalidade() -> None:
