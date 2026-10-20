@@ -965,7 +965,7 @@ def main() -> None:
 
     # A busca exploratória pode ser executada de qualquer branch.
 
-   _clear_generated_outputs()
+    _clear_generated_outputs()
     OUT.mkdir(parents=True, exist_ok=True)
     manifest = validate_snapshot(U67)
     start_date = str((manifest.get("bars") or {}).get("start") or "2016-01-01")
