@@ -91,6 +91,24 @@ def test_universo_independente_de_cardinalidade(tmp_path, monkeypatch) -> None:
     assert configuracao.carregar_universo() == tuple(names)
 
 
+def test_etapas_treinamento_sao_subconjunto_do_universo() -> None:
+    import json
+    from engine.configuracao import ASSETS
+    from reproducao.control import carregar_etapas_treinamento
+
+    payload = json.loads(
+        (ROOT / "dados" / "universo.json").read_text(encoding="utf-8")
+    )
+    assert tuple(payload["assets"]) == ASSETS
+    staged = carregar_etapas_treinamento()
+    assert len(staged) == len(set(staged))
+    assert set(staged).issubset(ASSETS)
+    assert staged
+    assert "BASE_DATA,\n" in (
+        ROOT / "reproducao" / "control.py"
+    ).read_text(encoding="utf-8")
+
+
 def test_codigos_ativos_nao_exigem_identificador_de_cardinalidade() -> None:
     for relative in (
         "engine/configuracao.py",
