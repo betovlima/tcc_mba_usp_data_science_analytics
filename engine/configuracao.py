@@ -17,8 +17,8 @@ from typing import Any
 
 EXPERIMENT_VERSION = "1.22.4-dev.1"
 START_DATE = "2016-01-01"
-ANALYSIS_END_DATE = "2026-09-17"
-BAR_SNAPSHOT_AS_OF_END = "2026-09-17"
+ANALYSIS_END_DATE = "2026-10-20"
+BAR_SNAPSHOT_AS_OF_END = "2026-10-20"
 
 def carregar_ativos_referencia() -> tuple[str, ...]:
     """Lê o universo solicitado no manifesto versionado, sem cardinalidade fixa.
