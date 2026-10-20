@@ -13,15 +13,21 @@ O estudo utiliza um universo de ativos **declarado pelos dados e pela seleção 
 
 Os demais códigos científicos ficam em `engine/` e `reproducao/`.
 
-## Composição do universo
+## Universo único da pesquisa
 
-- `dados/referencia/manifest.json`: fornece a lista de ativos do snapshot de referência; os CSVs permanecem idênticos aos históricos, sem modificação de conteúdo.
-- `dados/selecao_ativos.json`: registra a seleção adicional da campanha que gerou a referência histórica, sem contagem fixa no executor.
-- Dados adicionais: histórico local da campanha anterior com `raw_bars/` e `corporate_actions/`. O programa procura um conjunto completo em `dados/` ou aceita o diretório indicado em `TCC_CANDIDATE_DATA_ROOT`.
+O arquivo `dados/universo.json` define os símbolos solicitados. O tamanho é calculado
+pela lista, sem limites fixos nem grupos de referência ou candidatos adicionais.
 
-A seleção adicional histórica e o valor de aproximadamente **US$ 587,17 milhões** são preservados como **referência descritiva**, e não como condição de sucesso. Mudanças na seleção exigem uma nova avaliação cronológica; não promovem automaticamente o resultado antigo ao universo novo.
+A coleta com `python -m reproducao.preparar_snapshot` consulta a Alpaca para todos
+os símbolos declarados. Os CSVs são salvos em `dados/referencia/` por compatibilidade
+de caminhos (o nome do diretório **não** define um grupo de ativos).
+A reprodução financeira usa apenas os CSVs congelados, sem banco ou Alpaca,
+confere o corte em **16/10/2026** e exige que a lista do manifesto da coleta
+coincida com o universo declarado.
 
-Não existem bloqueios por hash, versões de branch ou checkpoints financeiros para iniciar o cálculo. Permanecem verificações de arquivos presentes, símbolos duplicados, preços utilizáveis, continuidade das séries e exclusões estruturais documentadas. Não são reconstruídas identidades de ativos nem mescladas fontes para corrigir problemas estruturais.
+Ativos com problemas estruturais continuam excluídos da modelagem e documentados;
+não se reconstrói ou combina uma série para corrigir identidade. As evidências
+das campanhas antigas permanecem no histórico, sem determinar o universo atual.
 
 ## Execução
 
