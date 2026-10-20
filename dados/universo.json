@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "Universo unico solicitado da pesquisa, sem grupos de referencia ou candidatos.",
+  "description": "Universo único da pesquisa. A lista staged_training_assets preserva a sequência de treinamento da campanha histórica, sem criar outro universo de investimento.",
   "assets": [
     "NVDA",
     "AAPL",
@@ -79,5 +79,18 @@
     "MCHB",
     "LAD",
     "TOWN"
-  ]
+  ],
+  "staged_training_assets": [
+    "CRT",
+    "NBR",
+    "CAPR",
+    "PNBK",
+    "PENN",
+    "JBL",
+    "STAG",
+    "MCHB",
+    "LAD",
+    "TOWN"
+  ],
+  "training_method": "chronological_fold_calibration_with_staged_per_asset_training"
 }
