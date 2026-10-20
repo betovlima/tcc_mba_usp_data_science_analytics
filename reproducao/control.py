@@ -495,6 +495,15 @@ def executar_control() -> dict[str, Any]:
             "Atualize os CSVs pela Alpaca e reconstrua o manifesto antes da reproducao; "
             "nao modifique apenas as datas do manifesto."
         )
+    collected = tuple(str(x).strip().upper() for x in metadata.get("assets", []))
+    if set(collected) != set(ASSETS) or len(collected) != len(ASSETS):
+        raise RuntimeError(
+            "Universo coletado diferente do universo declarado. "
+            f"declarados={len(ASSETS)} coletados={len(collected)} "
+            f"faltantes={sorted(set(ASSETS) - set(collected))} "
+            f"extras={sorted(set(collected) - set(ASSETS))}. "
+            "Atualize o snapshot completo antes da reprodução."
+        )
     base_raw, exclusions, preparation, data_audit = prepare_model_frames(
         BASE_DATA,
         assets=ASSETS,
