@@ -1,16 +1,17 @@
-> **Organização do repositório — 2026-10-20:** a raiz expõe somente
-> `buscar_ativos.py` e `reproduzir_experimento.py` como scripts de entrada,
-> de acordo com a simplificação do projeto. Preparação do snapshot,
-> auditoria da elegibilidade, geração de figuras, validação U67+n e busca
-> por PCA/agrupamentos foram mantidas como módulos internos em
-> `reproducao/`. Os dados científicos congelados, testes, a documentação
-> Word, as figuras e as evidências foram preservados. A reprodução oficial
-> não foi modificada. O cenário exploratório U67+10 de US$ 587,17 milhões
-> permanece documentado separadamente do Control U67 de US$ 76,93 milhões.
-> As referências a caminhos antigos nas seções históricas abaixo descrevem
-> o estado da época; as instruções atuais estão no `README.md`.
-
 # MANIFEST — TCC MBA USP Data Science & Analytics
+
+> **ATUALIZAÇÃO 13/10/2026 — referência vigente v1.22.3-dev.1.** A
+> limpeza v1.22.2-dev.1 havia apontado incorretamente para U67 com
+> US$ 76,93 milhões. O executor principal foi restaurado para o
+> **Control U67+10, 75 ativos, US$ 587.165.941,13 de referência
+> histórica**, conforme campanha v1.0.11. Os históricos de dez
+> ativos adicionais estão no cache local da campanha; sem eles,
+> não é possível reproduzir seu capital na máquina CI. **Hashes,
+> gates por checkpoint/branch e validações por identidade SHA foram
+> removidos dos fluxos ativos.** O único limite temporal obrigatório
+> de negociação é a permanência mínima de dois pregões do swing trade.
+> As seções abaixo são histórico científico, não configuração vigente.
+>
 
 ## 1. Finalidade deste documento
 
@@ -1629,3 +1630,1422 @@ pesquisa sobre o cadastro, o backtest nem a possibilidade de adotar o
 Challenger como Winner no ambiente operacional. A redação anterior sobre
 etapas extras de homologação foi retirada. Esta alteração de documentação
 não modifica os resultados numéricos nem a política de universo congelada.
+
+
+### 25.12 Pesquisa experimental de persistência preditiva multi-horizonte (2026-10-12)
+
+**Versão experimental:** horizon-persistence-oos-v1.0.2.
+**Branch separada:** research/horizon-persistence-oos-v1, criada a partir de
+da pesquisa U67+10 no commit 13e5ed39.
+Esta pesquisa **não modifica** os checkpoints, a reprodução oficial, o
+checkpoint congelado U67+10 ou o universo original. Não existe promoção
+automática nem mudança do resultado acadêmico validado.
+
+**Hipótese:** a antiga permanência mínima fixa de dois pregões pode ser
+substituída por evidência individual dos horizontes 5/10/20/40/60, acompanhando
+a previsão registrada no instante de compra e suas revisões posteriores. O
+modelo oficial atual aprende **uma única utilidade agregada** como alvo, com
+pesos (0.10, 0.15, 0.20, 0.30, 0.25); ele não emite diretamente cinco
+previsões individuais. O experimento ajusta cabeças LightGBM adicionais por
+ativo e horizonte usando as colunas de alvo existentes
+forward_horizon_utility_{h} — não pressupõe previsões que o sistema
+original não produzia.
+
+**Três braços de replay**, mantendo o mesmo universo efetivo, preços,
+folds walk-forward, custos e modelos agregados:
+
+1. control_holding_2 — política congelada, incluindo a margem de troca
+   calibrada; o capital final deve reproduzir US$ 587.165.941,1330212.
+2. ablation_holding_0 — mesma utilidade agregada, modelos, margens e
+   custos; apenas o holding mínimo passa a zero.
+3. horizon_confidence — sem holding mínimo; o primeiro filtro econômico
+   da margem de troca permanece; uma segunda evidência usa previsões
+   individuais por horizonte, pesos das frações ainda não vencidas das
+   previsões feitas na entrada e erro absoluto p75 calculado estritamente
+   antes da janela fora da amostra. Multiplicadores 0/0.5/1.0 são
+   selecionados por score de calibração cronológica antes de cada fold
+   de teste. O p75 **não** é uma probabilidade calibrada de ganho.
+
+A nova regra emprega um estimador heurístico explícito: horizonte restante
+r_h=max(0,1-idade_em_sessoes/h), previsão atual do ativo comprado e
+previsão original no instante da entrada com mistura 50/50, e previsão
+atual de cada concorrente. A troca é admitida se o ganho esperado no
+horizonte em comparação com essa referência excede
+multiplicador*p75_erro. O efeito de truncar horizontes não representa
+matematicamente uma distribuição preditiva do retorno residual; por isso a
+regra é uma hipótese mensurável de pesquisa, não confiança probabilística.
+Quando o horizonte original se esgota, usam-se apenas previsões novas.
+Em troca de fold, se uma posição foi herdada e a previsão exata da compra
+anterior não está disponível, a observação atual é registrada como
+substituto marcado na auditoria. A simulação financeira não recebe preços
+futuros na seleção de operações.
+
+**Dados e causalidade:** o script exige o snapshot U67 versionado no Git
+e os arquivos RAW e Corporate Actions locais da campanha de dez ativos,
+com SHA-256 registrado na saída. Não baixa ativos adicionais. A rotina
+exige continuidade e ausência de quebra estrutural nos ativos externos.
+Treino de cada horizonte é truncado em h observações antes do próximo
+intervalo; o cálculo de erro descarta qualquer rótulo que só maturaria
+depois da janela de calibração. Os mesmos dez símbolos congelados são
+usados sem nova busca de subconjuntos.
+
+**Execução:** abrir pesquisar_persistencia_horizontes_spyder.py no Spyder e
+executar com F5; alternativamente:
+python pesquisar_persistencia_horizontes_spyder.py
+
+**Artefatos:** output/persistencia_horizontes_u77/{experiment.json,
+comparison.csv, horizon_calibration.csv, horizon_decisions.csv,
+control_holding_2_equity.csv, ablation_holding_0_equity.csv,
+horizon_confidence_equity.csv e *trades.csv}.
+Todas as saídas são de pesquisa. Nenhum resultado do novo experimento foi
+observado no momento da implementação. Os testes unitários validam
+causalidade de rótulos, memória da previsão de entrada, possibilidade de
+troca imediata e saída para CASH; não equivalem a uma execução financeira
+completa. A avaliação do efeito de múltiplas comparações e da capacidade
+de execução econômica permanece relevante antes de qualquer adoção futura.
+
+**Separação permanente:** apenas após execução e análise dos três braços,
+com auditoria OOS e deliberação do autor, uma versão operacional distinta
+poderá ser proposta. Esta pesquisa não altera a aplicação operacional.
+
+
+#### 25.12.1 Hotfix H05 — eliminação do double purge (v1.0.2, 2026-10-12)
+
+**Incidente observado na primeira execução local, confirmado pelo log do autor:**
+
+- control_holding_2: US$ 587.165.941,13 (reproduzido ao centavo).
+- ablation_holding_0: US$ 59.060.362,54.
+- RuntimeError H5: insuficientes residuos maturados para medir a incerteza
+  antes do OOS: 0.
+
+O erro aconteceu antes de calcular qualquer resultado do braço multi-horizonte.
+O fold 1 da calibração contém 700 observações de treino, o mínimo
+rotation_minimum_training_rows=700. A primeira implementação fazia
+safe_train_dates=state.train_dates[:-h], removendo mais 5 datas
+(695 linhas disponíveis) embora o protocolo oficial já separasse o treino
+da calibração com purge de 60 pregões. A função de treinamento retornava
+um dicionário de modelos vazio e a medição de erro recebia previsões
+não finitas, resultando em zero resíduos válidos. Não houve corrupção de
+dados, alteração da estratégia base nem conclusão sobre a política nova.
+
+A correção preserva todas as datas pré-calibração e pré-OOS cujo rótulo
+de horizonte h matura antes do primeiro pregão de avaliação. Para cada
+fold e h, a validação exige estritamente:
+
+    (train_end_exclusive - 1) + h < evaluation_start_index
+
+A verificação funciona para H05/H10/H20/H40/H60 com purge 60, sem
+novo truncamento das 700 observações mínimas. Também verifica que
+o dicionário de modelos não está vazio e mantém o descarte de
+rótulos de calibração não maturados antes da decisão OOS. Novos testes
+de regressão cobrem quantidade original de treinamento e rejeição de
+rótulos futuros.
+
+**A pesquisa nova ainda precisa ser executada novamente pelo autor.**
+O backtest completo não está validado pela CI unitária; os resultados
+Control e ablação observados não antecipam desempenho do método
+multi-horizonte. Reexecutar pesquisar_persistencia_horizontes_spyder.py
+após atualizar esta branch e enviar o ZIP produzido.
+
+
+#### 25.12.2 Resultado executado dos três braços (v1.0.2, 2026-10-12)
+
+**Fonte observada:** pacote local
+pacote_persistencia_horizontes_u77.zip fornecido pelo autor, script_version
+horizon-persistence-oos-v1.0.2, status completed e cutoff 2026-10-06.
+Snapshot U67 SHA-256:
+e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575.
+Universo requisitado 77, efetivo 75, exclusões CLMT e DOC.
+A campanha usa os dez ativos novos congelados e os mesmos três folds.
+
+| Política | Capital final USD | Sharpe | MaxDD | CAGR | Rotações |
+|---|---:|---:|---:|---:|---:|
+| Control, holding=2 | 587.165.941,13 | 2,728536 | -41,6828% | 486,575% | 354 |
+| Ablação, holding=0 | 59.060.362,54 | 2,257679 | -41,6828% | 305,150% | 450 |
+| Horizonte/confiança heurística | 473.069,88 | 1,264438 | -74,7582% | 86,1475% | 129 |
+
+O Control reproduziu o checkpoint de US$ 587.165.941,1330212 ao
+centavo. A retirada da permanência mínima reduziu o capital simulado em
+89,94145% e aumentou as rotações de 354 para 450. A nova política de
+confiança alcançou apenas 0,0805683% do capital do Control e não
+demonstrou vantagem. Não se deve exportar ou promover a nova política
+com base nesta execução.
+
+**Capitais acumulados nos finais de fold:**
+
+| Fold | Control USD | Sem holding USD | Multi-horizonte USD |
+|---|---:|---:|---:|
+| 1 | 67.999,95 | 37.425,26 | 25.249,95 |
+| 2 | 10.968.842,01 | 3.205.786,89 | 39.859,00 |
+| 3 | 587.165.941,13 | 59.060.362,54 | 473.069,88 |
+
+No braço multi-horizonte, as 1.560 decisões registradas incluem:
+751 CURRENT_BEST, 666 HORIZON_CONFIDENCE_NOT_MET,
+129 ROTATE_HORIZON_CONFIDENT, 13 SWITCH_MARGIN e uma entrada inicial.
+O fold 2, especificamente, registrou 411 bloqueios de confiança,
+apenas 4 rotações e 79 decisões em que o ativo atual era o melhor.
+O multiplicador calibrado foi 0,0 no fold 1; 1,0 no fold 2; e 0,0
+no fold 3. São escolhas de limiar heurístico, não probabilidades
+estatisticamente calibradas.
+
+O Control registrou 355 aplicações do MIN_HOLD_GUARD, porém somente
+162 dessas decisões identificavam um ativo bruto superior ao
+incumbente. Logo, contar 355 como oportunidades perdidas seria
+incorreto. Comparando as posições diárias, a ablação diferiu do
+Control em 164 de 1.560 sessões (10,5%), e o multi-horizonte em
+712 sessões (45,6%). Os efeitos cumulativos refletem trajetórias
+distintas de composição de capital, não apenas diferenças isoladas
+de taxa de transação.
+
+**Interpretação e limitações:** A política experimental faz uma
+comparação adicional com uma mistura da previsão atual e da previsão
+da compra em cinco horizontes, cujo erro absoluto p75 é calculado
+em períodos anteriores ao OOS. Esse p75 não é calibrado como
+probabilidade condicional de outra ação superar a posição corrente,
+nem mede diretamente a diferença de utilidade de pares. No fold 2,
+o limiar impediu quase toda a rotação. O experimento demonstra
+fracasso da heurística específica, **não** refutação da possibilidade
+de usar memória preditiva por horizonte.
+
+Em 73 linhas de decisão a origem da previsão de entrada foi
+fold_boundary_proxy (posição herdada de outro fold), e não a
+previsão histórica original da compra. Esse caso deve ser
+resolvido em uma próxima versão para obter a equivalência de estado
+do replay prospectivo.
+
+**Próxima hipótese a testar, em pesquisa separada nesta mesma branch:**
+manter o comportamento do Control holding=2 como fallback, habilitando
+um override antecipado estritamente quando evidência calibrada de
+vantagem líquida específica do par candidato-incumbente for suficiente.
+Para isolar o efeito, comparar baseline, override antecipado e
+limiar calibrado, preservando o protocolo temporal. Registrar
+decisões antecipadas, PnL contrafactual, custos, calibragem e
+estabilidade por fold. Não escolher thresholds com base na janela
+OOS final, não confundir o score agregado com probabilidade e não
+impor aprovação ou gate novo à adoção: trata-se de pesquisa
+científica para subsidiar decisão posterior.
+
+**Separação entre defeitos:** eventual diferença do contador de
+holding de produção precisa de correção operacional independente;
+nenhum resultado aqui justifica manter um contador desatualizado.
+
+
+#### 25.12.3 Versão v1.0.3 — override antecipado de rotação, sem veto adicional
+
+**Hipótese operacional em pesquisa (não promovida):** a política Control
+com permanência mínima de dois pregões apresentou desempenho muito superior
+ao holding=0 e à primeira heurística de confiança por horizonte. Em lugar de
+substituir toda a decisão Control por um veto de confiança, a nova experiência
+mantém as decisões do Control como fallback e tenta **somente antecipar**
+uma troca durante o período em que o Control ainda impediria a saída por
+holding mínimo. Depois de satisfeita a permanência, não aplica qualquer
+veto adicional à decisão Control.
+
+**Código:** mesma branch research/horizon-persistence-oos-v1, no mesmo
+arquivo pesquisar_persistencia_horizontes_spyder.py,
+script_version horizon-persistence-oos-v1.0.3.
+
+**Três braços:** controle original holding=2, ablação holding=0 e
+early_horizon_override. Todos compartilham o universo U67+10 de 75 ativos,
+calendário, modelos agregados, margens do Control, custos financeiros e
+checkpoint histórico congelado do Control, que deve reproduzir
+US$ 587.165.941,1330212 ao centavo antes das variantes.
+
+**Política de override:** primeiro calcular a decisão oficial do Control
+com a posição e idade efetivamente presentes na **própria simulação**
+experimental. Somente se o Control mantiver o ativo, ainda houver holding
+inferior a 2 pregões e existir uma previsão original de entrada registrada
+pelo próprio modelo para essa posição, verificar a melhor alternativa.
+Exigir vantagem positiva da utilidade agregada contra CASH e o incumbent,
+considerando a mesma switch margin do Control. Em seguida, calcular a
+vantagem predita do par por H05/H10/H20/H40/H60 e comparar tanto com a
+previsão atual quanto com a previsão original da entrada, usando pesos
+efetivos de horizontes ainda não expirados. Antecipar a troca apenas se
+ambas as vantagens de par superarem o multiplicador do erro quantílico
+correspondente. Não preencher previsões de entrada desconhecidas
+com uma observação sintética. Se houver transição de fold e a posição
+original for desconhecida, **não permitir override até a próxima
+entrada real**, preservando a decisão Control.
+
+**Erro de diferenças por par:** para cada data de estimação, comparar a
+previsão de utilidade individual por horizonte do líder agregado com a
+dos demais símbolos disponíveis e o retorno/risco realizado de cada par.
+Agregam-se os erros absolutos pelo p75 dentro do dia, e usa-se o p75
+desses erros diários para o horizonte. Somente rótulos totalmente
+maturados antes da data de corte participam da estimação. Isso evita
+contar 74 pares da mesma sessão como 74 observações cronológicas
+independentes. **O indicador continua sendo uma heurística de margem
+de erro, não uma probabilidade calibrada.**
+
+**Calibração cronológica separada:** o primeiro segmento de 2/3 das
+126 datas de calibração estima os erros por horizonte; o 1/3 final
+seleciona exclusivamente entre os multiplicadores 0,0; 0,5; 1,0,
+sem utilizar labels ou métricas da janela OOS. O protocolo original
+preserva o purge de 60 dias para treinar os modelos de horizonte.
+Um multiplicador pode permitir nenhuma troca antecipada; isso é um
+resultado legítimo de comparação, não uma promoção obrigatória.
+
+**Saídas v1.0.3 (separadas da v1.0.2):**
+
+    output/persistencia_horizontes_u77_v103/
+      experiment.json
+      comparison.csv
+      horizon_calibration.csv
+      horizon_decisions.csv
+      override_by_fold.csv
+      control_decision_reasons.csv
+      no_hold_decision_reasons.csv
+      control_holding_2_equity.csv / *_trades.csv
+      ablation_holding_0_equity.csv / *_trades.csv
+      early_horizon_override_equity.csv / *_trades.csv
+      pacote_persistencia_horizontes_u77_v103.zip
+
+**Interpretação:** preservar a lógica do Control como fallback significa
+não vetar as ações que ele autorizaria **dado o estado da variante no
+mesmo dia**. Uma rotação antecipada modifica o ativo subsequente,
+portanto a trajetória completa da variante pode divergir da
+trajetória do Control: não se afirma identidade de ordens ou de capital
+após um override. A análise medirá frequência, delta financeiro,
+custos, drawdown, estabilidade por fold e causalidade sem reotimizar
+o resultado original do TCC.
+
+**Status de resultados:** A implementação em branch e os testes de
+regressão não representam uma execução financeira completa desta
+versão. Os valores de 2026-10-12 na seção anterior pertencem à
+v1.0.2 e não se transferem automaticamente à v1.0.3. Os
+resultados ficam pendentes de execução no ambiente de pesquisa com
+os dados candidatos congelados. Nenhuma alteração foi feita na
+aplicação operacional, no Winner ou na main do TCC.
+
+
+#### 25.12.4 Versão v1.0.4 — duração mínima da permanência
+
+**Motivação e evidência recebida (v1.0.3, 2026-10-12):** a execução do
+pacote `pacote_persistencia_horizontes_u77_v103.zip` reproduziu o Control
+(holding=2) em US$ 587.165.941,13 (Sharpe 2,7285, MaxDD -41,6828%).
+O override antecipado encerrou em US$ 353.355.356,01 (Sharpe 2,6147);
+holding=0 ficou em US$ 59.060.362,54. Houve 20 overrides apenas no
+primeiro fold, com seleção do multiplicador zero nesse fold. A v1.0.3
+não foi promovida. Não atribuir diferenças agregadas a uma única causa:
+trajetórias e capital reinvestido divergem após decisões diferentes.
+
+**Hipótese predefinida:** verificar se duração mínima fixa entre 1, 2, 3
+e 4 sessões explica a vantagem do Control; comparar ainda uma política
+que seleciona um desses quatro valores exclusivamente na calibração
+anterior a cada fold (sem escolher o melhor pelo OOS). Holding=2 e
+holding=0 permanecem como referências. A v1.0.4 NÃO antecipa rotações
+com previsões por horizonte; mantém previsões agregadas, mesmos
+hiperparâmetros, margens selecionadas para o Control, custos, universo
+U67+10 e calendário congelado.
+
+**Reprodução:** branch `research/horizon-persistence-oos-v1`;
+arquivo existente `pesquisar_persistencia_horizontes_spyder.py`;
+`VERSION=horizon-persistence-oos-v1.0.4`. O checkpoint Control
+US$ 587.165.941,1330212 deve ser reproduzido ao centavo ANTES
+de qualquer comparação. Só aceita os 75 ativos válidos, inclusive
+os dez externos já congelados no cache local, com hashes externos
+registrados. Falta de dados deve interromper a pesquisa, sem download,
+bridge entre fontes ou alteração manual de ativo.
+
+**Seleção por fold:** cada fold usa seu modelo e a margem já calibrada
+pelo Control. Os holdings 1,2,3,4 são avaliados nos últimos 1/3 das
+datas de calibração do próprio fold (aproximadamente 42 sessões).
+O melhor score de crescimento ajustado por risco escolhe um único
+valor para a janela OOS subsequente. O empate prefere holding=2,
+depois o valor mais próximo de 2. Em nenhum momento a seleção lê
+retornos ou métricas OOS. Como a margem Control já foi calibrada
+utilizando a janela histórica e a amostra para holding é curta,
+há risco de sobreajuste INTRA-calibração e elevada variância;
+o método é exploratório e não uma comprovação de superioridade.
+Os holdings fixos são comparadores registrados antes da execução,
+não candidatos selecionáveis pelo resultado final OOS.
+
+**Diagnóstico causalmente disponível:** registrar nas decisões em que
+o Control bloqueou uma troca por permanência mínima as variáveis
+`vol_20`, `vol_60`, `return_5`, `trend_efficiency_20`,
+`distance_from_high_20` da data da decisão, sem rótulos futuros.
+Esse CSV é observacional, não identifica sozinho o efeito causal
+de regime ou da mudança de holding; não há regra adaptativa
+treinada por essas variáveis na v1.0.4.
+
+**Outputs separados da v1.0.3:**
+
+    output/persistencia_horizontes_u77_v104/
+      experiment.json
+      comparison.csv
+      fold_comparison.csv
+      calibrated_holding_by_fold.csv
+      hold_guard_point_in_time_features.csv
+      control_decision_reasons.csv
+      trades_by_asset.csv
+      trades_by_month.csv
+      *_equity.csv / *_trades.csv
+      pacote_persistencia_horizontes_u77_v104.zip
+
+**Status:** implementação publicada apenas nesta branch de pesquisa.
+Testes unitários de seleção e causalidade adicionados. Backtest financeiro
+v1.0.4 pendente de execução no Spyder com cache histórico completo.
+Não altera a `main`, a reprodução oficial, a aplicação operacional
+ou qualquer Winner. Os resultados devem ser interpretados por fold,
+Sharpe, drawdown, custos e capital final, sem promoção automática.
+
+
+#### 25.12.5 Versão v1.0.5 — ganho percentual previsto relativo ao ativo atual
+
+**Hipótese fixada antes do backtest:** quando outra ação do mesmo universo
+apresenta retorno percentual **líquido previsto** maior que o da ação
+mantida em carteira nos horizontes de curto e médio prazo, pode valer
+a pena substituí-la. H05 e H10 formam o grupo curto; H20 e H40 formam
+o grupo médio. O H60 permanece somente no alvo da política Control
+original. Comparação é por ativo contra o incumbent na mesma data e
+não por preço nominal de uma ação.
+
+**Alvo numérico:** para cada H05/H10/H20/H40, criar
+`forward_horizon_net_return_pct_H` a partir de
+`expm1(forward_horizon_net_log_return_H)`, cujo log já desconta
+custos round-trip conforme configuração congelada. Cada regressão
+LightGBM estima diretamente retorno percentual líquido esperado
+condicional às características da data. O alvo utiliza futuro
+**somente no ajuste do modelo**, nunca para gerar decisões,
+selecionar ativos ou regras OOS. Um retorno líquido previsto é
+estimativa do modelo, não lucro garantido. Os custos e a liquidez
+efetiva continuam limitações.
+
+**Treinamento causal:** utilizar os mesmos folds e o embargo original
+de 60 sessões. Cada novo modelo H é treinado somente com rótulos
+que estejam inteiramente maturados antes do começo de seu
+período OOS, verificados com
+`select_purged_horizon_training_dates`. Em cada fold treinar
+4 regressões por ativo, reutilizando o mesmo pipeline, features
+contemporâneas, parâmetros LightGBM e snapshot U67+10.
+Usar as previsões para a data atual (não o retorno observado
+nos próximos H dias). Nenhuma consulta Alpaca e nenhuma troca
+de fonte para corrigir ativos.
+
+**Duas regras pré-definidas, ambas experimentais:**
+1. `relative_short_medium_group`: candidato deve ter previsão
+   de retorno líquido positivo nos dois grupos, superar o ativo
+   atual em ao menos 0,005 de retorno (0,5 ponto percentual)
+   nas médias H05/H10 e H20/H40; se o Control estiver
+   trocando para outro candidato, a nova escolha deve superar
+   também este destino nos dois grupos.
+2. `relative_all_four_positive`: mesmas condições, e vantagem
+   estritamente positiva em cada H05/H10/H20/H40 individual,
+   além de utilidade agregada superar o incumbent pela margem
+   Control. Isso é mais conservador que a regra 1.
+
+**Restrições:** manter holding mínimo=2, todas as previsões
+agregadas do Control, limiar de caixa e limiar de entrada.
+Preservar integralmente a ação do Control quando houver saída
+para caixa, quando o tempo mínimo não tiver vencido, ou quando
+não houver candidato qualificado; não acrescentar veto contra
+rotações do Control. Permitir que a regra experimental selecione
+um ativo alternativo quando supera as referências pelo critério
+de retorno dos horizontes. A diferença em decisões subsequentes
+pode aumentar com trajetórias distintas. Não interpretar o
+limiar 0,005 como uma margem otimizada, nem selecionar vencedor
+olhando o OOS.
+
+**Auditoria e limites:** registrar ranking dos dez primeiros
+candidatos por data/variante, previsões individuais e médias,
+diferenças em pontos percentuais frente ao ativo atual e destino
+Control, ações executadas, motivo, folds, custos, Sharpe,
+drawdown, capital final e os hashes dos dez históricos externos.
+A vantagem em retorno projetado não é causal nem garante
+execução real; comparar também com o baseline em cada fold.
+Como as mesmas janelas OOS já foram examinadas nas v1.0.2 a
+v1.0.4, o experimento é exploratório e a confirmação exigirá
+outra janela cronológica, sem ajustá-la a esses resultados.
+
+**Checkpoint de regressão:** o Control holding=2 deve gerar
+US$ 587.165.941,1330212 ao centavo, sem mutações na main.
+
+**Saídas:** `output/persistencia_horizontes_u77_v105/`,
+com `comparison.csv`, `fold_comparison.csv`,
+`group_candidate_ranking_top10.csv`,
+`four_horizons_candidate_ranking_top10.csv`,
+`group_policy_decisions.csv`,
+`four_horizons_policy_decisions.csv`,
+`horizon_model_training.csv`, curvas e operações por variante,
+`experiment.json` e ZIP `pacote_persistencia_horizontes_u77_v105.zip`.
+
+**Status:** código e testes unitários da v1.0.5 publicados na
+branch de pesquisa. Backtest financeiro pendente de execução
+local no Spyder com o cache U67+10. Não promove estratégia
+operacional ou altera a reprodução acadêmica oficial.
+
+
+#### 25.12.6 v1.0.6 — análise de captura e seleção expandida de auditoria
+
+**Motivação:** v1.0.5 confirmou Control holding=2 US$ 587.165.941,13
+no universo U67+10. Regras adicionais com ganhos projetados
+superiores em H05/H10/H20/H40 reduziram o resultado financeiro.
+A maioria das operações do Control durou menos de cinco a dez
+sessões. É necessário testar a correspondência entre horizonte
+preditivo e duração operacional antes de formular novas trocas.
+
+**Dois estudos na MESMA execução, com seleções independentes:**
+A. `capture` considera H02/H03/H05/H10, priorizando
+   horizontes de captura observados na carteira. Compara todos
+   os candidatos com o ativo atual na data de decisão, com
+   previsão percentual líquida e um desconto incremental
+   conservador de custo de troca.
+B. `expanded_audit` classifica os mesmos candidatos de maneira
+   independente em H01/H02/H03/H05/H10/H15/H20/H30/H40/H60.
+   Também exporta o melhor candidato isolado por horizonte.
+   Inclui granularidade mais ampla, mas não amplia o prazo
+   máximo além do embargo causal original de 60 sessões.
+   H90/H120 exigiriam reprojetar o protocolo temporal, não
+   sendo testados nesta versão.
+
+**Sem nova estratégia de rotação:** ambos os seletores são
+EXCLUSIVAMENTE diagnósticos. A simulação financeira executa
+somente o Control, sem ordens experimentais. O Control deve
+reproduzir o checkpoint ao centavo antes do estudo. Não
+existe promoção do melhor candidato ou do melhor horizonte
+por desempenho observado fora da amostra. O mesmo fold
+histórico já foi consultado em outras campanhas e, portanto,
+a pesquisa ainda é exploratória.
+
+**Alvos e preços:** usar o mesmo ajuste e snapshot de dados.
+H05/H10/H20/H40/H60 reutilizam exatamente os targets
+`forward_horizon_net_log_return` previamente definidos
+pelo pipeline. H01/H02/H03/H15/H30 produzem rótulos
+suplementares usando abertura na sessão seguinte,
+fechamento da sessão t+H e custo round-trip equivalente,
+reindexando no calendário oficial ANTES de aplicar o
+deslocamento; não se comprimem lacunas ou se criam dias
+sintéticos. O log líquido é convertido a retorno percentual
+por `expm1`. É proibido usar retornos observados futuros
+para treinar dentro do fold OOS ou para classificar candidatos
+na data de decisão.
+
+**Calibração e treino:** novos LightGBM com as features,
+parâmetros, universo e folds oficiais. Há uma regressão
+de retorno percentual para cada ativo e horizonte,
+treinada por fold exclusivamente com labels que
+amadurecem antes do período de teste. H60 usa o embargo
+de 60 pregões já existente; nenhum alvo superior a H60
+é treinado sem ajustar o desenho experimental.
+
+**Ranking:** converter a diferença entre percentual
+previsto de candidato e incumbente em pontos percentuais.
+Descontar um custo incremental round-trip de troca como
+proxy conservadora (não um backtest executável);
+normalizar o delta por H para gerar um score diário
+comparável entre horizontes; ordenar por maior média
+do ganho diário previsto, com desempate determinístico.
+Registrar cinco melhores candidatos por data e seleção,
+quantidade de horizontes com vantagem e as previsões
+individuais. Uma vantagem prevista negativa não gera
+`best_candidate`, mas o ranking pode incluir pontuações
+negativas para auditoria.
+
+Na **selecao de captura**, o candidato somente e escolhido se
+pelo menos tres dos quatro horizontes apresentarem vantagem
+individual e as medias H02/H03 (curto) e H05/H10 (medio)
+forem ambas positivas. A **auditoria expandida** nao herda
+esse filtro, preservando uma amostra mais ampla para medir
+concordancia e divergencias entre horizontes. Essas regras
+foram fixadas antes do backtest v1.0.6.
+
+**Avaliação fora da amostra, separada da seleção:**
+após congelar os rankings, juntar retornos realizados
+do ativo atual e do candidato escolhido por H.
+Somente calcular um resultado quando t+H se completar
+DENTRO do mesmo fold OOS, evitando dados do fold
+seguinte ou do futuro não observado. Resultado realizado
+é uma diferença contrafactual de retorno fixo, não
+um P&L de carteira executado ou um efeito causal.
+Relatar taxa de acerto, ganho realizado, MAE, RMSE,
+acurácia de sinal e quantidade de observações maduras,
+por fold e horizonte. Registrar hashes dos históricos
+complementares, preservando exclusões estruturais.
+
+**Saídas isoladas:**
+`output/persistencia_horizontes_u77_v106/`:
+`control_holding_2_equity.csv`,
+`control_holding_2_trades.csv`,
+`control_decision_reasons.csv`,
+`capture_ranked_top5.csv`, `capture_selected.csv`,
+`capture_quality_by_fold_horizon.csv`,
+`expanded_audit_ranked_top5.csv`,
+`expanded_audit_selected.csv`,
+`expanded_audit_best_per_horizon.csv`,
+`expanded_audit_quality_by_fold_horizon.csv`,
+`horizon_model_training.csv`, `comparison.csv`,
+`experiment.json` e o ZIP
+`pacote_persistencia_horizontes_u77_v106.zip`.
+
+**Estado:** código de pesquisa na branch
+`research/horizon-persistence-oos-v1`; backtest v1.0.6
+pendente no Spyder com o cache histórico privado.
+Sem downloads de corretora e sem alteração na main,
+na execução oficial ou na aplicação operacional.
+
+
+#### 25.12.7 v1.0.7 — pares de ativos, erro histórico e comparação com a decisão Control
+
+**Causa e hipótese:** a pesquisa v1.0.6 exibiu vantagens previstas
+em H02/H03/H05/H10 que não foram sustentadas, em média, pelos ganhos
+realizados. A escolha do maior valor entre dezenas de ativos pode
+produzir otimismo no vencedor do ranking. O novo experimento investiga
+se comparar diretamente o ganho percentual previsto do candidato
+com o ativo realmente mantido **e com o ativo que a política Control
+escolheria** produz oportunidades mais confiáveis.
+
+**Separação de evidências:** não se treina um modelo LightGBM dedicado
+a cada par, pois isso exigiria outro desenho computacional e temporal.
+A v1.0.7 usa as previsões de retorno percentual líquido das regressões
+por ativo/H e calcula o **delta de retorno entre pares**, estimando
+diretamente sobre os pares historicamente escolhidos um fator
+de contração `slope` em [0,1] e o quantil p75 do erro absoluto.
+Isso calibra a diferença condicionada ao procedimento de seleção
+e combate o otimismo do máximo de muitos candidatos, mas
+não garante nem demonstra superioridade causal.
+
+**Calibração cronológica:** em cada um dos três folds, modelos
+auxiliares H02/H03/H05/H10 são ajustados apenas no período de treino,
+separado da calibração por embargo. Produzem previsões inéditas para
+as datas da calibração. Simula-se a posição histórica do Control
+naquela janela para formar um conjunto de referências; candidatos
+são ordenados usando exclusivamente previsões contemporâneas.
+O primeiro 2/3 dessa janela fornece pares vencedores para
+estimar contração e erro. Um rótulo do período de ajuste só entra
+se o seu horizonte maturou estritamente ANTES do início do
+último 1/3 da calibração. O último 1/3 serve como
+**checagem histórica** e não é usado para determinar slope/p75.
+A margem do próprio Control foi anteriormente calibrada na
+janela histórica total; portanto essa checagem não deve ser
+tratada como holdout inteiramente independente.
+
+**Confiabilidade:** aplicar slope às diferenças projetadas
+candidato-Control e candidato-incumbente. Exigir ganho curto
+(H02/H03) e médio (H05/H10) positivo contra ambos, vantagem
+positiva em pelo menos 3 horizontes, e o score diário ajustado
+superior ao limite derivado exclusivamente dos erros p75 da
+primeira parte da calibração. Nenhum fator ou limiar é escolhido
+pelas métricas OOS. Se não houver ao menos 15 dias cronológicos
+distintos com pares maturados para cada horizonte, interromper
+com erro em vez de preencher estimativas. Exportar seleção
+bruta e seleção com confiança, mesmo que a última esteja vazia.
+
+**Custo:** uma estimativa incremental específica de cada par
+usa exclusivamente os fechamentos conhecidos na data da decisão,
+slippage, comissão, SEC, TAF e CAT configurados. Considera
+venda+compra quando Control mantém o ativo, e a diferença
+positiva de custo de compra quando Control já giraria para
+outro ativo. O proxy não substitui a contabilidade exata
+nem modela impacto de mercado, liquidez, quantidades e caps
+finais de taxas; quantidades futuras não são observadas.
+As métricas financeiras do Control são as da simulação
+original, jamais substituídas por essa estimativa.
+
+**Sem transações experimentais:** Control holding=2 é a
+única carteira simulada e deve reproduzir
+US$ 587.165.941,1330212 ao centavo. Toda oportunidade
+de troca é contrafactual em horizonte fixo, não operação
+executada nem estimativa automática de capital final.
+
+**Auditoria expandida independente:** H01/H02/H03/H05/H10/
+H15/H20/H30/H40/H60 continuam sendo avaliados na mesma
+execução, mas não participam do ajuste de slope, da seleção
+de confiança ou da escolha de horizontes da pesquisa
+de captura. Ranking consolidado e líder individual
+por horizonte são auditados com custos estimados
+específicos do candidato e retornos realizados apenas
+quando t+H termina dentro do próprio fold. O script
+usa `decision_to_fold` para não duplicar a data de
+fronteira entre folds contíguos. Limite máximo H60
+preserva o embargo original de 60 sessões.
+
+**Outputs separados:** `output/persistencia_horizontes_u77_v107/`,
+com `control_holding_2_equity.csv`,
+`control_holding_2_trades.csv`,
+`control_decision_reasons.csv`,
+`capture_pair_ranked_top5.csv`,
+`capture_pair_raw_selected.csv`,
+`capture_pair_confident_selected.csv`,
+`capture_pair_calibration_by_fold.csv`,
+`capture_pair_historical_validation.csv`,
+`capture_pair_validation_quality.csv`,
+`capture_pair_raw_quality.csv`,
+`capture_pair_confident_quality.csv`,
+`expanded_audit_ranked_top5.csv`,
+`expanded_audit_selected.csv`,
+`expanded_audit_quality_by_fold_horizon.csv`,
+`expanded_audit_best_per_horizon.csv`,
+`expanded_audit_per_horizon_quality.csv`,
+`horizon_model_training.csv`, `comparison.csv`,
+`experiment.json` e pacote
+`pacote_persistencia_horizontes_u77_v107.zip`.
+
+**Governança:** a main, a reprodução oficial e a aplicação
+operacional não são modificadas. Não há promoção automática
+de estratégia. Os mesmos folds já foram analisados nas
+campanhas v1.0.2–v1.0.6, de modo que esta avaliação
+continua exploratória; confirmação externa exige novo
+período cronológico ainda não utilizado na pesquisa.
+Resultados financeiros da v1.0.7 pendentes de execução
+local com os históricos complementares congelados.
+
+#### 25.12.8 v1.0.8 — modelo direto de diferenças de retorno
+
+**Motivo:** na v1.0.7, a maior parte dos ganhos relativos previstos nao se confirmou e nenhuma troca passou pelo filtro de confianca. A v1.0.8 investiga o aprendizado supervisionado direto da diferenca de retorno entre candidato e ativo de referencia em H02/H03/H05/H10, preservando o Control como unica carteira simulada.
+
+**Correcao da cobertura:** todos os rotulos H01/H02/H03/H05/H10/H15/H20/H30/H40/H60 sao reconstruidos individualmente no calendario congelado a partir da abertura em t+1 e fechamento em t+H com custo-alvo round-trip. Um label curto pode amadurecer nas ultimas 60 sessoes mesmo quando H60 nao amadureceu. Lacunas permanecem ausentes. Esses rotulos somente alimentam treinos anteriores ao teste e verificacoes posteriores, nunca a escolha em t.
+
+**Modelo direto:** para cada horizonte curto, o LightGBM aprende R_candidato - R_referencia a partir de 13 indicadores disponiveis em t para cada ativo e suas 13 diferencas (39 colunas). Os pares de treinamento usam duas referencias rotativas deterministicas por data, sem conhecimento de rentabilidade futura, nas duas orientacoes. Treino cronologico em duas etapas por fold: antes da calibracao e antes do teste, sempre respeitando o embargo original de 60 sessoes. CPU deterministica e parametros congelados.
+
+**Calibracao:** os primeiros dois tercos da janela historica fornecem vencedores de ranking escolhidos apenas por previsao e rotulos plenamente maduros antes da divisao, para estimar vies mediano e erro absoluto p75 por H. O ultimo terco e destinado a verificacao historica, sem ajuste por resultados OOS. Nessa etapa a referencia historica usa a margem-base do Control, nao a margem selecionada a posteriori nessa janela.
+
+**Selecao:** comparar candidato simultaneamente com o ativo atual e com o destino escolhido pelo Control; exigir vantagem nos grupos H02/H03 e H05/H10, tres horizontes positivos contra Control e, para a variante conservadora, limite inferior corrigido por vies e erro historico positivo em ambos os grupos. As taxas incrementais estimadas por candidato incluem slippage, comissao, SEC, TAF e CAT conforme parametros e cotacao disponivel na data da decisao. Essa estimativa nao substitui execucao com liquidez e impacto de mercado.
+
+**Auditoria independente:** a mesma execucao treina modelos individuais H01 a H60 sem influenciar os modelos de pares. Exporta rank consolidado, lideres por H, ganhos realizados pos-selecao, qualidade por fold e completude de labels em horizon_label_coverage.csv. Decisoes de fronteira nao sao duplicadas; outcomes que atravessam o final do fold sao ignorados.
+
+**Saidas:** output/persistencia_horizontes_u77_v108/pacote_persistencia_horizontes_u77_v108.zip, incluindo captura de pares (ranking, escolhas brutas e confiantes, calibracao e qualidade historica/OOS), auditoria expandida, coverage, hashes do U67+10, experiment.json e trades/curva do Control.
+
+**Status:** somente branch research/horizon-persistence-oos-v1; main, experimento oficial e aplicacao operacional inalterados. Os folds OOS foram vistos em pesquisas anteriores: conclusoes sao exploratorias e exigem uma nova janela futura para confirmacao. O backtest completo da v1.0.8 permanece pendente no Spyder.
+
+#### 25.12.9 v1.0.9 — comparacao integral de rankings, mesma execucao
+
+**Objetivo:** auditar a capacidade de ordenacao dos 75 ativos usando as
+previsoes e os historicos congelados, sem alterar o Control. Executar
+oito classificadores sobre exatamente o mesmo conjunto de ativos
+e datas elegiveis, com tie-break por simbolo, e produzir logs,
+ranking integral e metricas por horizonte e fold.
+
+**Metodos registrados ANTES de observar novos resultados:**
+1. predicted_return: media igualmente ponderada dos retornos previstos
+   por pregao em H02/H03/H05/H10;
+2. net_advantage: media por pregao das diferencas esperadas contra
+   destino Control, descontado custo incremental do ativo;
+3. borda: combinacao das quatro posicoes transversais, sem depender
+   das magnitudes extremas das previsoes;
+4. topsis: distancia normalizada entre solucao ideal e anti-ideal
+   com pesos fixos: H02/H03/H05/H10, cada qual 0,15; volatilidade
+   0,15; friccao 0,15; dispersao entre horizontes 0,10;
+5. pareto: fronteiras nao dominadas em quatro ganhos diarios
+   e menor volatilidade, com desempate deterministico;
+6. probabilistic: media das probabilidades aproximadas de vantagem
+   sobre o destino Control em H02/H03/H05/H10, com distribuicao
+   Normal de erro, medias e desvios estimados APENAS em previsoes
+   cronologicamente anteriores ao OOS. A independencia implicita
+   entre erros de ativos e apenas aproximacao; nao tratar como
+   probabilidade calibrada sem verificacao;
+7. robust: pior ganho previsto apos ajuste de vies e um desvio
+   historico aproximado, por horizonte e por pregao;
+8. learning_to_rank: comparador supervisionado adicional LambdaMART
+   (LGBMRanker) com features de mercado disponiveis em t e
+   relevancia historica H05 agrupada por sessao. Diferentemente
+   dos demais, este metodo treina novo modelo; seus labels
+   amadurecem integralmente antes do fold OOS e obedecem embargo.
+   Nao usa ganho OOS no treinamento.
+
+**Amostra e avaliacao:** os rankings e scores usam somente informacoes
+disponiveis no fechamento da sessao de decisao, modelos treinados
+anteriormente e calibracao historica anterior ao periodo OOS.
+Para cada metodo, usar a mesma lista de candidatos com previsoes
+finitas em todos os horizontes, dados completos de features e
+custos estimados. A politica Control e o benchmark fixo.
+Calcular retornos realizados e rankings verdadeiros apenas APOS
+congelar todas as ordenacoes por data. Nao substituir Top-1 por
+Top-2 quando o rotulo futuro do primeiro estiver ausente;
+marcar esse caso como nao avaliavel. Nao permitir outcomes
+que atravessem o final do fold.
+
+**Metricas:** correlacao de Spearman, Kendall, NDCG@5,
+retorno realizado do Top-1 e da media Top-5 relativo ao Control,
+taxa de acerto do Top-1 e arrependimento do Top-1 comparado
+ao melhor retorno observado. Relatar por dia/horizonte/fold,
+e agregar os resultados de modo macro (media dos 3 folds),
+sem selecionar pesos/limiares a partir do OOS.
+A metrica PRINCIPAL descritiva foi fixada como media macro-fold
+do NDCG@5 (medida de posicionamento no topo da lista).
+O metodo que obtiver o maior NDCG@5 sera chamado de melhor
+ordenacao OBSERVADA nesta amostra, nunca de vencedor
+confirmado e nunca sera promovido automaticamente.
+
+**Logs e arquivos:** manter no mesmo
+`output/persistencia_horizontes_u77_v109/`:
+`ranking_methods.log` (inicio, metodos, fold, lideres
+periodicos e leaderboard completo),
+`ranking_all_assets.csv` (cada posicao para todos os
+metodos e datas com previsoes e desfechos maduros),
+`ranking_oos_quality_by_session.csv`,
+`ranking_methods_by_fold.csv`,
+`ranking_methods_leaderboard.csv`,
+`ranking_historical_error_calibration.csv`, alem de toda
+a auditoria v1.0.8 e
+`pacote_persistencia_horizontes_u77_v109.zip`.
+O ZIP deve conter os logs e CSVs.
+
+**Governanca e limitacoes:** somente a branch
+`research/horizon-persistence-oos-v1`.
+A main, a reproducao Control congelada e a aplicacao
+operacional permanecem inalteradas. O checkpoint do Control
+US$ 587.165.941,13 continua obrigatorio. Nenhuma nova
+politica e simulada financeiramente ou promovida.
+Como os folds OOS anteriores ja foram vistos muitas vezes,
+o leaderboard e exploratorio e nao constitui prova
+de generalizacao. Efeito de slippage real, liquidez,
+capacidade e descontinuidade de ativos nao e modelado
+pela ordenacao.
+
+**Status:** implementacao programatica concluida;
+backtest local Spyder e leaderboard financeiro v1.0.9
+pendentes de execucao com o cache historico U67+10.
+
+#### 25.12.10 v1.0.10 — rotacoes matematicas autonomas
+
+**Questao da pesquisa:** nao e obrigatorio superar o capital final
+do Control; pretende-se testar politicas mais autonomas, precisas,
+reproduziveis e robustas que realizem rotacoes com menos decisoes
+desfavoraveis. O Control permanece como comparador congelado, nunca
+como entrada para a decisao das novas politicas.
+
+**Previsoes:** reutilizar as mesmas estimativas LightGBM individuais
+e cronologicas para H02/H03/H05/H10 da pesquisa v1.0.9.
+Nenhuma politica AUTONOMA treina um modelo de ordenacao.
+A auditoria legada v1.0.9 ainda executa seu comparador LambdaMART
+em separado, sem participar das novas escolhas; isso prolonga
+o tempo total de execucao. Os modelos de previsao continuam
+existindo, mas a ordenacao das novas politicas e matematica.
+
+**Quatro politicas de decisao independentes**, cada uma com sua
+propria carteira simulada, estado e duracao de permanencia:
+- `net_gain`: ordenar pela media de retorno diario previsto,
+  descontando custo de entrada/troca em t;
+- `borda_pareto`: combinar posicoes nos quatro horizontes e
+  favorecer candidatos na fronteira de Pareto, incluindo menor risco;
+- `topsis`: combinar ganhos previstos, risco, custo e dispersao,
+  com pesos fixos e normalizacao transversal;
+- `consensus`: exigir intersecao do Top 5 de Borda, TOPSIS e ganho
+  liquido, mais nao dominancia de Pareto.
+
+**Decisao:** permanecer pelo menos dois pregoes antes de trocar ou
+sair para caixa; abrir posicao somente se a vantagem esperada for
+positiva. Troca entre ativos requer melhoria liquida prevista
+positiva contra a POSICAO ATUAL e vantagem prevista positiva nos
+grupos H02/H03 e H05/H10. Consenso exige tambem tres de quatro
+horizontes positivos. Se a expectativa media diaria do ativo atual
+for negativa e a permanencia minima tiver sido cumprida, e permitido
+sair para caixa. Nao escolher parametros com resultados dos folds
+OOS. Os custos estimados na decisao usam apenas fechamento presente
+e parametros de slippage/comissao/SEC/TAF/CAT conhecidos;
+a contabilidade das simulacoes usa as funcoes originais de taxas
+e execucao do Control.
+
+**Experimento financeiro:** apos reproduzir o checkpoint do Control
+US$ 587.165.941,13 ao centavo, executar quatro replays separados
+via `_simular_exato` sobre o MESMO calendario OOS, universo de 75
+ativos e modelo de custos; nenhuma operacao real. Comparar capital
+final, Sharpe, drawdown, pior fold, fees, quantidade de trocas,
+exposicao, tempo de permanencia e politica original.
+Manter o Control como checkpoint, sem alteracao na implementacao
+`engine/rotacao.py` nem na branch `main`.
+
+**Precisao das rotacoes:** depois da simulacao, usar somente
+retornos futuros ja maturados no mesmo fold e medir se cada
+acao de TROCAR (incluindo caixa) teria apresentado retorno
+liquido superior a permanecer no ativo anterior em H02/H03/H05/H10.
+Nao permitir desfechos atravessando o final do fold; esses
+retornos sao apenas diagnostico ex post de qualidade da decisao,
+nao resultados financeiros de uma politica nem insumos da escolha.
+Avaliar mesma definicao tambem sobre as decisoes do Control.
+A metrica primaria diagnostica pre-fixada e precisao H05 por fold,
+calculando a media macro dos folds. Para evitar falsas vitorias
+com pouquissimas trocas, rankings de qualidade so recebem posicao
+quando ha pelo menos 10 trocas com H05 maduro em CADA fold.
+Metodos sem amostra suficiente permanecem reportados sem rank.
+Desempate alfabetico; nenhuma promocao por resultados OOS.
+
+**Artefatos v1.0.10:**
+`output/persistencia_horizontes_u77_v110/` com as trilhas
+v1.0.9 preservadas e novos
+`autonomous_<metodo>_equity.csv`,
+`autonomous_<metodo>_trades.csv`,
+`autonomous_rotation_decisions.csv`,
+`autonomous_rotation_realized_quality.csv`,
+`autonomous_rotation_quality_by_fold.csv`,
+`autonomous_financial_summary.csv`,
+`autonomous_quality_leaderboard.csv`,
+`rotation_policy.log`, `execution_full.log`, `experiment.json`
+e `pacote_persistencia_horizontes_u77_v110.zip`.
+Logs completos de stdout e stderr aparecem no console Spyder
+e sao gravados no arquivo. Aviso sonoro no fim em Windows
+por `winsound.Beep`: sucesso com dois tons altos, erro com
+dois tons baixos. Fora de Windows usa fallback ASCII bell,
+dependendo do terminal. Em caso de erro, `execution_full.log`
+contem stack trace e deve ser enviado mesmo se nao gerar ZIP.
+
+**Limitacoes importantes:** a simulacao nao inclui impacto real de
+mercado, spread e restricoes de capacidade proporcionais ao
+capital acumulado. O universo inclui ativos de liquidez variavel.
+Os tres folds OOS ja foram vistos em varias pesquisas; todos
+os resultados desta versao sao exploratorios e exigem uma nova
+janela temporal intocada para confirmacao. Precisao positiva
+H05 nao prova melhor curva de capital. A saida para caixa e
+experimental. O estudo e isolado de sistemas operacionais.
+
+**Status:** codigo versionado e testes automaticos de regressao,
+sem execucao completa com os historicos congelados do Spyder.
+
+
+#### 25.12.10.A Marco de encerramento da v1.0.10 (13/10/2026)
+
+**Status da campanha:** execucao Spyder completa, auditoria de
+artefatos realizada, resultados congelados como referencia de
+pesquisa exploratoria. **Nao promover** nenhuma politica; nao
+alterar a `main`, o Control ou a aplicacao operacional.
+
+**Artefato local imutavel recebido:**
+`pacote_persistencia_horizontes_u77_v110.zip`
+SHA-256:
+`c44d7b4c6fa7268afeefab4d6b8d82bc3673e2b57b5b4a83e63cd495e6ba7ad2`.
+O ZIP do usuario nao foi versionado no Git; o hash permite sua
+identificacao precisa apos transferencia externa.
+
+**Checkpoint:** 75 ativos, tres folds, Control reproduzido com
+capital US$ 587.165.941,1330212. As quatro politicas autonomas
+foram simuladas, cada uma com sua carteira independente. Todos
+os indicadores seguintes vem do pacote v1.0.10 e nao sao
+garantia de desempenho futuro.
+
+| Politica | Precisao H05 macro-fold | Trocas H05 maduras | Capital final (US$) | MaxDD |
+|---|---:|---:|---:|---:|
+| Control | 58,7604% | 352 | 587.165.941,13 | -41,68% |
+| Net gain | 51,9033% | 195 | 165.481,13 | -70,66% |
+| TOPSIS | 50,9317% | 187 | 120.939,53 | -75,47% |
+| Borda + Pareto | 50,1932% | 209 | 156.107,33 | -76,73% |
+| Consensus | 49,0961% | 200 | 216.922,97 | -65,43% |
+
+**Diagnostico do mecanismo Control, sem afirmacao causal:**
+`control_decision_reasons.csv` registra 1.560 decisoes:
+831 `HOLD_CURRENT_BEST`, 355 `MIN_HOLD_GUARD`,
+354 `ROTATE_TO_BEST_ASSET`, 19 `SWITCH_MARGIN_GUARD`
+e uma entrada inicial. Nas 355 sessoes do guard,
+em 193 o ativo atual continuava em primeiro no ranking
+bruto; em **162** o ranking indicava outro ativo, mas a
+permanencia minima impediu trocar.
+As margens efetivas de troca eram 0,0005 nos folds 1/3
+e 0,01 no fold 2, escolhidas no historico de calibracao.
+Control estima **utilidade ajustada ao risco**
+(`forward_risk_adjusted_utility`), incluindo penalidades
+de downside/drawdown e componentes de movimento/persistencia,
+enquanto as novas politicas ordenam previsoes de retornos
+percentuais H02/H03/H05/H10. Assim, diferem
+**o alvo da previsao e a politica**, e nao somente o hold.
+
+**Auditoria retrospectiva adicional sobre o guard:**
+para 161 dos 162 dias de bloqueio com rival na lideranca,
+foi possivel obter o retorno H05 dos dois ativos nos
+arquivos `ranking_all_assets.csv`.
+Se o melhor bruto fosse comprado imediatamente, seu
+retorno H05 superaria o retorno de manter em 85/161
+dias (52,8%), mas a diferenca media foi aproximadamente
+**-0,24 ponto percentual**, sem simular custos e
+trajetoria decorrentes da troca. Esse exercicio
+diagnostico nao prova que o guard cause a precisao
+maior; bloqueia tanto oportunidades positivas quanto
+negativas.
+
+**Conclusao:** nenhuma politica autonoma alcancou o
+Control em precisao de troca H05. Nao confundir
+`precisao condicional entre as trocas executadas` com
+qualidade de TODAS as decisoes de manter/rotacionar/caixa.
+O Control escolhe quando operar segundo utilidade de
+risco calibrada, favorecendo uma amostra selecionada
+de rotacoes. O motivo de sua maior precisao deve ser
+investigado mediante **ablacao controlada**, nao
+atribuido ao hold por inferencia.
+
+**Proposta subsequente, ainda NAO implementada:**
+comparar Control completo com ablacões de hold=0,
+margem fixa e mesmo sinal de utilidade; isolar
+efeito do alvo de previsao vs efeito da politica.
+Para reproduzir autonomia sem gates rigidamente fixos,
+pesquisar uma **meta-politica probabilistica de acao**
+que aprenda, somente no treino com previsoes OOF e
+labels maturos, a vantagem estimada de
+`manter / trocar / caixa`, condicionada ao estado
+atual, custos, incerteza e regimes. Validar por
+walk-forward purgado e posteriormente por janela nova.
+Nao escolher pesos/hyperparametros usando o OOS ja visto.
+
+**Governanca de fechamento:** esta secao e o
+registro versionado do marco. Recomenda-se criar a
+tag anotada local `research-v1.0.10-rotacoes-autonomas`
+apontando ao commit deste registro e enviá-la
+ao GitHub. Isso nao autoriza merge para `main`.
+
+
+#### 25.12.11 v1.0.11 — ablação fatorial da utilidade Control
+
+**Pergunta:** a maior precisão das rotações do Control decorre
+predominantemente do seu sinal de utilidade ajustado ao risco,
+da permanência obrigatória ou da margem de troca? A v1.0.10
+testou modelos de retornos percentuais e regras matemáticas
+diferentes ao mesmo tempo; portanto não isolou tais efeitos.
+
+**Pré-registro:** o Control congelado H2 + margem calibrada
+é o checkpoint obrigatório de US$ 587.165.941,13.
+Nenhuma previsão LightGBM do Control será re-treinada
+ou ajustada para as variantes. Cada fold reutiliza o MESMO
+cache preditivo OOS de utilidade ajustada ao risco,
+o MESMO universo de 75 ativos, custos, calendário,
+configurações de risco e simulador.
+
+**Fatorial 2 x 3** (seis cenários, sem varredura de
+parâmetros a posteriori):
+- Fator hold = 0 ou 2 pregões;
+- Fator margem = zero (ambas as margens zeradas),
+  base de configuração fixa, ou calibrada no histórico
+  anterior ao teste, igual à escolha oficial do fold.
+
+O cenário H2 + calibrada **reutiliza diretamente a
+simulação do Control**; não cria uma segunda versão
+potencialmente divergente do checkpoint. Para as outras
+cinco combinações, o código produz novas decisões
+pela própria `_politica_utilidade` usando exatamente
+as mesmas previsões: NUNCA copia a ação final do Control
+para executar a estratégia alternativa.
+
+**Dois tipos de avaliação complementares:**
+1. *Ablação pareada de uma decisão*: todas as combinações
+   são reaplicadas à MESMA data, ao MESMO ativo atual
+   e ao MESMO holding observado no Control; mede quantas
+   ações mudariam ao retirar apenas a margem ou o bloqueio.
+   O cenário oficial deve concordar 100% ou o experimento
+   aborta. Os desfechos H05 das ações alternativas são
+   auditados somente quando já maturados dentro do fold.
+   Esta é uma comparação pontual; NÃO é backtest alternativo.
+2. *Replay financeiro completo*: cada combinação possui
+   sua própria sequência de ativos, contador de permanência,
+   ordens simuladas e carteira; compara a trajetória real
+   da política frente ao checkpoint, conservando fees,
+   execução no próximo pregão e folds. Como o estado
+   diverge ao longo do tempo, diferenças finais refletem
+   efeitos acumulados, não somente um bloqueio isolado.
+
+**Métricas predefinidas:** precisão de rotações H05
+contra permanecer no ativo anterior (primária descritiva),
+também H02/H03/H10, número de rotações, média do ganho
+relativo realizado por troca, Sharpe, capital, MaxDD,
+pior fold, custos e diferenças de ação no mesmo estado.
+O aprendizado de ranking da v1.0.9 e as políticas de
+retorno da v1.0.10 seguem como auditorias separadas,
+não entram na escolha por utilidade.
+Resultados OOS pré-examinados são exploratórios:
+NENHUMA seleção/promocão automática; validação
+confirmatória exige nova janela não explorada.
+
+**Arquivos:** `output/persistencia_horizontes_u77_v111/`,
+contendo `utility_ablation_financial.csv`,
+`utility_ablation_quality_by_fold.csv`,
+`utility_ablation_quality_by_decision.csv`,
+`utility_ablation_policy_decisions.csv`,
+`utility_ablation_one_step.csv`,
+`utility_ablation.log`, seis curvas de capital e arquivos
+de operações `utility_hold*_margin_*_equity.csv` e
+`utility_hold*_margin_*_trades.csv`, todos os artefatos
+de auditoria anteriores, `comparison.csv`,
+`experiment.json`, `execution_full.log` e
+`pacote_persistencia_horizontes_u77_v111.zip`.
+
+**Correção do pacote:** o ZIP agora é criado SOMENTE
+depois de gravar no log a conclusão e o aviso sonoro,
+após fechar stdout/stderr, e validado integralmente.
+O sinal sonoro continua diferenciado entre sucesso
+e erro. Em erros, guardar `execution_full.log`
+independentemente de haver ZIP.
+
+**Limitações:** a função de utilidade Control contém
+ganho/riscos futuros apenas NOS LABELS de treinamento,
+não nas features OOS. Sua otimização de margens utiliza
+histórico de calibração, não o OOS atual. O backtest
+de capital composto não modela completamente liquidez,
+impacto real e capacidade. O contrafactual de uma
+única sessão H05 não mede o resultado de mudar toda
+a trajetória. Os mesmos folds já foram examinados;
+um vencedor histórico não é melhoria confirmada.
+
+**Estado:** implementação versionada no ramo isolado;
+execução completa Spyder com snapshot congelado pendente
+de resultados. O Control e a main seguem intocados.
+
+
+#### 25.12.11.A Esclarecimento metodológico: permanência mínima do swing trade
+
+**Decisão de governança confirmada em 13/10/2026:** a
+permanência mínima de **dois pregões** constitui restrição
+original e intencional do desenho da estratégia de *swing
+trade*. É **regra estrutural**, não hiperparâmetro livre
+a ser otimizado, removido ou ajustado com base no capital
+final ou na precisão observada nos folds de pesquisa.
+A margem de troca permanece uma regra distinta,
+calibrada apenas nas janelas históricas próprias.
+
+**Leitura correta da v1.0.11:** os cenários com
+`rotation_min_holding_days=0` são **contrafactuais
+diagnósticos**, fora da família de políticas admissíveis
+para o desenho pretendido. Eles ajudam a entender a
+sensibilidade do mecanismo, mas NÃO são candidatos para
+substituir o Control e NÃO justificam retirar a restrição.
+Manter como referência metodológica o cenário
+`utility_hold2_margin_calibrated`, equivalente ao Control
+congelado. Nenhuma alteração no código da política oficial,
+em seu checkpoint ou em `main`.
+
+**Pesquisas futuras:** preservar `rotation_min_holding_days=2`
+em todas as políticas elegíveis de swing trade;
+separar qualidade do sinal preditivo, precisão das
+trocas admissíveis, custos, risco e calibração histórica
+da margem, sem tentar novamente otimizar o tempo mínimo.
+Uma política pode manter a posição **por mais** de dois
+pregões sempre que não existir vantagem suficiente
+para rotacionar; cumprir o mínimo não obriga trocar.
+
+**Evidência bibliográfica:** há menção do pesquisador a
+estudos históricos que motivaram o desenho swing trade.
+As referências específicas e sua abrangência não foram
+identificadas/validadas neste registro; não se afirma
+que dois pregões sejam um ótimo universal do mercado de ações.
+A decisão metodológica de manter a restrição independe
+de apresentar essa hipótese como lei geral.
+
+**Status:** esclarecimento documental na mesma branch;
+sem alteração algorítmica e sem criação de estratégia
+operacional.
+
+
+## Limpeza consolidada v1.22.2-dev.1 — 13/10/2026
+
+**Motivo:** simplificar o projeto depois das campanhas de pesquisa,
+eliminando múltiplos executáveis na raiz e preservando apenas
+`buscar_ativos.py` (busca exploratória) e
+`reproduzir_experimento.py` (reprodução oficial).
+**Commit anterior à limpeza e ponto de recuperação:**
+`7bfaee55d4fe4d6cafc33607c8e0d901127b1e69` na branch de pesquisa; todo o conteúdo dos
+scripts experimentais permanece recuperável pelo histórico Git.
+**Escopo:** limpeza da estrutura, documentação e testes;
+NÃO altera a política de produção científica, checkpoint U67,
+margem histórica, LightGBM, dados versionados ou `main`.
+
+**Melhorias já aprovadas que permanecem funcionais:**
+1. Dados U67 congelados em CSV (67 requisitados, 65 elegíveis),
+   normalização de splits e verificação de hashes;
+   ativos estruturais CLMT e DOC excluídos sem interpolação.
+2. Correção da elegibilidade causal: decisão com atributos
+   conhecidos na sessão t, sem consultar abertura/fechamento
+   de t+1; execução nos preços efetivos da sessão seguinte.
+3. LightGBM de utilidade ajustada a risco, folds walk-forward,
+   purge, margens selecionadas somente nas janelas históricas
+   de calibração, execução determinística para reprodução.
+4. Restrição estrutural de swing trade:
+   `rotation_min_holding_days = 2` intocada;
+   permanência pode exceder dois pregões sem troca.
+5. Referência comprar/manter com capital dividido pelos
+   mesmos ativos e intervalo da rotação, custos consistentes,
+   métricas financeiras e relatórios versionados.
+6. Triagem de ativos baseada em características técnicas,
+   continuidade e exclusões, mapa de semelhança e
+   complementaridade; shortlist não é promoção automática.
+   A busca baixa candidatos para cache local separado
+   do snapshot U67 e não executa backtest financeiro
+   dos candidatos.
+7. Geração de artefatos auditáveis, testes unitários,
+   logs e aviso sonoro no runner de reprodução.
+
+**Resultados explicitamente NÃO incorporados à política
+oficial:** alterações de permanência mínima (H0), ranking
+autônomo por Borda/TOPSIS/Pareto, Learning-to-Rank,
+meta-políticas, otimizações sugeridas exclusivamente pelo
+OOS de campanhas repetidas, e expansão U67+10 sem seus
+dez ativos extras congelados integralmente neste Git.
+As campanhas v1.0.9, v1.0.10 e v1.0.11 ficam registradas
+como evidência histórica no histórico Git e nos pacotes
+já produzidos, não como nova política. O checkpoint de
+US$ 587.165.941,13 é exploratório, não o checkpoint
+oficial deste runner. Referência oficial v1.22.1:
+US$ 76.927.051,38897176.
+
+**Organização:** somente dois scripts de entrada na raiz;
+apoio técnico em `engine/` e `reproducao/`, snapshot
+`dados/u67/`, material `evidencias/` e `figuras/`.
+Os scripts antigos de execução de pesquisas, auditoria,
+geração de figuras e reconstrução de snapshot são removidos
+da raiz. A reconstrução do snapshot passa a ser módulo
+interno `reproducao.preparar_snapshot`, e continua separada
+da execução oficial.
+
+**Efeito na reexecução de pesquisas antigas:** o checkout
+desta branch após a limpeza não executará diretamente os
+programas v1.0.9–v1.0.11; para reexecutá-los é necessário
+consultar o commit anterior à limpeza e os dados de pesquisa
+locais correspondentes. Este trade-off é deliberado para
+preservar uma estrutura mínima, sem alegar que históricos
+de execução sejam reproduzíveis apenas com o snapshot U67.
+
+**Status de validação:** testar a estrutura limpa por CI;
+não afirmar reprodução integral de mercado sem execução
+Spyder com dados e ambiente científicos completos.
+
+
+## Atualização corretiva — v1.22.3-dev.1, 13/10/2026
+
+**Problema:** a limpeza que deixou apenas dois executáveis
+restaurou por engano o Control U67 antigo (65 ativos,
+US$ 76.927.051,39), apesar de a última campanha aprovada
+ser o U67+10 com **75 ativos e US$ 587.165.941,13**.
+A implementação mais recente existia no Git anterior ao
+commit de limpeza, em
+`pesquisar_persistencia_horizontes_spyder.py` (v1.0.11).
+Isso foi uma regressão de versão da minha consolidação,
+não uma alteração desejada da estratégia.
+
+**Correção:** `reproduzir_experimento.py` passa a chamar
+`reproducao.control_u77.executar_control_u77`. O módulo
+reutiliza os mesmos métodos de treino LightGBM por fold,
+preparação de séries, fusão de caches, margens calibradas
+no histórico e política de utilidade do Control U67+10.
+Sem o teste de ablações, hold=0, ranking de pares ou
+simulações auxiliares. Só existem os dois scripts
+de entrada na raiz (incluindo `buscar_ativos.py`).
+
+**Contrato de dados real:** os 65 ativos base vêm de
+`dados/u67/`. Os dez adicionais (CRT, NBR, CAPR,
+PNBK, PENN, JBL, STAG, MCHB, LAD e TOWN) vêm de
+`dados/.u67_expansion_cache/full_raw_20261006/`,
+com OHLCV e Corporate Actions locais. Esses arquivos
+foram utilizados na campanha v1.0.11 e não estão no
+snapshot U67 publicado. Não declarar que o Git sozinho
+reproduz US$ 587 milhões. O script apenas informa a
+ausência de arquivos indispensáveis e não altera o
+universo silenciosamente. A continuidade histórica
+e a identidade dos ativos são verificadas para evitar
+incorporação de séries estruturalmente problemáticas.
+
+**Remoções solicitadas pelo pesquisador:**
+- nenhum SHA-256 é calculado/validado pelo pipeline ativo;
+- os metadados legados `file_hashes` e `snapshot_sha256`
+  são ignorados durante a leitura;
+- não há bloqueio por divergência do capital de
+  US$ 587.165.941,13; essa cifra é referência descritiva;
+- nenhum gate por nome de branch, commit, schema/cutoff
+  histórico ou número fixo de ativos;
+- não criar outras restrições temporais. Preservar
+  SOMENTE a permanência mínima de dois pregões,
+  preexistente e expressamente aprovada.
+
+O código mantém controles necessários à validade de
+dados de negociação (arquivos presentes, OHLCV legível,
+preços finitos/positivos, continuidade de série e exclusões
+estruturais já definidas). Não interpretar tais cuidados
+como estratégia de restrição/otimização adicional.
+
+**Validação:** análise estática e testes do GitHub CI
+são necessários, porém não substituem a execução do
+backtest U67+10 no Spyder com as dez séries em cache.
+Registrar SHA do commit Git para rastrear versões é
+diferente de validar hashes de arquivos de dados,
+que foi removido por solicitação.
+
+
+## 26. Auditoria de continuidade e autonomia apos a limpeza — 13/10/2026
+
+**Tipo da entrega:** resgate historico e inventario de estado,
+**sem alteracao de codigo, estrategia, limites ou configuracao**.
+Branch `research/horizon-persistence-oos-v1`; base de codigo auditada
+`af7ee7b256f40e0548c9e60c6e1601fbe39bf7ee`.
+A `main` nao e alterada.
+O Control U67+10 e referencia primaria da linha de pesquisa;
+a reproducao local completa da versao de consolidacao ainda
+deve ser confirmada usando os dez historicos adicionais.
+
+### 26.1 O que a branch EXECUTA atualmente
+
+- `reproduzir_experimento.py` e a unica entrada financeira na
+  raiz, delegando para `reproducao/control_u77.py`.
+- `buscar_ativos.py` e a outra entrada; produz shortlist
+  exploratoria com dados externos, sem alterar a carteira.
+- Control com 75 ativos = U67 solicitado, exclusao estrutural
+  CLMT/DOC, mais `CRT,NBR,CAPR,PNBK,PENN,JBL,STAG,MCHB,LAD,TOWN`.
+  O conjunto de dez esta **fixo** no codigo, sem dinamica temporal
+  de entrada e saida de ativos elegiveis.
+- LightGBM separado por ativo e fold, objetivo
+  `forward_risk_adjusted_utility`, caracteristicas disponiveis
+  na sessao da decisao, embargo de 60 sessoes e margens
+  selecionadas no passado de cada fold; mesmas features
+  e politica `_politica_utilidade` do Control historico.
+- Restricao de swing trade: permanencia minima de **dois
+  pregoes**, preservada como decisao do pesquisador, nao
+  hiperparametro a ser reotimizado. Permanencia prolongada
+  continua possivel se a utilidade do atual ou a margem assim
+  determinarem. Ha possibilidade de caixa segundo o
+  mecanismo original do Control.
+- Registrados `control_decisions.csv` (scores do incumbente,
+  melhor e segundo ativo, posicoes, gaps e motivo), folds,
+  margem por fold, curva, trades, graficos e analiticos.
+- Sem validacao ativa por checksum de arquivo ou veto por
+  diferenca do capital historico. US$ 587.165.941,13 e
+  REFERENCIA, nao gate.
+- Dados dos dez candidatos externos usados no maior backtest
+  estao em `dados/.u67_expansion_cache/full_raw_20261006/`
+  e **nao** constam do snapshot U67 Git. Sem esses CSVs,
+  o checkout sozinho nao reproduz a campanha.
+- CI de codigo validado com 85 testes. Isso nao significa
+  backtest financeiro completo reexecutado no Spyder apos
+  a limpeza.
+
+### 26.2 Descobertas ja realizadas, POR ORIGEM
+
+1. **Pesquisa de universo U67+n v1.1 a v1.3.**
+   Foram testadas contribuicoes marginais de candidatos,
+   15 positivos e 180 combinacoes de subconjuntos.
+   O Challenger fixo de dez ativos foi observado em
+   US$ 587.165.941,13 versus US$ 76.927.051,39 no U67
+   base, ambos simulados. A selecao foi feita com
+   informacao da janela historica pesquisada; nao e
+   ganho prospectivo demonstrado.
+2. **Assurance e v1.4.** A contribuicao individual de
+   NBR, CRT, CAPR, LEU, EML e outros varia muito por
+   fold; o piloto de decisao `ADICIONAR / MANTER /
+   REMOVER` mudou a composicao entre folds. O estudo
+   indicou necessidade de **pertencimento temporal**
+   e de redescoberta nested do universo, ainda pendente.
+   CSCV/PBO: 53,57% por log-growth e 59,52% por Sharpe
+   para o processo de escolha de subconjuntos.
+   Nao confundir isso com probabilidade de fracasso
+   da politica fixa.
+3. **Estresse de custos.** Challenger U67+10 caiu de
+   US$ 587,17 mi para US$ 411,67 mi com 5 bps
+   adicionais de slippage e US$ 288,63 mi com 10 bps.
+   Isso e evidencia de sensibilidade operacional, nao
+   criterio automatico de exclusao/promocao.
+4. **Captura e horizontes v1.0.2 a v1.0.8.**
+   O Control usa utilidade agregada multi-horizonte;
+   horizontes previstos individualmente e estimadores
+   de confianca nao demonstraram melhor politica no
+   OOS pesquisado. A primeira heuristica completa
+   terminou em US$ 473.069,88 e o override v1.0.3
+   em US$ 353.355.356,01, inferiores ao Control.
+   Ganhos relativos projetados por pares foram
+   excessivamente otimistas, e a v1.0.8 investigou
+   calibracao de vies e erro usando treinamento causal.
+   Esses scripts exploratorios foram retirados da
+   estrutura ativa, mas estao no commit anterior
+   a limpeza `7bfaee55d4fe4d6cafc33607c8e0d901127b1e69`.
+5. **Ranking v1.0.9.** Oito metodos foram comparados,
+   incluindo vantagem prevista, Borda, TOPSIS, Pareto,
+   robustez, aproximacao probabilistica e LambdaMART.
+   A classificacao transversal teve apenas sinal
+   pequeno frente ao acaso, e nao justificou
+   substituir a previsao de utilidade do Control.
+   Auditoria de ranking removida do runner ativo.
+6. **Politicas matematicas v1.0.10.** Entre quatro
+   politicas independentes, a melhor precisao de
+   rotacao H05 foi vantagem liquida (51,90%),
+   abaixo do Control (58,76%). Consenso teve o
+   melhor capital dentre as alternativas
+   (US$ 216.922,97), muito inferior ao Control.
+   Menos trocas isoladamente nao significou
+   decisoes melhores. Nenhuma politica foi promovida.
+7. **Ablacao v1.0.11.** Mesmas previsoes de utilidade
+   e margens/holding variados: Control H2 +
+   calibrada ficou em US$ 587,17 mi; H0 +
+   calibrada em US$ 59,06 mi; H2 + margem
+   base em US$ 316,52 mi (resultados relatados
+   no pacote analisado). A permanencia minima
+   H2 foi reafirmada pelo pesquisador como
+   **regra estrutural de swing trade**, nao
+   algo a ser modificado para otimizar o OOS.
+
+### 26.3 Lacunas reais da branch atual
+
+| Capacidade | Situacao |
+|---|---|
+| Control U67+10 recuperado no codigo | PRESENTE |
+| Utilidade ajustada ao risco e margem calibrada | PRESENTE |
+| Minimo H2 do swing trade | PRESENTE |
+| Decisoes com scores/gaps e trade logs | PRESENTE |
+| Buy-and-hold e graficos de rotacao | PRESENTE |
+| Busca independente por PCA/agrupamento | PRESENTE, MAS ISOLADA |
+| Avaliacao financeira marginal dos novos candidatos | AUSENTE DO FLUXO ATIVO |
+| Selecionar ativos por contribuicao segundo regime/data | NAO IMPLEMENTADO |
+| Inclusao/manutencao/remocao temporais no universo OOS | NAO IMPLEMENTADO |
+| Redescoberta nested, usando somente dados anteriores | PENDENTE |
+| Analise OOS da precisao de trocar VERSUS manter | AUSENTE DO RUNNER ATIVO |
+| Auditoria multi-horizonte e de erros de ranking | APENAS HISTORICO GIT |
+| Estresse de custos e selecao PBO/CSCV no runner | APENAS HISTORICO GIT |
+| Cache U67+10 portatil e completo no proprio Git | INCOMPLETO |
+
+**Atenção: regressoes do buscador apos limpeza.** O arquivo
+`buscar_ativos.py` usa `CANDIDATE_POOL_SIZE=500`,
+atribuindo `stable_key=symbol` e ordenando por essa
+coluna; isso significa que os 500 selecionados sao
+os primeiros alfabeticamente, e nao uma amostra
+equilibrada nem a lista marginal que produziu o
+Challenger. Ha ainda filtros como `marginable=True`,
+exchanges definidos, historico >=2400 observacoes,
+minimo de 20 candidatos e selecao nominal de
+12 semelhantes + 12 complementares, alem de thresholds
+geometricos P75-P95. Essas escolhas NAO devem ser
+apresentadas como condicoes de negocio aprovadas nem
+como requisitos de reproducao do Control.
+Precisam ser revisitadas antes de tratar o
+buscador como fonte automatica de candidatos.
+
+O cutoff do buscador vem do manifesto U67 e nao
+necessariamente coincide com o cutoff da campanha
+U67+10 ate 2026-10-06. Isso deve ser explicitado
+quando comparados os dois programas.
+
+### 26.4 Caminho de autonomia sem alterar o Control
+
+**Primeiro, confirmar a reproducao do maior backtest no
+Spyder** com os mesmos CSVs. Nao reivindicar resultado
+novo sem essa verificacao.
+
+**Depois, restaurar componentes de PESQUISA, nao gates:**
+- Usar candidatos de `buscar_ativos.py` como universo
+  amplo de opcoes; corrigir amostragem alfabetica
+  e evitar filtros operacionais nao solicitados.
+- Gerar contribuicoes economicas marginais por
+  janela passada e por ativo, comparadas com o
+  universo ja disponivel naquela data. Nao usar o
+  capital final do periodo de teste para escolher
+  ativos no inicio dele.
+- Testar lista elegivel dinamica com estados
+  `ADICIONAR / MANTER / REMOVER`, mantendo
+  2 pregoes de permanencia minima APENAS na
+  politica de operacao. A lista dinamica nao
+  representa venda obrigatoria na data em que
+  um candidato deixa de ser sugerido.
+- Manter a previsao LightGBM de utilidade e a
+  decisao Control INALTERADAS numa primeira
+  comparacao; variar somente o universo de
+  oportunidades para atribuir o efeito da
+  autonomia ao componente correto.
+- Medir precisao H05 de rotacoes concretas,
+  oportunidades perdidas de permanencia, custo,
+  capital e estabilidade por fold. A rotulagem
+  de retornos futuros sera feita apenas APOS
+  cada decisao, nunca como feature ou selecao OOS.
+- Usar estresse de custo e risco como DIAGNOSTICO,
+  nao como restricao de promocao inventada.
+  Nao criar verificacoes de checksum nem um
+  novo modelo probabilistico sem necessidade.
+
+**Limitacao:** o Challenger fixo de dez ativos
+foi selecionado analisando a janela historica
+ja vista. Um universo dinamico treinado/selecionado
+nesse mesmo OOS continuara exploratorio; para
+confirmacao prospectiva sera preciso periodo
+cronologico que ainda nao tenha orientado a
+escolha dos metodos.
+
+**Governanca:** este registro e APENAS auditoria.
+Nenhum codigo de busca, decisao, modelo, universo,
+margem, configuracao ou restricao foi alterado.
+Reutilizar os dois programas de entrada existentes.

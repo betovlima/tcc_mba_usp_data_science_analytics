@@ -1,94 +1,109 @@
-# TCC MBA USP — Rotação de Capital com Machine Learning
+# TCC MBA USP — Reprodução do Control U67+10
 
-## Entradas do projeto
+**Versão de consolidação:** v1.22.3-dev.1  
+**Política de referência:** Control com 75 ativos, LightGBM de utilidade
+ajustada ao risco e swing trade com permanência mínima de dois pregões.
 
-Este repositório mantém **somente dois scripts de execução na raiz**:
+## Apenas dois programas de entrada no Spyder
 
-| Arquivo | Finalidade |
-| --- | --- |
-| `buscar_ativos.py` | Pesquisa exploratória de ativos (PCA, agrupamentos e, opcionalmente, investigação U67+n) sem alterar a composição do universo oficial |
-| `reproduzir_experimento.py` | Reproduz o experimento científico oficial usando o snapshot congelado versionado em `dados/u67/`, sem baixar dados nem consultar outra aplicação operacional |
+### 1. `reproduzir_experimento.py` — Control de US$ 587 milhões
 
-A metodologia, os resultados e o histórico científico continuam em
-[MANIFEST.md](MANIFEST.md). A reorganização não altera os modelos, parâmetros,
-configurações científicas nem os dados congelados.
-
-### Instalação
-
-Python 3.12:
-
-```bash
-python -m pip install -r requirements.txt
+```python
+%run reproduzir_experimento.py
 ```
 
-### Reprodução oficial
+O script chama `reproducao/control_u77.py`, que utiliza o fluxo
+de treinamento e composição de previsões da campanha U67+10
+encerrada na v1.0.11. O experimento histórico registrou
+**US$ 587.165.941,13**, com 75 ativos, três folds OOS e
+margens calibradas historicamente. Esse valor é referência
+**descritiva**, não é validação obrigatória nem limite de resultado.
+Se o capital mudar, o programa informa a diferença em vez de
+abortar pela não coincidência.
 
-```bash
-python reproduzir_experimento.py
+**Dados necessários para a mesma execução:**
+
+- `dados/u67/raw_bars/` e
+  `dados/u67/corporate_actions/` — universo U67 versionado;
+- `dados/.u67_expansion_cache/full_raw_20261006/raw_bars/` e
+  `dados/.u67_expansion_cache/full_raw_20261006/corporate_actions/`
+  — dez ativos adicionais `CRT, NBR, CAPR, PNBK, PENN, JBL,
+  STAG, MCHB, LAD, TOWN` usados na campanha original.
+
+**Importante:** os dez históricos adicionais não constam no
+snapshot U67 do Git. Na mesma máquina onde a campanha v1.0.11
+foi executada, o cache normalmente já existe. Se faltar,
+o script informa os arquivos ausentes; não finge reproduzir
+os US$ 587 milhões com outro universo. Esses arquivos de
+mercado são necessários ao cálculo, **não constituem uma
+restrição arbitrária**.
+
+A execução reproduz LightGBM individual por ativo,
+compõe previsões U67+10, aplica decisões com dois pregões
+mínimos, calibra a margem no histórico anterior a cada
+fold e gera operações, curva financeira, métricas, gráficos,
+planilhas e `output/reproducao/pacote_reproducao_u77.zip`.
+
+**Não há SHA-256, controle de hashes ou bloqueio por
+checkpoint, contagem antiga de ativos, branch ou metadados
+de versões passadas.** Os CSVs locais são lidos normalmente.
+São mantidas verificações indispensáveis de dados presentes,
+preços válidos e exclusões de séries com problemas estruturais;
+não se tenta reconstruir/mesclar identidades de ativos.
+
+### 2. `buscar_ativos.py` — busca independente
+
+```python
+%run buscar_ativos.py
 ```
 
-No Spyder, abra `reproduzir_experimento.py` e execute com F5 após reiniciar
-o kernel. O resultado é salvo em `output/reproducao/` e o script valida o
-snapshot local `dados/u67/` antes de iniciar o treinamento.
+Faz triagem técnica e busca semelhança/complementaridade
+com PCA, agrupamento e geometria no universo de referência.
+Pode acessar Alpaca; os downloads de candidatos ficam no
+cache local `output/candidate_cluster_search/cache_bars/`.
+A shortlist não promove ativos automaticamente nem modifica
+o universo do Control. Possui som diferente para sucesso e
+erro.
 
-### Busca de ativos
+Para consultas à Alpaca, configure localmente um arquivo
+`.env` com `ALPACA_API_KEY` e `ALPACA_SECRET_KEY`.
 
-```bash
-python buscar_ativos.py
-```
+## Regras aprovadas preservadas
 
-No Spyder, execute `buscar_ativos.py` com F5. No início do script, selecione:
+- Swing trade com **mínimo obrigatório de dois pregões**,
+  podendo manter a posição por mais tempo;
+- previsão LightGBM de utilidade ajustada ao risco, com
+  atributos conhecidos na data da decisão;
+- execução cronológica, folds walk-forward e histórico
+  de calibração separado do OOS;
+- exclusão explícita de ativos com problemas estruturais
+  de histórico, sem bridges ou correções manuais;
+- comparação financeira com compra/manutenção no mesmo
+  universo, taxas e slippage;
+- dados em CSV e resultados exportados; nenhum banco de dados;
+- aviso sonoro ao fim do backtest e da busca.
 
-- `MODO_BUSCA = "agrupamentos"`: explora o catálogo Alpaca e produz
-  shortlist por atributos técnicos, PCA e clusters; **não incorpora candidatos
-  automaticamente** ao universo científico.
-- `MODO_BUSCA = "expansao_u67"`: mantém a investigação incremental U67+n e seus
-  checkpoints históricos. O módulo preservado usa por padrão
-  `RUN_MODE = "decision_validation"`. Os outros modos de pesquisa são
-  documentados em [PESQUISA_EXPANSAO_U67.md](PESQUISA_EXPANSAO_U67.md).
+O resultado anterior de **US$ 76,93 milhões** corresponde à
+reprodução histórica de apenas 65 ativos e não é o Control
+principal desta versão. Os oito rankings e as ablações
+v1.0.9–v1.0.11 foram experiências diagnósticas, sem
+promoção à estratégia atual.
 
-A busca consulta a Alpaca e exige credenciais locais. Use `.env` conforme
-`.env.example`. Diferentemente da reprodução, a busca pode coletar dados
-de candidatos e gravar cache em `output/` ou `dados/` ignorados pelo Git.
-Ela não altera `dados/u67/`.
+## Estrutura interna e testes
 
-**Distinção de resultados:** a referência reproduzida no contrato científico
-U67 é de aproximadamente US$ 76,93 milhões. A campanha exploratória
-U67+10 registrou um cenário de aproximadamente US$ 587,17 milhões.
-Este último não é promovido automaticamente a novo resultado oficial;
-a metodologia e suas limitações estão no `MANIFEST.md`.
-
-## Módulos internos e manutenção
-
-As rotinas auxiliares de auditoria, preparação do snapshot e figuras foram
-movidas para `reproducao/`, sem virar novos scripts na raiz. Quando necessário:
-
-```bash
-python -m reproducao.avaliar_elegibilidade_u67
-python -m reproducao.gerar_figuras_tcc
-```
-
-A preparação do snapshot é **separada e explícita**; a reprodução oficial
-nunca a executa. Apenas para uma nova campanha de coleta, com credenciais
-Alpaca e posterior revisão e versionamento dos dados:
-
-```bash
-python -m reproducao.preparar_snapshot_u67
-```
-
-Há também `python -m reproducao.finalizar_decision_validation` para recuperar
-a serialização de uma campanha histórica já calculada.
-
-Os arquivos de `engine/`, `reproducao/`, `dados/u67/`, `evidencias/`,
-`figuras/`, `documento/` e os testes preservam a verificabilidade do estudo.
-Scripts exploratórios redundantes foram retirados da versão corrente;
-continuam recuperáveis no histórico Git.
-
-## Testes
+As pastas `engine/` e `reproducao/` contêm as funções
+internas; `dados/` contém séries de mercado;
+`MANIFEST.md` guarda a cronologia das decisões.
+Só `buscar_ativos.py` e `reproduzir_experimento.py`
+são arquivos de execução na raiz.
 
 ```bash
 python -m pytest -q
 python -m ruff check engine reproducao buscar_ativos.py reproduzir_experimento.py tests --select F401,F811,F821,F841
 ```
 
-O código oficial não depende de banco de dados nem de outra aplicação operacional.
+O CI verifica sintaxe, contratos e testes unitários.
+**Não executa** os backtests completos com os dez
+históricos adicionais, ausentes do ambiente CI.
+Confirmação do capital de US$ 587 milhões exige execução
+local no Spyder com o mesmo cache de dados.
