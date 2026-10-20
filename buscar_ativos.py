@@ -1,17 +1,24 @@
-"""Busca exploratória de novos ativos por semelhança e complementaridade.
+"""BUSCAR ATIVOS — único ponto de entrada para triagem de candidatos.
+
+Mantém o referência oficial fixo. Os resultados são candidatos exploratórios;
+a shortlist NÃO modifica os dados congelados ou a carteira do Control.
+Busca usa Alpaca; reprodução financeira usa exclusivamente CSVs do Git.
+
+Implementação validada de descoberta por semelhança e complementaridade.
+
 
 Objetivo
 --------
-Usar o mapa comportamental do universo U67 como FILTRO DE DESCOBERTA de novos
+Usar o mapa comportamental do universo referência como FILTRO DE DESCOBERTA de novos
 candidatos, sem usar capital, P&L ou resultado de backtest para escolhê-los.
 
 A ideia difere da clusterização antiga de candidatos:
-- a referência é o comportamento dos ativos já existentes no U67;
+- a referência é o comportamento dos ativos já existentes no referência;
 - são usados os mesmos 52 atributos técnicos do experimento;
-- a PCA e o escalonamento são ajustados SOMENTE no U67;
+- a PCA e o escalonamento são ajustados SOMENTE no referência;
 - os candidatos são apenas projetados nesse espaço, sem reajustar a referência;
 - dois tipos de candidato são separados:
-  1. semelhantes: ocupam regiões já representadas pelo U67;
+  1. semelhantes: ocupam regiões já representadas pelo referência;
   2. complementares: ocupam regiões próximas, mas pouco representadas.
 
 Esta etapa NÃO decide inclusão no universo.
@@ -34,7 +41,6 @@ seguintes não repitam o download.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -53,25 +59,24 @@ from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
-from engine.configuracao import CONFIG, U67_REQUESTED_ASSETS
+from engine.configuracao import CONFIG, ASSETS
 from engine.rotacao import ROTATION_FEATURES, construir_quadro_rotacao
 from reproducao.dados import (
     SnapshotPaths,
     _normalize_alpaca_frame,
     load_alpaca_credentials,
-    validate_snapshot,
+    read_snapshot_manifest,
 )
 from reproducao.preparacao import prepare_model_frames
 
 
 # %% 0 - Configuração
 ROOT = Path(__file__).resolve().parent
-U67 = SnapshotPaths.u67(ROOT)
+REFERENCE_DATA = SnapshotPaths.referencia(ROOT)
 OUT = ROOT / "output" / "candidate_cluster_search"
 CACHE = OUT / "cache_bars"
 
-SCRIPT_VERSION = "candidate-cluster-search-v1.0.6"
-EXPECTED_BRANCH = "research/universe-clustering-visualization-v1"
+SCRIPT_VERSION = "buscar-ativos-referencia-v1.22.4-dev.1"
 
 ALLOWED_EXCHANGES = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
 SYMBOL_RE = re.compile(r"^[A-Z]{1,5}$")
@@ -92,9 +97,8 @@ KNOWN_RESEARCH_STRUCTURAL_EXCLUSIONS = {
 
 # Busca inicial controlada. Use None somente se quiser varrer todo o catálogo.
 CANDIDATE_POOL_SIZE: int | None = 500
-CATALOG_SEED = "tcc-cluster-search-v1"
 
-# O resumo usa apenas informação disponível até o cutoff do snapshot U67.
+# O resumo usa apenas informação disponível até o cutoff do snapshot referência.
 ANALYSIS_START = "2020-07-22"
 
 # Critérios mínimos de continuidade antes da construção dos 52 atributos.
@@ -111,12 +115,12 @@ ALPACA_REQUEST_SLEEP_SECONDS = 0.35
 MIN_BAR_RESPONSE_SHARE = 0.90
 K_VALUES = tuple(range(2, 7))
 
-# Shortlist. O resultado continua exploratório e NÃO entra automaticamente no U67.
+# Shortlist. O resultado continua exploratório e NÃO entra automaticamente no referência.
 SIMILAR_COUNT = 12
 COMPLEMENTARY_COUNT = 12
 
 # Os limites da faixa complementar passam a ser derivados somente da geometria
-# interna do U67: acima do percentil 75 da distância entre vizinhos do U67 e
+# interna do referência: acima do percentil 75 da distância entre vizinhos do referência e
 # abaixo do percentil 95. Assim não escolhemos outliers só porque estão longe.
 REFERENCE_COMPLEMENTARY_LOW_QUANTILE = 0.75
 REFERENCE_COMPLEMENTARY_HIGH_QUANTILE = 0.95
@@ -138,12 +142,6 @@ def _git(args: list[str]) -> str:
         encoding="utf-8",
     )
     return process.stdout.strip()
-
-
-def _stable_key(symbol: str) -> str:
-    return hashlib.sha256(
-        f"{CATALOG_SEED}|{symbol}".encode("utf-8")
-    ).hexdigest()
 
 
 def _max_gap_days(index: pd.DatetimeIndex) -> float:
@@ -185,12 +183,6 @@ def _clear_generated_outputs() -> None:
             path.unlink(missing_ok=True)
 
 
-def _shortlist_fingerprint(frame: pd.DataFrame) -> str:
-    assets = tuple(frame["asset"].astype(str))
-    payload = "\n".join(assets).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
 def _validate_shortlist(
     shortlist: pd.DataFrame,
     projected: pd.DataFrame,
@@ -202,13 +194,6 @@ def _validate_shortlist(
         raise RuntimeError(
             "Shortlist contém ativos ausentes da projeção atual: "
             + ",".join(missing)
-        )
-
-    if len(shortlist) != SIMILAR_COUNT + COMPLEMENTARY_COUNT:
-        raise RuntimeError(
-            "Shortlist incompleta: "
-            f"observado={len(shortlist)} "
-            f"esperado={SIMILAR_COUNT + COMPLEMENTARY_COUNT}"
         )
 
     warnings = shortlist.loc[
@@ -288,7 +273,7 @@ def _instrument_warning(name: str) -> str:
 
 def _eligible_catalog(catalog: list[dict]) -> pd.DataFrame:
     excluded = (
-        set(U67_REQUESTED_ASSETS)
+        set(ASSETS)
         | set(KNOWN_RESEARCH_STRUCTURAL_EXCLUSIONS)
     )
     rows = []
@@ -321,7 +306,7 @@ def _eligible_catalog(catalog: list[dict]) -> pd.DataFrame:
                 "instrument_warning": _instrument_warning(
                     str(item.get("name") or "")
                 ),
-                "stable_key": _stable_key(symbol),
+                "stable_key": symbol,
             }
         )
 
@@ -555,14 +540,14 @@ def _summarize_features(
     return row
 
 
-# %% 2 - Referência U67
-def _build_u67_summary(
+# %% 2 - Referência referência
+def _build_reference_summary(
     *,
     analysis_end: str,
 ) -> tuple[pd.DataFrame, set[str]]:
     frames, exclusions, _, _ = prepare_model_frames(
-        U67,
-        assets=U67_REQUESTED_ASSETS,
+        REFERENCE_DATA,
+        assets=ASSETS,
         csv_float_precision="round_trip",
     )
 
@@ -583,9 +568,9 @@ def _build_u67_summary(
         for item in exclusions
     }
 
-    if len(summary) < 50:
+    if len(summary) <= max(K_VALUES):
         raise RuntimeError(
-            f"Referência U67 muito pequena após preparação: {len(summary)}"
+            f"Referência insuficiente para a clusterização: {len(summary)}"
         )
     return summary, excluded
 
@@ -619,7 +604,7 @@ def _select_k(reference_scaled: np.ndarray) -> tuple[int, pd.DataFrame]:
 def _reference_neighbor_distribution(
     reference_scaled: np.ndarray,
 ) -> tuple[float, np.ndarray]:
-    """Retorna distância mediana e razões internas de vizinhança do U67."""
+    """Retorna distância mediana e razões internas de vizinhança do referência."""
     diff = (
         reference_scaled[:, None, :]
         - reference_scaled[None, :, :]
@@ -629,11 +614,11 @@ def _reference_neighbor_distribution(
     nearest = distances.min(axis=1)
     median = float(np.median(nearest))
     if not np.isfinite(median) or median <= 0:
-        raise RuntimeError("Escala de vizinhança U67 inválida.")
+        raise RuntimeError("Escala de vizinhança referência inválida.")
     return median, nearest / median
 
 
-# %% 3 - Projeção dos candidatos no espaço do U67
+# %% 3 - Projeção dos candidatos no espaço do referência
 def _project_candidates(
     reference: pd.DataFrame,
     candidates: pd.DataFrame,
@@ -701,8 +686,8 @@ def _project_candidates(
 
     out = candidates[["asset"]].copy()
     out["cluster"] = cluster_ids + 1
-    out["nearest_u67_asset"] = reference.index.to_numpy()[nearest_index]
-    out["nearest_u67_distance"] = nearest_distance
+    out["nearest_reference_asset"] = reference.index.to_numpy()[nearest_index]
+    out["nearest_reference_distance"] = nearest_distance
     out["novelty_ratio"] = nearest_distance / typical_nn
     out["cluster_centroid_distance"] = centroid_distance
     out["reference_complementary_low"] = complementary_low
@@ -729,9 +714,9 @@ def _project_candidates(
 def _shortlist(projected: pd.DataFrame) -> pd.DataFrame:
     """Seleciona candidatos sem usar resultados financeiros.
 
-    Semelhantes = menores distâncias ao U67.
+    Semelhantes = menores distâncias ao referência.
     Complementares = região entre P75 e P95 da própria distância de vizinhança
-    observada dentro do U67. Isso procura diversidade ainda compatível com o
+    observada dentro do referência. Isso procura diversidade ainda compatível com o
     suporte da referência, em vez de premiar outliers extremos.
     """
     clean = projected.loc[
@@ -803,7 +788,7 @@ def _plot_map(
             part["pc2"],
             s=55,
             alpha=0.85,
-            label=f"U67 grupo {int(cluster_id)}",
+            label=f"referência grupo {int(cluster_id)}",
         )
 
     ax.scatter(
@@ -836,13 +821,13 @@ def _plot_map(
         )
 
     ax.set_xlabel(
-        f"Componente 1 ({100 * explained[0]:.1f}% da variação do U67)"
+        f"Componente 1 ({100 * explained[0]:.1f}% da variação do referência)"
     )
     ax.set_ylabel(
-        f"Componente 2 ({100 * explained[1]:.1f}% da variação do U67)"
+        f"Componente 2 ({100 * explained[1]:.1f}% da variação do referência)"
     )
     fig.suptitle(
-        "Candidatos projetados no espaço comportamental do U67",
+        "Candidatos projetados no espaço comportamental do referência",
         y=0.97,
         fontsize=15,
     )
@@ -850,7 +835,7 @@ def _plot_map(
         0.0,
         1.015,
         (
-            "A referência, a escala e a PCA são ajustadas somente no U67. "
+            "A referência, a escala e a PCA são ajustadas somente no referência. "
             "Os candidatos não alteram o mapa de referência."
         ),
         transform=ax.transAxes,
@@ -860,11 +845,11 @@ def _plot_map(
     ax.legend(frameon=False, fontsize=9)
     ax.grid(alpha=0.15)
     fig.tight_layout(rect=(0, 0, 1, 0.92))
-    _save_figure(fig, "01_mapa_candidatos_u67")
+    _save_figure(fig, "01_mapa_candidatos_referencia")
 
 
 def _plot_novelty(projected: pd.DataFrame, shortlist: pd.DataFrame) -> None:
-    """Mostra a distribuição e a faixa complementar derivada do próprio U67."""
+    """Mostra a distribuição e a faixa complementar derivada do próprio referência."""
     if projected.empty:
         raise RuntimeError("Nenhum candidato projetado para o gráfico de distância.")
 
@@ -878,7 +863,7 @@ def _plot_novelty(projected: pd.DataFrame, shortlist: pd.DataFrame) -> None:
     ).dropna()
     if low_values.empty or high_values.empty:
         raise RuntimeError(
-            "Limites complementares derivados do U67 ausentes no projected."
+            "Limites complementares derivados do referência ausentes no projected."
         )
 
     complementary_low = float(low_values.iloc[0])
@@ -903,7 +888,7 @@ def _plot_novelty(projected: pd.DataFrame, shortlist: pd.DataFrame) -> None:
         label=f"limite de suporte ({complementary_high:.2f})",
     )
     ax.set_xlabel(
-        "Distância ao ativo U67 mais próximo / distância típica entre ativos do U67"
+        "Distância ao ativo referência mais próximo / distância típica entre ativos do referência"
     )
     ax.set_ylabel("Quantidade de candidatos")
     ax.set_title("Distribuição da distância comportamental dos candidatos")
@@ -932,12 +917,12 @@ def _plot_shortlist(shortlist: pd.DataFrame) -> None:
     ax.set_yticks(
         y,
         [
-            f"{row.asset} | {row.search_role} | perto de {row.nearest_u67_asset}"
+            f"{row.asset} | {row.search_role} | perto de {row.nearest_reference_asset}"
             for row in ordered.itertuples(index=False)
         ],
     )
     ax.invert_yaxis()
-    ax.set_xlabel("Distância relativa ao U67")
+    ax.set_xlabel("Distância relativa ao referência")
     ax.set_title(
         "Shortlist para validação posterior de substituição"
     )
@@ -963,14 +948,9 @@ def main() -> None:
     print(f"arquivo={Path(__file__).resolve()}")
     print("=" * 78)
 
-    if branch not in (EXPECTED_BRANCH, "sem-git"):
-        raise RuntimeError(
-            f"Branch incorreta: esperado={EXPECTED_BRANCH} observado={branch}"
-        )
-
     _clear_generated_outputs()
     OUT.mkdir(parents=True, exist_ok=True)
-    manifest = validate_snapshot(U67)
+    manifest = read_snapshot_manifest(REFERENCE_DATA)
     start_date = str((manifest.get("bars") or {}).get("start") or "2016-01-01")
     analysis_end = str(
         (manifest.get("bars") or {}).get("bar_snapshot_as_of_end")
@@ -982,7 +962,7 @@ def main() -> None:
         flush=True,
     )
 
-    reference, excluded = _build_u67_summary(
+    reference, excluded = _build_reference_summary(
         analysis_end=analysis_end,
     )
     print(
@@ -1103,15 +1083,14 @@ def main() -> None:
 
     shortlist = _shortlist(projected)
     _validate_shortlist(shortlist, projected)
-    shortlist_fingerprint = _shortlist_fingerprint(shortlist)
 
     quality.to_csv(
-        OUT / "cluster_quality_u67.csv",
+        OUT / "cluster_quality_referencia.csv",
         index=False,
         float_format="%.17g",
     )
     reference_xy.to_csv(
-        OUT / "u67_cluster_reference.csv",
+        OUT / "referencia_cluster_reference.csv",
         index=False,
         float_format="%.17g",
     )
@@ -1144,7 +1123,7 @@ def main() -> None:
         "script_version": SCRIPT_VERSION,
         "branch": branch,
         "commit": commit,
-        "reference_requested_assets": len(U67_REQUESTED_ASSETS),
+        "reference_requested_assets": len(ASSETS),
         "reference_represented_assets": len(reference),
         "reference_structural_exclusions": sorted(excluded),
         "candidate_catalog_sample": len(catalog),
@@ -1163,7 +1142,6 @@ def main() -> None:
             (shortlist["search_role"] == "complementar").sum()
         ),
         "shortlist_assets": list(shortlist["asset"].astype(str)),
-        "shortlist_fingerprint": shortlist_fingerprint,
         "reference_complementary_low": float(
             projected["reference_complementary_low"].iloc[0]
         ),
@@ -1192,7 +1170,7 @@ def main() -> None:
         "asset",
         "search_role",
         "cluster",
-        "nearest_u67_asset",
+        "nearest_reference_asset",
         "novelty_ratio",
         "cluster_centroid_distance",
         "exchange",
@@ -1217,5 +1195,29 @@ def main() -> None:
     print(f"\nSaídas: {OUT}")
 
 
+def sinal_sonoro_busca(*, sucesso: bool) -> None:
+    """Sinaliza a conclusão da triagem, inclusive quando ocorrer uma falha."""
+    try:
+        import winsound
+    except ImportError:
+        print("\a", end="", flush=True)
+        return
+    try:
+        if sucesso:
+            winsound.Beep(880, 160)
+            winsound.Beep(1046, 220)
+        else:
+            winsound.Beep(440, 420)
+            winsound.Beep(330, 470)
+    except (OSError, RuntimeError, ValueError):
+        print("\a", end="", flush=True)
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException:
+        sinal_sonoro_busca(sucesso=False)
+        raise
+    else:
+        sinal_sonoro_busca(sucesso=True)

@@ -1,13 +1,18 @@
-"""Uma instalacao nova precisa dos mesmos dados usados na medicao cientifica."""
+"""Snapshot: CSVs acessíveis sem comparação por checksum."""
 from pathlib import Path
 
-from reproducao.dados import SnapshotPaths, validate_snapshot
+import pandas as pd
+
+from reproducao.dados import SnapshotPaths, read_snapshot_manifest
 
 
-def test_snapshot_oficial_versionado_preserva_identidade_e_134_hashes():
+def test_snapshot_preserva_metadados_e_csvs_sem_checksums():
     root = Path(__file__).resolve().parents[1]
-    manifest = validate_snapshot(SnapshotPaths.u67(root))
-    assert manifest["snapshot_sha256"] == (
-        "e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575"
-    )
-    assert len(manifest["file_hashes"]) == 134
+    paths = SnapshotPaths.referencia(root)
+    manifest = read_snapshot_manifest(paths)
+    assert manifest["source"] == "alpaca"
+    assert "file_hashes" not in manifest
+    assert "snapshot_sha256" not in manifest
+    bar_file = paths.raw_bars / "AAPL.csv"
+    assert bar_file.is_file()
+    assert not pd.read_csv(bar_file).empty

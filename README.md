@@ -1,152 +1,56 @@
-# TCC MBA USP — Rotação de Capital com Machine Learning
+# TCC MBA USP — Rotação de capital com Machine Learning
 
-Release: **v1.22.1**, integrada à `main` a partir de
-`fix/u67-eligibilidade-sem-futuro`. A memória da release, as evidências e as
-pendências estão na seção 24 de [MANIFEST.md](MANIFEST.md).
+**Versão de refatoração:** `v1.22.4-dev.1`
 
-## Requisitos
+O estudo utiliza um universo de ativos **declarado pelos dados e pela seleção versionada**, sem quantidades codificadas nos métodos. Mantém o Control LightGBM, validação cronológica walk-forward, calibração por fold, purge temporal de 60 pregões e swing trade com permanência mínima de dois pregões.
 
-- Python 3.12
-- dependências de `requirements.txt`
+## Executáveis na raiz
 
-Instale:
+| Programa | Responsabilidade |
+| --- | --- |
+| `reproduzir_experimento.py` | Reproduzir a política Control sobre o universo declarado |
+| `buscar_ativos.py` | Buscar candidatos por atributos técnicos, PCA e agrupamentos, sem promover resultados automaticamente |
+
+Os demais códigos científicos ficam em `engine/` e `reproducao/`.
+
+## Composição do universo
+
+- `dados/referencia/manifest.json`: fornece a lista de ativos do snapshot de referência; os CSVs permanecem idênticos aos históricos, sem modificação de conteúdo.
+- `dados/selecao_ativos.json`: registra a seleção adicional da campanha que gerou a referência histórica, sem contagem fixa no executor.
+- Dados adicionais: histórico local da campanha anterior com `raw_bars/` e `corporate_actions/`. O programa procura um conjunto completo em `dados/` ou aceita o diretório indicado em `TCC_CANDIDATE_DATA_ROOT`.
+
+A seleção adicional histórica e o valor de aproximadamente **US$ 587,17 milhões** são preservados como **referência descritiva**, e não como condição de sucesso. Mudanças na seleção exigem uma nova avaliação cronológica; não promovem automaticamente o resultado antigo ao universo novo.
+
+Não existem bloqueios por hash, versões de branch ou checkpoints financeiros para iniciar o cálculo. Permanecem verificações de arquivos presentes, símbolos duplicados, preços utilizáveis, continuidade das séries e exclusões estruturais documentadas. Não são reconstruídas identidades de ativos nem mescladas fontes para corrigir problemas estruturais.
+
+## Execução
+
+Instale as dependências Python 3.12 com:
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-## 1. Verifique os dados
-
-A reprodução usa:
-
-```text
-dados/u67/
-├── raw_bars/
-├── corporate_actions/
-└── manifest.json
-```
-
-A release inclui o snapshot congelado em `dados/u67/`. Vá direto para a
-execução; os hashes são conferidos antes do treinamento.
-
-Se o snapshot ainda não existir, crie um arquivo `.env` local com:
-
-```text
-ALPACA_API_KEY=sua_api_key
-ALPACA_SECRET_KEY=sua_secret_key
-```
-
-e execute:
-
-```bash
-python preparar_snapshot_u67.py
-```
-
-## 2. Execute a reprodução
-
-No terminal:
+Depois execute no Spyder com F5 ou no terminal:
 
 ```bash
 python reproduzir_experimento.py
+python buscar_ativos.py
 ```
 
-No Spyder, abra `reproduzir_experimento.py`, reinicie o kernel e execute o
-arquivo completo.
+A busca pode consultar a Alpaca, mediante credenciais locais `.env`; a reprodução financeira utiliza CSVs locais e não acessa banco de dados nem envia ordens.
 
-## 3. Resultados
+## Validação temporal e evidências
 
-Os artefatos são gravados em:
+A reprodução histórica conserva os três folds walk-forward, treinamento/calibração sobre dados passados e purge de 60 pregões. A janela de replay de **04/08/2026 a 16/10/2026** é uma avaliação temporal distinta da campanha histórica até **06/10/2026**. Não se devem confundir as duas ou reutilizar os resultados históricos como prova de teste prospectivo independente.
 
-```text
-output/reproducao/
-```
+Os resultados, versões antigas, arquivos de evidências, figuras e decisões científicas permanecem documentados no `MANIFEST.md`. Identificadores com quantidades de ativos em seções históricas são registros de procedência, não regras da implementação atual.
 
-## 4. Confira o efeito da correção de elegibilidade
-
-No terminal:
+## Testes
 
 ```bash
-python avaliar_elegibilidade_u67.py
+python -m pytest -q
+python -m ruff check engine reproducao buscar_ativos.py reproduzir_experimento.py tests --select F401,F811,F821,F841
 ```
 
-No Spyder, abra `avaliar_elegibilidade_u67.py` e execute o arquivo completo
-com F5. O script compara o filtro antigo e o corrigido com os mesmos modelos
-ajustados, sem baixar dados ou alterar os parâmetros. Os resultados ficam em
-`output/elegibilidade/`. O controle com o filtro antigo serve à auditoria;
-`reproduzir_experimento.py` usa a regra corrigida.
-
-## 5. Gere as figuras do TCC
-
-No terminal:
-
-```bash
-python gerar_figuras_tcc.py
-```
-
-No console do Spyder, com a pasta do projeto como diretório de trabalho:
-
-```python
-%run gerar_figuras_tcc.py
-```
-
-As sete figuras em PNG e SVG, as tabelas derivadas e sua procedência ficam em
-`figuras/`. O comando usa as evidências preservadas da execução dev.10; não
-treina modelos nem executa outro backtest. Ele é separado da reprodução.
-
-A reprodução usa os hiperparâmetros fixados pela campanha histórica e calibra
-a margem de troca por busca em grade em cada janela temporal. Ela não repete a
-otimização bayesiana que selecionou os hiperparâmetros.
-
-A documentação técnica, histórica e a avaliação completa do projeto estão em
-`MANIFEST.md`.
-
-
-## 6. Pesquisa de expansão incremental U67+n
-
-A pesquisa que mantém o U67 fixo e testa somente a adição de novos ativos está
-em:
-
-```text
-pesquisar_expansao_u67_spyder.py
-```
-
-A versão 1.4.1 usa por padrão o modo `decision_validation`. Ela preserva
-os checkpoints da assurance e mede qualidade de ranking/decisão, Deflated
-Sharpe Ratio, Probability of Backtest Overfitting e um piloto temporal de
-`ADICIONAR / MANTER / REMOVER` ativos. Os modos `assurance_validation`,
-`subset_optimization` e `direct_marginal` permanecem disponíveis para
-reproduzir as etapas anteriores.
-
-Ela exige as credenciais locais da Alpaca no arquivo `.env`, mas não recria nem
-altera `dados/u67`. Os dados dos candidatos são mantidos em cache local
-ignorado pelo Git.
-
-No terminal:
-
-```bash
-python pesquisar_expansao_u67_spyder.py
-```
-
-No Spyder, abra `pesquisar_expansao_u67_spyder.py`, reinicie o kernel e execute
-o arquivo completo com F5.
-
-No modo padrão de validação da decisão, os resultados ficam em:
-
-```text
-output/u67_decision_validation/
-```
-
-Os modos anteriores continuam usando `output/u67_assurance_validation/`,
-`output/u67_subset_optimization/` e `output/u67_asset_expansion/`.
-
-O desenho e as limitações da campanha estão documentados em
-`PESQUISA_EXPANSAO_U67.md`.
-
-Se uma execução v1.4.0 já concluiu os cálculos e falhou somente ao serializar
-`NaN` no JSON final, não repita o backtest. Preserve a pasta de output e rode:
-
-```bash
-python finalizar_u67_decision_validation_spyder.py
-```
-
-No Spyder, abra esse arquivo e execute com F5.
+O CI verifica código e contratos, mas não reproduz a campanha financeira completa quando o cache histórico adicional não está disponível no runner.
