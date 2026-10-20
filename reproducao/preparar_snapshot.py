@@ -25,8 +25,8 @@ ROOT = Path(__file__).resolve().parent.parent
 BUILD = SnapshotPaths.from_root(ROOT / "dados" / ".reference_build")
 TARGET = SnapshotPaths.referencia(ROOT)
 
-SNAPSHOT_END_DATE = "2026-10-06"
-SNAPSHOT_NAME = "tcc-reference-frozen-20261006"
+SNAPSHOT_END_DATE = "2026-10-20"
+SNAPSHOT_NAME = "tcc-reference-frozen-20261020"
 
 
 # %% 1 - Coleta completa em area temporaria
