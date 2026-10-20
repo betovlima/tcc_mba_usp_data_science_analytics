@@ -1,13 +1,4 @@
-"""Control da estratégia LightGBM no universo declarado pela seleção da pesquisa.
-
-Reutiliza literalmente os helpers de preparação e treino auditados da
-campanha que reproduziu US$ 587.165.941,13. O resultado observado é
-comparado ao histórico, jamais usado como condição de execução.
-
-Os dez ativos adicionais são lidos do cache local da pesquisa anterior,
-na pasta de pesquisa localizada em tempo de execução. Sem SHA-256 ou restrições por
-checkpoint, branch, modo de execução ou contagem fixa de capital.
-"""
+"""Reprodução Control LightGBM sobre o universo único versionado da pesquisa."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -483,11 +474,11 @@ def executar_control() -> dict[str, Any]:
 
     started = time.perf_counter()
     OUT.mkdir(parents=True, exist_ok=True)
-    needed, historical_reference_capital = carregar_selecao()
-    candidate_data = localizar_dados_adicionais(needed)
+    needed: list[str] = []
+    historical_reference_capital = None
+    candidate_data = None
     print(f"[TCC] versão={VERSION} modo=Control", flush=True)
-    print(f"[TCC] referência={BASE_DATA.root}", flush=True)
-    print(f"[TCC] dados adicionais={candidate_data.root if candidate_data else 'nenhum'}", flush=True)
+    print(f"[TCC] dados={BASE_DATA.root} universo_solicitado={len(ASSETS)}", flush=True)
 
     # A leitura do manifesto não faz comparações por hash nem restringe
     # a execução a uma identidade/versionamento antigos.
