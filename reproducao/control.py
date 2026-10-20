@@ -1,11 +1,11 @@
-"""Control U67+10 (75 ativos): reprodução oficial a partir da campanha v1.0.11.
+"""Control da estratégia LightGBM no universo declarado pela seleção da pesquisa.
 
 Reutiliza literalmente os helpers de preparação e treino auditados da
 campanha que reproduziu US$ 587.165.941,13. O resultado observado é
 comparado ao histórico, jamais usado como condição de execução.
 
 Os dez ativos adicionais são lidos do cache local da pesquisa anterior,
-na mesma pasta que gerou o resultado. Sem SHA-256 ou restrições por
+na pasta de pesquisa localizada em tempo de execução. Sem SHA-256 ou restrições por
 checkpoint, branch, modo de execução ou contagem fixa de capital.
 """
 from __future__ import annotations
@@ -14,12 +14,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 import json
+import os
 import time
 
 import numpy as np
 import pandas as pd
 
-from engine.configuracao import CONFIG, START_DATE, U67_REQUESTED_ASSETS
+from engine.configuracao import CONFIG, START_DATE, ASSETS
 from engine.modelo_lightgbm import (
     _ajustar_modelos_lightgbm, _construir_contexto_execucao,
     diagnosticos_fora_amostra, selecionar_switch_margin,
@@ -42,19 +43,58 @@ from reproducao.artefatos import criar_pacote_analise, sinal_sonoro_conclusao
 from reproducao.graficos import gerar_analises_backtest
 
 ROOT = Path(__file__).resolve().parent.parent
-BASE_DATA = SnapshotPaths.u67(ROOT)
-CACHE_ROOT = ROOT / "dados" / ".u67_expansion_cache"
-FULL_DATA = SnapshotPaths.from_root(CACHE_ROOT / "full_raw_20261006")
+BASE_DATA = SnapshotPaths.referencia(ROOT)
+SELECTION_FILE = ROOT / "dados" / "selecao_ativos.json"
 OUT = ROOT / "output" / "reproducao"
-VERSION = "1.22.3-dev.1"
-EXECUTION_SCHEMA = "u77-control-swing-75-assets"
+VERSION = "1.22.4-dev.1"
+EXECUTION_SCHEMA = "control-selected-universe-swing"
 ANALYSIS_END_DATE = "2026-10-06"
 HISTORY_START_TOLERANCE_DAYS = 10
-REFERENCE_CAPITAL_U77 = 587_165_941.1330212  # informação, NÃO gate
-DISCOVERY_SELECTED_CANDIDATES = (
-    "CRT", "NBR", "CAPR", "PNBK", "PENN",
-    "JBL", "STAG", "MCHB", "LAD", "TOWN",
-)
+
+
+def carregar_selecao() -> tuple[list[str], float | None]:
+    """Carrega a seleção versionada sem uma cardinalidade no código."""
+    if not SELECTION_FILE.is_file():
+        raise FileNotFoundError(f"Seleção de ativos não encontrada: {SELECTION_FILE}")
+    payload = json.loads(SELECTION_FILE.read_text(encoding="utf-8"))
+    names = [str(item).strip().upper() for item in (payload.get("selected_candidates") or [])]
+    if len(set(names)) != len(names) or any(not item for item in names):
+        raise ValueError("Seleção de ativos com símbolos duplicados ou inválidos.")
+    if set(names).intersection(ASSETS):
+        raise ValueError("Seleção adicional contém símbolos que já existem na referência.")
+    historical = payload.get("reference_capital_usd")
+    return names, float(historical) if historical is not None else None
+
+
+def localizar_dados_adicionais(symbols: list[str]) -> SnapshotPaths | None:
+    """Encontra o cache completo pelo conteúdo ou por diretório informado."""
+    if not symbols:
+        return None
+    configured = os.getenv("TCC_CANDIDATE_DATA_ROOT")
+    if configured:
+        roots = [SnapshotPaths.from_root(Path(configured).expanduser().resolve())]
+    else:
+        roots = [
+            SnapshotPaths.from_root(p.parent)
+            for p in sorted((ROOT / "dados").glob("**/raw_bars"))
+            if p.parent.resolve() != BASE_DATA.root.resolve()
+        ]
+    valid = [
+        item for item in roots
+        if all(
+            (item.raw_bars / f"{symbol}.csv").is_file()
+            and (item.corporate_actions / f"{symbol}.csv").is_file()
+            for symbol in symbols
+        )
+    ]
+    if len(valid) != 1:
+        raise FileNotFoundError(
+            "Dados adicionais ausentes ou com múltiplas fontes compatíveis. "
+            "Defina TCC_CANDIDATE_DATA_ROOT para a pasta de dados com "
+            "raw_bars/ e corporate_actions/. "
+            f"Fontes completas encontradas: {len(valid)}."
+        )
+    return valid[0]
 
 
 @dataclass(frozen=True)
@@ -171,12 +211,13 @@ def _prepare_candidate_frames(
     common_dates: pd.DatetimeIndex,
     all_decision_dates: pd.DatetimeIndex,
     config: Any,
+    candidate_data: SnapshotPaths,
 ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
     frames: dict[str, pd.DataFrame] = {}
     audits = []
     for position, symbol in enumerate(symbols, start=1):
-        raw_path = FULL_DATA.raw_bars / f"{symbol}.csv"
-        action_path = FULL_DATA.corporate_actions / f"{symbol}.csv"
+        raw_path = candidate_data.raw_bars / f"{symbol}.csv"
+        action_path = candidate_data.corporate_actions / f"{symbol}.csv"
         row: dict[str, Any] = {"asset": symbol, "status": "rejected", "reason": None}
         try:
             raw = load_raw_bar_file(raw_path, float_precision="round_trip")
@@ -260,7 +301,7 @@ def _train_baseline_states(
             symbols,
             train_dates,
             config,
-            phase=f"u67_expansion_baseline_fold_{fold_id}_calibration",
+            phase=f"reference_expansion_baseline_fold_{fold_id}_calibration",
         )
         calibration_cache, _ = _precalcular_utilidades_modelo(
             calibration_models, frames, symbols, calibration_dates, config
@@ -280,7 +321,7 @@ def _train_baseline_states(
         for margin, score in scores:
             calibration_rows.append(
                 {
-                    "scenario": "U67_BASELINE",
+                    "scenario": "REFERENCE_BASELINE",
                     "fold_id": fold_id,
                     "candidate_margin": margin,
                     "calibration_score": score,
@@ -293,7 +334,7 @@ def _train_baseline_states(
             symbols,
             final_fit_dates,
             config,
-            phase=f"u67_expansion_baseline_fold_{fold_id}_final",
+            phase=f"reference_expansion_baseline_fold_{fold_id}_final",
         )
         decision_cache, _ = _precalcular_utilidades_modelo(
             final_models, frames, symbols, decision_dates, config
@@ -363,7 +404,7 @@ def _train_candidate_caches(
             [symbol],
             state.train_dates,
             config,
-            phase=f"u67_expansion_{symbol}_fold_{state.fold_id}_calibration",
+            phase=f"reference_expansion_{symbol}_fold_{state.fold_id}_calibration",
         )
         calibration_cache, _ = _precalcular_utilidades_modelo(
             calibration_model,
@@ -378,7 +419,7 @@ def _train_candidate_caches(
             [symbol],
             state.final_fit_dates,
             config,
-            phase=f"u67_expansion_{symbol}_fold_{state.fold_id}_final",
+            phase=f"reference_expansion_{symbol}_fold_{state.fold_id}_final",
         )
         decision_cache, _ = _precalcular_utilidades_modelo(
             final_model,
@@ -437,25 +478,27 @@ def _merge_utility_caches(
 
 
 
-def executar_control_u77() -> dict[str, Any]:
-    """Reproduz o modelo de utilidade U67+10 sem repetir ablações."""
+def executar_control() -> dict[str, Any]:
+    """Reproduz o Control com a seleção de ativos registrada pela pesquisa."""
 
     started = time.perf_counter()
     OUT.mkdir(parents=True, exist_ok=True)
-    print(f"[TCC] versão={VERSION} modo=Control-U67+10", flush=True)
-    print(f"[TCC] dados U67={BASE_DATA.root}", flush=True)
-    print(f"[TCC] dados 10 adicionais={FULL_DATA.root}", flush=True)
+    needed, historical_reference_capital = carregar_selecao()
+    candidate_data = localizar_dados_adicionais(needed)
+    print(f"[TCC] versão={VERSION} modo=Control", flush=True)
+    print(f"[TCC] referência={BASE_DATA.root}", flush=True)
+    print(f"[TCC] dados adicionais={candidate_data.root if candidate_data else 'nenhum'}", flush=True)
 
     # A leitura do manifesto não faz comparações por hash nem restringe
     # a execução a uma identidade/versionamento antigos.
     metadata = read_snapshot_manifest(BASE_DATA)
     base_raw, exclusions, preparation, data_audit = prepare_model_frames(
         BASE_DATA,
-        assets=U67_REQUESTED_ASSETS,
+        assets=ASSETS,
         csv_float_precision="round_trip",
     )
-    baseline = [symbol for symbol in U67_REQUESTED_ASSETS if symbol in base_raw]
-    configuration_u67 = build_control_config(
+    baseline = [symbol for symbol in ASSETS if symbol in base_raw]
+    configuration_reference = build_control_config(
         {symbol: base_raw[symbol] for symbol in baseline}, CONFIG
     ).copiar_modelo(update={"analysis_end_date": ANALYSIS_END_DATE})
     (
@@ -463,25 +506,17 @@ def executar_control_u77() -> dict[str, Any]:
         folds, all_decision_dates, decision_to_fold, decision_metadata,
     ) = _construir_contexto_execucao(
         {symbol: base_raw[symbol] for symbol in baseline},
-        configuration_u67,
+        configuration_reference,
     )
-    needed = list(DISCOVERY_SELECTED_CANDIDATES)
-    missing_files = [
-        str(path) for symbol in needed for path in (
-            FULL_DATA.raw_bars / f"{symbol}.csv",
-            FULL_DATA.corporate_actions / f"{symbol}.csv",
-        ) if not path.is_file()
-    ]
-    if missing_files:
-        raise FileNotFoundError(
-            "Para reproduzir o Control de 75 ativos é necessário o "
-            "histórico dos dez ativos adicionais que foi usado na "
-            "campanha v1.0.11. Arquivos ausentes (sem exigir hash): "
-            + ", ".join(missing_files)
+    if needed:
+        candidate_frames, continuity = _prepare_candidate_frames(
+            needed, common_dates, all_decision_dates, configuration_reference,
+            candidate_data,
         )
-    candidate_frames, continuity = _prepare_candidate_frames(
-        needed, common_dates, all_decision_dates, configuration_u67,
-    )
+    else:
+        candidate_frames, continuity = {}, pd.DataFrame(
+            columns=["asset", "status", "reason"]
+        )
     continuity.to_csv(OUT / "continuity_audit.csv", index=False)
     rejected = [s for s in needed if s not in candidate_frames]
     if rejected:
@@ -496,17 +531,17 @@ def executar_control_u77() -> dict[str, Any]:
     # ordem CASH + todos os símbolos e calibra margens só no treino.
     states, _, baseline_margins = _train_baseline_states(
         baseline_frames, common_dates, baseline_symbols,
-        folds, configuration_u67,
+        folds, configuration_reference,
     )
     candidates = {
         symbol: _train_candidate_caches(
-            symbol, candidate_frames[symbol], states, configuration_u67
+            symbol, candidate_frames[symbol], states, configuration_reference
         ) for symbol in needed
     }
     symbols = sorted([*baseline_symbols, *needed])
     frames = {**baseline_frames, **candidate_frames}
     config = construir_configuracao_controle(
-        configuration_u67, assets=symbols,
+        configuration_reference, assets=symbols,
     )
     policies: dict[int, Any] = {}
     decisions: dict[pd.Timestamp, dict[str, Any]] = {}
@@ -567,23 +602,26 @@ def executar_control_u77() -> dict[str, Any]:
             flush=True,
         )
     result = _simular_exato(
-        "tcc_u77_control_swing",
+        "tcc_control_swing",
         _politica_agendada(policies, decision_to_fold),
         frames, symbols, all_decision_dates, config,
         calcular_taxas_referencia, aplicar_deslizamento,
         decision_metadata=decision_metadata,
-        model_label="TCC Control U67+10: 75 ativos, swing trade",
+        model_label=f"TCC Control: {len(symbols)} ativos, swing trade",
     )
     metrics = _scenario_metrics(
         result, folds, float(config.initial_capital)
     )
     observed = float(metrics["ending_capital"])
-    print(
-        f"[TCC] Control U67+10 capital=US$ {observed:,.2f}; "
-        f"referencia_historica=US$ {REFERENCE_CAPITAL_U77:,.2f}; "
-        f"diferenca=US$ {observed-REFERENCE_CAPITAL_U77:+,.2f}",
-        flush=True,
-    )
+    if historical_reference_capital is not None:
+        print(
+            f"[TCC] Control capital=US$ {observed:,.2f}; "
+            f"referencia_historica=US$ {historical_reference_capital:,.2f}; "
+            f"diferenca=US$ {observed-historical_reference_capital:+,.2f}",
+            flush=True,
+        )
+    else:
+        print(f"[TCC] Control capital=US$ {observed:,.2f}", flush=True)
     print(
         f"[TCC] Sharpe={metrics['sharpe']:.4f} "
         f"MaxDD={metrics['maximum_drawdown']:.3%} "
@@ -606,32 +644,32 @@ def executar_control_u77() -> dict[str, Any]:
         "execution_schema": EXECUTION_SCHEMA,
         "version": VERSION,
         "status": "completed",
-        "strategy": "Control_U67_plus_10",
+        "strategy": "Control",
         "target": "forward_risk_adjusted_utility",
         "minimum_holding_sessions": config.rotation_min_holding_days,
         "margin_calibration": "past_only_by_fold",
         "assets": list(symbols),
         "total_assets": len(symbols),
         "initial_capital": float(config.initial_capital),
-        "historical_reference_capital": REFERENCE_CAPITAL_U77,
+        "historical_reference_capital": historical_reference_capital,
         "actual_ending_capital": observed,
-        "difference_from_reference": observed - REFERENCE_CAPITAL_U77,
+        "difference_from_reference": (observed - historical_reference_capital) if historical_reference_capital is not None else None,
         "metrics": metrics,
         "fold_margins": fold_margins,
         "snapshot_metadata": metadata,
         "structural_exclusions": exclusions,
         "runtime_seconds": time.perf_counter() - started,
-        "origin": "v1.0.11_Control_75_assets",
+        "origin": "selection_manifest",
     }
-    (OUT / "reproducao_u77.json").write_text(
+    (OUT / "reproducao_control.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
     gerar_analises_backtest(OUT, manifest=metadata, result=result)
     package = criar_pacote_analise(
-        OUT, comparison_file="reproducao_u77.json",
+        OUT, comparison_file="reproducao_control.json",
         execution_schema=EXECUTION_SCHEMA,
-        archive_name="pacote_reproducao_u77.zip",
+        archive_name="pacote_reproducao_control.zip",
     )
     print(f"[TCC] pacote={package}", flush=True)
     sinal_sonoro_conclusao()

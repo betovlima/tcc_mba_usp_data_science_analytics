@@ -8,7 +8,7 @@ from reproducao.dados import SnapshotPaths, read_snapshot_manifest
 
 def test_snapshot_preserva_metadados_e_csvs_sem_checksums():
     root = Path(__file__).resolve().parents[1]
-    paths = SnapshotPaths.u67(root)
+    paths = SnapshotPaths.referencia(root)
     manifest = read_snapshot_manifest(paths)
     assert manifest["source"] == "alpaca"
     assert "file_hashes" not in manifest

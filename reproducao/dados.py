@@ -70,8 +70,8 @@ class SnapshotPaths:
         )
 
     @classmethod
-    def u67(cls, project_root: Path) -> "SnapshotPaths":
-        return cls.from_root(project_root / "dados" / "u67")
+    def referencia(cls, project_root: Path) -> "SnapshotPaths":
+        return cls.from_root(project_root / "dados" / "referencia")
 
     def ensure(self) -> None:
         self.raw_bars.mkdir(parents=True, exist_ok=True)

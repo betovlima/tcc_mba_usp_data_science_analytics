@@ -71,3 +71,33 @@ def test_busca_avisos_sonoros_diferenciam_sucesso_de_erro(monkeypatch) -> None:
     calls.clear()
     module.sinal_sonoro_busca(sucesso=False)
     assert calls == [(440, 420), (330, 470)]
+
+
+def test_selecao_independente_de_cardinalidade(tmp_path, monkeypatch) -> None:
+    import json
+    import reproducao.control as control
+
+    names = ["AAA", "BBB", "CCC"]
+    selection = tmp_path / "selecao.json"
+    selection.write_text(
+        json.dumps({"selected_candidates": names, "reference_capital_usd": None}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(control, "SELECTION_FILE", selection)
+    selected, reference_capital = control.carregar_selecao()
+    assert selected == names
+    assert reference_capital is None
+
+
+def test_codigos_ativos_nao_exigem_identificador_de_cardinalidade() -> None:
+    for relative in (
+        "engine/configuracao.py",
+        "reproducao/control.py",
+        "reproducao/preparar_snapshot.py",
+        "reproducao/dados.py",
+        "buscar_ativos.py",
+        "reproduzir_experimento.py",
+    ):
+        source = (ROOT / relative).read_text(encoding="utf-8").lower()
+        assert "u67" not in source, relative
+        assert "u77" not in source, relative

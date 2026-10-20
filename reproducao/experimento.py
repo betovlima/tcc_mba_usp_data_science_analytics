@@ -1,4 +1,4 @@
-"""Apoio enxuto para a reproducao oficial do U67 Control."""
+"""Apoio enxuto para a reproducao oficial do Control."""
 from __future__ import annotations
 
 from copy import deepcopy

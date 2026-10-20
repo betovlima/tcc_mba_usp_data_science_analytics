@@ -1,5 +1,6 @@
 import ast
 import importlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,7 +25,6 @@ from engine.configuracao import (
     BAR_SNAPSHOT_AS_OF_END,
     CONFIG,
     EXPERIMENT_VERSION,
-    U67_REQUESTED_ASSETS,
 )
 
 
@@ -95,8 +95,10 @@ def test_official_reproduction_has_no_database_dependency() -> None:
 
 
 def test_frozen_universe_and_dates_match_cpu_reference() -> None:
-    assert len(ASSETS) == 67
-    assert U67_REQUESTED_ASSETS == ASSETS == CONFIG.assets
+    expected = json.loads(
+        (ROOT / "dados" / "referencia" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert tuple(expected["assets"]) == ASSETS == CONFIG.assets
     assert "DOC" in ASSETS
     assert "CLMT" in ASSETS
     assert ANALYSIS_END_DATE == "2026-09-17"
@@ -238,19 +240,19 @@ def test_lightgbm_parameters_are_frozen() -> None:
 
 def test_control_runner_loads_latest_75_asset_training() -> None:
     runner = (ROOT / "reproduzir_experimento.py").read_text(encoding="utf-8")
-    source = (ROOT / "reproducao" / "control_u77.py").read_text(encoding="utf-8")
-    assert "executar_control_u77()" in runner
+    source = (ROOT / "reproducao" / "control.py").read_text(encoding="utf-8")
+    assert "executar_control()" in runner
     assert "_train_baseline_states(" in source
     assert "_train_candidate_caches(" in source
     assert "_merge_utility_caches(" in source
     assert "_simular_exato(" in source
-    assert "REFERENCE_CAPITAL_U77 = 587_165_941.1330212" in source
+    assert "historical_reference_capital" in source
 
 
 def test_snapshot_layout_is_csv_per_asset() -> None:
-    snapshot = SnapshotPaths.u67(ROOT)
+    snapshot = SnapshotPaths.referencia(ROOT)
 
-    assert snapshot.root == ROOT / "dados" / "u67"
+    assert snapshot.root == ROOT / "dados" / "referencia"
     assert snapshot.raw_bars.name == "raw_bars"
     assert snapshot.corporate_actions.name == "corporate_actions"
     assert snapshot.manifest.name == "manifest.json"
@@ -320,10 +322,10 @@ def test_analysis_end_date_is_inclusive_for_nyse_utc_timestamp() -> None:
     assert pd.Timestamp("2026-09-23 04:00:00+00:00") not in dates
 
 
-def test_u77_reuses_local_market_data_and_does_not_require_hashes() -> None:
-    source = (ROOT / "reproducao" / "control_u77.py").read_text(encoding="utf-8")
-    assert "SnapshotPaths.u67(ROOT)" in source
-    assert "full_raw_20261006" in source
+def test_control_reuses_local_market_data_and_does_not_require_hashes() -> None:
+    source = (ROOT / "reproducao" / "control.py").read_text(encoding="utf-8")
+    assert "SnapshotPaths.referencia(ROOT)" in source
+    assert "localizar_dados_adicionais" in source
     assert "read_snapshot_manifest(BASE_DATA)" in source
     assert 'csv_float_precision="round_trip"' in source
     assert "validate_snapshot" not in source
@@ -331,7 +333,7 @@ def test_u77_reuses_local_market_data_and_does_not_require_hashes() -> None:
     assert "download_raw_bars" not in source
 
 
-def test_u67_snapshot_preparation_is_separate_from_reproduction() -> None:
+def test_reference_snapshot_preparation_is_separate_from_reproduction() -> None:
     source = (ROOT / "reproducao" / "preparar_snapshot.py").read_text(
         encoding="utf-8"
     ).lower()
@@ -339,7 +341,7 @@ def test_u67_snapshot_preparation_is_separate_from_reproduction() -> None:
     assert "download_corporate_actions" in source
     assert "load_alpaca_credentials" in source
     assert "snapshot_end_date = \"2026-10-06\"" in source
-    assert "dados" in source and ".u67_build" in source
+    assert "dados" in source and ".reference_build" in source
 
 def test_capital_rotations_follow_backtest_analytics_semantics() -> None:
     trades = pd.DataFrame(
@@ -685,20 +687,20 @@ def test_runtime_config_attribute_contract() -> None:
     )
 
 
-def test_u67_data_is_versioned_and_build_area_is_ignored() -> None:
+def test_reference_data_is_versioned_and_build_area_is_ignored() -> None:
     rules = (ROOT / ".gitignore").read_text(encoding="utf-8")
-    assert "dados/.u67_build/" in rules
-    assert "!dados/u67/raw_bars/*.csv" in rules
-    assert "!dados/u67/corporate_actions/*.csv" in rules
-    assert "!dados/u67/manifest.json" in rules
+    assert "dados/.reference_build/" in rules
+    assert "!dados/referencia/raw_bars/*.csv" in rules
+    assert "!dados/referencia/corporate_actions/*.csv" in rules
+    assert "!dados/referencia/manifest.json" in rules
     assert "!dados/pesquisa/" not in rules
 
 
 def test_current_reproduction_control_uses_75_assets_and_swing_minimum() -> None:
-    source = (ROOT / "reproducao" / "control_u77.py").read_text(encoding="utf-8")
+    source = (ROOT / "reproducao" / "control.py").read_text(encoding="utf-8")
     cfg = (ROOT / "engine" / "configuracao.py").read_text(encoding="utf-8")
-    assert "DISCOVERY_SELECTED_CANDIDATES" in source
-    assert "REFERENCE_CAPITAL_U77 = 587_165_941.1330212" in source
+    assert "carregar_selecao()" in source
+    assert "historical_reference_capital" in source
     assert "config.rotation_switch_margin_candidates" in source
     assert 'rotation_min_holding_days: int = 2' in cfg
 
@@ -730,6 +732,6 @@ def test_project_has_no_external_system_reference_token() -> None:
 
 def test_main_runner_delegates_to_recovered_control() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(encoding="utf-8")
-    assert "from reproducao.control_u77 import executar_control_u77" in source
+    assert "from reproducao.control_control import executar_control" in source
     assert "if __name__ == \"__main__\":" in source
-    assert "U67_EXPECTED_ENDING_CAPITAL" not in source
+    assert "reference_EXPECTED_ENDING_CAPITAL" not in source

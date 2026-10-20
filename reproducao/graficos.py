@@ -660,7 +660,7 @@ def _salvar_excel(
     analytics: dict[str, pd.DataFrame],
     summary: dict[str, Any],
 ) -> None:
-    """Persiste a analise do U67 Control em uma unica planilha."""
+    """Persiste a analise do Control em uma unica planilha."""
     resumo = pd.DataFrame(
         [
             {"metric": key, "control": summary.get(key)}
@@ -825,7 +825,7 @@ def gerar_analises_backtest(
     manifest: dict[str, Any],
     result: Any,
 ) -> dict[str, Path]:
-    """Gera dados, graficos e planilha do backtest oficial U67 Control."""
+    """Gera dados, graficos e planilha do backtest oficial Control."""
     graficos_dir = output_dir / "graficos"
     if graficos_dir.exists():
         shutil.rmtree(graficos_dir)
@@ -834,7 +834,7 @@ def gerar_analises_backtest(
     analytics, paths, summary = _gerar_variante(
         graficos_dir,
         slug="control",
-        label="U67 Control",
+        label="Control",
         result=result,
     )
 

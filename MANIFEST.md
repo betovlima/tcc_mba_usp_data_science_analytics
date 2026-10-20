@@ -1,3 +1,13 @@
+## Estado operacional vigente — refatoração de nomenclatura v1.22.4-dev.1 (20/10/2026)
+
+**Regra ativa:** o estudo não fixa em código a quantidade de ativos. O executor `reproduzir_experimento.py` chama `reproducao/control.py`; o universo de referência vem da lista no `dados/referencia/manifest.json`, e os ativos adicionais da seleção em `dados/selecao_ativos.json`. O número efetivo é calculado após as exclusões estruturais. O diretório de dados foi renomeado sem mudar os bytes dos CSVs. Os históricos adicionais permanecem no cache local da campanha anterior, identificado pelo conteúdo ou pela variável `TCC_CANDIDATE_DATA_ROOT`.
+
+**Validação científica preservada:** treinamento e calibração separados cronologicamente por fold, purge de 60 pregões, restrições de swing trade, comparação com compra e manutenção no mesmo universo. O capital de US$ 587.165.941,13 é referência histórica informativa, não um requisito de reprodução. Nenhum hash/checkpoint histórico bloqueia o executor. A avaliação de 04/08 a 16/10/2026 deve ser analisada separadamente do resultado histórico que terminou em 06/10/2026.
+
+**Procedência:** nomes e números de universo presentes nas seções antigas a seguir são referências históricas dos estudos anteriores. Não descrevem parâmetros fixos do código atual. Os arquivos de evidências, o manifesto histórico de origem e as tags Git continuam preservados. As instruções vigentes de execução estão no `README.md`.
+
+---
+
 # MANIFEST — TCC MBA USP Data Science & Analytics
 
 > **ATUALIZAÇÃO 13/10/2026 — referência vigente v1.22.3-dev.1.** A
