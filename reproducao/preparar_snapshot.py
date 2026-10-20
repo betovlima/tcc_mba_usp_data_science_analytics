@@ -6,6 +6,7 @@ snapshot de pesquisa. A reproducao oficial nao acessa a Alpaca.
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 import shutil
 
 from engine.configuracao import (
@@ -30,6 +31,23 @@ SNAPSHOT_NAME = "tcc-reference-frozen-20261020"
 
 
 # %% 1 - Coleta completa em area temporaria
+# No plano SIP historico, a Alpaca requer fim da consulta com ao menos
+# 15 minutos de atraso. O limite superior e exclusivo (dia seguinte UTC).
+# Nao substitua o cutoff por um horario parcial: isso alteraria o experimento.
+from datetime import date
+requested_end_exclusive = datetime.combine(
+    date.fromisoformat(SNAPSHOT_END_DATE) + timedelta(days=1),
+    datetime.min.time(),
+    tzinfo=timezone.utc,
+)
+allowed_at = requested_end_exclusive + timedelta(minutes=20)
+if datetime.now(timezone.utc) < allowed_at:
+    raise RuntimeError(
+        "Snapshot SIP diario ainda nao pode ser consultado integralmente "
+        f"com cutoff={SNAPSHOT_END_DATE}. Execute apos "
+        f"{allowed_at.isoformat()} (UTC), ou use um corte anterior "
+        "em uma campanha cientifica separada. Dados existentes preservados."
+    )
 credentials = load_alpaca_credentials(ROOT)
 BUILD.clear_generated()
 
