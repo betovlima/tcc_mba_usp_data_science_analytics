@@ -48,7 +48,7 @@ SELECTION_FILE = ROOT / "dados" / "selecao_ativos.json"
 OUT = ROOT / "output" / "reproducao"
 VERSION = "1.22.4-dev.1"
 EXECUTION_SCHEMA = "control-selected-universe-swing"
-ANALYSIS_END_DATE = "2026-10-20"
+ANALYSIS_END_DATE = "2026-10-16"
 HISTORY_START_TOLERANCE_DAYS = 10
 
 
