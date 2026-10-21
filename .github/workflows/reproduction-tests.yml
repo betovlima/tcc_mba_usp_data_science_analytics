@@ -91,8 +91,8 @@ jobs:
             test "$(git rev-parse "$RELEASE_TAG^{}")" = "$RELEASE_SHA"
             exit 0
           fi
-          git -c user.name='github-actions[bot]' \\
-              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \\
-              tag -a "$RELEASE_TAG" "$RELEASE_SHA" \\
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              tag -a "$RELEASE_TAG" "$RELEASE_SHA" \
               -m 'Release v1.23.0: reproducao validada US$ 587.165.941,13 e contrato congelado'
           git push origin "refs/tags/$RELEASE_TAG"
