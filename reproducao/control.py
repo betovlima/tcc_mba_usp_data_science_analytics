@@ -610,6 +610,10 @@ def executar_control() -> dict[str, Any]:
         flush=True,
     )
 
+    # A pasta pode ter sido removida por uma limpeza externa durante o treino.
+    # Revalidar imediatamente antes da gravação, sem alterar a simulação.
+    OUT.mkdir(parents=True, exist_ok=True)
+    print(f"[TCC] gravando artefatos em {OUT}", flush=True)
     # Outputs funcionais, não mecanismos para vetar a execução.
     result.predictions.to_csv(OUT / "control_equity.csv", index_label="timestamp")
     result.trades.to_csv(OUT / "control_trades.csv", index=False)
