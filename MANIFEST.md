@@ -1672,3 +1672,12 @@ A reprodução confirma o algoritmo e o histórico **na mesma base congelada de 
 Próximo objetivo: estudar uma **assinatura temporal/contextual de pertencimento** para ADICIONAR/MANTER/REMOVER ativos, com redescoberta nested e separação temporal completa. Não transformar o conjunto ótimo full-window em evidência prospectiva nem trocar os candidatos após observar o holdout. A linha v1.18/v1.19 de assinatura matemática utilizou outra referência financeira (U59); sua aplicação ao contexto atual depende de nova validação, não de importação de métricas entre universos.
 
 O roteiro de reprodução **offline**, os arquivos de entrada e as instruções específicas para o console Git versus o Spyder estão em [CONTEXTO_MESTRE.md](CONTEXTO_MESTRE.md). Nada desta seção altera código, hiperparâmetros, hashes ou política de custos.
+
+
+## 27. Executor oficial genérico do universo selecionado (v1.23.0)
+
+A pedido do autor, `reproduzir_experimento.py` deixou de ser um executor limitado ao universo base e passou a reproduzir **o conjunto histórico selecionado de 77 ativos solicitados, 75 efetivos**, com corte em 06/10/2026. A referência base de 65 ativos segue disponível no programa histórico de pesquisa. O novo executor mantém nomes genéricos, enquanto as funções originais da campanha de expansão são reutilizadas pela camada `reproducao/experimento.py` para preservar exatamente o treino, a calibração temporal, os custos, a composição dos caches e o replay.
+
+**Versão do executor:** `1.23.0`; **checkpoint esperado:** `587165941.1330212`; **manifesto de entrada:** `evidencias/manifest_universo_congelado.json`. O manifesto contém a identidade do snapshot congelado e os 20 hashes SHA-256 extraídos do pacote de assurance de 21/10/2026. Os dez pares de arquivos externos permanecem no cache local e **não são automaticamente baixados ou reconstruídos**. Havendo divergência de dados ou capital, a execução falha explicitamente, sem ajustar matemática ou números para forçar o checkpoint.
+
+**Saída:** `output/reproducao_universo/reproducao_universo.json` e `pacote_reproducao_universo.zip`, com série de decisões e resultados; a saída anterior é copiada para backup antes de ser substituída. **Nota de verificabilidade:** o pipeline CI cobre contratos estáticos e testes unitários, mas não dispõe do cache de candidatos; a equivalência financeira em execução completa da nova entrada deve ser confirmada no Spyder e auditada pelo ZIP gerado. As referências históricas do Control base permanecem como evidências da pesquisa, não como objetivo do executor atual.

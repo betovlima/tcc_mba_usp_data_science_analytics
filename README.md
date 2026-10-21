@@ -1,6 +1,6 @@
 # TCC MBA USP — Rotação de Capital com Machine Learning
 
-Release do motor Control de referência: **v1.22.1**; pesquisa de expansão reproduzida em **v1.4.1** e já integrada à `main`. A memória da release, as evidências e as
+Executor oficial do universo selecionado: **v1.23.0** (motor Control histórico v1.22.1); pesquisa de expansão reproduzida em **v1.4.1** e já integrada à `main`. A memória da release, as evidências e as
 pendências estão na seção 24 de [MANIFEST.md](MANIFEST.md).
 
 ## Requisitos
@@ -16,30 +16,27 @@ python -m pip install -r requirements.txt
 
 ## 1. Verifique os dados
 
-A reprodução usa:
+A execução oficial usa **duas fontes congeladas**:
 
 ```text
-dados/u67/
-├── raw_bars/
-├── corporate_actions/
-└── manifest.json
+dados/u67/                         # snapshot base versionado
+  raw_bars/
+  corporate_actions/
+  manifest.json
+dados/.u67_expansion_cache/full_raw_20261006/   # cache local, nao versionado
+  raw_bars/                      # 10 candidatos selecionados
+  corporate_actions/
+evidencias/manifest_universo_congelado.json     # hashes SHA-256 exigidos
 ```
 
 A release inclui o snapshot congelado em `dados/u67/`. Vá direto para a
 execução; os hashes são conferidos antes do treinamento.
 
-Se o snapshot ainda não existir, crie um arquivo `.env` local com:
-
-```text
-ALPACA_API_KEY=sua_api_key
-ALPACA_SECRET_KEY=sua_secret_key
-```
-
-e execute:
-
-```bash
-python preparar_snapshot_u67.py
-```
+**Não execute `preparar_snapshot_u67.py` para reproduzir o checkpoint:**
+isso substituiria a fonte histórica. Sem os dez CSVs locais e os arquivos de
+eventos corporativos com os hashes do manifesto, o programa aborta antes do treino.
+O snapshot base está no Git, mas o cache dos candidatos precisa ser restaurado
+de uma execução histórica preservada.
 
 ## 2. Execute a reprodução
 
@@ -57,7 +54,7 @@ arquivo completo.
 Os artefatos são gravados em:
 
 ```text
-output/reproducao/
+output/reproducao_universo/
 ```
 
 ## 4. Confira o efeito da correção de elegibilidade
@@ -72,7 +69,7 @@ No Spyder, abra `avaliar_elegibilidade_u67.py` e execute o arquivo completo
 com F5. O script compara o filtro antigo e o corrigido com os mesmos modelos
 ajustados, sem baixar dados ou alterar os parâmetros. Os resultados ficam em
 `output/elegibilidade/`. O controle com o filtro antigo serve à auditoria;
-`reproduzir_experimento.py` usa a regra corrigida.
+`reproduzir_experimento.py` reutiliza as rotinas congeladas de decisão da pesquisa de expansão, com a mesma regra causal.
 
 ## 5. Gere as figuras do TCC
 
@@ -92,7 +89,7 @@ As sete figuras em PNG e SVG, as tabelas derivadas e sua procedência ficam em
 `figuras/`. O comando usa as evidências preservadas da execução dev.10; não
 treina modelos nem executa outro backtest. Ele é separado da reprodução.
 
-A reprodução usa os hiperparâmetros fixados pela campanha histórica e calibra
+O executor oficial reproduz o conjunto fixo de 77 ativos solicitados (75 efetivos), cujo capital histórico esperado é **US$ 587.165.941,13**; não realiza nova busca de ativos ou otimização de universo. A reprodução usa os hiperparâmetros fixados pela campanha histórica e calibra
 a margem de troca por busca em grade em cada janela temporal. Ela não repete a
 otimização bayesiana que selecionou os hiperparâmetros.
 
@@ -158,3 +155,10 @@ O checkpoint histórico foi novamente confirmado em **21/10/2026**: Control de 6
 **Antes de rodar:** leia [CONTEXTO_MESTRE.md](CONTEXTO_MESTRE.md), que contém o contrato dos snapshots, a diferença entre a execução financeira inicial e a assurance de expansão, a preparação offline no Spyder, as verificações de hashes e as limitações científicas. O cache extra dos 15 candidatos não está versionado; não é possível prometer US$ 587 milhões em um clone limpo sem os mesmos arquivos. Evite executar `preparar_snapshot_u67.py` ou o runner de expansão com downloads ativos durante a reprodução.
 
 A integração da pesquisa histórica (commit `13e5ed39ed0e700d2eb8c90bc8bee64adc7fdf9a`) à `main` já ocorreu no commit `9d2e279938a2ad271f3ef5e0ac86a18e130c7e4f`. A referência de tag para esta reprodução é `research-u67plus10-challenger-v1.4.1` (confira sua publicação no repositório antes de usá-la). Os resultados completos e alertas de seleção estão em [MANIFEST.md](MANIFEST.md), seção 26, e em [PESQUISA_EXPANSAO_U67.md](PESQUISA_EXPANSAO_U67.md).
+
+
+## Executor oficial do universo selecionado (v1.23.0)
+
+`reproduzir_experimento.py` agora executa o **mesmo replay financeiro de dez candidatos** usado na pesquisa de expansão, e não somente a referência base. O arquivo do executor usa nomenclatura genérica; a adaptação preserva a rotina histórica por trás de `reproducao/experimento.py`, sem duplicar a matemática. A saída é `output/reproducao_universo/pacote_reproducao_universo.zip`.
+
+O código valida primeiro a identidade do snapshot, a composição do universo e os **20 hashes dos CSVs** (barras e eventos de dez ativos). Depois treina a referência e os candidatos por fold, calibra conjuntamente e compara o capital simulado ao checkpoint congelado. Nenhuma chamada de download é feita pelo executor. O cenário é histórico, não uma previsão de resultado futuro. O teste financeiro completo da nova entrada dependerá de execução no Spyder, pois os dez CSVs não estão versionados no Git.

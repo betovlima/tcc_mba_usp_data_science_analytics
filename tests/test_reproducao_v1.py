@@ -236,23 +236,15 @@ def test_lightgbm_parameters_are_frozen() -> None:
     assert settings["random_state"] == 42
 
 
-def test_official_u67_workflow_is_explicitly_sectioned() -> None:
+def test_official_runner_delegates_to_exact_replay() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(encoding="utf-8")
-    assert source.count("# %%") >= 9
-    assert "# %% 1 - Snapshot U67 congelado e versionado" in source
-    assert "# %% 2 - Processamento estrutural do snapshot U67" in source
-    assert "# %% 3 - Calendario e configuracao do universo fixo U67" in source
-    assert "# %% 5 - Treino, calibracao e politica oficial do TCC" in source
-    assert "# %% 6 - Replay financeiro" in source
-    config_source = (ROOT / "engine" / "configuracao.py").read_text(
-        encoding="utf-8"
-    )
-    assert "U67_REQUESTED_ASSETS = ASSETS" in config_source
-    assert "U67_EXPECTED_REQUESTED_COUNT = 67" in config_source
-    assert "U67_EXPECTED_EFFECTIVE_COUNT = 65" in config_source
-    assert 'U67_EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})' in config_source
-    assert "U67_EXPECTED_ENDING_CAPITAL = 76_927_051.38897176" in source
-    assert "_simular_exato(" in source
+    assert "67" not in source
+    assert "reproduzir_universo_congelado(" in source
+    assert "REPRODUCTION_VERSION = \"1.23.0\"" in source
+    assert "EXECUTION_SCHEMA = \"universe-reproduction-v3\"" in source
+    assert "pesquisar_expansao_u67_spyder" not in source
+    assert "download_raw_bars" not in source
+    assert "download_corporate_actions" not in source
 
 
 def test_snapshot_layout_is_csv_per_asset() -> None:
@@ -328,17 +320,17 @@ def test_analysis_end_date_is_inclusive_for_nyse_utc_timestamp() -> None:
     assert pd.Timestamp("2026-09-23 04:00:00+00:00") not in dates
 
 
-def test_official_reproduction_uses_frozen_u67_snapshot() -> None:
-    source = (ROOT / "reproduzir_experimento.py").read_text(
-        encoding="utf-8"
-    ).lower()
-    assert "snapshotpaths.u67(root)" in source
-    assert "validate_snapshot(data)" in source
-    assert "download_raw_bars" not in source
-    assert "download_corporate_actions" not in source
-    assert "load_alpaca_credentials" not in source
-    assert 'csv_float_precision="round_trip"' in source
-    assert 'u67_analysis_end_date = "2026-10-06"' in source
+def test_official_reproduction_uses_exact_input_manifest() -> None:
+    source = (ROOT / "reproduzir_experimento.py").read_text(encoding="utf-8")
+    helper = (ROOT / "reproducao" / "experimento.py").read_text(encoding="utf-8")
+    assert "67" not in source
+    assert "manifest_universo_congelado.json" in helper
+    assert "_train_baseline_states(" in helper
+    assert "_train_candidate_caches(" in helper
+    assert "_evaluate_scenario(" in helper
+    assert "digest(path)" in helper
+    assert "download_raw_bars(" not in helper
+    assert "download_corporate_actions(" not in helper
 
 
 def test_u67_snapshot_preparation_is_separate_from_reproduction() -> None:
@@ -704,22 +696,33 @@ def test_u67_data_is_versioned_and_build_area_is_ignored() -> None:
     assert "!dados/pesquisa/" not in rules
 
 
-def test_official_reproduction_uses_u67_contract() -> None:
-    source = (ROOT / "reproduzir_experimento.py").read_text(
-        encoding="utf-8"
+def test_official_reproduction_uses_selected_universe_contract() -> None:
+    import json
+
+    source = (ROOT / "reproduzir_experimento.py").read_text(encoding="utf-8")
+    contract = json.loads(
+        (ROOT / "evidencias" / "manifest_universo_congelado.json").read_text(
+            encoding="utf-8"
+        )
     )
-    config_source = (ROOT / "engine" / "configuracao.py").read_text(
-        encoding="utf-8"
+    assert "67" not in source
+    assert "76_927_051" not in source
+    assert contract["analysis_end_date"] == "2026-10-06"
+    assert contract["snapshot_sha256"] == (
+        "e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575"
     )
-    assert "DATA = SnapshotPaths.u67(ROOT)" in source
-    assert "U67_REQUESTED_ASSETS = ASSETS" in config_source
-    for asset in ("THO", "WDAY", "EXR", "XEL", "SBFG", "PAYX", "MUX", "SXC"):
-        assert f'"{asset}"' in config_source
-    assert "U67_EXPECTED_REQUESTED_COUNT = 67" in config_source
-    assert "U67_EXPECTED_EFFECTIVE_COUNT = 65" in config_source
-    assert 'U67_EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})' in config_source
-    assert "U67_EXPECTED_CAPITAL_AT_CHECKPOINT = 78_782_538.31270888" in source
-    assert "U67_EXPECTED_ENDING_CAPITAL = 76_927_051.38897176" in source
+    assert contract["expected_ending_capital"] == 587_165_941.1330212
+    assert contract["selected_assets"] == [
+        "CRT", "NBR", "CAPR", "PNBK", "PENN",
+        "JBL", "STAG", "MCHB", "LAD", "TOWN",
+    ]
+    assert len(contract["candidate_file_hashes"]) == 10
+    assert all(
+        len(digests[field]) == 64
+        for digests in contract["candidate_file_hashes"].values()
+        for field in ("raw_sha256", "corporate_actions_sha256")
+    )
+
 
 def test_project_has_no_external_system_reference_token() -> None:
     forbidden_tokens = ("m" + "ct", "market " + "cycle trader")

@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "scope": "historical_selected_universe",
+  "analysis_end_date": "2026-10-06",
+  "snapshot_sha256": "e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575",
+  "baseline_ending_capital": 76927051.38897176,
+  "expected_ending_capital": 587165941.1330212,
+  "selected_assets": [
+    "CRT",
+    "NBR",
+    "CAPR",
+    "PNBK",
+    "PENN",
+    "JBL",
+    "STAG",
+    "MCHB",
+    "LAD",
+    "TOWN"
+  ],
+  "candidate_file_hashes": {
+    "CRT": {
+      "raw_sha256": "0898cfd4dbefb25e3d60fe4917db0260fea16841d1b7cdc4912683287e8414ac",
+      "corporate_actions_sha256": "14d9828157e4ae2c05fc1b8b0eaf254c312bd4cf863f12192865e40fe7592a28"
+    },
+    "NBR": {
+      "raw_sha256": "1bfe3f11517da57fcfd601a4842981ec28f6e07f14a6ef01fcfa5e7288011b42",
+      "corporate_actions_sha256": "e60d60676bee02280c9d9defb0e240a79b89a7a9501be89cbad17da025682e32"
+    },
+    "CAPR": {
+      "raw_sha256": "c55a05060bc73e5234efc4b188da644c3177219afe1f1afb02bf597d540f0813",
+      "corporate_actions_sha256": "37ffee05ca73077b2c902f670b824ed9bd45e7286e0d4d79a48bdab39260a534"
+    },
+    "PNBK": {
+      "raw_sha256": "bdc7f8aa1fa929ffbe974cd89013ebc1885ecd8b1c05c137b1f10cc5aeeef8a5",
+      "corporate_actions_sha256": "9d55082d3c70b4314b4e3eece88a52b87343b8e9657b733337260e08a0b3edf0"
+    },
+    "PENN": {
+      "raw_sha256": "297c8314daff24c87da062eb91eebcd58df8132a2b93574d4127d441359946e4",
+      "corporate_actions_sha256": "01fa02784451eb160e578aa5bed3dc6cc74a2a4a16cc780db56047b11e2d5f74"
+    },
+    "JBL": {
+      "raw_sha256": "7b1d4d9c087d883442386dcfba04098694f17886ee76ad975c2790a314d05fbc",
+      "corporate_actions_sha256": "813079a766da9d072a99b7ca91a7c6edebb4f1c28b9e70b0b6927633435da35f"
+    },
+    "STAG": {
+      "raw_sha256": "c60ad99f4036001553f40a3c33198cc3e12fba0271732d6c91d3ddef07a5a02e",
+      "corporate_actions_sha256": "3165928b0f7cc85f7f6ec30389414fa9a7a0aa10beb0d6e3d51a4484a5c7dc9f"
+    },
+    "MCHB": {
+      "raw_sha256": "e9f8491272e84bbe67dac62ba7cc2ab02e3710011fffac830c535305b2dd2139",
+      "corporate_actions_sha256": "9f2ebaed5a5cc20954691ecbac1cebd87fa2d13b1d452376f5f848a1bc9f0d2c"
+    },
+    "LAD": {
+      "raw_sha256": "cfc337fa882b6316f6353a54f387033dbcb09c83dfb88d55df2da894922d4b19",
+      "corporate_actions_sha256": "af6e236be67b0e7d8bda4f03ee3a395c42e0724f6f4d87f00078c7bfe1e85404"
+    },
+    "TOWN": {
+      "raw_sha256": "7e7e9532a9af4104aff101aade9febb77138116d2eccfedd5fde1b2c6c4e0b8c",
+      "corporate_actions_sha256": "126e3787821ee28171f54def90605a78fc4c62a6f7c7f512be44cd597356dde5"
+    }
+  },
+  "source_provenance": "pacote_analise_u67_assurance_validation(1).zip / pesquisa_u67_assurance_validation.json",
+  "extra_data_location": "dados/.u67_expansion_cache/full_raw_20261006",
+  "extra_data_in_git": false
+}
