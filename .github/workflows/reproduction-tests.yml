@@ -66,3 +66,33 @@ jobs:
               tag -a "$RELEASE_TAG" "$RELEASE_SHA" \
               -m 'Release v1.22.1: elegibilidade corrigida, referência no mesmo universo, diagnósticos e figuras verificadas'
           git push origin "refs/tags/$RELEASE_TAG"
+
+
+  tag_release_v1_23_0:
+    needs: tests
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      startsWith(github.event.head_commit.message, 'Release v1.23.0: reproducao oficial do universo selecionado')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Criar tag anotada v1.23.0 apos os testes
+        env:
+          RELEASE_TAG: v1.23.0
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            test "$(git rev-parse "$RELEASE_TAG^{}")" = "$RELEASE_SHA"
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \\
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \\
+              tag -a "$RELEASE_TAG" "$RELEASE_SHA" \\
+              -m 'Release v1.23.0: reproducao validada US$ 587.165.941,13 e contrato congelado'
+          git push origin "refs/tags/$RELEASE_TAG"

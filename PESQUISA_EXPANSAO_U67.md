@@ -917,3 +917,10 @@ A campanha **v1.4.1**, `RUN_MODE="assurance_validation"`, voltou a reproduzir **
 O código v1.4.1 possui downloads da Alpaca na preparação dos candidatos. Para não substituir o cache, a execução de confirmação empregou interceptação **somente em memória** das rotinas de download no Spyder; o script versionado, os modelos e a estratégia não foram modificados. Um novo download ou cutoff não é a mesma experiência. Consulte [CONTEXTO_MESTRE.md](CONTEXTO_MESTRE.md) para o procedimento offline completo.
 
 **Interpretação:** a exatidão é de reprodução histórica, não de validação prospectiva de seleção de universo. Os 15 candidatos foram descobertos na janela completa. Os testes de seleção temporal num pool fixo, os 38/45 alertas de overfit e os valores PBO de 53,57%/59,52% continuam relevantes. Prioridade científica posterior: assinatura temporal/contextual e descoberta nested de ativos sem vazamento de informação futura.
+
+
+## Encerramento do executor oficial v1.23.0 (21/10/2026)
+
+A rotina `reproduzir_experimento.py` passou a reproduzir, sem realizar nova busca ou atualização de dados, o conjunto fixo de dez candidatos já selecionados nesta pesquisa, com 77 ativos solicitados e 75 efetivos. A execução real no Spyder registrou **US$ 587.165.941,1330212**, exatamente o checkpoint de `decision_validation`/`assurance_validation`, e `reproduced_exact_to_cent=true`. O pacote `pacote_reproducao_universo.zip`, SHA-256 `0c3518387556f147897baf121cb089f532f8355a8bb074c91fe0a6b5ec4b6ac8`, inclui 1.560 previsões/sessões e 710 registros de negociação. A saída é `output/reproducao_universo/`.
+
+Essa validação confirma a **reprodução de um cenário selecionado retrospectivamente**, não uma seleção de novos candidatos fora da amostra. A investigação sobre assinatura temporal de pertencimento, o alerta de PBO e a ausência de redescoberta nested prospectiva permanecem assuntos científicos abertos. O manifesto `evidencias/manifest_universo_congelado.json` fixa os hashes dos arquivos históricos adicionais; os respectivos CSVs continuam fora do controle de versão. Ver seção 28 do `MANIFEST.md` e seção 8 de `CONTEXTO_MESTRE.md`.

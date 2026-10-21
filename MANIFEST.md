@@ -6,7 +6,9 @@ Este arquivo consolida em um único lugar o histórico técnico, as decisões
 metodológicas, a arquitetura final, os resultados, as refatorações, os testes e
 a avaliação crítica do projeto no contrato científico descrito abaixo.
 
-Release e baseline científico documentados:
+**Estado oficial atual: release `v1.23.0`**, executor do universo selecionado, validado em 21/10/2026; consultar a seção 28. O bloco abaixo é um registro **histórico** da release anterior, não a versão oficial atual.
+
+Release e baseline científico anteriormente documentados:
 
 ```text
 versão: 1.22.1
@@ -1680,4 +1682,51 @@ A pedido do autor, `reproduzir_experimento.py` deixou de ser um executor limitad
 
 **Versão do executor:** `1.23.0`; **checkpoint esperado:** `587165941.1330212`; **manifesto de entrada:** `evidencias/manifest_universo_congelado.json`. O manifesto contém a identidade do snapshot congelado e os 20 hashes SHA-256 extraídos do pacote de assurance de 21/10/2026. Os dez pares de arquivos externos permanecem no cache local e **não são automaticamente baixados ou reconstruídos**. Havendo divergência de dados ou capital, a execução falha explicitamente, sem ajustar matemática ou números para forçar o checkpoint.
 
-**Saída:** `output/reproducao_universo/reproducao_universo.json` e `pacote_reproducao_universo.zip`, com série de decisões e resultados; a saída anterior é copiada para backup antes de ser substituída. **Nota de verificabilidade:** o pipeline CI cobre contratos estáticos e testes unitários, mas não dispõe do cache de candidatos; a equivalência financeira em execução completa da nova entrada deve ser confirmada no Spyder e auditada pelo ZIP gerado. As referências históricas do Control base permanecem como evidências da pesquisa, não como objetivo do executor atual.
+**Saída:** `output/reproducao_universo/reproducao_universo.json` e `pacote_reproducao_universo.zip`, com série de decisões e resultados; a saída anterior é copiada para backup antes de ser substituída. **Nota de verificabilidade:** o pipeline CI cobre contratos estáticos e testes unitários, mas não dispõe do cache de candidatos. A equivalência financeira foi posteriormente **confirmada no Spyder em 21/10/2026**, conforme o pacote auditado e a seção 28. Isso não torna o cache automaticamente disponível em um novo clone. As referências históricas do Control base permanecem como evidências da pesquisa, não como objetivo do executor atual.
+
+
+## 28. Release v1.23.0 — reprodução integral do universo selecionado (21/10/2026)
+
+### 28.1 Entrega, identidade e escopo
+
+A versão **`v1.23.0`** passa a identificar o **executor oficial** `reproduzir_experimento.py` para o universo selecionado: **77 ativos solicitados e 75 efetivos**. O código do executor usa nomenclatura genérica, sem codificar no nome do arquivo o tamanho do universo histórico. A implementação reutiliza `reproducao/experimento.py` e as funções científicas originais de `pesquisar_expansao_u67_spyder.py` para manter o caminho de treinamento, calibração da margem e replay financeiro. Esta não é uma nova estratégia otimizada nem uma nova janela de dados.
+
+O código funcional da v1.23.0 já estava integrado à `main` nos commits `2fcba6ddb7676ab54f27b0107a7807be2fe14bcf` e `01b5d13464e224ab49463862221f132e7f5b5355`. Este registro atualiza a **documentação**, ativa a criação da tag anotada `v1.23.0` após a CI aprovada e não executa merge redundante. A tag `research-u67plus10-challenger-v1.4.1` permanece referência histórica independente.
+
+### 28.2 Evidência empírica do executor oficial
+
+A execução real foi concluída em **21/10/2026**, com `status=completed`, `execution_schema=universe-reproduction-v3`, `reproduction_version=1.23.0`, `reproduced_exact_to_cent=true` e `analysis_end_date=2026-10-06`. O usuário forneceu o arquivo `pacote_reproducao_universo.zip`, SHA-256:
+
+```text
+0c3518387556f147897baf121cb089f532f8355a8bb074c91fe0a6b5ec4b6ac8
+```
+
+O conteúdo do ZIP foi conferido: **29 arquivos**; `reproducao_universo.json`, `predictions.csv` (**1.560 linhas de sessões**), `trades.csv` (**710 registros**), listas de ativos e exclusões, calibrações, auditoria de continuidade e gráficos/planilha. Os resultados registrados são:
+
+| Indicador no período congelado | Resultado |
+|---|---:|
+| Capital inicial | US$ 10.000,00 |
+| Capital final esperado | US$ 587.165.941,1330212 |
+| Capital final observado | **US$ 587.165.941,1330212** |
+| Diferença absoluta | **US$ 0,00** |
+| Ativos solicitados / efetivos | 77 / 75 |
+| Ativos excluídos por identidade estrutural | DOC, CLMT |
+| Ativos acrescentados à referência | CRT, NBR, CAPR, PNBK, PENN, JBL, STAG, MCHB, LAD, TOWN |
+| Rotações de capital | 354 |
+| Sharpe | 2,7285355361749786 |
+| Drawdown máximo | -41,682836376988985% |
+| Benchmark compra e manutenção | US$ 31.548,767358399888 |
+
+O manifesto do snapshot-base retornou a identidade `e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575`. A execução produziu hashes das barras e dos eventos corporativos dos dez candidatos, conforme `evidencias/manifest_universo_congelado.json`. A campanha anteriormente auditada nos modos `decision_validation` e `assurance_validation` chegou ao mesmo capital final.
+
+### 28.3 Condições de reprodução e interpretação científica
+
+O executor oficial **não baixa novas séries, não usa banco de dados e não procura novos ativos**. Os 20 arquivos CSV adicionais, correspondentes a dez séries de barras e dez arquivos de Corporate Actions, dependem do cache local histórico em `dados/.u67_expansion_cache/full_raw_20261006/` e **não estão no Git**. Se os hashes divergirem, a execução deve falhar, sem forçar o checkpoint por reconstrução ou download. Antes de rodar, é obrigatório conferir o contrato em `evidencias/manifest_universo_congelado.json`.
+
+A versão está **validada financeiramente no ambiente executado pelo autor**, sobre a base congelada de descoberta. Isso não equivale a replicação em ambiente independente sem o cache histórico nem comprova seleção prospectiva dos dez candidatos: estes foram identificados retrospectivamente. A análise da PBO e os limites da seleção são preservados na seção 25 e em `PESQUISA_EXPANSAO_U67.md`.
+
+### 28.4 Continuidade do projeto
+
+Para atualizar o projeto, utilizar o **console Git**; para executar o Python, o **console IPython do Spyder**. O ponto de entrada é `reproduzir_experimento.py`; a saída é `output/reproducao_universo/pacote_reproducao_universo.zip`. Os scripts de pesquisa anteriores permanecem disponíveis e não devem substituir o executor oficial. A documentação de continuidade está em `CONTEXTO_MESTRE.md` e o roteiro de uso em `README.md`.
+
+A tag `v1.23.0` deve apontar ao commit de release **após CI bem-sucedida**. A criação e sua referência remota precisam ser verificadas; a ausência do tag é falha de publicação, não falha do backtest.
