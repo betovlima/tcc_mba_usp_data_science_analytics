@@ -156,10 +156,17 @@ def preparar_cenario(
         quadros_base, datas_comuns, fonte_calendario, simbolos_base,
         folds, datas_decisao, decisao_fold, metadados_decisao,
     ) = pesquisa._construir_contexto_execucao(raw_base, config_alvo)
-    if calendario_referencia is not None and not datas_decisao.equals(
+    # O calendario de decisoes inclui a observacao inicial (N+1 datas).
+    # A curva patrimonial usa apenas as N datas de execucao (a partir de [1:]).
+    # Comparar execucao com execucao evita falso positivo nos cenarios B/C/D.
+    datas_execucao = pd.DatetimeIndex(datas_decisao[1:])
+    if calendario_referencia is not None and not datas_execucao.equals(
         calendario_referencia
     ):
-        raise RuntimeError(f"{nome}: calendario de teste mudou.")
+        raise RuntimeError(
+            f"{nome}: calendario de execucao realmente mudou "
+            f"(atual={len(datas_execucao)}, referencia={len(calendario_referencia)})."
+        )
 
     # Os treinos usam os rotulos dos quadros_base, mas as regras de calibracao
     # continuam com o config_original em todos os quatro cenarios.
