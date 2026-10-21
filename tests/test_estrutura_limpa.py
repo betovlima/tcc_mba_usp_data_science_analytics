@@ -43,7 +43,7 @@ def test_regras_aprovadas_ficam_no_motor_congelado() -> None:
 
 
 def test_snapshot_e_evidencias_sao_preservados() -> None:
-    assert (ROOT / "dados" / "referencia" / "manifest.json").is_file()
+    assert (ROOT / "dados" / "universo.json").is_file()
     assert (ROOT / "evidencias" / "eligibilidade_v1.22.0-dev.10.json").is_file()
     assert (ROOT / "figuras" / "procedencia_figuras.json").is_file()
 
