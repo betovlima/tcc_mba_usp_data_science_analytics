@@ -4,9 +4,10 @@ Spyder: execute este arquivo com F5, a partir da branch de pesquisa.
 Nao acessa Alpaca, nao atualiza series e nao altera a reproducao oficial.
 Requer os MESMOS arquivos congelados e o cache local do experimento oficial.
 
-Desenho: os alvos sao recalculados para cada cenario; treino e previsoes
-sao refeitos. Os coeficientes e a regra de calibracao/execucao permanecem
-fixos na configuracao ORIGINAL, isolando a mudanca da variavel-alvo.
+Desenho: reutiliza o controle A ja auditado da primeira ablação;
+retreina B, C e D com alvos modificados e aplica em todos os folds as margens
+selecionadas por A. Preserva separadamente a ablação com recalibracao.
+A margem efetiva minima da politica continua sendo 0.0005.
 """
 
 from __future__ import annotations
