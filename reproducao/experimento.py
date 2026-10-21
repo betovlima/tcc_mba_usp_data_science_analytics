@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -97,8 +98,8 @@ def summarize_metrics(
 
 def reproduzir_universo_congelado(
     *,
-    root: "Path",
-    output: "Path",
+    root: Path,
+    output: Path,
     version: str,
     execution_schema: str,
 ) -> dict[str, Any]:
@@ -110,7 +111,6 @@ def reproduzir_universo_congelado(
     exatamente aos hashes versionados em evidencias/.
     """
     from datetime import datetime
-    from pathlib import Path
     import hashlib
     import json
     import math
