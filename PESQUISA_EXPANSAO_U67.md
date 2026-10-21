@@ -906,3 +906,14 @@ Ainda permanecem sem resposta causal suficiente:
 O cache atual contém os dados de mercado necessários para aprofundar essas
 perguntas sem novo download dos 500 candidatos. O que falta são rótulos
 contrafactuais temporais mais densos, produzidos pelo próprio replay controlado.
+
+
+## Reprodução histórica conferida em 21/10/2026
+
+A campanha **v1.4.1**, `RUN_MODE="assurance_validation"`, voltou a reproduzir **US$ 76.927.051,38897176** no Control inicial, **US$ 290.727.954,41339606** no grupo de 15 e **US$ 587.165.941,1330212** com os dez selecionados. O pacote recebido (`pacote_analise_u67_assurance_validation(1).zip`, SHA-256 `0f06561e9685b3e84194580c50a6808e4c84d30a55584b97bd19dae2fafd6c37`) registra `status=completed` e replays com capital, escolhas e curva idênticos (`exact_to_cent=true`, `selected_asset_sequence_identical=true`, `max_equity_absolute_difference=0.0`).
+
+**Condições essenciais:** cutoff 06/10/2026, snapshot `dados/u67` com SHA `e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575`, 67 originais/65 efetivos (excluindo DOC e CLMT), mais 15 caches RAW e Corporate Actions em `dados/.u67_expansion_cache/full_raw_20261006/`. Esses 15 pares de CSV são arquivos locais não versionados no Git. A garantia de reprodução requer preservar os arquivos **e seus hashes** listados no pacote, e não apenas os tickers.
+
+O código v1.4.1 possui downloads da Alpaca na preparação dos candidatos. Para não substituir o cache, a execução de confirmação empregou interceptação **somente em memória** das rotinas de download no Spyder; o script versionado, os modelos e a estratégia não foram modificados. Um novo download ou cutoff não é a mesma experiência. Consulte [CONTEXTO_MESTRE.md](CONTEXTO_MESTRE.md) para o procedimento offline completo.
+
+**Interpretação:** a exatidão é de reprodução histórica, não de validação prospectiva de seleção de universo. Os 15 candidatos foram descobertos na janela completa. Os testes de seleção temporal num pool fixo, os 38/45 alertas de overfit e os valores PBO de 53,57%/59,52% continuam relevantes. Prioridade científica posterior: assinatura temporal/contextual e descoberta nested de ativos sem vazamento de informação futura.

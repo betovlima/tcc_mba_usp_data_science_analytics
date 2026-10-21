@@ -1617,3 +1617,58 @@ pesquisa sobre o cadastro, o backtest nem a possibilidade de adotar o
 Challenger como Winner no ambiente operacional. A redação anterior sobre
 etapas extras de homologação foi retirada. Esta alteração de documentação
 não modifica os resultados numéricos nem a política de universo congelada.
+
+
+## 26. Recuperação e reprodução independente da campanha v1.4.1 (21/10/2026)
+
+### 26.1 Identidade versionada e integração à main
+
+O autor solicitou preservar a campanha histórica do commit `13e5ed39ed0e700d2eb8c90bc8bee64adc7fdf9a` na `main` e registrar um ponto de recuperação para estudos futuros. O GitHub já mostrava a integração pelo **merge `9d2e279938a2ad271f3ef5e0ac86a18e130c7e4f`** (18/10/2026 UTC), com a branch histórica em `13e5ed39ed0e700d2eb8c90bc8bee64adc7fdf9a`. Assim, este registro **não reexecuta o merge nem substitui o código científico**, apenas acrescenta documentação à main existente.
+
+**Identificador da tag de congelamento solicitada:** `research-u67plus10-challenger-v1.4.1`. A instrução histórica da seção 25.10 previa uma tag no commit da branch; a solicitação posterior do autor prevalece: o ponto de recuperação deve incluir esta documentação e estar na `main`. Verificar se a ref de tag foi de fato criada/publicada antes de apresentar a tag como existente.
+
+### 26.2 Fonte de dados e restauração do checkpoint
+
+No primeiro teste com o cache local alterado, o Control base produziu **US$ 45.493.884,10360689**, em vez de US$ 76.927.051,38897176. O arquivo `dados/u67/manifest.json` local tinha um SHA de identidade diferente. A restauração **somente dos dados históricos versionados**, preservando backup dos dados anteriores, recuperou:
+
+```text
+snapshot_sha256 = e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575
+feed             = Alpaca SIP
+adjustment       = RAW
+timeframe        = 1Day
+start            = 2016-01-01
+analysis_end     = 2026-10-06
+requested_base   = 67
+effective_base   = 65
+structural_exclusions = DOC, CLMT
+```
+
+Os 15 candidatos externos estavam no **cache local ignorado pelo Git** em `dados/.u67_expansion_cache/full_raw_20261006/raw_bars/` e `corporate_actions/`. Todos os arquivos estavam presentes na reprodução; os CSVs de barras dos cinco candidatos adicionais também terminaram em 06/10/2026. A assurance foi executada no Spyder sem coleta nova, por interceptação temporária das funções de download na memória do interpretador, sem mudar o script ou as configurações dos modelos. **As duas fontes (snapshot-base versionado e cache de candidatos local) precisam ser preservadas juntas** para uma reprodução idêntica.
+
+### 26.3 Evidências recebidas e resultados
+
+A execução concluída foi `u67-asset-expansion-v1.4.1`, `RUN_MODE=assurance_validation`, esquema `u67-asset-expansion-v5`, `status=completed`. O autor forneceu `pacote_analise_u67_assurance_validation(1).zip` com SHA-256 `0f06561e9685b3e84194580c50a6808e4c84d30a55584b97bd19dae2fafd6c37`.
+
+| Cenário | Capital final (US$) | Checkpoint |
+|---|---:|---|
+| Control original, 65 ativos efetivos | 76.927.051,38897176 | restaurado e exato |
+| Control + 15 candidatos | 290.727.954,41339606 | `all_15_exact_to_cent=true` |
+| Control + 10 selecionados | 587.165.941,1330212 | `selected_10_exact_to_cent=true` |
+
+`reproducibility.json` confirmou `exact_to_cent=true`, `selected_asset_sequence_identical=true` e `max_equity_absolute_difference=0.0` **entre dois replays da campanha restaurada**. Para os dez selecionados: Sharpe **2,7285355362**, drawdown máximo **-41,68283638%**. Stress de slippage de 5 bps resultou em **US$ 411.668.837,00**; de 10 bps, em **US$ 288.628.398,50**. O diagnóstico de treino registrou **38 alertas de overfit entre 45 avaliações candidato-fold**; 7 tiveram habilidade OOS acima da previsão ingênua.
+
+Os dez selecionados, em ordem, foram:
+
+```text
+CRT,NBR,CAPR,PNBK,PENN,JBL,STAG,MCHB,LAD,TOWN
+```
+
+Este conjunto amplia os 67 solicitados para **77 solicitados e 75 efetivos**, respeitando a exclusão estrutural de DOC e CLMT. Não implica que 75 ativos estavam igualmente expostos ou operaram em todas as sessões.
+
+### 26.4 Limitações e próximo passo científico
+
+A reprodução confirma o algoritmo e o histórico **na mesma base congelada de descoberta**. Não comprova descoberta prospectiva de novos ativos: os 15 candidatos haviam sido escolhidos com acesso à janela completa antes dos testes temporais. A PBO registrada é **53,57% (log-growth)** e **59,52% (Sharpe)**; são alertas de seleção, não vetos operacionais automáticos. A comparação em novo cutoff ou com dados atuais da Alpaca é **outro experimento**, não uma falha automática de reprodução.
+
+Próximo objetivo: estudar uma **assinatura temporal/contextual de pertencimento** para ADICIONAR/MANTER/REMOVER ativos, com redescoberta nested e separação temporal completa. Não transformar o conjunto ótimo full-window em evidência prospectiva nem trocar os candidatos após observar o holdout. A linha v1.18/v1.19 de assinatura matemática utilizou outra referência financeira (U59); sua aplicação ao contexto atual depende de nova validação, não de importação de métricas entre universos.
+
+O roteiro de reprodução **offline**, os arquivos de entrada e as instruções específicas para o console Git versus o Spyder estão em [CONTEXTO_MESTRE.md](CONTEXTO_MESTRE.md). Nada desta seção altera código, hiperparâmetros, hashes ou política de custos.
