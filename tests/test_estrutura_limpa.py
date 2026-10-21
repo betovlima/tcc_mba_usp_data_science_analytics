@@ -73,22 +73,15 @@ def test_busca_avisos_sonoros_diferenciam_sucesso_de_erro(monkeypatch) -> None:
     assert calls == [(440, 420), (330, 470)]
 
 
-def test_universo_independente_de_cardinalidade(tmp_path, monkeypatch) -> None:
+def test_universo_independente_de_cardinalidade() -> None:
     import json
-    import engine.configuracao as configuracao
+    from engine.configuracao import ASSETS, carregar_universo
 
-    names = ["AAA", "BBB", "CCC"]
-    path = tmp_path / "universo.json"
-    path.write_text(json.dumps({"assets": names}), encoding="utf-8")
-    original_read_text = Path.read_text
-
-    def fake_read_text(self, *args, **kwargs):
-        if self.name == "universo.json":
-            return path.read_text(encoding="utf-8")
-        return original_read_text(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "read_text", fake_read_text)
-    assert configuracao.carregar_universo() == tuple(names)
+    payload = json.loads(
+        (ROOT / "dados" / "universo.json").read_text(encoding="utf-8")
+    )
+    assert carregar_universo() == ASSETS == tuple(payload["assets"])
+    assert len(ASSETS) == len(set(ASSETS))
 
 
 def test_etapas_treinamento_sao_subconjunto_do_universo() -> None:
