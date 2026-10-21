@@ -85,5 +85,18 @@
     "feed": "sip",
     "adjustment": "raw",
     "timeframe": "1Day"
-  }
+  },
+  "staged_training_assets": [
+    "CRT",
+    "NBR",
+    "CAPR",
+    "PNBK",
+    "PENN",
+    "JBL",
+    "STAG",
+    "MCHB",
+    "LAD",
+    "TOWN"
+  ],
+  "training_method": "original_independent_asset_models_with_two_stage_cache_assembly"
 }
