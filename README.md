@@ -1,7 +1,6 @@
 # TCC MBA USP — Rotação de Capital com Machine Learning
 
-Release: **v1.22.1**, integrada à `main` a partir de
-`fix/u67-eligibilidade-sem-futuro`. A memória da release, as evidências e as
+Release do motor Control de referência: **v1.22.1**; pesquisa de expansão reproduzida em **v1.4.1** e já integrada à `main`. A memória da release, as evidências e as
 pendências estão na seção 24 de [MANIFEST.md](MANIFEST.md).
 
 ## Requisitos
@@ -150,3 +149,12 @@ python finalizar_u67_decision_validation_spyder.py
 ```
 
 No Spyder, abra esse arquivo e execute com F5.
+
+
+## Reproduzir a campanha histórica de US$ 587 milhões
+
+O checkpoint histórico foi novamente confirmado em **21/10/2026**: Control de 65 ativos **US$ 76.927.051,39**; Control com 15 candidatos **US$ 290.727.954,41**; Control com dez selecionados **US$ 587.165.941,13**, para cutoff de **06/10/2026**. Esta é a campanha de pesquisa `u67-asset-expansion-v1.4.1`, não uma alteração do algoritmo ou das configurações do motor `v1.22.1`.
+
+**Antes de rodar:** leia [CONTEXTO_MESTRE.md](CONTEXTO_MESTRE.md), que contém o contrato dos snapshots, a diferença entre a execução financeira inicial e a assurance de expansão, a preparação offline no Spyder, as verificações de hashes e as limitações científicas. O cache extra dos 15 candidatos não está versionado; não é possível prometer US$ 587 milhões em um clone limpo sem os mesmos arquivos. Evite executar `preparar_snapshot_u67.py` ou o runner de expansão com downloads ativos durante a reprodução.
+
+A integração `research/mct-final-582` → `main` já ocorreu no commit `9d2e279938a2ad271f3ef5e0ac86a18e130c7e4f`. A referência de tag para esta reprodução é `research-u67plus10-challenger-v1.4.1` (confira sua publicação no repositório antes de usá-la). Os resultados completos e alertas de seleção estão em [MANIFEST.md](MANIFEST.md), seção 26, e em [PESQUISA_EXPANSAO_U67.md](PESQUISA_EXPANSAO_U67.md).
