@@ -15,6 +15,7 @@ import gc
 import hashlib
 import json
 import math
+import shutil
 import time
 import zipfile
 from pathlib import Path
@@ -37,8 +38,9 @@ import pesquisar_expansao_u67_spyder as pesquisa
 
 
 ROOT = Path(__file__).resolve().parent
-OUT = ROOT / "output" / "ablacao_utilidade_risco"
-SCHEMA = "tcc-risk-target-ablation-v1"
+OUT = ROOT / "output" / "ablacao_utilidade_risco_margens_fixas"
+ANTERIOR = ROOT / "output" / "ablacao_utilidade_risco"
+SCHEMA = "tcc-risk-target-ablation-fixed-margins-v2"
 TOLERANCIA_CAPITAL = 0.01
 
 
@@ -137,6 +139,117 @@ def episodios_da_curva(curva: pd.Series) -> tuple[pd.DataFrame, dict]:
     return resultado, stats
 
 
+def controle_A_anterior(contrato: dict, snapshot: dict, config) -> tuple:
+    """Carrega apenas A, ja validado na ablação recalibrada, e suas margens."""
+    manifest = ANTERIOR / "manifesto_execucao.json"
+    origem = ANTERIOR / "A_ORIGINAL"
+    obrigatorios = [
+        manifest, origem / "indicadores.json", origem / "predictions.csv",
+        origem / "calibracao_margens.csv", ANTERIOR / "comparacao_cenarios.csv",
+    ]
+    faltam = [str(p) for p in obrigatorios if not p.is_file()]
+    if faltam:
+        raise FileNotFoundError(
+            "Nao achei a ablação anterior em output/ablacao_utilidade_risco. "
+            "Restaure o pacote_ablacao_utilidade_risco.zip em output/. "
+            "Arquivos ausentes: " + ", ".join(faltam)
+        )
+    anterior_manifest = json.loads(manifest.read_text(encoding="utf-8"))
+    if (
+        anterior_manifest.get("schema") != "tcc-risk-target-ablation-v1"
+        or anterior_manifest.get("checkpoint_exato_centavos") is not True
+        or anterior_manifest.get("snapshot_sha256") != snapshot["snapshot_sha256"]
+        or anterior_manifest.get("analysis_end_date") != contrato["analysis_end_date"]
+        or anterior_manifest.get("candidate_file_hashes") != contrato["candidate_file_hashes"]
+    ):
+        raise RuntimeError("Manifesto da ablação anterior nao confere com o snapshot.")
+
+    info = json.loads((origem / "indicadores.json").read_text(encoding="utf-8"))
+    esperado = float(contrato["expected_ending_capital"])
+    if not math.isclose(float(info["capital_final"]), esperado, rel_tol=0, abs_tol=TOLERANCIA_CAPITAL):
+        raise RuntimeError("Capital do controle anterior diverge do oficial.")
+    if (not math.isclose(float(info["coef_downside_no_rotulo"]), float(config.rotation_downside_penalty),
+                         abs_tol=1e-12)
+        or not math.isclose(float(info["coef_drawdown_no_rotulo"]), float(config.rotation_drawdown_penalty),
+                            abs_tol=1e-12)):
+        raise RuntimeError("Coeficientes do controle A anterior divergem.")
+
+    df = pd.read_csv(origem / "calibracao_margens.csv")
+    campos = {"fold_id", "candidate_margin", "selected"}
+    if not campos.issubset(df.columns):
+        raise RuntimeError("Tabela de margens anterior incompleta.")
+    escolhidas = df[df["selected"].astype(str).str.lower() == "true"]
+    if (len(escolhidas) != len(info["folds"]) or
+            escolhidas["fold_id"].duplicated().any()):
+        raise RuntimeError("A deve ter exatamente uma margem selecionada por fold.")
+    margens = {int(item.fold_id): float(item.candidate_margin)
+               for item in escolhidas.itertuples(index=False)}
+    if any(not np.isfinite(x) or x < 0 for x in margens.values()):
+        raise RuntimeError("Margens originais invalidas.")
+    pred = pd.read_csv(origem / "predictions.csv", index_col=0)
+    pred.index = pd.to_datetime(pred.index, utc=True)
+    if (pred.index.has_duplicates or not pred.index.is_monotonic_increasing or
+            len(pred) != int(info["sessoes"])):
+        raise RuntimeError("Calendario do controle anterior invalido.")
+    curva = pred["strategy_equity"].astype(float).rename("A_ORIGINAL")
+    if not math.isclose(float(curva.iloc[-1]), esperado, rel_tol=0,
+                        abs_tol=TOLERANCIA_CAPITAL):
+        raise RuntimeError("Ultimo valor da curva do controle divergente.")
+    ativos = pred["selected_asset"].fillna("CASH").astype(str).rename("A_ORIGINAL")
+    shutil.copytree(origem, OUT / "A_ORIGINAL", dirs_exist_ok=True)
+    print("[controle] A validado; margens originais: ", margens, flush=True)
+    return margens, curva, ativos, info
+
+
+def avaliar_margens_fixas(nome, selecionados, quadros_base, adicionais,
+                           simbolos_base, estados, modelos_adicionais, folds,
+                           datas_decisao, decisao_fold, metadados_decisao,
+                           config_original, margens_fixas):
+    """Copia o replay cientifico, substituindo apenas a margem de cada fold."""
+    simbolos = sorted([*simbolos_base, *selecionados])
+    quadros = dict(quadros_base)
+    quadros.update({a: adicionais[a] for a in selecionados})
+    config = pesquisa.construir_configuracao_controle(
+        config_original, assets=simbolos
+    )
+    politicas, margens_usadas = {}, []
+    for estado in estados:
+        fold_id = int(estado.fold_id)
+        if fold_id not in margens_fixas:
+            raise RuntimeError(f"{nome}: sem margem original para fold {fold_id}")
+        margem_calibrada = float(margens_fixas[fold_id])
+        margem_efetiva = max(float(config.rotation_switch_margin), margem_calibrada)
+        caches = {a: modelos_adicionais[a][fold_id].decision_cache for a in selecionados}
+        cache_decisao = pesquisa._merge_utility_caches(
+            estado.decision_cache, simbolos_base, caches, simbolos
+        )
+        politicas[fold_id] = pesquisa._politica_utilidade(
+            {}, quadros, simbolos, config, margem_efetiva,
+            fold_id=fold_id, calibrated_switch_margin=margem_calibrada,
+            utility_cache=cache_decisao
+        )
+        margens_usadas.append({
+            "cenario": nome, "fold_id": fold_id,
+            "margem_calibrada_original": margem_calibrada,
+            "margem_efetiva_aplicada": margem_efetiva,
+            "origem": "A_ORIGINAL/calibracao_margens.csv"
+        })
+        print(f"[{nome}] fold {fold_id}: margem efetiva fixa={margem_efetiva:.4f}", flush=True)
+    resultado = pesquisa._simular_exato(
+        "tcc_u67_asset_expansion",
+        pesquisa._politica_agendada(politicas, decisao_fold),
+        quadros, simbolos, datas_decisao, config,
+        pesquisa.calcular_taxas_referencia, pesquisa.aplicar_deslizamento,
+        decision_metadata=metadados_decisao,
+        model_label=f"TCC {nome} - margens fixas do original",
+        method_line="- Ablacao de rotulo, margens originais por fold."
+    )
+    indicadores = pesquisa._scenario_metrics(
+        resultado, folds, float(config.initial_capital)
+    )
+    return resultado, indicadores, margens_usadas
+
+
 def preparar_cenario(
     nome: str,
     coef_downside: float,
@@ -145,7 +258,8 @@ def preparar_cenario(
     selecionados: tuple[str, ...],
     raw_base: dict[str, pd.DataFrame],
     config_original: object,
-    calendario_referencia: pd.DatetimeIndex | None,
+    calendario_referencia: pd.DatetimeIndex,
+    margens_fixas: dict[int, float],
 ) -> tuple[pd.Series, pd.Series, dict]:
     # Somente a construcao dos ROTULOS usa os coeficientes experimentais.
     config_alvo = config_original.copiar_modelo(update={
@@ -195,11 +309,10 @@ def preparar_cenario(
             ativo, adicionais[ativo], estados, config_original
         )
 
-    resultado, indicadores, calibracao = pesquisa._evaluate_scenario(
-        f"ABLACAO_{nome}", list(selecionados),
-        quadros_base, adicionais, simbolos_base, estados,
-        modelos_adicionais, folds, datas_decisao, decisao_fold,
-        metadados_decisao, config_original
+    resultado, indicadores, calibracao = avaliar_margens_fixas(
+        nome, selecionados, quadros_base, adicionais, simbolos_base,
+        estados, modelos_adicionais, folds, datas_decisao,
+        decisao_fold, metadados_decisao, config_original, margens_fixas
     )
     destino = OUT / nome
     destino.mkdir(parents=True, exist_ok=True)
@@ -226,6 +339,7 @@ def preparar_cenario(
         "cenario": nome,
         "coef_downside_no_rotulo": coef_downside,
         "coef_drawdown_no_rotulo": coef_drawdown,
+        "margens_fixas_por_fold": {str(k): v for k, v in margens_fixas.items()},
         "coeficientes_da_calibracao": {
             "downside": float(config_original.rotation_downside_penalty),
             "drawdown": float(config_original.rotation_drawdown_penalty),
@@ -304,45 +418,35 @@ def main() -> None:
         ("C_SEM_DRAWDOWN", d, 0.0),
         ("D_SEM_AMBAS", 0.0, 0.0),
     ]
-    # Nenhuma pesquisa de ativos, nenhuma chamada Alpaca.
+    # Nenhuma pesquisa de ativos; controle A reusado da ablação auditada.
     OUT.mkdir(parents=True, exist_ok=True)
-    comparacao = []
-    curvas = {}
-    escolhas = {}
-    calendario_referencia = None
+    margens_fixas, curva_a, ativos_a, info_a = controle_A_anterior(
+        contrato, snapshot, config_original
+    )
+    comparacao = [{k: v for k, v in info_a.items() if k != "folds"}]
+    curvas = {"A_ORIGINAL": curva_a}
+    escolhas = {"A_ORIGINAL": ativos_a}
+    calendario_referencia = pd.DatetimeIndex(curva_a.index)
     capital_esperado = float(contrato["expected_ending_capital"])
 
-    for nome, coef_d, coef_m in cenarios:
+    for nome, coef_d, coef_m in cenarios[1:]:
         print(
-            f"\n[ablacao] {nome} alvo: downside={coef_d} drawdown={coef_m}",
+            f"\n[ablacao-margens-fixas] {nome}: "
+            f"downside={coef_d} drawdown={coef_m}",
             flush=True,
         )
         curva, ativos, dados = preparar_cenario(
             nome, coef_d, coef_m, contrato, selecionados, raw_base,
-            config_original, calendario_referencia
+            config_original, calendario_referencia, margens_fixas
         )
-        if nome == "A_ORIGINAL":
-            if not math.isclose(
-                dados["capital_final"], capital_esperado,
-                rel_tol=0.0, abs_tol=TOLERANCIA_CAPITAL
-            ):
-                raise RuntimeError(
-                    "Checkpoint oficial divergente: "
-                    f"{dados['capital_final']:.8f} vs {capital_esperado:.8f}. "
-                    "ABORTADO: nao interprete as ablacoes."
-                )
-            calendario_referencia = pd.DatetimeIndex(curva.index)
-            print("[controle] capital oficial reproduzido a centavos.", flush=True)
-        else:
-            if not curva.index.equals(calendario_referencia):
-                raise RuntimeError(f"{nome}: eixo temporal divergente.")
+        if not curva.index.equals(calendario_referencia):
+            raise RuntimeError(f"{nome}: eixo temporal divergente.")
         curvas[nome] = curva
         escolhas[nome] = ativos
         comparacao.append({k: v for k, v in dados.items() if k != "folds"})
         pd.DataFrame(comparacao).to_csv(
             OUT / "comparacao_parcial.csv", index=False
         )
-        del curva, ativos
         gc.collect()
 
     curvas_df = pd.DataFrame(curvas)
@@ -377,9 +481,40 @@ def main() -> None:
     ]
     tabela.to_csv(OUT / "comparacao_cenarios.csv", index=False)
     graficos_reais(curvas_df)
+    # Comparacao direta da ablação reajustada com a de margens originais fixas.
+    anterior = pd.read_csv(ANTERIOR / "comparacao_cenarios.csv")
+    comparativo = tabela.merge(
+        anterior[["cenario", "capital_final", "sharpe", "drawdown_maximo"]]
+            .rename(columns={
+                "capital_final": "capital_recalibrado",
+                "sharpe": "sharpe_recalibrado",
+                "drawdown_maximo": "drawdown_recalibrado"
+            }),
+        on="cenario", how="left", validate="one_to_one"
+    )
+    if comparativo["capital_recalibrado"].isna().any():
+        raise RuntimeError("Faltam resultados recalibrados para confrontar.")
+    comparativo["delta_capital_fixas_menos_recalibradas"] = (
+        comparativo["capital_final"] - comparativo["capital_recalibrado"]
+    )
+    comparativo.to_csv(
+        OUT / "comparacao_recalibrada_vs_fixa.csv", index=False
+    )
     salvar_json(OUT / "manifesto_execucao.json", {
         "schema": SCHEMA,
-        "desenho": "ablacao SOMENTE do rotulo; calibracao e execucao fixas",
+        "desenho": "rotulo ablatado, margens originais congeladas por fold",
+        "controle_reutilizado": str(ANTERIOR / "A_ORIGINAL"),
+        "sha256_manifesto_recalibrado": sha256(ANTERIOR / "manifesto_execucao.json"),
+        "sha256_margens_originais": sha256(
+            ANTERIOR / "A_ORIGINAL" / "calibracao_margens.csv"
+        ),
+        "margens_originais_calibradas": {
+            str(k): v for k, v in margens_fixas.items()
+        },
+        "margens_efetivas_fixas": {
+            str(k): max(float(config_original.rotation_switch_margin), v)
+            for k, v in margens_fixas.items()
+        },
         "reproducao_oficial_preservada": True,
         "checkpoint_exato_centavos": True,
         "snapshot_sha256": snapshot["snapshot_sha256"],
@@ -397,7 +532,7 @@ def main() -> None:
             "Os componentes de captura e persistencia continuam no rotulo.",
         ],
     })
-    pacote = OUT.parent / "pacote_ablacao_utilidade_risco.zip"
+    pacote = OUT.parent / "pacote_ablacao_utilidade_risco_margens_fixas.zip"
     with zipfile.ZipFile(pacote, "w", zipfile.ZIP_DEFLATED) as zipf:
         for caminho in sorted(OUT.rglob("*")):
             if caminho.is_file():
