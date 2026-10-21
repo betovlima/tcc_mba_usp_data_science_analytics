@@ -3,7 +3,7 @@
 Este modulo e independente de banco de dados em tempo de execucao. Os dados
 entram somente por CSVs locais gerados pela etapa de snapshot da Alpaca.
 
-Versao cientifica: 1.22.1
+Versao cientifica: 1.22.4-dev.1
 Backend oficial: CPU
 Estrategia oficial: LightGBM Control
 """
@@ -11,30 +11,29 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
+from pathlib import Path
+import json
 from typing import Any
 
-EXPERIMENT_VERSION = "1.22.1"
+EXPERIMENT_VERSION = "1.22.4-dev.1"
 START_DATE = "2016-01-01"
-ANALYSIS_END_DATE = "2026-09-17"
-BAR_SNAPSHOT_AS_OF_END = "2026-09-17"
+ANALYSIS_END_DATE = "2026-10-16"
+BAR_SNAPSHOT_AS_OF_END = "2026-10-16"
 
-ASSETS = (
-    "NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "AMD", "JPM",
-    "SPY", "AVGO", "NFLX", "CRM", "ORCL", "COST", "LLY", "XOM", "CAT",
-    "WMT", "V", "HD", "ADC", "ADEA", "ADI", "ADM", "DDS", "CNQ", "VRTS",
-    "XSD", "CXW", "ENS", "CORT", "CCK", "CEF", "GKOS", "RACE", "TX", "UNF",
-    "BXMT", "PXLW", "KKR", "SCSC", "LKFT", "DNN", "VNCE", "UNFI", "DOC",
-    "CLMT", "APD", "MGM", "MAN", "MYE", "YANG", "MKSI", "MCS", "ECC",
-    "COLB", "AMS", "FOXF", "THO", "WDAY", "EXR", "XEL", "SBFG", "PAYX",
-    "MUX", "SXC",
-)
+def carregar_universo() -> tuple[str, ...]:
+    """Carrega exclusivamente o universo declarado para a campanha.
+
+    O manifesto de mercado registra dados coletados, não define a seleção.
+    """
+    path = Path(__file__).resolve().parents[1] / "dados" / "universo.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    names = tuple(str(x).strip().upper() for x in payload.get("assets", []))
+    if not names or any(not x for x in names) or len(names) != len(set(names)):
+        raise ValueError("Universo inválido: símbolos ausentes ou duplicados.")
+    return names
 
 
-U67_REQUESTED_ASSETS = ASSETS
-U67_EXPECTED_REQUESTED_COUNT = 67
-U67_EXPECTED_EFFECTIVE_COUNT = 65
-U67_EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})
-
+ASSETS = carregar_universo()
 
 
 def _configuracoes_lightgbm() -> dict[str, Any]:
