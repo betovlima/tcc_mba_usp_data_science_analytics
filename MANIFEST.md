@@ -1623,7 +1623,7 @@ não modifica os resultados numéricos nem a política de universo congelada.
 
 ### 26.1 Identidade versionada e integração à main
 
-O autor solicitou preservar a campanha histórica documentada em `research/mct-final-582` na `main` e registrar um ponto de recuperação para estudos futuros. O GitHub já mostrava a integração pelo **merge `9d2e279938a2ad271f3ef5e0ac86a18e130c7e4f`** (18/10/2026 UTC), com a branch histórica em `13e5ed39ed0e700d2eb8c90bc8bee64adc7fdf9a`. Assim, este registro **não reexecuta o merge nem substitui o código científico**, apenas acrescenta documentação à main existente.
+O autor solicitou preservar a campanha histórica do commit `13e5ed39ed0e700d2eb8c90bc8bee64adc7fdf9a` na `main` e registrar um ponto de recuperação para estudos futuros. O GitHub já mostrava a integração pelo **merge `9d2e279938a2ad271f3ef5e0ac86a18e130c7e4f`** (18/10/2026 UTC), com a branch histórica em `13e5ed39ed0e700d2eb8c90bc8bee64adc7fdf9a`. Assim, este registro **não reexecuta o merge nem substitui o código científico**, apenas acrescenta documentação à main existente.
 
 **Identificador da tag de congelamento solicitada:** `research-u67plus10-challenger-v1.4.1`. A instrução histórica da seção 25.10 previa uma tag no commit da branch; a solicitação posterior do autor prevalece: o ponto de recuperação deve incluir esta documentação e estar na `main`. Verificar se a ref de tag foi de fato criada/publicada antes de apresentar a tag como existente.
 
