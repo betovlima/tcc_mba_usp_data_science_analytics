@@ -96,13 +96,13 @@ def test_official_reproduction_has_no_database_dependency() -> None:
 
 def test_frozen_universe_and_dates_match_cpu_reference() -> None:
     expected = json.loads(
-        (ROOT / "dados" / "referencia" / "manifest.json").read_text(encoding="utf-8")
+        (ROOT / "dados" / "universo.json").read_text(encoding="utf-8")
     )
     assert tuple(expected["assets"]) == ASSETS == CONFIG.assets
     assert "DOC" in ASSETS
     assert "CLMT" in ASSETS
-    assert ANALYSIS_END_DATE == "2026-09-17"
-    assert BAR_SNAPSHOT_AS_OF_END == "2026-09-17"
+    assert ANALYSIS_END_DATE == "2026-10-16"
+    assert BAR_SNAPSHOT_AS_OF_END == "2026-10-16"
     assert CONFIG.strategy_mode == "COMPOUND_ROTATION_SWING_LIGHTGBM"
     assert CONFIG.rotation_model_repetitions == 1
     assert CONFIG.rotation_target_horizons == (5, 10, 20, 40, 60)
@@ -544,7 +544,7 @@ def test_backtest_analytics_generation_creates_expected_files(tmp_path) -> None:
     assert (graph_dir / "monthly_return_heatmap_control_excess.svg").exists()
 
 def test_official_runtime_has_no_historical_references() -> None:
-    assert EXPERIMENT_VERSION == "1.22.4-dev.1"
+    assert EXPERIMENT_VERSION == "1.22.5-dev.1"
     forbidden = (
         "series_historicas",
         "tiingo",
