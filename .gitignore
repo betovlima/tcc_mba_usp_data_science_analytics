@@ -28,17 +28,18 @@ env/
 .ipynb_checkpoints/
 
 # Dados
-# O snapshot oficial U67 e versionado no Git.
+# O snapshot oficial de referência e versionado no Git.
 dados/*
-!dados/u67/
-!dados/u67/raw_bars/
-!dados/u67/corporate_actions/
-!dados/u67/manifest.json
-!dados/u67/raw_bars/*.csv
-!dados/u67/corporate_actions/*.csv
+!dados/referencia/
+!dados/referencia/raw_bars/
+!dados/referencia/corporate_actions/
+!dados/referencia/manifest.json
+!dados/universo.json
+!dados/referencia/raw_bars/*.csv
+!dados/referencia/corporate_actions/*.csv
 
-# Area temporaria usada somente durante a criacao do snapshot U67.
-dados/.u67_build/
+# Area temporaria usada somente durante a criacao do snapshot de referência.
+dados/.reference_build/
 
 # Resultados locais
 output/
@@ -56,9 +57,9 @@ artifacts/
 *.gz
 *.zip
 
-# Excecao: CSVs oficiais do snapshot U67 entram no Git.
-!dados/u67/raw_bars/*.csv
-!dados/u67/corporate_actions/*.csv
+# Excecao: CSVs oficiais do snapshot de referência entram no Git.
+!dados/referencia/raw_bars/*.csv
+!dados/referencia/corporate_actions/*.csv
 
 # Sistema operacional
 .DS_Store
