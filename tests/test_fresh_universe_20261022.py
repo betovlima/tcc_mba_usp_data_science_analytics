@@ -1,10 +1,9 @@
-"""Smoke tests sem credenciais Alpaca para o runner experimental TCC."""
+"""Testes sem download para a comparacao de datas no universo fixo TCC."""
 from __future__ import annotations
 
 from datetime import datetime
 import json
 from pathlib import Path
-from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -25,6 +24,12 @@ def test_rejects_future_or_unfinished_current_session() -> None:
     )
 
 
+def test_cannot_compare_cutoff_after_snapshot() -> None:
+    with pytest.raises(ValueError, match="ultrapassa"):
+        fresh.validate_cutoffs("2026-10-06", fresh.EVALUATION_CUTOFFS)
+    fresh.validate_cutoffs("2026-10-22", fresh.EVALUATION_CUTOFFS)
+
+
 def test_rejects_incomplete_aapl_bar(tmp_path: Path) -> None:
     paths = fresh.SnapshotPaths.from_root(tmp_path / "snapshot")
     paths.ensure()
@@ -35,10 +40,9 @@ def test_rejects_incomplete_aapl_bar(tmp_path: Path) -> None:
         fresh.verify_reference_session(paths, "2026-10-22")
 
 
-def test_fresh_job_does_not_overwrite_official_snapshot(
+def test_download_once_77_assets_and_two_cutoffs_preserve_reference(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Verifica a orquestracao inteira com stubs, sem requests nem treino pesado.
     (tmp_path / "evidencias").mkdir()
     reference = json.loads(
         (fresh.ROOT / "evidencias" / "manifest_universo_congelado.json").read_text(
@@ -51,20 +55,19 @@ def test_fresh_job_does_not_overwrite_official_snapshot(
     original_marker = tmp_path / "dados" / "u67" / "historico_preservado.txt"
     original_marker.parent.mkdir(parents=True)
     original_marker.write_text("imutable", encoding="utf-8")
-
     monkeypatch.setattr(fresh, "ROOT", tmp_path)
     monkeypatch.setattr(fresh, "EXPERIMENT_DATA_ROOT", tmp_path / "dados" / ".u67_fresh_runs")
     monkeypatch.setattr(fresh, "EXPERIMENT_OUTPUT_ROOT", tmp_path / "output" / "fresh")
     monkeypatch.setattr(fresh, "assert_completed_session", lambda cutoff: None)
     monkeypatch.setattr(fresh, "load_alpaca_credentials", lambda root: object())
 
-    downloaded: list[tuple[Path, tuple[str, ...]]] = []
+    calls: list[tuple[str, Path, tuple[str, ...]]] = []
 
     def fake_bars(credentials: object, paths: fresh.SnapshotPaths, *,
                   assets: tuple[str, ...], bar_snapshot_as_of_end: str,
                   analysis_end_date: str) -> dict[str, Path]:
         paths.ensure()
-        downloaded.append((paths.root, assets))
+        calls.append(("bars", paths.root, assets))
         saved = {}
         for symbol in assets:
             target = paths.raw_bars / f"{symbol}.csv"
@@ -78,6 +81,7 @@ def test_fresh_job_does_not_overwrite_official_snapshot(
 
     def fake_actions(credentials: object, paths: fresh.SnapshotPaths, *,
                      assets: tuple[str, ...], query_end: str) -> dict[str, Path]:
+        calls.append(("actions", paths.root, assets))
         saved = {}
         for symbol in assets:
             target = paths.corporate_actions / f"{symbol}.csv"
@@ -85,27 +89,60 @@ def test_fresh_job_does_not_overwrite_official_snapshot(
             saved[symbol] = target
         return saved
 
+    def fake_manifest(paths: fresh.SnapshotPaths, *args: object, **kwargs: object) -> dict:
+        identity = {
+            "snapshot_sha256": "test-single-snapshot",
+            "assets": list(kwargs["assets"]),
+            "bars": {"bar_snapshot_as_of_end": kwargs["bar_snapshot_as_of_end"]},
+        }
+        paths.manifest.write_text(json.dumps(identity), encoding="utf-8")
+        return identity
+
     monkeypatch.setattr(fresh, "download_raw_bars", fake_bars)
     monkeypatch.setattr(fresh, "download_corporate_actions", fake_actions)
-    monkeypatch.setattr(fresh, "build_snapshot_manifest", lambda *a, **k: {
-        "snapshot_sha256": "test-fresh-snapshot",
-    })
-    monkeypatch.setattr(fresh, "validate_snapshot", lambda paths: {
-        "snapshot_sha256": "test-fresh-snapshot",
-    })
-    replay = Mock(return_value={"checkpoint": {"observed_capital": 12345.67}})
-    monkeypatch.setattr(fresh, "reproduzir_universo_congelado", replay)
+    monkeypatch.setattr(fresh, "build_snapshot_manifest", fake_manifest)
+    monkeypatch.setattr(
+        fresh, "validate_snapshot",
+        lambda paths: json.loads(paths.manifest.read_text(encoding="utf-8")),
+    )
 
-    result = fresh.main(cutoff="2026-10-22")
-    assert result["checkpoint"]["observed_capital"] == 12345.67
-    assert [len(assets) for _, assets in downloaded] == [67, 10]
-    assert all(".u67_fresh_runs" in str(path) for path, _ in downloaded)
+    replays: list[dict] = []
+
+    def fake_replay(*, root: Path, output: Path, version: str,
+                    execution_schema: str, experimental: dict) -> dict:
+        output.mkdir(parents=True)
+        (output / "predictions.csv").write_text("timestamp,asset\n", encoding="utf-8")
+        saved_contract = json.loads(
+            Path(experimental["manifest_path"]).read_text(encoding="utf-8")
+        )
+        replays.append({"experimental": experimental, "contract": saved_contract})
+        return {
+            "checkpoint": {"observed_capital": 10000.0 + len(replays)},
+            "universe": {"effective_count": 75, "excluded_assets": [
+                {"symbol": "DOC"}, {"symbol": "CLMT"},
+            ]},
+            "metrics": {"folds": []},
+            "calendar": {"decision_sessions": 1560},
+        }
+
+    monkeypatch.setattr(fresh, "reproduzir_universo_congelado", fake_replay)
+    summary = fresh.main(cutoff="2026-10-22")
+    assert [name for name, _, _ in calls] == ["bars", "actions"]
+    assert all(len(assets) == 77 for _, _, assets in calls)
+    assert calls[0][1] == calls[1][1]
+    assert len(replays) == 2
+    assert [item["contract"]["analysis_end_date"] for item in replays] == [
+        "2026-10-06", "2026-10-21",
+    ]
+    assert replays[0]["experimental"]["snapshot_root"] == replays[1]["experimental"]["snapshot_root"]
     assert original_marker.read_text(encoding="utf-8") == "imutable"
-    kwargs = replay.call_args.kwargs
-    assert kwargs["experimental"] is not None
-    experimental = kwargs["experimental"]
-    assert Path(experimental["base_root"]) != tmp_path / "dados" / "u67"
-    contract = json.loads(Path(experimental["manifest_path"]).read_text(encoding="utf-8"))
-    assert contract["analysis_end_date"] == "2026-10-22"
-    assert contract["expected_ending_capital"] is None
-    assert len(contract["candidate_file_hashes"]) == 10
+    assert summary["same_snapshot_both_cutoffs"] is True
+    assert summary["effective_asset_count"] == 75
+    archives = list((tmp_path / "output" / "fresh").rglob("pacote_comparacao_cutoffs.zip"))
+    assert len(archives) == 1
+    import zipfile
+    with zipfile.ZipFile(archives[0]) as archive:
+        assert "comparacao_cutoffs.json" in archive.namelist()
+        assert "snapshot_77_manifest.json" in archive.namelist()
+        assert "cutoff_2026-10-06/predictions.csv" in archive.namelist()
+        assert "cutoff_2026-10-21/predictions.csv" in archive.namelist()
