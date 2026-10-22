@@ -180,7 +180,8 @@ def main(*, cutoff: str = TARGET_CUTOFF) -> dict:
         for symbol in selected
     }
     results: dict[str, dict] = {}
-    output_root.mkdir(parents=True)
+    # A pasta ja pode existir quando recuperamos o snapshot apos uma falha.
+    output_root.mkdir(parents=True, exist_ok=True)
 
     # Cada replay utiliza o mesmo snapshot e os mesmos modelos/regras do Control.
     for evaluation_date in EVALUATION_CUTOFFS:
