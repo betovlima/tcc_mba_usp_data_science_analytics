@@ -96,6 +96,11 @@ def summarize_metrics(
 
 
 
+def checkpoint_delta(observed: float, expected: float | None) -> float | None:
+    """O replay com novos dados nao tem checkpoint monetario esperado."""
+    return None if expected is None else float(observed) - float(expected)
+
+
 def reproduzir_universo_congelado(
     *,
     root: Path,
@@ -369,10 +374,7 @@ def reproduzir_universo_congelado(
         "checkpoint": {
             "observed_capital": capital,
             "expected_capital": expected_capital,
-            "delta": (
-                capital - expected_capital
-                if expected_capital is not None else None
-            ),
+            "delta": checkpoint_delta(capital, expected_capital),
         },
         "data": {
             "source": "alpaca",
