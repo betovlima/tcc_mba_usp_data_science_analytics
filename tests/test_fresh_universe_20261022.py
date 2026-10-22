@@ -167,3 +167,17 @@ def test_download_once_77_assets_and_two_cutoffs_preserve_reference(
         assert "snapshot_77_manifest.json" in archive.namelist()
         assert "cutoff_2026-10-06/predictions.csv" in archive.namelist()
         assert "cutoff_2026-10-21/predictions.csv" in archive.namelist()
+
+    # Retomar a mesma coleta validada: nenhum novo download da Alpaca.
+    resumed = fresh.main(cutoff="2026-10-22")
+    assert [name for name, _, _ in calls] == ["bars", "actions"]
+    assert len(replays) == 4
+    assert resumed["snapshot_sha256"] == summary["snapshot_sha256"]
+    assert original_marker.read_text(encoding="utf-8") == "imutable"
+
+
+def test_experimental_checkpoint_without_expected_capital() -> None:
+    from reproducao.experimento import checkpoint_delta
+
+    assert checkpoint_delta(34567.89, None) is None
+    assert checkpoint_delta(34567.89, 10000.0) == pytest.approx(24567.89)
