@@ -247,7 +247,6 @@ def audit(
     raw_changes: list[dict] = []
     adjusted_changes: list[dict] = []
     action_changes: list[dict] = []
-    event_rows: list[dict] = []
     for number, symbol in enumerate(requested, 1):
         old = (
             originals if symbol in U67_REQUESTED_ASSETS
