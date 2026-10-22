@@ -177,7 +177,7 @@ A branch `research/v1.23.1-fresh-snapshot-20261022` acrescenta somente o teste e
 7. Artefatos: `output/fresh_universe/asof_<DATA>_<ID>/pacote_atualizacao_series.zip`, inclusive `reproducao_universo.json`, CSVs de decisoes/operacoes, evolucao financeira, hashes e exclusoes.
 8. `reproduced_exact_to_cent=null` significa *checkpoint historico nao aplicavel* e nao ausencia de reproducibilidade. O capital final novo **nao e esperado ser US$ 587 milhoes**. Para comparacao causal, auditar as mesmas datas e o primeiro ativo/decisao divergente.
 
-**Sem acesso as credenciais Alpaca nesta conversa, somente testes de contrato/mocks podem ser executados no CI.** O backtest integral exige rodar localmente e enviar o ZIP. Nenhuma alteracao foi feita no MCT nem na Winner.
+**Sem acesso as credenciais Alpaca nesta conversa, somente testes de contrato/mocks podem ser executados no CI.** O backtest integral exige rodar localmente e enviar o ZIP. Nenhuma alteracao foi feita na aplicacao operacional nem na Winner.
 
 Comandos Git (PowerShell):
 ```powershell
