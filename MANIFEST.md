@@ -1733,16 +1733,16 @@ A tag `v1.23.0` deve apontar ao commit de release **após CI bem-sucedida**. A c
 
 ## 29. Auditoria de paridade e diagnóstico dos snapshots — revisão documental v1.23.5 (22/10/2026)
 
-**Escopo da branch:** \`research/v1.23.1-fresh-snapshot-20261022\`. O experimento financeiro que gerou os resultados abaixo permanece na **v1.23.4**; a v1.23.5 adiciona *somente auditoria e testes*, sem mudar LightGBM, política, hiperparâmetros, custos, universo ou \`main\`.
+**Escopo da branch:** `research/v1.23.1-fresh-snapshot-20261022`. O experimento financeiro que gerou os resultados abaixo permanece na **v1.23.4**; a v1.23.5 adiciona *somente auditoria e testes*, sem mudar LightGBM, política, hiperparâmetros, custos, universo ou `main`.
 
 **Proveniência Git:**
-- TCC \`main\` usado como referência: \`4667d2ccee3f3441ee4d2b362ce734311cedd5e3\` (release histórica \`v1.23.0\`).
-- Runner TCC experimental v1.23.4 analisado: \`bd99b592c03dadec2cf45ade0b09e8ee07148d3b\`.
-- Implementação do diagnóstico offline: \`bc4a61cecfbbfcc894886d065ef7a2e22023fa70\` (ajuste posterior \`1578b7edcf5be556d8730ee3ea28cf4d002d6761\`).
-- Testes automatizados do diagnóstico: \`d2fb205ceb475ac91bc7834c6728b7d359af8556\`.
-- Execução externa de comparação: \`adb764df4bbf36bcf63af1c9017b9a3dcb6fb844\` (API v10.8.125).
-- Identidade snapshot histórico base U67: \`e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575\`; identidade snapshot único renovado U77: \`1c4d16173eaa5219a1bcc18cfa431cf1c096dbeaa26ca53aa03e9fcf047cff5c\`.
-- Pacote de comparação v1.23.4, SHA-256 \`fb9b87c43d6233ae8334e6dc083b42280bb0778cbcb31c698a2c12766963ab61\`.
+- TCC `main` usado como referência: `4667d2ccee3f3441ee4d2b362ce734311cedd5e3` (release histórica `v1.23.0`).
+- Runner TCC experimental v1.23.4 analisado: `bd99b592c03dadec2cf45ade0b09e8ee07148d3b`.
+- Implementação do diagnóstico offline: `bc4a61cecfbbfcc894886d065ef7a2e22023fa70` (ajuste posterior `1578b7edcf5be556d8730ee3ea28cf4d002d6761`).
+- Testes automatizados do diagnóstico: `d2fb205ceb475ac91bc7834c6728b7d359af8556`.
+- Execução externa de comparação: `adb764df4bbf36bcf63af1c9017b9a3dcb6fb844` (API v10.8.125).
+- Identidade snapshot histórico base U67: `e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575`; identidade snapshot único renovado U77: `1c4d16173eaa5219a1bcc18cfa431cf1c096dbeaa26ca53aa03e9fcf047cff5c`.
+- Pacote de comparação v1.23.4, SHA-256 `fb9b87c43d6233ae8334e6dc083b42280bb0778cbcb31c698a2c12766963ab61`.
 
 **Resultado reproduzido:**
 | Execução | Corte | Patrimônio final |
@@ -1756,8 +1756,8 @@ A execução renovada e a plataforma operacional apresentaram 1.571/1.571 escolh
 
 **Importante:** diferença de SHA-256 dos CSVs NÃO comprova revisão retroativa. A simples inclusão de registros após 06/10 altera o hash. Também não se pode afirmar que uma revisão específica foi responsável pelo capital sem checar primeiro preços brutos, calendário e Corporate Actions.
 
-**Próximo experimento (somente leitura, sem corretora):** abrir \`auditar_drift_historico_spyder.py\` no Spyder e executar com F5. O programa valida hashes históricos e atuais, confronta **os 77 ativos fixos** (65+10 efetivos, exclusões DOC/CLMT preservadas) somente até 06/10, compara OHLCV bruto nas mesmas datas, compara valores após normalização de splits e registra mudanças de eventos corporativos anteriores ao corte e splits posteriores. Uma análise focaliza entradas anteriores a 28/07/2020. Gera \`output/auditoria_drift_historico/pacote_auditoria_drift_historico.zip\`. Não faz downloads, não atualiza CSVs e não modifica a reprodução oficial.
+**Próximo experimento (somente leitura, sem corretora):** abrir `auditar_drift_historico_spyder.py` no Spyder e executar com F5. O programa valida hashes históricos e atuais, confronta **os 77 ativos fixos** (65+10 efetivos, exclusões DOC/CLMT preservadas) somente até 06/10, compara OHLCV bruto nas mesmas datas, compara valores após normalização de splits e registra mudanças de eventos corporativos anteriores ao corte e splits posteriores. Uma análise focaliza entradas anteriores a 28/07/2020. Gera `output/auditoria_drift_historico/pacote_auditoria_drift_historico.zip`. Não faz downloads, não atualiza CSVs e não modifica a reprodução oficial.
 
-**Pré-requisito local:** dados oficiais em \`dados/u67\`, cache original dos dez adicionais em \`dados/.u67_expansion_cache/full_raw_20261006\` com hashes exatos e snapshot novo em \`dados/.u67_fresh_runs/asof_2026-10-22_*/universe_77\`. Se faltar algum original, o programa deve interromper — nunca baixar ou reconstruir no lugar. O ZIP de backtest não contém os RAWs necessários para esse teste.
+**Pré-requisito local:** dados oficiais em `dados/u67`, cache original dos dez adicionais em `dados/.u67_expansion_cache/full_raw_20261006` com hashes exatos e snapshot novo em `dados/.u67_fresh_runs/asof_2026-10-22_*/universe_77`. Se faltar algum original, o programa deve interromper — nunca baixar ou reconstruir no lugar. O ZIP de backtest não contém os RAWs necessários para esse teste.
 
 **Interpretação acadêmica:** distinguir robustez da política contra revisões de fonte, reprodução exata condicionada ao snapshot congelado e testes efetivamente fora da amostra; evitar afirmar ausência de vazamento futuro ou causalidade da primeira decisão divergente sem a auditoria por linha.
