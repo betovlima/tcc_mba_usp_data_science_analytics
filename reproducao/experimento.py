@@ -102,7 +102,8 @@ def reproduzir_universo_congelado(
     output: Path,
     version: str,
     execution_schema: str,
-) -> dict[str, Any]:
+    experimental: dict[str, Any] | None = None,
+) -> dict[str, Any>:
     """Reproduz o universo selecionado pela mesma rotina financeira da pesquisa.
 
     O modulo historico continua sendo a unica fonte do procedimento de treino,
@@ -117,7 +118,7 @@ def reproduzir_universo_congelado(
     import shutil
     import time
 
-    from reproducao.dados import validate_snapshot
+    from reproducao.dados import SnapshotPaths, validate_snapshot
     from reproducao.preparacao import prepare_model_frames
     from reproducao.artefatos import criar_pacote_analise, sinal_sonoro_conclusao
     from reproducao.graficos import gerar_analises_backtest
@@ -129,7 +130,19 @@ def reproduzir_universo_congelado(
     root = Path(root).resolve()
     output = Path(output).resolve()
 
-    manifest_path = root / "evidencias" / "manifest_universo_congelado.json"
+    is_experimental = experimental is not None
+    base_paths = (
+        SnapshotPaths.from_root(Path(experimental["base_root"]).resolve())
+        if is_experimental else pesquisa.BASE_DATA
+    )
+    candidate_paths = (
+        SnapshotPaths.from_root(Path(experimental["candidate_root"]).resolve())
+        if is_experimental else pesquisa.FULL_DATA
+    )
+    manifest_path = (
+        Path(experimental["manifest_path"]).resolve()
+        if is_experimental else root / "evidencias" / "manifest_universo_congelado.json"
+    )
     contract = json.loads(manifest_path.read_text(encoding="utf-8"))
     selected = tuple(contract["selected_assets"])
     if selected != tuple(pesquisa.DISCOVERY_SELECTED_CANDIDATES):
@@ -137,11 +150,11 @@ def reproduzir_universo_congelado(
     if len(set(selected)) != len(selected):
         raise RuntimeError("Ativos duplicados no manifesto do universo.")
 
-    snapshot = validate_snapshot(pesquisa.BASE_DATA)
+    snapshot = validate_snapshot(base_paths)
     if snapshot.get("snapshot_sha256") != contract["snapshot_sha256"]:
         raise RuntimeError(
-            "Snapshot diferente do congelado. Preserve o historico; "
-            "nao atualize os dados para ajustar o resultado."
+            "Snapshot diferente do manifesto verificado; "
+            "nao modifique os CSVs depois da coleta."
         )
 
     def digest(path: Path) -> str:
@@ -156,9 +169,9 @@ def reproduzir_universo_congelado(
     for symbol in selected:
         expected = contract["candidate_file_hashes"][symbol]
         paths = {
-            "raw_sha256": pesquisa.FULL_DATA.raw_bars / f"{symbol}.csv",
+            "raw_sha256": candidate_paths.raw_bars / f"{symbol}.csv",
             "corporate_actions_sha256": (
-                pesquisa.FULL_DATA.corporate_actions / f"{symbol}.csv"
+                candidate_paths.corporate_actions / f"{symbol}.csv"
             ),
         }
         observed = {}
@@ -183,15 +196,15 @@ def reproduzir_universo_congelado(
         raise RuntimeError("Ordem/identidade dos ativos base divergente.")
 
     raw, exclusions, diagnostics, data_audit = prepare_model_frames(
-        pesquisa.BASE_DATA,
+        base_paths,
         assets=requested,
         csv_float_precision="round_trip",
     )
     excluded = frozenset(str(item.get("symbol") or "").upper() for item in exclusions)
-    if excluded != pesquisa.U67_EXPECTED_EXCLUSIONS:
+    if not is_experimental and excluded != pesquisa.U67_EXPECTED_EXCLUSIONS:
         raise RuntimeError("Exclusoes estruturais divergentes.")
     baseline_order = tuple(symbol for symbol in requested if symbol in raw)
-    if len(baseline_order) != pesquisa.U67_EXPECTED_EFFECTIVE_COUNT:
+    if not is_experimental and len(baseline_order) != pesquisa.U67_EXPECTED_EFFECTIVE_COUNT:
         raise RuntimeError("Tamanho do universo base efetivo divergente.")
 
     config = build_control_config(
@@ -225,8 +238,10 @@ def reproduzir_universo_congelado(
     baseline_metrics = pesquisa._scenario_metrics(
         baseline_result, folds, float(config.initial_capital)
     )
-    expected_base = float(contract["baseline_ending_capital"])
-    if not math.isclose(
+    expected_base = (
+        None if is_experimental else float(contract["baseline_ending_capital"])
+    )
+    if expected_base is not None and not math.isclose(
         baseline_metrics["ending_capital"], expected_base, rel_tol=0.0, abs_tol=0.01
     ):
         raise RuntimeError(
@@ -236,15 +251,20 @@ def reproduzir_universo_congelado(
     print(f"[base] capital=US$ {baseline_metrics['ending_capital']:,.2f}", flush=True)
 
     frames, continuity, verified_hashes = pesquisa._prepare_candidate_frames(
-        list(selected), common_dates, all_decision_dates, config
+        list(selected), common_dates, all_decision_dates, config,
+        paths=candidate_paths,
     )
+    requested_selected = selected
     missing = [symbol for symbol in selected if symbol not in frames]
-    if missing:
+    if missing and not is_experimental:
         raise RuntimeError(
             "Candidatos incompativeis com as series congeladas: "
             + ", ".join(missing)
         )
-    if verified_hashes != file_hashes:
+    if is_experimental:
+        selected = tuple(symbol for symbol in selected if symbol in frames)
+        print(f"[experimental] candidatos excluidos={missing}", flush=True)
+    if any(verified_hashes.get(symbol) != file_hashes[symbol] for symbol in selected):
         raise RuntimeError("Dados dos candidatos foram alterados durante a leitura.")
 
     caches = {}
@@ -268,10 +288,15 @@ def reproduzir_universo_congelado(
         decision_metadata,
         config,
     )
-    expected_capital = float(contract["expected_ending_capital"])
+    expected_capital = (
+        None if is_experimental else float(contract["expected_ending_capital"])
+    )
     capital = float(metrics["ending_capital"])
-    exact = math.isclose(capital, expected_capital, rel_tol=0.0, abs_tol=0.01)
-    if not exact:
+    exact = (
+        None if expected_capital is None else
+        math.isclose(capital, expected_capital, rel_tol=0.0, abs_tol=0.01)
+    )
+    if exact is False:
         raise RuntimeError(
             f"Reproducao divergente: observado=US$ {capital:,.8f}, "
             f"esperado=US$ {expected_capital:,.8f}. "
@@ -316,7 +341,11 @@ def reproduzir_universo_congelado(
         "reproduction_version": version,
         "execution_schema": execution_schema,
         "status": "completed",
-        "purpose": "reproducao_universo_selecionado",
+        "purpose": (
+            "atualizacao_series_universo_fixo" if is_experimental
+            else "reproducao_universo_selecionado"
+        ),
+        "experimental_fresh_snapshot": is_experimental,
         "reproduced_exact_to_cent": exact,
         "analysis_end_date": contract["analysis_end_date"],
         "checkpoint": {
@@ -329,20 +358,24 @@ def reproduzir_universo_congelado(
             "feed": "sip",
             "adjustment": "raw",
             "timeframe": "1Day",
-            "full_refresh": False,
+            "full_refresh": is_experimental,
             "database_used": False,
             "snapshot_sha256": snapshot["snapshot_sha256"],
             "candidate_file_hashes": verified_hashes,
             "candidate_cache_committed_to_git": False,
+            "source_manifest_path": str(manifest_path),
+            "base_snapshot_path": str(base_paths.root),
+            "candidate_snapshot_path": str(candidate_paths.root),
             "data_audit": data_audit,
             "diagnostics": diagnostics,
         },
         "universe": {
-            "requested_assets": list(requested) + list(selected),
-            "requested_count": len(requested) + len(selected),
+            "requested_assets": list(requested) + list(requested_selected),
+            "requested_count": len(requested) + len(requested_selected),
             "effective_assets": effective,
             "effective_count": len(effective),
             "excluded_assets": exclusions,
+            "excluded_candidates": missing,
         },
         "calendar": {
             "calendar_source": calendar_source,
@@ -360,7 +393,10 @@ def reproduzir_universo_congelado(
         output,
         comparison_file="reproducao_universo.json",
         execution_schema=execution_schema,
-        archive_name="pacote_reproducao_universo.zip",
+        archive_name=(
+            "pacote_atualizacao_series.zip" if is_experimental
+            else "pacote_reproducao_universo.zip"
+        ),
     )
     print(
         f"[done] capital=US$ {capital:,.2f} exact_to_cent={exact} "
