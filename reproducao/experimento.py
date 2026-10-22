@@ -369,7 +369,10 @@ def reproduzir_universo_congelado(
         "checkpoint": {
             "observed_capital": capital,
             "expected_capital": expected_capital,
-            "delta": capital - expected_capital,
+            "delta": (
+                capital - expected_capital
+                if expected_capital is not None else None
+            ),
         },
         "data": {
             "source": "alpaca",
