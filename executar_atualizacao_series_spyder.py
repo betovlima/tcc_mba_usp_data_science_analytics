@@ -1,4 +1,4 @@
-"""V1.23.3 — replay Control com o universo vencedor inteiro e novos dados Alpaca.
+"""V1.23.4 — replay Control com o universo vencedor inteiro e novos dados Alpaca.
 
 Execucao unica no Spyder (F5): coleta os 77 simbolos fixos UMA VEZ e roda
 os cortes de 06 e 21 de outubro sobre os MESMOS arquivos atualizados.
@@ -30,10 +30,11 @@ from reproducao.experimento import reproduzir_universo_congelado
 ROOT = Path(__file__).resolve().parent
 TARGET_CUTOFF = "2026-10-22"  # Data ate a qual as series sao atualizadas.
 EVALUATION_CUTOFFS = ("2026-10-06", "2026-10-21")
-EXPERIMENT_VERSION = "1.23.3"
+EXPERIMENT_VERSION = "1.23.4"
 EXECUTION_SCHEMA = "fresh-fixed-universe-v2"
 EXPERIMENT_DATA_ROOT = ROOT / "dados" / ".u67_fresh_runs"
 EXPERIMENT_OUTPUT_ROOT = ROOT / "output" / "fresh_universe"
+REUSE_LAST_COMPLETE_SNAPSHOT = True  # Retomar apos falhas sem novo download.
 
 
 def assert_completed_session(cutoff: str, *, now: datetime | None = None) -> None:
@@ -79,6 +80,38 @@ def validate_cutoffs(snapshot_end: str, evaluation_cutoffs: tuple[str, ...]) -> 
         raise ValueError("Um dos cortes de avaliacao ultrapassa o snapshot RAW.")
 
 
+def find_reusable_snapshot(
+    cutoff: str,
+    full_universe: tuple[str, ...],
+) -> tuple[Path, SnapshotPaths, dict] | None:
+    """Retoma apenas snapshots locais inteiros, conferidos por SHA-256."""
+    for run_root in sorted(
+        EXPERIMENT_DATA_ROOT.glob(f"asof_{cutoff}_*"), reverse=True
+    ):
+        if not run_root.is_dir():
+            continue
+        source = SnapshotPaths.from_root(run_root / "universe_77")
+        if not source.manifest.is_file():
+            continue  # Download anterior interrompido, sem manifesto pronto.
+        manifest = validate_snapshot(source)
+        if tuple(manifest.get("assets") or ()) != full_universe:
+            raise RuntimeError(
+                "Snapshot local possui universo diferente dos 77 ativos fixos: "
+                f"{source.root}. Nao reutilizar sem auditar."
+            )
+        if manifest.get("bars", {}).get("bar_snapshot_as_of_end") != cutoff:
+            raise RuntimeError(
+                f"Snapshot local possui cutoff divergente: {source.root}."
+            )
+        verify_reference_session(source, cutoff)
+        print(
+            f"[resume] snapshot existente validado; coleta dispensada: {source.root}",
+            flush=True,
+        )
+        return run_root, source, manifest
+    return None
+
+
 def main(*, cutoff: str = TARGET_CUTOFF) -> dict:
     assert_completed_session(cutoff)
     validate_cutoffs(cutoff, EVALUATION_CUTOFFS)
@@ -94,46 +127,55 @@ def main(*, cutoff: str = TARGET_CUTOFF) -> dict:
     if len(full_universe) != 77 or len(set(full_universe)) != 77:
         raise RuntimeError("Os 77 ativos fixos precisam ser unicos.")
 
-    # A coleta e indivisivel: 77 simbolos no mesmo snapshot, sem descoberta.
-    run_id = datetime.now(ZoneInfo("UTC")).strftime("%Y%m%dT%H%M%S%fZ")
-    run_root = EXPERIMENT_DATA_ROOT / f"asof_{cutoff}_{run_id}"
-    output_root = EXPERIMENT_OUTPUT_ROOT / f"asof_{cutoff}_{run_id}"
-    if run_root.exists() or output_root.exists():
-        raise FileExistsError("O identificador da execucao ja existe.")
-    source = SnapshotPaths.from_root(run_root / "universe_77")
-    credentials = load_alpaca_credentials(ROOT)
-
+    # Um snapshot pronto pode ser reusado apos falha no replay (nao na coleta).
+    reusable = (
+        find_reusable_snapshot(cutoff, full_universe)
+        if REUSE_LAST_COMPLETE_SNAPSHOT else None
+    )
     print(
         f"[fresh] versao={EXPERIMENT_VERSION} cutoff_coleta={cutoff} "
         f"universo_fixo={len(full_universe)} cortes={EVALUATION_CUTOFFS}",
         flush=True,
     )
-    print("[fresh] coleta RAW/SIP/1Day com janela SIP atrasada >=20min", flush=True)
-    print("[fresh] sem IEX e sem atualizacao dos arquivos oficiais", flush=True)
-    bars = download_raw_bars(
-        credentials, source, assets=full_universe,
-        bar_snapshot_as_of_end=cutoff, analysis_end_date=cutoff,
-        sip_delay_guard_minutes=20,  # SIP historico; nao requisitar futuro
-    )
-    actions = download_corporate_actions(
-        credentials, source, assets=full_universe, query_end=cutoff,
-    )
-    manifest = build_snapshot_manifest(
-        source, bars, actions, bar_snapshot_as_of_end=cutoff,
-        analysis_end_date=cutoff, assets=full_universe,
-        snapshot_name=f"fixed-77-fresh-{cutoff}",
-    )
-    validated = validate_snapshot(source)
-    verify_reference_session(source, cutoff)
+    if reusable is not None:
+        run_root, source, validated = reusable
+    else:
+        # Uma coleta de 77 ativos; jamais sobrescrever o snapshot oficial.
+        run_id = datetime.now(ZoneInfo("UTC")).strftime("%Y%m%dT%H%M%S%fZ")
+        run_root = EXPERIMENT_DATA_ROOT / f"asof_{cutoff}_{run_id}"
+        if run_root.exists():
+            raise FileExistsError(run_root)
+        source = SnapshotPaths.from_root(run_root / "universe_77")
+        credentials = load_alpaca_credentials(ROOT)
+        print("[fresh] coleta RAW/SIP/1Day, janela SIP atrasada >=20min", flush=True)
+        print("[fresh] sem IEX e sem escrita no snapshot oficial", flush=True)
+        bars = download_raw_bars(
+            credentials, source, assets=full_universe,
+            bar_snapshot_as_of_end=cutoff, analysis_end_date=cutoff,
+            sip_delay_guard_minutes=20,
+        )
+        actions = download_corporate_actions(
+            credentials, source, assets=full_universe, query_end=cutoff,
+        )
+        manifest = build_snapshot_manifest(
+            source, bars, actions, bar_snapshot_as_of_end=cutoff,
+            analysis_end_date=cutoff, assets=full_universe,
+            snapshot_name=f"fixed-77-fresh-{cutoff}",
+        )
+        validated = validate_snapshot(source)
+        verify_reference_session(source, cutoff)
+        if validated["snapshot_sha256"] != manifest["snapshot_sha256"]:
+            raise RuntimeError("Hash da coleta alterado durante a validacao.")
+
+    output_root = EXPERIMENT_OUTPUT_ROOT / run_root.name
     if tuple(validated["assets"]) != full_universe:
         raise RuntimeError("O snapshot nao contem exatamente os 77 simbolos fixos.")
-    if validated["snapshot_sha256"] != manifest["snapshot_sha256"]:
-        raise RuntimeError("Hash da coleta alterado durante a validacao.")
-
     candidate_hashes = {
         symbol: {
-            "raw_sha256": sha256_file(bars[symbol]),
-            "corporate_actions_sha256": sha256_file(actions[symbol]),
+            "raw_sha256": sha256_file(source.raw_bars / f"{symbol}.csv"),
+            "corporate_actions_sha256": sha256_file(
+                source.corporate_actions / f"{symbol}.csv"
+            ),
         }
         for symbol in selected
     }
