@@ -1,4 +1,4 @@
-"""V1.23.2 — replay Control com o universo vencedor inteiro e novos dados Alpaca.
+"""V1.23.3 — replay Control com o universo vencedor inteiro e novos dados Alpaca.
 
 Execucao unica no Spyder (F5): coleta os 77 simbolos fixos UMA VEZ e roda
 os cortes de 06 e 21 de outubro sobre os MESMOS arquivos atualizados.
@@ -30,7 +30,7 @@ from reproducao.experimento import reproduzir_universo_congelado
 ROOT = Path(__file__).resolve().parent
 TARGET_CUTOFF = "2026-10-22"  # Data ate a qual as series sao atualizadas.
 EVALUATION_CUTOFFS = ("2026-10-06", "2026-10-21")
-EXPERIMENT_VERSION = "1.23.2"
+EXPERIMENT_VERSION = "1.23.3"
 EXECUTION_SCHEMA = "fresh-fixed-universe-v2"
 EXPERIMENT_DATA_ROOT = ROOT / "dados" / ".u67_fresh_runs"
 EXPERIMENT_OUTPUT_ROOT = ROOT / "output" / "fresh_universe"
@@ -108,10 +108,12 @@ def main(*, cutoff: str = TARGET_CUTOFF) -> dict:
         f"universo_fixo={len(full_universe)} cortes={EVALUATION_CUTOFFS}",
         flush=True,
     )
-    print("[fresh] coleta RAW/SIP/1Day; sem atualizacao dos arquivos oficiais", flush=True)
+    print("[fresh] coleta RAW/SIP/1Day com janela SIP atrasada >=20min", flush=True)
+    print("[fresh] sem IEX e sem atualizacao dos arquivos oficiais", flush=True)
     bars = download_raw_bars(
         credentials, source, assets=full_universe,
         bar_snapshot_as_of_end=cutoff, analysis_end_date=cutoff,
+        sip_delay_guard_minutes=20,  # SIP historico; nao requisitar futuro
     )
     actions = download_corporate_actions(
         credentials, source, assets=full_universe, query_end=cutoff,
