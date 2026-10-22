@@ -30,6 +30,25 @@ def test_cannot_compare_cutoff_after_snapshot() -> None:
     fresh.validate_cutoffs("2026-10-22", fresh.EVALUATION_CUTOFFS)
 
 
+def test_sip_end_never_requests_future_midnight() -> None:
+    from reproducao.dados import _delayed_sip_end
+
+    now = pd.Timestamp("2026-10-22T22:00:00Z")
+    requested = _delayed_sip_end(
+        "2026-10-22", now_utc=now, delay_minutes=20,
+    )
+    assert requested == pd.Timestamp("2026-10-22T21:40:00Z")
+    assert requested < now - pd.Timedelta(minutes=15)
+
+    # Um snapshot ja passado nao e truncado desnecessariamente.
+    historical = _delayed_sip_end(
+        "2026-10-06", now_utc=now, delay_minutes=20,
+    )
+    assert historical == pd.Timestamp("2026-10-07T00:00:00Z")
+    with pytest.raises(ValueError, match="15 minutos"):
+        _delayed_sip_end("2026-10-22", now_utc=now, delay_minutes=10)
+
+
 def test_rejects_incomplete_aapl_bar(tmp_path: Path) -> None:
     paths = fresh.SnapshotPaths.from_root(tmp_path / "snapshot")
     paths.ensure()
@@ -65,9 +84,11 @@ def test_download_once_77_assets_and_two_cutoffs_preserve_reference(
 
     def fake_bars(credentials: object, paths: fresh.SnapshotPaths, *,
                   assets: tuple[str, ...], bar_snapshot_as_of_end: str,
-                  analysis_end_date: str) -> dict[str, Path]:
+                  analysis_end_date: str,
+                  sip_delay_guard_minutes: int = 0) -> dict[str, Path]:
         paths.ensure()
         calls.append(("bars", paths.root, assets))
+        assert sip_delay_guard_minutes == 20
         saved = {}
         for symbol in assets:
             target = paths.raw_bars / f"{symbol}.csv"
