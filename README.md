@@ -162,13 +162,14 @@ A integração da pesquisa histórica (commit `13e5ed39ed0e700d2eb8c90bc8bee64ad
 
 O código valida primeiro a identidade do snapshot, a composição do universo e os **20 hashes dos CSVs** (barras e eventos de dez ativos). Depois treina a referência e os candidatos por fold, calibra conjuntamente e compara o capital simulado ao checkpoint congelado. Nenhuma chamada de download é feita pelo executor. O cenário é histórico, não uma previsão de resultado futuro. **A execução completa foi concluída no Spyder em 21/10/2026**, sobre o cache histórico preservado, com `status=completed`, `reproduced_exact_to_cent=true`, capital de **US$ 587.165.941,1330212** e diferença de **US$ 0,00**. O ZIP conferido é `pacote_reproducao_universo.zip`, SHA-256 `0c3518387556f147897baf121cb089f532f8355a8bb074c91fe0a6b5ec4b6ac8`. O pacote contém 29 arquivos, incluindo `predictions.csv` (1.560 sessões), `trades.csv` (710 registros), `reproducao_universo.json` e análises gráficas. O checkpoint foi confirmado também pelos modos de pesquisa `decision_validation` e `assurance_validation` sobre o mesmo recorte congelado. O cache local continua **não versionado**: clones limpos não têm, por si só, os arquivos suficientes para refazer o replay.
 
-## Experimento v1.23.2 — comparacao do TCC com a data final atualizada
+## Experimento v1.23.3 — comparacao do TCC com a data final atualizada
 
 **Objetivo restrito:** investigar o efeito de atualizar os historicos e de avancar o corte temporal mantendo *o mesmo universo vencedor fixo*, que gerou US$ 587.165.941,13 em 06/10/2026. Nao descobrir, classificar ou otimizar novos ativos.
 
-- Branch em uso: `research/v1.23.1-fresh-snapshot-20261022`; **revisao experimental v1.23.2**, sem alterar a `main`.
+- Branch em uso: `research/v1.23.1-fresh-snapshot-20261022`; **revisao experimental v1.23.3**, sem alterar a `main`.
 - Entrada no Spyder: `executar_atualizacao_series_spyder.py` (reiniciar kernel, F5).
 - `TARGET_CUTOFF = "2026-10-22"` e `EVALUATION_CUTOFFS = ("2026-10-06", "2026-10-21")`.
+- **Correção do erro 403 SIP (v1.23.3):** a coleta preserva `feed=sip` e `adjustment=raw`, mas limita `end` a, no máximo, a hora UTC atual menos 20 minutos. Isso evita requisitar o início de 23/10/2026 enquanto ainda estamos em 22/10/2026. O cutoff analítico permanece 22/10/2026, e a barra de AAPL dessa data deve ser verificada. Não trocar automaticamente SIP por IEX. Se o `403` persistir, verificar a mensagem retornada pela Alpaca e as permissões da credencial.
 - **Uma coleta de 77 ativos solicitados** de Alpaca RAW/SIP/1Day e seus eventos corporativos. O pacote historico original (67 + 10) define a lista uma unica vez. A pesquisa nao executa descoberta de candidatos, nem altera a composicao.
 - **75 ativos efetivos obrigatorios.** Exclusoes estruturais permanecem DOC e CLMT. Um novo problema de integridade interrompe a execucao com erro; nao descartar ativos silenciosamente nem reparar series manualmente.
 - Dados localmente isolados em `dados/.u67_fresh_runs/asof_<DATA>_<ID>/universe_77/` (nao versionados no Git), manifesto e SHA-256. Os arquivos do snapshot oficial `dados/u67/` e os manifestos de `evidencias/` sao preservados.
