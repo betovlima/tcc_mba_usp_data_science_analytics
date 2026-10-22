@@ -103,7 +103,7 @@ def reproduzir_universo_congelado(
     version: str,
     execution_schema: str,
     experimental: dict[str, Any] | None = None,
-) -> dict[str, Any>:
+) -> dict[str, Any]:
     """Reproduz o universo selecionado pela mesma rotina financeira da pesquisa.
 
     O modulo historico continua sendo a unica fonte do procedimento de treino,
