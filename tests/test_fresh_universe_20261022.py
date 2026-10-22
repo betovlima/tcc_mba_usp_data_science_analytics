@@ -131,7 +131,7 @@ def test_download_once_77_assets_and_two_cutoffs_preserve_reference(
 
     def fake_replay(*, root: Path, output: Path, version: str,
                     execution_schema: str, experimental: dict) -> dict:
-        output.mkdir(parents=True)
+        output.mkdir(parents=True, exist_ok=True)
         (output / "predictions.csv").write_text("timestamp,asset\n", encoding="utf-8")
         saved_contract = json.loads(
             Path(experimental["manifest_path"]).read_text(encoding="utf-8")
