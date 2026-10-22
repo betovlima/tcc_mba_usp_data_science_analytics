@@ -210,6 +210,26 @@ def _normalize_alpaca_frame(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
     return result.loc[valid].copy()
 
 
+def _delayed_sip_end(
+    snapshot_end: str,
+    *,
+    now_utc: pd.Timestamp,
+    delay_minutes: int,
+) -> pd.Timestamp:
+    """Preserva SIP/RAW e respeita os 15 min da conta sem SIP em tempo real."""
+    if delay_minutes < 15:
+        raise ValueError("O SIP historico requer ao menos 15 minutos de atraso.")
+    current = pd.Timestamp(now_utc)
+    current = (
+        current.tz_localize("UTC")
+        if current.tzinfo is None
+        else current.tz_convert("UTC")
+    )
+    requested_exclusive = pd.Timestamp(snapshot_end, tz="UTC") + pd.Timedelta(days=1)
+    available_end = current - pd.Timedelta(minutes=delay_minutes)
+    return min(requested_exclusive, available_end)
+
+
 def download_raw_bars(
     credentials: AlpacaCredentials,
     paths: SnapshotPaths,
@@ -217,8 +237,9 @@ def download_raw_bars(
     assets: tuple[str, ...],
     bar_snapshot_as_of_end: str,
     analysis_end_date: str,
+    sip_delay_guard_minutes: int = 0,
 ) -> dict[str, Path]:
-    """Baixa SIP/1Day/RAW, um ativo por requisicao, e grava um CSV por ativo."""
+    """Baixa SIP/1Day/RAW, sem trocar o feed nem incluir SIP em tempo real."""
     paths.ensure()
     client = StockHistoricalDataClient(
         api_key=credentials.api_key,
@@ -226,13 +247,28 @@ def download_raw_bars(
     )
     start = pd.Timestamp(START_DATE, tz="UTC").to_pydatetime()
     bar_end = pd.Timestamp(bar_snapshot_as_of_end, tz="UTC")
-    api_end = (bar_end + pd.Timedelta(days=1)).to_pydatetime()
+    requested_end = bar_end + pd.Timedelta(days=1)
+    # A Alpaca bloqueia SIP se o argumento 'end' cair dentro dos ultimos
+    # 15 minutos, inclusive quando esse horario esta NO FUTURO.
+    # O guard de 20 minutos so e ativado pelo replay experimental.
+    api_end_ts = (
+        _delayed_sip_end(
+            bar_snapshot_as_of_end,
+            now_utc=pd.Timestamp.now(tz="UTC"),
+            delay_minutes=sip_delay_guard_minutes,
+        )
+        if sip_delay_guard_minutes else requested_end
+    )
+    if api_end_ts <= pd.Timestamp(start):
+        raise RuntimeError("Janela SIP vazia depois do limite de atraso.")
+    api_end = api_end_ts.to_pydatetime()
 
     print(
         "[alpaca-bars] loader=alpaca_raw_sip_daily "
         f"assets={len(assets)} feed=sip adjustment=raw timeframe=1Day "
         f"start={START_DATE} bar_asof_end={bar_snapshot_as_of_end} "
-        f"analysis_end={analysis_end_date}",
+        f"analysis_end={analysis_end_date} api_end={api_end_ts.isoformat()} "
+        f"sip_delay_guard_minutes={sip_delay_guard_minutes}",
         flush=True,
     )
 
