@@ -131,14 +131,14 @@ def reproduzir_universo_congelado(
     output = Path(output).resolve()
 
     is_experimental = experimental is not None
-    base_paths = (
-        SnapshotPaths.from_root(Path(experimental["base_root"]).resolve())
-        if is_experimental else pesquisa.BASE_DATA
+    # Uma unica coleta de 77 simbolos para a nova avaliacao.
+    # A divisao interna 65+10 so preserva o replay matematico v1.23.0.
+    snapshot_paths = (
+        SnapshotPaths.from_root(Path(experimental["snapshot_root"]).resolve())
+        if is_experimental else None
     )
-    candidate_paths = (
-        SnapshotPaths.from_root(Path(experimental["candidate_root"]).resolve())
-        if is_experimental else pesquisa.FULL_DATA
-    )
+    base_paths = snapshot_paths if is_experimental else pesquisa.BASE_DATA
+    candidate_paths = snapshot_paths if is_experimental else pesquisa.FULL_DATA
     manifest_path = (
         Path(experimental["manifest_path"]).resolve()
         if is_experimental else root / "evidencias" / "manifest_universo_congelado.json"
@@ -192,8 +192,21 @@ def reproduzir_universo_congelado(
           flush=True)
 
     requested = tuple(pesquisa.U67_REQUESTED_ASSETS)
-    if tuple(snapshot.get("assets") or ()) != requested:
-        raise RuntimeError("Ordem/identidade dos ativos base divergente.")
+    requested_universe = (*requested, *selected)
+    expected_snapshot_assets = requested_universe if is_experimental else requested
+    if tuple(snapshot.get("assets") or ()) != expected_snapshot_assets:
+        raise RuntimeError(
+            "Snapshot nao contem o universo vencedor fixo na ordem esperada: "
+            f"esperado={len(expected_snapshot_assets)}."
+        )
+    if is_experimental:
+        source_end = str(snapshot.get("bars", {}).get("bar_snapshot_as_of_end", ""))
+        target_end = str(contract["analysis_end_date"])
+        if target_end > source_end:
+            raise RuntimeError(
+                "O cutoff solicitado ultrapassa a data do snapshot atualizado: "
+                f"cutoff={target_end} snapshot={source_end}"
+            )
 
     raw, exclusions, diagnostics, data_audit = prepare_model_frames(
         base_paths,
@@ -201,11 +214,15 @@ def reproduzir_universo_congelado(
         csv_float_precision="round_trip",
     )
     excluded = frozenset(str(item.get("symbol") or "").upper() for item in exclusions)
-    if not is_experimental and excluded != pesquisa.U67_EXPECTED_EXCLUSIONS:
-        raise RuntimeError("Exclusoes estruturais divergentes.")
+    if excluded != pesquisa.U67_EXPECTED_EXCLUSIONS:
+        raise RuntimeError(
+            "Exclusoes estruturais inesperadas: "
+            f"esperadas={sorted(pesquisa.U67_EXPECTED_EXCLUSIONS)} "
+            f"observadas={sorted(excluded)}. Nao alterar o universo silenciosamente."
+        )
     baseline_order = tuple(symbol for symbol in requested if symbol in raw)
-    if not is_experimental and len(baseline_order) != pesquisa.U67_EXPECTED_EFFECTIVE_COUNT:
-        raise RuntimeError("Tamanho do universo base efetivo divergente.")
+    if len(baseline_order) != pesquisa.U67_EXPECTED_EFFECTIVE_COUNT:
+        raise RuntimeError("Esperados 65 ativos base efetivos, sem troca de universo.")
 
     config = build_control_config(
         {symbol: raw[symbol] for symbol in baseline_order},
@@ -256,16 +273,13 @@ def reproduzir_universo_congelado(
     )
     requested_selected = selected
     missing = [symbol for symbol in selected if symbol not in frames]
-    if missing and not is_experimental:
+    if missing:
         raise RuntimeError(
-            "Candidatos incompativeis com as series congeladas: "
-            + ", ".join(missing)
+            "Universo vencedor incompleto; nao executar com menos de 75 ativos. "
+            "Series ausentes ou estruturalmente incompativeis: " + ", ".join(missing)
         )
-    if is_experimental:
-        selected = tuple(symbol for symbol in selected if symbol in frames)
-        print(f"[experimental] candidatos excluidos={missing}", flush=True)
-    if any(verified_hashes.get(symbol) != file_hashes[symbol] for symbol in selected):
-        raise RuntimeError("Dados dos candidatos foram alterados durante a leitura.")
+    if verified_hashes != file_hashes:
+        raise RuntimeError("Dados dos dez ativos fixos foram alterados durante a leitura.")
 
     caches = {}
     for position, symbol in enumerate(selected, start=1):
@@ -306,6 +320,10 @@ def reproduzir_universo_congelado(
     effective = sorted([*baseline_symbols, *selected])
     if len(effective) != len(baseline_symbols) + len(selected):
         raise RuntimeError("Identidade duplicada no universo expandido.")
+    if is_experimental and len(effective) != 75:
+        raise RuntimeError(
+            f"Universo efetivo deve ter 75 ativos; encontrados {len(effective)}."
+        )
 
     # So depois da validacao dos inputs e do replay, preparar a saida.
     if output.exists():
@@ -363,6 +381,7 @@ def reproduzir_universo_congelado(
             "snapshot_sha256": snapshot["snapshot_sha256"],
             "candidate_file_hashes": verified_hashes,
             "candidate_cache_committed_to_git": False,
+            "single_unified_snapshot": is_experimental,
             "source_manifest_path": str(manifest_path),
             "base_snapshot_path": str(base_paths.root),
             "candidate_snapshot_path": str(candidate_paths.root),
