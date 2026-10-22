@@ -69,8 +69,8 @@ def test_fresh_job_does_not_overwrite_official_snapshot(
         for symbol in assets:
             target = paths.raw_bars / f"{symbol}.csv"
             target.write_text(
-                "timestamp,open,high,low,close,volume\\n"
-                "2026-10-22T04:00:00+00:00,1,1,1,1,100\\n",
+                "timestamp,open,high,low,close,volume\n"
+                "2026-10-22T04:00:00+00:00,1,1,1,1,100\n",
                 encoding="utf-8",
             )
             saved[symbol] = target
@@ -81,7 +81,7 @@ def test_fresh_job_does_not_overwrite_official_snapshot(
         saved = {}
         for symbol in assets:
             target = paths.corporate_actions / f"{symbol}.csv"
-            target.write_text("action_type\\n", encoding="utf-8")
+            target.write_text("action_type\n", encoding="utf-8")
             saved[symbol] = target
         return saved
 
