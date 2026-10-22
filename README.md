@@ -162,28 +162,27 @@ A integração da pesquisa histórica (commit `13e5ed39ed0e700d2eb8c90bc8bee64ad
 
 O código valida primeiro a identidade do snapshot, a composição do universo e os **20 hashes dos CSVs** (barras e eventos de dez ativos). Depois treina a referência e os candidatos por fold, calibra conjuntamente e compara o capital simulado ao checkpoint congelado. Nenhuma chamada de download é feita pelo executor. O cenário é histórico, não uma previsão de resultado futuro. **A execução completa foi concluída no Spyder em 21/10/2026**, sobre o cache histórico preservado, com `status=completed`, `reproduced_exact_to_cent=true`, capital de **US$ 587.165.941,1330212** e diferença de **US$ 0,00**. O ZIP conferido é `pacote_reproducao_universo.zip`, SHA-256 `0c3518387556f147897baf121cb089f532f8355a8bb074c91fe0a6b5ec4b6ac8`. O pacote contém 29 arquivos, incluindo `predictions.csv` (1.560 sessões), `trades.csv` (710 registros), `reproducao_universo.json` e análises gráficas. O checkpoint foi confirmado também pelos modos de pesquisa `decision_validation` e `assurance_validation` sobre o mesmo recorte congelado. O cache local continua **não versionado**: clones limpos não têm, por si só, os arquivos suficientes para refazer o replay.
 
-## Execucao experimental com series Alpaca atualizadas — v1.23.1 (branch isolada)
+## Experimento v1.23.2 — comparacao do TCC com a data final atualizada
 
-**A release oficial v1.23.0 nao foi alterada.** Seu replay em `reproduzir_experimento.py` ainda usa os CSVs congelados e preserva o checkpoint de US$ 587.165.941,13 em 06/10/2026.
+**Objetivo restrito:** investigar o efeito de atualizar os historicos e de avancar o corte temporal mantendo *o mesmo universo vencedor fixo*, que gerou US$ 587.165.941,13 em 06/10/2026. Nao descobrir, classificar ou otimizar novos ativos.
 
-A branch `research/v1.23.1-fresh-snapshot-20261022` acrescenta somente o teste exploratorio:
+- Branch em uso: `research/v1.23.1-fresh-snapshot-20261022`; **revisao experimental v1.23.2**, sem alterar a `main`.
+- Entrada no Spyder: `executar_atualizacao_series_spyder.py` (reiniciar kernel, F5).
+- `TARGET_CUTOFF = "2026-10-22"` e `EVALUATION_CUTOFFS = ("2026-10-06", "2026-10-21")`.
+- **Uma coleta de 77 ativos solicitados** de Alpaca RAW/SIP/1Day e seus eventos corporativos. O pacote historico original (67 + 10) define a lista uma unica vez. A pesquisa nao executa descoberta de candidatos, nem altera a composicao.
+- **75 ativos efetivos obrigatorios.** Exclusoes estruturais permanecem DOC e CLMT. Um novo problema de integridade interrompe a execucao com erro; nao descartar ativos silenciosamente nem reparar series manualmente.
+- Dados localmente isolados em `dados/.u67_fresh_runs/asof_<DATA>_<ID>/universe_77/` (nao versionados no Git), manifesto e SHA-256. Os arquivos do snapshot oficial `dados/u67/` e os manifestos de `evidencias/` sao preservados.
+- Dois replays financeiros com **o mesmo snapshot de 77 simbolos, os mesmos algoritmos, atributos, parametros, custos, treinamento e politica**, alterando apenas a data final. A divisao interna do motor historico entre base e adicionais existe unicamente para manter os calculos de v1.23.0; nao e etapa de pesquisa, escolha ou coleta em separado.
+- **Corte A — 06/10:** mede alteracoes do resultado em 06/10 com historicos atualizados, comparando ao TCC v1.23.0 (US$ 587.165.941,13).
+- **Corte B — 21/10:** mede o efeito de avancar a data final na mesma fonte e permite comparar com a execucao externa encerrada em 21/10.
+- Saida para compartilhar: `output/fresh_universe/asof_<DATA>_<ID>/pacote_comparacao_cutoffs.zip`; inclui `comparacao_cutoffs.json`, manifestos, dados financeiros e operacoes dos dois replays, sem RAWs. O checkpoint oficial nao e imposto aos experimentos; diferenças devem ser explicadas, nao ajustadas.
+- Nenhuma ordem, nenhuma atualizacao de Mongo e nenhuma modificacao da aplicacao operacional.
+- Testes CI validam a separacao, integridade de referencias e orquestracao de 77 ativos com mocks. A reproducao economica completa depende de executar F5 localmente com credenciais da Alpaca e enviar o pacote.
 
-1. Ajuste `TARGET_CUTOFF = "2026-10-22"` em `executar_atualizacao_series_spyder.py` conforme o ultimo pregao completo.
-2. No Spyder, reinicie o kernel e execute `executar_atualizacao_series_spyder.py` (F5), com suas credenciais locais Alpaca no `.env` preexistente.
-3. O programa baixa **67 series base e 10 adicionais** em Alpaca SIP/RAW/1Day, incluindo eventos corporativos, e armazena tudo em `dados/.u67_fresh_runs/asof_<DATA>_<ID>/` (ignorado pelo Git). Nao utiliza MongoDB nem interage com ordens.
-4. AAPL deve possuir barra diaria da sessao de corte. Nao inicia para dia futuro ou pregão em andamento (requer ao menos 17h horario de Nova York no proprio dia).
-5. Cada snapshot recebe manifesto SHA-256, e o replay faz nova verificacao de identidade e de hashes. Ativos estruturalmente incompativeis sao excluidos e relatados. Nenhum arquivo sob `dados/u67/`, `evidencias/` ou o cache historico dos candidatos e escrito.
-6. A politica usa os **mesmos 77 simbolos solicitados**, os algoritmos, hiperparametros e regras de rotacao do TCC; podem variar o universo efetivo e a calibracao dos folds em funcao dos novos dados.
-7. Artefatos: `output/fresh_universe/asof_<DATA>_<ID>/pacote_atualizacao_series.zip`, inclusive `reproducao_universo.json`, CSVs de decisoes/operacoes, evolucao financeira, hashes e exclusoes.
-8. `reproduced_exact_to_cent=null` significa *checkpoint historico nao aplicavel* e nao ausencia de reproducibilidade. O capital final novo **nao e esperado ser US$ 587 milhoes**. Para comparacao causal, auditar as mesmas datas e o primeiro ativo/decisao divergente.
+Para baixar a branch no terminal Git:
 
-**Sem acesso as credenciais Alpaca nesta conversa, somente testes de contrato/mocks podem ser executados no CI.** O backtest integral exige rodar localmente e enviar o ZIP. Nenhuma alteracao foi feita na aplicacao operacional nem na Winner.
-
-Comandos Git (PowerShell):
 ```powershell
 git fetch origin
-git switch main
-git pull --ff-only origin main
 git switch research/v1.23.1-fresh-snapshot-20261022
 git pull --ff-only origin research/v1.23.1-fresh-snapshot-20261022
 ```
