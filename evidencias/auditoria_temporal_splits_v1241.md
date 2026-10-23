@@ -49,3 +49,9 @@ Com o snapshot, o executor:
 Depois disso, verificar com um replay completo e sem seleção de parâmetros se a inclusão de um evento futuro desconhecido não muda as decisões anteriores. Se falhar, documentar e corrigir a dependência temporal; se passar, não afirmar que isso resolve outros possíveis vazamentos ou que valida retrospectivamente os US$ 587 milhões.
 
 **Resultado histórico preservado:** os US$ 587.165.941,13 pertencem ao TCC v1.23.0 condicionado aos seus CSVs e à normalização legada. A v1.24.1 não substitui esse checkpoint nem os resultados do contrafactual de 73 barras de maio de 2018.
+
+## Verificação complementar de aritmética decimal
+
+A base de custo também foi protegida contra resíduos de precisão decimal em desdobramentos de proporção não inteira, por exemplo **3 ações novas para cada 2 antigas**. O custo não deve ser falsamente marcado como divergente porque a divisão gera decimal periódico; o resíduo permitido é apenas de arredondamento, nunca de mudança econômica material. Alteração em `reproducao/splits_temporais.py`: commit `52324409a142e46234ea77a9edfb18271a64a357`; teste de custódia sintética em `tests/test_splits_temporais_v1241.py`: commit `3ee84550108f2c2538a44f6e5f71673c357bb466`.
+
+O exemplo sintético **não** valida regras de cash-in-lieu da corretora: isso ainda exige especificação e teste próprios antes da integração ao replay de capital real.
