@@ -2,7 +2,7 @@
 
 **Data:** 23/10/2026. **Branch de pesquisa:** `research/v1.23.1-fresh-snapshot-20261022`. **PR:** #18 (Draft). **`main` de referência, não alterada:** `4667d2ccee3f3441ee4d2b362ce734311cedd5e3`.
 
-**Versão:** v1.24.1 — teste isolado sobre a política RAW estrita v1.24.0, **sem alterar o código do backtest oficial v1.23.0** nem parâmetros, universo de 75 ativos, política Control, snapshot RAW ou MCT.
+**Versão:** v1.24.1 — teste isolado sobre a política RAW estrita v1.24.0, **sem alterar o código do backtest oficial v1.23.0** nem parâmetros, universo de 75 ativos, política Control, snapshot RAW ou a plataforma operacional.
 
 **Commits da implementação e testes:**
 - `41dde42d74e408a107805356103d6fcbbc5df796`: `reproducao/splits_temporais.py`, políticas distintas para visibilidade de anúncio, efetivação e contabilidade sintética.
