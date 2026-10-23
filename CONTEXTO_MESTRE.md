@@ -1,3 +1,22 @@
+## Auditoria financeira final da unificação dos 75 ativos — v1.23.7
+
+**Branch:** `research/v1.23.1-fresh-snapshot-20261022`; **revisão testada:** `78d473fb83d5ce2b89c3282f6b6ace4054c53bdc`; **base da `main` preservada:** `4667d2ccee3f3441ee4d2b362ce734311cedd5e3`. **Relatório integral:** `evidencias/auditoria_universo_unico_75_v1237_20261022.md`, adicionado no commit `ecf16c9080ea94ef5c89ceb89d247f7b9b5b5a1b`. **Pacote local v1.23.7:** `pacote_comparacao_cutoffs_75.zip`, SHA-256 `da1001963f1a57cc2576aa6e55cffbaf31150bb20c824e6fca2419c381175e79`.
+
+| Execução | Cutoff 06/10/2026 | Cutoff 21/10/2026 |
+|---|---:|---:|
+| Controle experimental v1.23.7 — **75 ativos treinados conjuntamente** | **US$ 89.941.496,49095525** | **US$ 76.152.561,33521412** |
+| Controle experimental v1.23.4 — 75 efetivos, motor legado | US$ 89.941.496,49095525 | US$ 76.152.561,33521412 |
+| Plataforma operacional, mesma estratégia e data | — | US$ 76.152.561,33521412 |
+| TCC oficial v1.23.0 — dados congelados, cutoff 06/10 | US$ 587.165.941,1330212 | não executado |
+
+**Provas de equivalência nesta fotografia:** `snapshot_75_manifest.json` possui exatamente 75 símbolos. Todos os **150 arquivos RAW/Corporate Actions** destes ativos mantêm SHA-256 idêntico ao snapshot anterior de 77, sendo DOC e CLMT os únicos símbolos descartados. A nova identidade U75 é `595b7a03dc2c8978487975cd3554b1ea65608741893f13208938dc624cb273cc`, proveniente da U77 `1c4d16173eaa5219a1bcc18cfa431cf1c096dbeaa26ca53aa03e9fcf047cff5c`. Os `predictions.csv` e `trades.csv` de v1.23.7 e v1.23.4 são **100% idênticos por célula**, respectivamente 1.560 e 1.571 decisões e 690 e 698 registros de negociação; as margens e pontuações de calibração são idênticas, diferindo apenas o rótulo `scenario` herdado do motor (`U67_BASELINE`). **Nenhum resultado econômico se alterou com a consolidação dos 75 ativos.**
+
+Métricas até 21/10: Sharpe **2,310440236459**, drawdown máximo **−41,682843%**, 348 rotações, benchmark de comprar/manter no mesmo universo **US$ 30.822,89**. O replay terminado em 06/10 liquida a posição CAPR e paga US$ 1.897,45; o replay contínuo marca US$ 89.943.393,94 nesse dia, daí a diferença contábil entre encerrar ou continuar.
+
+**Consequência metodológica:** não há justificativa para manter duas etapas 65+10 na pesquisa contemporânea: a execução conjunta dos 75 produziu exatamente os mesmos resultados. Isso **não explica nem recupera** os US$ 587 milhões sobre o snapshot antigo. É preciso concluir o teste contrafactual das **73 barras de maio de 2018 em 31 ativos efetivos**, por `pesquisar_causa_drift_2018_spyder.py` na mesma branch, com resultado isolado `pacote_contrafactual_2018.zip`. Não alterar o TCC oficial, a `main` ou a aplicação operacional. DOC/CLMT não participaram dos resultados comparados; este experimento não mede o resultado hipotético de incluí-los.
+
+---
+
 ## Política definitiva do universo efetivo — v1.23.7 (22/10/2026)
 
 **Decisão do pesquisador:** o **único universo da pesquisa é composto por 75 ativos**, sem DOC e CLMT. Os símbolos excluídos permanecem apenas nos manifestos de proveniência histórica e na reprodução oficial já congelada, **nunca na coleta, treinamento, calibração, simulação ou auditoria prospectiva do fluxo de pesquisa v1.23.7**. Nenhum ativo deve ser acrescentado, descoberto, substituído ou reabilitado automaticamente.
