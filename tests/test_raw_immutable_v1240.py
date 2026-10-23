@@ -2,16 +2,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-import hashlib
-import json
 
-import numpy as np
 import pandas as pd
 import pytest
 
 from reproducao.dados import SnapshotPaths, _normalize_alpaca_frame
 from reproducao.preparacao import load_raw_bar_file, prepare_model_frames
-from auditar_series_alpaca_raw_spyder import verify_unaltered_model_input
 
 
 def make_raw(tmp_path: Path, values: list[dict]) -> Path:
