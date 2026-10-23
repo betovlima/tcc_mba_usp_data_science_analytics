@@ -52,3 +52,28 @@ Executar `auditar_drift_historico_spyder.py` (introduzido na mesma branch após 
 ## Integridade histórica
 
 A reprodução original em `reproduzir_experimento.py`, seus hashes oficiais, o modo Control e a `main` devem permanecer imutáveis durante estes testes. A auditoria local é somente leitura sobre os dois snapshots e produção de novos relatórios em `output/`.
+
+## 30. Resultado da auditoria por linha — snapshot antigo x renovado (22/10/2026)
+
+**Evidência efetivamente recebida:** `pacote_auditoria_drift_historico.zip`, SHA-256 **`a6ce4625b3bbca7ad7440e94e3623f1fff20fe01bf0fc0b03d5a6e5592aa414c`**; executado em `2026-10-22T23:58:08.453028+00:00` na branch `research/v1.23.1-fresh-snapshot-20261022`.
+
+- Snapshot base antigo **`e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575`** e novo unificado **`1c4d16173eaa5219a1bcc18cfa431cf1c096dbeaa26ca53aa03e9fcf047cff5c`** (conferidos pelos manifestos locais).
+- **77/77 ativos solicitados** têm exatamente as mesmas **2.705 linhas até 06/10/2026** e os mesmos timestamps. Todos receberam **12 sessões novas posteriores à data**. Foram **zero datas ausentes e zero datas novas** na janela comparável.
+- **32/77 ativos têm modificações materiais** em datas comuns, **75 barras no total, exclusivamente em 01, 02 e 03 de maio de 2018**. Os outros **45 ativos** não apresentam alteração material de OHLCV no intervalo.
+- O ativo **CLMT**, excluído estruturalmente do universo efetivo, está entre os 32 afetados (duas barras). Portanto, **73 das 75 barras alteradas pertencem a 31 ativos efetivos**; não se deve atribuir diretamente contribuição econômica às duas barras de CLMT.
+- 01/05/2018: 12 barras, **somente volume**. 02/05/2018: 31 barras, todas com volume e máxima alterados (28 mínimas, 7 aberturas e 1 fechamento). 03/05/2018: 32 barras, todas com volume alterado (28 máximas, 28 mínimas, 9 aberturas e 1 fechamento).
+- Volume somado **apenas entre os ativos com divergência naquela data**: 02/05, **12.152.097 antigo vs. 216.979.152 renovado**; 03/05, **10.871.735 vs. 196.836.941**. O histórico original contém valores de volume muito inferiores aos da nova consulta. Essa coincidência de datas em muitos ativos é um sinal forte de anomalia localizada dos *insumos históricos*, mas **o motivo da anomalia não foi comprovado**.
+- Dos 75 registros OHLCV, **somente dois fechamentos diferiram:** **SBFG em 02/05/2018 (18,930 vs. 18,954)** e **CAPR em 03/05/2018 (1,290 vs. 1,280)**. As demais divergências de preços foram predominantemente abertura, máxima e mínima, além do volume.
+- **Corporate Actions:** sete novos registros de `cash_dividend` no snapshot atualizado, todos com ex-date em setembro de 2026: **CRM, ADC, BXMT, XEL, CRT, STAG e TOWN**. Não houve eventos de split anteriores a 06/10 incluídos/removidos nas evidências.
+- **Normalização por splits:** as mesmas **75 barras** foram apontadas após normalização; nenhuma nova data com diferença surgiu no arquivo `divergencias_ohlcv_splits.csv`.
+- **MGM e CXW** apresentam séries OHLCV equivalentes na janela até 06/10; a decisão diferente de 28/07/2020 requer investigação de **efeitos indiretos sobre o treinamento/calibração** e da composição dos folds, não simples divergência de preço desses dois ativos.
+
+### Interpretação e limites
+
+A comparação de arquivos agora localiza as diferenças em maio de 2018, **antes de todas as 1.560 decisões OOS comparadas**. Isso cria uma hipótese plausível de amplificação das diferenças por LightGBM + decisões de rotação + reinvestimento, mas **não prova a cadeia causal**. Os sete dividendos de setembro de 2026 e possíveis diferenças nas fronteiras de folds devido às 12 sessões adicionais constituem fatores a avaliar separadamente. Em especial, diferenças grandes de capital não permitem inferir automaticamente vazamento de futuro ou erro de algoritmo.
+
+**Status: diagnóstico descritivo concluído.** A próxima análise é um **teste de sensibilidade controlada** em uma cópia descartável do snapshot atualizado: conservar os mesmos 77 símbolos, o mesmo calendário, os eventos e o mesmo cutoff 06/10/2026, alterando somente as 75 barras divergentes de maio de 2018 para seus valores do snapshot histórico verificado. Executar lado a lado o Control no snapshot renovado integral e nessa cópia. **Não alterar nenhum dos dois snapshots originais; não efetuar correções manuais em séries estruturais nem promover a cópia de diagnóstico como fonte oficial.**
+
+- **Nova revisão experimental de diagnóstico:** `v1.23.6` na mesma branch `research/v1.23.1-fresh-snapshot-20261022`; script `pesquisar_causa_drift_2018_spyder.py`.
+- **Implementação inicial:** commit **`e02b315d47474c21e94223bbee1738a799077e9c`**; testes de isolamento iniciados no commit **`df3f500f4e180803e722273d11ba9b0858b62000`**.
+- **Saída a obter localmente:** `output/causal_drift_2018/<ID>/pacote_contrafactual_2018.zip`. Somente nesse resultado poderá ser quantificada a contribuição financeira condicional às diferenças de 2018. A referência para a comparação é **US$ 89.941.496,49** (snapshot renovado em 06/10), frente ao checkpoint histórico **US$ 587.165.941,13**.
