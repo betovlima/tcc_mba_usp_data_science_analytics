@@ -237,3 +237,18 @@ def test_synthetic_lightgbm_ranking_unchanged_by_unannounced_future_split(
     assert max(choices[0], key=choices[0].get) == max(
         choices[1], key=choices[1].get
     )
+
+
+def test_three_for_two_split_decimal_cost_basis_is_conserved() -> None:
+    item = action("2020-07-01T12:00:00Z")
+    item["old_rate"] = 2
+    item["new_rate"] = 3
+    item["id"] = "three-for-two"
+    event = split_from_action(item)
+    assert event is not None
+    qty, cost, _ = apply_custody_split(
+        quantity=Decimal("7"), average_unit_cost=Decimal("20"),
+        event=event, valuation_time="2020-08-12T12:00:00Z",
+    )
+    assert qty == Decimal("10.5")
+    assert abs(qty * cost - Decimal("140")) < Decimal("1e-20")
