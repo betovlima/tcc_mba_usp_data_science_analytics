@@ -1,3 +1,19 @@
+## v1.25.4 — correcao da auditoria de generalizacao preditiva (23/10/2026)
+
+**Branch unica:** `research/v1.23.1-fresh-snapshot-20261022`; `main` intocada. **Arquivo:** `auditar_generalizacao_587m_spyder.py`; versao `1.25.4`.
+
+**Incidente:** v1.25.3 completou o treinamento da auditoria dos 75 ativos × 3 folds, mas abortou na validacao com `RuntimeError: Metricas incompletas ou invalidas; nao imputar dados.` O erro ocorreu **antes da criacao do ZIP**, sem resultados cientificos publicados.
+
+**Causa demonstrada pela inspecao do codigo:** `diagnosticos_fora_amostra(...)` retorna `{..., "by_asset": {symbol: {"rmse", "mae", "rows", ...}}}`; a auditoria v1.25.3 passava incorretamente `state.oos_diagnostics.get(symbol)` e `cache.oos_diagnostics.get(symbol)` a `_fit_quality_row`. Assim a metrica `oos_rmse` de cada ativo se tornava vazia, embora os ajustes tivessem terminado. A rotina anterior de assurance já acessava corretamente `by_asset`.
+
+**Correcao:** as duas leituras agora usam `oos_diagnostics.get("by_asset", {}).get(symbol)`, sem alterar modelo, dados RAW, universo, parametros, folds, simulador ou politica. Acrescentado resgate **opcional, condicionado a evidencia local**: quando o traceback da falha permanece no mesmo kernel Spyder, reutiliza as metricas de treino armazenadas na variavel `frame` e as metricas OOS de `output/reproducao_universo/validacao_preditiva/metricas_por_ativo_fold.csv` (225 pares de ativo/fold; reproducao local previamente validada contra SHA do vintage e checkpoint). Na ausencia de qualquer uma dessas evidencias, refaz **somente** os ajustes preditivos; nao baixa dados nem executa backtest. Salva o quadro bruto em `output/auditoria_generalizacao_587m/ultima_execucao_metricas_brutas.csv` antes de validar, para permitir diagnostico de futuras falhas. O pacote de saida passa a `pacote_generalizacao_587m_v1254.zip`.
+
+**Status de verificacao:** alteracao publicada no GitHub, mas **ainda nao executada no Spyder do pesquisador** e ainda sem resultado de gap/RMSE comprovado. A reproducao monetaria de US$ 587.165.941,13 foi preservada, nao recalculada. A auditoria estima generalizacao **preditiva**, nao atribuicao causal de riqueza nem validacao prospectiva da escolha de ativos/hiperparametros.
+
+**Procedimento:** no terminal, `git fetch origin`, `git switch research/v1.23.1-fresh-snapshot-20261022`, `git pull --ff-only origin research/v1.23.1-fresh-snapshot-20261022`. **Nao reiniciar o kernel antes da primeira tentativa**, para possibilitar resgate; no mesmo Spyder, F5 em `auditar_generalizacao_587m_spyder.py`. Enviar ZIP `output/auditoria_generalizacao_587m/<run_id>/pacote_generalizacao_587m_v1254.zip`. Se o traceback anterior for indisponivel, o executor informa que fara novo ajuste dos modelos (sem simular capital).
+
+---
+
 ## v1.25.1 — recuperação sem retreino do backtest RAW econômico (23/10/2026)
 
 **Branch única:** `research/v1.23.1-fresh-snapshot-20261022`. **`main` intacta:** `4667d2ccee3f3441ee4d2b362ce734311cedd5e3`. PR #18 Draft, sem merge.
