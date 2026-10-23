@@ -1,8 +1,8 @@
-"""Teste de sensibilidade: 75 barras de maio/2018, sem alterar insumos oficiais.
+"""Teste de sensibilidade: 73 barras de 31 ativos efetivos, sem alterar fontes.
 
 Dois replays CONTROL ate 06/10/2026, mesmo cutoff e mesmas Corporate Actions:
 1. snapshot Alpaca atual sem alteracoes;
-2. COPIA ISOLADA desse snapshot com as 75 observacoes divergentes de maio/2018
+2. COPIA ISOLADA desse snapshot com as 73 observacoes divergentes de maio/2018
    restauradas exclusivamente dos CSVs historicos com hash verificado.
 
 Nao e correcao nem substituicao dos dados oficiais: e intervencao experimental
@@ -22,23 +22,25 @@ import pandas as pd
 
 from auditar_drift_historico_spyder import (
     ANALYSIS_CUTOFF, FRESH_CUTOFF, BARS,
-    compare_bar_frames, file_sha256, latest_valid_fresh_snapshot,
-    original_extra_paths,
+    compare_bar_frames, file_sha256, original_extra_paths,
 )
-from engine.configuracao import U67_REQUESTED_ASSETS
+from engine.configuracao import U67_EXPECTED_EXCLUSIONS, U67_REQUESTED_ASSETS
+from executar_atualizacao_series_spyder import (
+    find_reusable_snapshot, reuse_legacy_snapshot_as_75,
+)
 from reproducao.dados import (
     SnapshotPaths, build_snapshot_manifest, validate_snapshot,
 )
-from reproducao.experimento import reproduzir_universo_congelado
+from reproducao.universo_fixo75 import reproduzir_universo_fixo75, universo_75
 from reproducao.preparacao import load_raw_bar_file
 
 ROOT = Path(__file__).resolve().parent
-EXPERIMENT_VERSION = "1.23.6"
-EXECUTION_SCHEMA = "causal-2018-bar-replay-v1"
+EXPERIMENT_VERSION = "1.23.7"
+EXECUTION_SCHEMA = "causal-2018-single-75-v2"
 COMPARE_CUTOFF = ANALYSIS_CUTOFF  # 06/10/2026: mesma data do checkpoint.
 SNAPSHOT_CUTOFF = FRESH_CUTOFF    # 22/10/2026: mesma fotografia Alpaca.
-EXPECTED_CHANGED_ROWS = 75
-EXPECTED_CHANGED_ASSETS = 32
+EXPECTED_CHANGED_ROWS = 73
+EXPECTED_CHANGED_ASSETS = 31
 ALLOWED_DATES = frozenset({"2018-05-01", "2018-05-02", "2018-05-03"})
 WORK_ROOT = ROOT / "dados" / ".u67_fresh_runs"
 OUTPUT_ROOT = ROOT / "output" / "causal_drift_2018"
@@ -116,11 +118,11 @@ def make_counterfactual_snapshot(
 ) -> tuple[dict, dict]:
     """Cria nova identidade SHA-256 para copia atualizada com barras isoladas."""
     original = verify_historical_sources(root, historical)
+    universe = universo_75(historical, ())
     selected = tuple(historical["selected_assets"])
-    universe = (*U67_REQUESTED_ASSETS, *selected)
     original_fresh = validate_snapshot(fresh)
     if tuple(original_fresh["assets"]) != universe:
-        raise RuntimeError("Snapshot atual nao corresponde ao universo fixo de 77.")
+        raise RuntimeError("Snapshot atual nao contem os 75 ativos elegiveis.")
     if original_fresh["bars"]["bar_snapshot_as_of_end"] != snapshot_end:
         raise RuntimeError("O snapshot de origem possui data de coleta diferente.")
     if destination.root.exists():
@@ -161,7 +163,7 @@ def make_counterfactual_snapshot(
     if (len(changes_by_symbol) != EXPECTED_CHANGED_ROWS
             or len({x["symbol"] for x in changes_by_symbol}) != EXPECTED_CHANGED_ASSETS):
         raise RuntimeError(
-            "Quantidade das divergencias de maio/2018 inesperada: "
+            "Quantidade das divergencias nos 75 ativos inesperada: "
             f"{len(changes_by_symbol)} registros, "
             f"{len({x['symbol'] for x in changes_by_symbol})} ativos. "
             "Nao executar um contrafactual diferente do auditado."
@@ -182,7 +184,9 @@ def make_counterfactual_snapshot(
         "source_fresh_snapshot_sha256": original_fresh["snapshot_sha256"],
         "source_historical_base_sha256": historical["snapshot_sha256"],
         "counterfactual_snapshot_sha256": validated["snapshot_sha256"],
-        "intervention": "restore_75_material_OHLCV_rows_from_2018_on_temporary_copy",
+        "intervention": "restore_73_effective_OHLCV_rows_from_2018_on_temporary_copy",
+        "fixed_asset_count": 75,
+        "structurally_excluded_from_research": sorted(U67_EXPECTED_EXCLUSIONS),
         "dates_permitted": sorted(ALLOWED_DATES),
         "modified_material_bars": len(changes_by_symbol),
         "modified_asset_count": len({x["symbol"] for x in changes_by_symbol}),
@@ -200,13 +204,28 @@ def run(*, root: Path = ROOT, output: Path | None = None) -> dict:
             encoding="utf-8"
         )
     )
-    fresh, original_manifest = latest_valid_fresh_snapshot(
-        root, cutoff=SNAPSHOT_CUTOFF,
-    )
+    universe = universo_75(historical, ())
+    reused = find_reusable_snapshot(SNAPSHOT_CUTOFF, universe)
+    if reused is not None:
+        _, fresh, original_manifest = reused
+    else:
+        migration_dir = root / "dados" / ".u75_fresh_runs" / (
+            "asof_2026-10-22_migrated_for_causal_" +
+            datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        )
+        migrated = reuse_legacy_snapshot_as_75(
+            SNAPSHOT_CUTOFF, universe, migration_dir
+        )
+        if migrated is None:
+            raise FileNotFoundError(
+                "Nao existe snapshot 75 pronto nem snapshot legado validado; "
+                "nao baixar nem reconstruir series originais."
+            )
+        fresh, original_manifest, _ = migrated
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    temp_root = WORK_ROOT if root == ROOT else root / "dados" / ".u67_fresh_runs"
+    temp_root = root / "dados" / ".u75_fresh_runs"
     scenario_dir = temp_root / f"counterfactual_2018_{stamp}"
-    clone = SnapshotPaths.from_root(scenario_dir / "universe_77")
+    clone = SnapshotPaths.from_root(scenario_dir / "universe_75")
     out = (Path(output) if output else root / "output" / "causal_drift_2018" / stamp)
     if out.exists():
         raise FileExistsError(out)
@@ -248,15 +267,13 @@ def run(*, root: Path = ROOT, output: Path | None = None) -> dict:
         contract_path.write_text(
             json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        result = reproduzir_universo_congelado(
+        result = reproduzir_universo_fixo75(
             root=root,
             output=out / label,
+            snapshot_root=paths.root,
+            analysis_end_date=COMPARE_CUTOFF,
             version=EXPERIMENT_VERSION,
             execution_schema=EXECUTION_SCHEMA,
-            experimental={
-                "manifest_path": str(contract_path),
-                "snapshot_root": str(paths.root),
-            },
         )
         if result["universe"]["effective_count"] != 75:
             raise RuntimeError(f"{label}: universo efetivo diferente de 75.")
@@ -279,6 +296,7 @@ def run(*, root: Path = ROOT, output: Path | None = None) -> dict:
             - decisions["fresh_reference"]["capital"]
         ),
         "historical_checkpoint_at_2026_10_06": historical["expected_ending_capital"],
+        "model_design": "all_75_models_trained_in_same_fold_no_65_plus_10",
         "warning": (
             "Comparacao contrafactual de sensibilidade, nao correcao oficial "
             "nem prova isolada da causa de cada ordem. Os dados imutaveis "
