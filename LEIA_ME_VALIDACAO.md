@@ -33,3 +33,11 @@ versão disponível no GitHub é 1.23.0 e tem caminho de treinamento distinto.
 por sessão para trabalhar com relevância não negativa; universo/candidatos
 selecionados full-window continuam contaminados por seleção retrospectiva.
 Nenhum resultado OOS é emitido quando faltam evidências.
+
+## Auditoria de vazamento nos folds
+
+`auditar_limites_temporais(states=..., common_dates=..., horizon_maximo=...)`
+identifica quantos rótulos da janela de treino ainda dependem de sessões
+posteriores ao início da calibração ou teste. Um alerta exige confirmar o
+uso efetivo desses rótulos e aplicar separação temporal apropriada no
+experimento futuro. Essa auditoria não altera a reprodução histórica.
