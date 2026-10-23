@@ -274,9 +274,15 @@ def auditar_normalizacao_splits(*, frames, origem_base, origem_candidatos, candi
                                     float_precision="round_trip")
             actions = load_actions_file(root.corporate_actions / f"{asset}.csv")
             normalized, applied = split_normalize(raw, actions)
+            def valid_rate(value):
+                try:
+                    return math.isfinite(float(value)) and float(value) > 0
+                except (TypeError, ValueError):
+                    return False
             invalid = [a for a in actions if a.get("action_type") in
                        {"forward_split", "reverse_split"} and (
-                           a.get("old_rate") is None or a.get("new_rate") is None
+                           not valid_rate(a.get("old_rate"))
+                           or not valid_rate(a.get("new_rate"))
                            or not a.get("ex_date")
                        )]
             if invalid:
