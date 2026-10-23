@@ -40,7 +40,7 @@ def test_literal_raw_serialization_is_17g_and_shortest_repr_ties(
 
 
 def test_not_all_small_differences_are_roundtrip_ties() -> None:
-    item = probe_float_serialization("1.0000000000000002", "3.0", "1/3")
+    item = probe_float_serialization("1.0000000000000002", "3", "1/3")
     assert item["literal_matches_17g"]
     assert not item["shortest_repr_equal"]
     assert not item["stored_literal_greater"]
