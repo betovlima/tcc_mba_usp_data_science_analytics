@@ -11,7 +11,6 @@ executam a cotação RAW original e a custódia muda sua QUANTIDADE ao split.
 """
 from __future__ import annotations
 
-import hashlib
 from typing import Any
 
 import numpy as np
