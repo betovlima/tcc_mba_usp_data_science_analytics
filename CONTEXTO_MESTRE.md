@@ -10,6 +10,9 @@
 
 **Novo teste v1.24.8 implementado:** `auditar_precisao_decimal_splits_spyder.py` commits **`e19e0f8a5e48edc73a40215fe31149e61edf4e79`**, **`4215b2122c5f8f8dfd14c404227f83a7ecfe6aee`**, **`a15a9ad82793cbe6bc1b53b804afa79c5df5267c`**; testes `tests/test_auditar_precisao_decimal_splits.py` commit **`4d7e85d8f497352be5487c623c37382ba7591bc0`**. Utiliza `csv.DictReader` para ler **os textos literais** das três duplas de preços, `Decimal` para interpretar decimal sem perda e `Fraction` para aplicar fatores de quantidade de split com exatidão racional, mesmo para proporções periódicas como 1:3. Informa se existe *empate decimal exato* ou diferença de origem no texto do CSV. Não corrige, arredonda ou reescreve dados; verifica SHA dos arquivos CAPR/YANG antes e depois, além do contrato U75.
 
+
+**Validação CI da implementação v1.24.8:** execução de testes associada ao HEAD `04978eaa8b0a936b411aca6bb354946d709febfc` concluída com **186 testes aprovados, 34 warnings, nenhuma falha**. Isso valida casos sintéticos e contratos do código; ainda não é resultado da inspeção dos números textuais reais de CAPR/YANG. Não concluir empate decimal real antes do ZIP gerado no Spyder.
+
 **Próximo F5:** atualizar a mesma branch, reiniciar Spyder, executar `auditar_precisao_decimal_splits_spyder.py`. Resultado esperado: `output/decimais_raw_splits/<ID>/pacote_decimais_raw_splits.zip` com `resultado.json`; ainda não há resultado dessa inspeção textual real. **Jamais afirmar igualdade decimal de origem sem ler o novo pacote.** A reprodução histórica e os US$ 587,17 milhões permanecem congelados e não são corrigidos/promovidos por este teste.
 
 ---
