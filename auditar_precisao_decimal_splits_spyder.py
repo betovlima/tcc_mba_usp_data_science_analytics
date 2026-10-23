@@ -14,6 +14,7 @@ from __future__ import annotations
 import csv
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, localcontext
+from fractions import Fraction
 import hashlib
 import json
 from pathlib import Path
@@ -98,47 +99,63 @@ def compare_exact_decimal_raw(
     O texto RAW permanece intacto. Não supõe tick mínimo ou arredondamento.
     """
     if entry_day > future_day:
-        raise ValueError("A entrada deve anteceder ou coincidir com a saida.")
+        raise ValueError("A entrada deve anteced    # Fraction(Decimal(texto)) evita inclusive erro por divisao decimal
+    # periodica em splits como 1 para 3. O sinal é racional EXATO.
+    entry = Fraction(decimal_rate(entry_open_literal, field="open"))
+    close = Fraction(decimal_rate(future_close_literal, field="close"))
+    factor = Fraction(1)
+    effects = []
+    for event in corporate_actions:
+        kind = str(event.get("action_type") or "")
+        if kind not in ("forward_split", "reverse_split"):
+            continue
+        ex_date = utc_day(event["ex_date"])
+        if not (entry_day < ex_date <= future_day):
+            continue
+        numerator = Fraction(decimal_rate(event["new_rate"], field="new_rate"))
+        denominator = Fraction(decimal_rate(event["old_rate"], field="old_rate"))
+        ratio = numerator / denominator
+        factor *= ratio
+        effects.append({
+            "ex_date": ex_date, "action_type": kind,
+            "old_rate_literal": event["old_rate"],
+            "new_rate_literal": event["new_rate"],
+            "quantity_ratio_fraction": f"{ratio.numerator}/{ratio.denominator}",
+        })
+
+    quote_per_original_share = close * factor
+    difference = quote_per_original_share - entry
     with localcontext() as ctx:
         ctx.prec = 80
-        entry = decimal_rate(entry_open_literal, field="open")
-        close = decimal_rate(future_close_literal, field="close")
-        factor = Decimal(1)
-        effects = []
-        for event in corporate_actions:
-            kind = str(event.get("action_type") or "")
-            if kind not in ("forward_split", "reverse_split"):
-                continue
-            ex_date = utc_day(event["ex_date"])
-            if not (entry_day < ex_date <= future_day):
-                continue
-            numerator = decimal_rate(event["new_rate"], field="new_rate")
-            denominator = decimal_rate(event["old_rate"], field="old_rate")
-            ratio = numerator / denominator
-            factor *= ratio
-            effects.append({
-                "ex_date": ex_date, "action_type": kind,
-                "old_rate_literal": event["old_rate"],
-                "new_rate_literal": event["new_rate"],
-                "quantity_ratio_decimal": str(ratio),
-            })
-        price_with_shares = close * factor
-        difference = price_with_shares - entry
-        return {
-            "entry_open_literal": entry_open_literal,
-            "future_close_literal": future_close_literal,
-            "entry_decimal": str(entry),
-            "future_close_decimal": str(close),
-            "quantity_multiplier_decimal": str(factor),
-            "future_value_per_entry_share_decimal": str(price_with_shares),
-            "difference_decimal": str(difference),
-            "exact_decimal_equal": bool(difference == 0),
-            "exact_decimal_close_gt_entry": bool(difference > 0),
-            "events_effectively_crossed": len(effects),
-            "event_details": effects,
-            "source_precision": (
-                "Texto do CSV preservado convertido a Decimal; "
-                "nenhum arredondamento de tick ou epsilon arbitrario."
+        approx_factor = Decimal(factor.numerator) / Decimal(factor.denominator)
+        approx_quote = (
+            Decimal(quote_per_original_share.numerator)
+            / Decimal(quote_per_original_share.denominator)
+        )
+        approx_delta = (
+            Decimal(difference.numerator) / Decimal(difference.denominator)
+        )
+    return {
+        "entry_open_literal": entry_open_literal,
+        "future_close_literal": future_close_literal,
+        "entry_decimal": str(Decimal(entry_open_literal)),
+        "future_close_decimal": str(Decimal(future_close_literal)),
+        "quantity_multiplier_fraction": f"{factor.numerator}/{factor.denominator}",
+        "quantity_multiplier_decimal_approx": str(approx_factor),
+        "future_value_decimal_approx": str(approx_quote),
+        "difference_decimal_approx": str(approx_delta),
+        "exact_difference_numerator": str(difference.numerator),
+        "exact_difference_denominator": str(difference.denominator),
+        "exact_decimal_equal": bool(difference == 0),
+        "exact_decimal_close_gt_entry": bool(difference > 0),
+        "events_effectively_crossed": len(effects),
+        "event_details": effects,
+        "source_precision": (
+            "Texto do CSV preservado e proporções de split como "
+            "frações racionais exatas; decimais de saída são apenas "
+            "representações aproximadas, nunca critério de decisão."
+        ),
+    }rio."
             ),
         }
 
