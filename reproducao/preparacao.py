@@ -251,6 +251,13 @@ def prepare_model_frames(
     replay de forma explícita e registrada. O comportamento padrao continua
     sendo excluir.
     """
+    if strict_raw == apply_split_adjustments:
+        raise ValueError(
+            "Modo de dados inconsistente. Para preservar Alpaca RAW use "
+            "strict_raw=True e apply_split_adjustments=False; para "
+            "reproduzir o legado, strict_raw=False e "
+            "apply_split_adjustments=True."
+        )
     paths.ensure()
     allowed_structural = {
         str(symbol).strip().upper()
