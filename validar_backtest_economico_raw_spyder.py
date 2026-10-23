@@ -1,4 +1,4 @@
-"""TCC v1.25.0 — replay financeiro experimental de Control com RAW intacto.
+"""TCC v1.25.1 — replay financeiro experimental de Control com RAW intacto.
 
 Roteiro de validação, não prova de lucro prospectivo. O universo e a
 configuração foram escolhidos retrospectivamente; NÃO interpretar este
@@ -25,7 +25,7 @@ from reproducao.universo_fixo75 import universo_75, reproduzir_universo_fixo75
 
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "1.25.0"
+VERSION = "1.25.1"
 SCHEMA = "fixed75-raw-economic-custody-v1"
 AS_OF_SNAPSHOT = "2026-10-22"
 CUTOFF = "2026-10-06"
@@ -81,6 +81,31 @@ def _snapshot_file_hashes(
     }
 
 
+def capital_do_resultado(result: dict) -> float:
+    """Contrato REAL de `summarize_metrics`, não do motor interno.
+
+    O executor `reproduzir_universo_fixo75` retorna payload["metrics"]
+    contendo "ending_capital". "strategy_ending_capital" existe SOMENTE
+    em `RotationRunResult.metrics`, antes da sumarização.
+    """
+    metrics = result["metrics"]
+    if "ending_capital" not in metrics:
+        raise KeyError(
+            "Ausente metrics.ending_capital no payload do executor U75; "
+            f"chaves disponíveis: {sorted(metrics)}"
+        )
+    capital = float(metrics["ending_capital"])
+    checkpoint = result.get("checkpoint") or {}
+    checkpoint_value = checkpoint.get("observed_capital")
+    if checkpoint_value is not None and not (
+        abs(float(checkpoint_value) - capital) <= 0.01
+    ):
+        raise RuntimeError(
+            "Inconsistência de capital: checkpoint e métricas divergem."
+        )
+    return capital
+
+
 def executar(*, root: Path = ROOT) -> dict:
     root = Path(root).resolve()
     source, assets = _verify_source(root)
@@ -107,14 +132,14 @@ def executar(*, root: Path = ROOT) -> dict:
     hashes_after = _snapshot_file_hashes(source, assets)
     if hashes_before != hashes_after:
         raise RuntimeError("Snapshot RAW/Corporate Actions foi modificado!")
-    metrics = result["metrics"]
-    output_capital = float(metrics["strategy_ending_capital"])
+    output_capital = capital_do_resultado(result)
     if not (0. <= output_capital < float("inf")):
         raise RuntimeError("Capital calculado inválido.")
 
     interpretation = {
         "version": VERSION,
         "schema": SCHEMA,
+        "source_run_version": str(result.get("reproduction_version", VERSION)),
         "snapshot_sha256": SNAPSHOT_SHA256,
         "cutoff": CUTOFF,
         "assets": len(assets),
@@ -163,7 +188,7 @@ def executar(*, root: Path = ROOT) -> dict:
         flush=True,
     )
     print(
-        "[RAW v1.25.0] Resultado retrospectivo. NÃO é validação "
+        "[RAW v1.25.1] Resultado retrospectivo. NÃO é validação "
         "de overfitting em dados nunca selecionados.",
         flush=True,
     )
