@@ -1,3 +1,15 @@
+## v1.25.7 — teste controlado de mitigação de overfitting (23/10/2026)
+
+**Motivo:** a auditoria v1.25.4 comprovou gap preditivo importante (224/225 OOS pior que treino; mediana +161,32%), mas as v1.25.5–v1.25.6 apenas consolidaram gráficos, sem testar mitigação. **Objetivo agora:** testar três intervenções LightGBM *uma por vez*, com diagnóstico preditivo, decisões e resultado econômico no mesmo vintage histórico. **Branch única:** `research/v1.23.1-fresh-snapshot-20261022`, `main` intocada.
+
+**Código:** `pesquisar_mitigacao_overfitting_spyder.py` (versão 1.25.7), com protocolo pré-execução em `evidencias/protocolo_mitigacao_overfitting_v1257.md`. Controle original, `bagging_ativo` (`subsample_freq=1`, único parâmetro alterado), `folha_min_50` (`min_child_samples=50`) e `menos_arvores_160` (`n_estimators=160`). O controle deve reproduzir **US$ 587.165.941,13** antes que variantes sejam executadas. Os dados do vintage anterior e os hashes do manifesto congelado são exigidos; não consultar Alpaca, não alterar dados ou app operacional, preservar 75 ativos efetivos, folds, taxas, rótulo e regra de calibração de margem. O executor usa as rotinas oficiais de ajuste e replay em vez de reproduzi-las em nova implementação. **Early stopping não incluído**, pois exigiria validação cronológica interna separada.
+
+**Métricas geradas:** 225 pares ativo/fold por variante, treino e teste RMSE/skill, gap, curva de capital, Sharpe, drawdown, pior fold, margens calibradas, diferença de 1.560 decisões frente ao controle, tabelas completas e gráficos PNG/SVG. Salva resultados parciais e gera `output/mitigacao_overfitting_v1257/<run_id>/pacote_mitigacao_overfitting_v1257.zip` apenas ao concluir. **Não seleciona automaticamente uma vencedora**. Os folds de 2020–2026 são retrospectivos já conhecidos, portanto eventuais melhorias serão *exploratórias*, não comprovação prospectiva de robustez. Não alterar `main`, TCC oficial, MCT operacional nem promover modelos.
+
+**Status:** código publicado no GitHub e protocolo congelado ANTES de qualquer resultado v1.25.7. Ainda sem execução local dos treinamentos; falta correr no Spyder e auditar ZIP. O conjunto de CSVs Alpaca do vintage antigo é cache local, não está disponível integralmente nos ZIPs agregados enviados ao assistente.
+
+---
+
 ## v1.25.6 — gráficos vetoriais contra linhas pixeladas (23/10/2026)
 
 **Branch única:** `research/v1.23.1-fresh-snapshot-20261022`, main intocada. Pedido motivador: linhas dos gráficos de consolidação v1.25.5 parecem pixeladas na ampliação. Em `consolidar_evidencias_overfitting_spyder.py` aumentou-se o PNG de 165 para 320 DPI e acrescentou-se SVG vetorial para cada uma das sete figuras, preservando escala, métricas e dados. ZIP: `pacote_consolidacao_overfitting_v1256.zip` (sete PNG, sete SVG, relatório com links, resumo). Relatório de evidências: `evidencias/melhoria_exportacao_graficos_v1256.md`.
