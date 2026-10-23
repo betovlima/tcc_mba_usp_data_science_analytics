@@ -89,3 +89,47 @@ a completude das Corporate Actions. Os intervalos dos folds ainda
 exigem conferir os avisos de rótulos incompletos na auditoria temporal.
 O conjunto de 75 ativos da v1.23 foi escolhido retrospectivamente,
 entao essas metricas OOS nao eliminam por si o viés de selecao.
+
+## Hotfix posterior à auditoria dos pacotes (7) e (8)
+
+Em 23/10/2026, os dois ZIPs enviados pelo autor foram comparados byte a byte:
+`pacote_reproducao_universo(7).zip` e `pacote_reproducao_universo(8).zip`
+possuem SHA-256 identico
+`f71ebf46b6fbcad1d97e75b720c78e8edad32705fe2d0b31cb5c58d41706ff5d`.
+Logo, nao houve evidencia de nova execucao entre esses pacotes.
+
+Ambos registram `predictive_audit.status=failed` e a mensagem
+`Cannot losslessly convert units`, **sem traceback**, sinal de que a
+correcao anterior de captura de traceback ainda nao foi usada na geracao.
+A branch recebeu um novo hotfix que elimina `searchsorted` e `reindex`
+com timestamps de unidade mista no exportador, usando chaves UTC inteiras.
+Nao altera treino, folds, negocio nem snapshots. O teste novo usa calendario
+em microssegundos com targets em nanossegundos.
+
+**Antes de rodar o backtest no Spyder**, confira a branch e o commit local
+no console Git:
+
+```bash
+git status --short
+git fetch origin
+git switch research/v1.25.2-diagnosticos-preditivos
+git pull --ff-only origin research/v1.25.2-diagnosticos-preditivos
+git rev-parse --short HEAD
+```
+
+Em Spyder, reinicie o kernel e confira:
+
+```python
+from pathlib import Path
+import reproducao.experimento as ex
+print("Fonte:", ex.__file__)
+texto = Path(ex.__file__).read_text(encoding="utf-8")
+assert '"traceback": stack[-8000:]' in texto
+from reproducao.validacao_preditiva import exportar_previsoes_oos
+assert '_utc_nanoseconds' in exportar_previsoes_oos.__code__.co_names
+```
+
+Em seguida, execute os testes `python -m unittest discover -s tests
+-p "test_validacao_preditiva.py" -v`. Apenas depois rode
+`%run reproduzir_experimento.py` no Spyder. Nao usar esse replay
+v1.23.0 como se fosse a campanha v1.25.1: os executores sao diferentes.
