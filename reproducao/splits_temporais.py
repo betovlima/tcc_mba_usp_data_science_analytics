@@ -115,7 +115,13 @@ def apply_custody_split(
     factor = event.quantity_factor
     result_quantity = quantity * factor
     result_unit_cost = average_unit_cost / factor
-    if quantity * average_unit_cost != result_quantity * result_unit_cost:
+    total_cost = quantity * average_unit_cost
+    reconstructed_cost = result_quantity * result_unit_cost
+    # A divisao Decimal pode ter periodo infinito (ex.: split 3:2).
+    # Aceitar somente residuo de arredondamento aritmetico, nao desvio
+    # economico material de base de custo.
+    allowed_residual = max(abs(total_cost), Decimal("1")) * Decimal("1e-24")
+    if abs(total_cost - reconstructed_cost) > allowed_residual:
         raise AssertionError("Split alterou a base economica da posicao.")
     return result_quantity, result_unit_cost, applied_event_keys | {event.event_key}
 
