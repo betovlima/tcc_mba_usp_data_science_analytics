@@ -1,4 +1,4 @@
-"""Audita revisoes retroativas RAW e Corporate Actions do universo TCC U77.
+"""Audita revisoes RAW e eventos somente nos 75 ativos efetivos do TCC.
 
 Somente leitura dos snapshots (nenhuma chamada Alpaca, nenhuma ordem ou treino).
 No Spyder: abra este arquivo e use F5. Saidas somente em output/.
@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from engine.configuracao import U67_REQUESTED_ASSETS
+from reproducao.universo_fixo75 import universo_75
 from reproducao.dados import SnapshotPaths, validate_snapshot
 from reproducao.preparacao import (
     load_actions_file, load_raw_bar_file, split_normalize,
@@ -25,7 +26,7 @@ ROOT = Path(__file__).resolve().parent
 ANALYSIS_CUTOFF = "2026-10-06"
 FIRST_DIFFERENT_DECISION = "2020-07-28"
 FRESH_CUTOFF = "2026-10-22"
-AUDIT_VERSION = "historical-drift-v1.0.0"
+AUDIT_VERSION = "historical-drift-v1.0.1-fixed75"
 OUTPUT = ROOT / "output" / "auditoria_drift_historico"
 BARS = ("open", "high", "low", "close", "volume")
 ECONOMIC_FIELDS = (
@@ -205,15 +206,18 @@ def original_extra_paths(root: Path, symbol: str) -> SnapshotPaths:
 def latest_valid_fresh_snapshot(
     root: Path, *, cutoff: str = FRESH_CUTOFF,
 ) -> tuple[SnapshotPaths, dict]:
-    base = root / "dados" / ".u67_fresh_runs"
-    candidates = sorted(base.glob(f"asof_{cutoff}_*/universe_77"), reverse=True)
+    base = root / "dados" / ".u75_fresh_runs"
+    candidates = sorted(base.glob(f"asof_{cutoff}_*/universe_75"), reverse=True)
     for item in candidates:
         paths = SnapshotPaths.from_root(item)
         if not paths.manifest.is_file():
             continue
-        return paths, validate_snapshot(paths)
+        manifest = validate_snapshot(paths)
+        if len(manifest.get("assets") or []) != 75:
+            raise RuntimeError("Auditoria so permite snapshot de 75 ativos.")
+        return paths, manifest
     raise FileNotFoundError(
-        f"Nenhum snapshot de 77 ativos completo em {base}; "
+        f"Nenhum snapshot de 75 ativos completo em {base}; "
         "o ZIP do replay nao contem CSVs brutos."
     )
 
@@ -237,11 +241,9 @@ def audit(
     fresh, new_manifest = latest_valid_fresh_snapshot(root, cutoff=fresh_cutoff)
 
     selected = tuple(historical["selected_assets"])
-    requested = (*U67_REQUESTED_ASSETS, *selected)
-    if len(requested) != 77 or len(set(requested)) != 77:
-        raise RuntimeError("A pesquisa exige os mesmos 77 ativos solicitados.")
+    requested = universo_75(historical, ())
     if tuple(new_manifest.get("assets") or ()) != requested:
-        raise RuntimeError("Snapshot renovado nao corresponde aos 77 ativos fixos.")
+        raise RuntimeError("Snapshot renovado nao corresponde aos 75 ativos fixos.")
 
     summaries: list[dict] = []
     raw_changes: list[dict] = []
@@ -319,7 +321,8 @@ def audit(
         "first_observed_trade_divergence": FIRST_DIFFERENT_DECISION,
         "snapshot_original_sha256": old_manifest["snapshot_sha256"],
         "snapshot_fresh_sha256": new_manifest["snapshot_sha256"],
-        "original_77_requested": len(requested),
+        "fixed_effective_asset_count": len(requested),
+        "excluded_from_all_research": ["CLMT", "DOC"],
         "source_kind": "local_offline_sha256_validated_csv",
         "strategy_modified": False,
         "downloads_made": False,
