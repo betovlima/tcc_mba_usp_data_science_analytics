@@ -46,6 +46,7 @@ def reproduzir_universo_fixo75(
     analysis_end_date: str,
     version: str = "1.23.7",
     execution_schema: str = "single-fixed-75-v1",
+    economic_raw_split_mode: bool = False,
 ) -> dict[str, Any]:
     """Treina e simula todos os 75 ativos em conjunto; nao ha base 65+10."""
     import pesquisar_expansao_u67_spyder as motor
@@ -68,19 +69,51 @@ def reproduzir_universo_fixo75(
 
     prepared, exclusions, data_diagnostics, data_audit = prepare_model_frames(
         source, assets=selected, csv_float_precision="round_trip",
+        strict_raw=economic_raw_split_mode,
+        apply_split_adjustments=not economic_raw_split_mode,
     )
     if exclusions or set(prepared) != set(selected) or len(prepared) != 75:
         raise RuntimeError(
             "Universo incompleto ou exclusao estrutural inesperada; "
             "a pesquisa nao modifica silenciosamente os 75 ativos."
         )
+    split_events_by_symbol = None
+    modeling_view = prepared
+    if economic_raw_split_mode:
+        from reproducao.preparacao import load_actions_file
+        from reproducao.visao_economica_splits import (
+            extrair_fatores_efetivos, construir_visao_economica,
+            restaurar_execucao_raw,
+        )
+
+        split_events_by_symbol = {
+            symbol: extrair_fatores_efetivos(
+                prepared[symbol],
+                load_actions_file(source.corporate_actions / f"{symbol}.csv"),
+            )
+            for symbol in selected
+        }
+        modeling_view = {
+            symbol: construir_visao_economica(
+                prepared[symbol], split_events_by_symbol[symbol],
+            )
+            for symbol in selected
+        }
     config = build_control_config(prepared, motor.CONFIG).copiar_modelo(
         update={"analysis_end_date": analysis_end_date}
     )
     (
         frames, common_dates, calendar_source, symbols, folds,
         decision_dates, decision_to_fold, decision_metadata,
-    ) = motor._construir_contexto_execucao(prepared, config)
+    ) = motor._construir_contexto_execucao(modeling_view, config)
+    if economic_raw_split_mode:
+        # Labels e indicadores vêm da vista econômica causal; negociação e
+        # marcação a mercado usam EXCLUSIVAMENTE OHLCV RAW. Os CSVs de
+        # origem não são modificados.
+        frames = {
+            symbol: restaurar_execucao_raw(frames[symbol], prepared[symbol])
+            for symbol in symbols
+        }
     if set(symbols) != set(selected) or len(symbols) != 75:
         raise RuntimeError("Painel de modelagem nao manteve os 75 ativos.")
 
@@ -99,7 +132,12 @@ def reproduzir_universo_fixo75(
         motor.calcular_taxas_referencia,
         motor.aplicar_deslizamento,
         decision_metadata=decision_metadata,
-        model_label="TCC Control - unico universo fixo de 75 ativos",
+        model_label=(
+            "TCC Control - 75 ativos RAW, splits por quantidade"
+            if economic_raw_split_mode
+            else "TCC Control - unico universo fixo de 75 ativos"
+        ),
+        split_events_by_symbol=split_events_by_symbol,
         method_line=(
             "- Todos os 75 ativos elegiveis sao ajustados e avaliados "
             "na mesma etapa; sem selecao nem expansao."
@@ -125,7 +163,11 @@ def reproduzir_universo_fixo75(
         "reproduction_version": version,
         "execution_schema": execution_schema,
         "status": "completed",
-        "purpose": "pesquisa_universo_unico_75",
+        "purpose": (
+            "validacao_economica_raw_split_custody"
+            if economic_raw_split_mode
+            else "pesquisa_universo_unico_75"
+        ),
         "research_design": "fixed_75_trained_together_from_first_fold",
         "analysis_end_date": analysis_end_date,
         "checkpoint": {
@@ -159,7 +201,25 @@ def reproduzir_universo_fixo75(
         "metrics": metrics,
         "baseline_reference": None,
         "runtime_seconds": time.perf_counter() - started,
+        "data_mode": (
+            "alpaca_raw_unchanged_split_economic_in_memory"
+            if economic_raw_split_mode else "legacy_split_reexpression"
+        ),
+        "fixed_parameters": True,
+        "fresh_hyperparameter_search": False,
+        "split_ex_dates_used": (
+            {
+                sym: [
+                    {"ex_date": ex.isoformat(), "quantity_factor": ratio}
+                    for ex, ratio in entries
+                ] for sym, entries in split_events_by_symbol.items()
+            } if split_events_by_symbol is not None else None
+        ),
         "comparison_warning": (
+            "Sem validacao prospectiva independente; universo/parametros "
+            "escolhidos retrospectivamente e supostas fracoes de acoes. "
+            "Sem impacto de mercado, slippage configurado nem cash-in-lieu. "
+            "NAO usar como prova de rentabilidade real. "
             "Treinamento conjunto de 75 ativos difere do executor legado "
             "65+10; nenhuma igualdade com o checkpoint historico e imposta."
         ),
@@ -173,7 +233,10 @@ def reproduzir_universo_fixo75(
         output,
         comparison_file="reproducao_universo.json",
         execution_schema=execution_schema,
-        archive_name="pacote_universo_75.zip",
+        archive_name=(
+            "pacote_validacao_economica_raw.zip"
+            if economic_raw_split_mode else "pacote_universo_75.zip"
+        ),
     )
     print(f"[fixed75] capital=US$ {capital:,.2f} pacote={pacote}", flush=True)
     sinal_sonoro_conclusao()
