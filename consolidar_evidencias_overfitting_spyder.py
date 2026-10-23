@@ -217,7 +217,7 @@ def relatorio(g, valid, arquivos, meta, pgen, prep):
         f"- LightGBM: {len(g)} modelos; {positive} com RMSE OOS superior ao treino; gap mediano {median:.2f}%.",
         f"- Alertas de overfit segundo regra pre-registrada: {warns}/{len(g)}.",
         f"- Rotacoes com retorno bruto superior a manter: {wins}/{len(valid)} ({wins/len(valid):.1%}); mediana {valid.median():+.2%} de retorno adicional. Comparacao local de horizonte, nao simulacao de uma estrategia alternativa de manter sempre.",
-        f"- Capital historico: US$ {CAPITAL_HISTORICO:,.2f}; RAW renovado: US$ {CAPITAL_RENOVADO:,.2f} (documentos de auditoria de vintages distintos).",
+        f"- Capital historico: US$ {CAPITAL_HISTORICO:,.2f}; snapshot renovado (processamento legado): US$ {CAPITAL_RENOVADO:,.2f} (documentos de auditoria de vintages distintos).",
         f"- PBO historico (v1.4.1): log-growth {PBO_LOG_GROWTH:.2f}% e Sharpe {PBO_SHARPE:.2f}%.", "",
         "## Leitura de cada grafico", ""
     ]
