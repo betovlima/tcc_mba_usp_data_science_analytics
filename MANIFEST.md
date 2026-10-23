@@ -1761,3 +1761,23 @@ A execução renovada e a plataforma operacional apresentaram 1.571/1.571 escolh
 **Pré-requisito local:** dados oficiais em `dados/u67`, cache original dos dez adicionais em `dados/.u67_expansion_cache/full_raw_20261006` com hashes exatos e snapshot novo em `dados/.u67_fresh_runs/asof_2026-10-22_*/universe_77`. Se faltar algum original, o programa deve interromper — nunca baixar ou reconstruir no lugar. O ZIP de backtest não contém os RAWs necessários para esse teste.
 
 **Interpretação acadêmica:** distinguir robustez da política contra revisões de fonte, reprodução exata condicionada ao snapshot congelado e testes efetivamente fora da amostra; evitar afirmar ausência de vazamento futuro ou causalidade da primeira decisão divergente sem a auditoria por linha.
+
+## 31. Auditoria de divergências de maio de 2018 — v1.23.6 (23/10/2026 UTC)
+
+**Branch:** `research/v1.23.1-fresh-snapshot-20261022` (**sem merge na main**). O replay financeiro de referência segue sendo **v1.23.4, commit `bd99b592c03dadec2cf45ade0b09e8ee07148d3b`**. A presente revisão v1.23.6 só acrescenta testes e instrumento de sensibilidade; não altera o modelo ou a política de rotação.
+
+**Evidência recebida:** `pacote_auditoria_drift_historico.zip`, SHA-256 `a6ce4625b3bbca7ad7440e94e3623f1fff20fe01bf0fc0b03d5a6e5592aa414c`, originado do teste offline v1.23.5. Original: SHA do snapshot base `e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575`. Atualizado: SHA do snapshot unificado `1c4d16173eaa5219a1bcc18cfa431cf1c096dbeaa26ca53aa03e9fcf047cff5c`.
+
+- **77 séries alinhadas até 06/10/2026**, cada qual com **2.705 datas idênticas**, sem lacunas; 12 sessões posteriores presentes no snapshot renovado.
+- **75 divergências OHLCV materiais em 32 ativos**, limitadas aos dias **1º, 2 e 3 de maio de 2018**. As demais 45 séries são materialmente idênticas nas datas antigas. Duas das 75 barras são de CLMT, previamente excluído do modelo por problema estrutural, restando **73 divergências em 31 ativos efetivos**.
+- Em **02/05/2018**, volume agregado nos ativos com diferenças: **12.152.097 (antigo)** versus **216.979.152 (renovado)**. Em **03/05/2018**, **10.871.735** versus **196.836.941**, respectivamente.
+- Somente dois fechamentos diferiram: **SBFG 02/05/2018 (18,930 × 18,954)** e **CAPR 03/05/2018 (1,290 × 1,280)**. As outras divergências correspondem a abertura, máxima, mínima e/ou volume.
+- **Sete eventos de dividendo** foram acrescentados no snapshot novo, todos em setembro de 2026 (CRM, ADC, BXMT, XEL, CRT, STAG, TOWN); a auditoria não constatou alteração em splits de datas anteriores ao corte. A diferença pós-normalização de splits permanece em 75 barras.
+- Os próprios históricos de **MGM e CXW**, associados à primeira decisão diferente em **28/07/2020**, não divergiram materialmente. A diferença de decisão pode refletir efeitos indiretos em treinamento, calibração ou seleção do modelo, sem causalidade ainda comprovada.
+
+**Próximo teste:** `pesquisar_causa_drift_2018_spyder.py` (F5 no Spyder), em **uma cópia descartável**, reconstrói os valores originais dessas 75 barras a partir de arquivos de hash verificado, sem editar qualquer CSV ou manifesto original. Executa **dois replays com cutoff 06/10/2026 e mesmas séries fora desses registros**, mantendo eventos corporativos, universo fixo, folds, regras e custos. O primeiro usa snapshot renovado inalterado; o segundo, a cópia isolada com as 75 barras restauradas para o experimento. Saída: `output/causal_drift_2018/<ID>/pacote_contrafactual_2018.zip`.
+
+**Proveniência do novo código:** implementação inicial `e02b315d47474c21e94223bbee1738a799077e9c`; testes sintéticos de imutabilidade e intervenção `df3f500f4e180803e722273d11ba9b0858b62000`. Os scripts também conferem a composição dos 77 símbolos, hashes e exatamente 75 diferenças históricas de 32 ativos. **A cópia criada não é fonte oficial** e não deve ser usada para alterar o checkpoint de US$ 587.165.941,13 ou promover estratégias.
+
+**Hipótese a verificar:** se os resultados dos dois replays mudarem fortemente apenas pela substituição das observações, teremos evidência experimental de sensibilidade financeira aos insumos de maio de 2018. Se não mudarem, será necessário investigar eventos, configuração do calendário de folds e demais diferenças controláveis; não presumir a explicação.
+
