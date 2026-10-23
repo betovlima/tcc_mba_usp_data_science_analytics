@@ -17,70 +17,107 @@ COLUNAS = ("data_decisao", "ativo", "fold", "previsao", "observado",
            "label_maturado", "split_validado")
 
 
+def _utc_nanoseconds(value):
+    """UTC integer key independent of pandas datetime64 native unit."""
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        raise ValueError(f"Timestamp sem timezone: {ts}")
+    return int(ts.tz_convert("UTC").value)
+
+
 def exportar_previsoes_oos(*, states, baseline_frames, baseline_symbols,
                            common_dates, horizon_maximo, data_corte,
                            candidate_frames=None, candidate_caches=None, splits_auditados=False):
-    """Exporta caches OOS existentes; nao ajusta modelos e nao faz downloads.
+    """Exporta caches OOS, sem modelos novos, downloads ou ajustes financeiros.
 
-    states: sequencia de BaselineFoldState da campanha historica.
-    O ultimo elemento de decision_dates e sentinela (nao e decisao).
-    Frames devem ter o alvo forward_risk_adjusted_utility e precos corrigidos
-    por eventos corporativos ANTES de construir esse alvo.
+    Preserva a sentinela final de decision_dates. Usa chaves UTC em inteiros
+    de nanosegundos para evitar pandas 3 'Cannot losslessly convert units'
+    em searchsorted/reindex de timestamps com resolucoes diferentes.
     """
+    from bisect import bisect_left, bisect_right
+
     candidate_frames = candidate_frames or {}
     candidate_caches = candidate_caches or {}
     frames = {**baseline_frames, **candidate_frames}
     calendar = pd.DatetimeIndex(common_dates)
     if calendar.tz is None:
         raise ValueError("Calendario deve ter timezone explicito")
-    if horizon_maximo <= 0:
-        raise ValueError("horizon_maximo deve ser positivo")
-    cutoff = pd.Timestamp(data_corte)
-    if cutoff.tzinfo is None:
-        cutoff = cutoff.tz_localize("UTC")
-    else:
-        cutoff = cutoff.tz_convert("UTC")
-    calendar = calendar.tz_convert("UTC")
-    # Datas YYYY-MM-DD incluem a sessao inteira sem aritmetica
-    # de nanosegundos (incompativel com algumas resolucoes pandas 3).
+    if not calendar.is_monotonic_increasing or calendar.has_duplicates:
+        raise ValueError("Calendario deve ser monotono e unico")
+    if int(horizon_maximo) <= 0:
+        raise ValueError("horizonte_maximo deve ser positivo")
+    calendar_ns = [_utc_nanoseconds(t) for t in calendar]
     if isinstance(data_corte, str) and len(data_corte) == 10:
-        exclusive_end = cutoff + pd.Timedelta(days=1)
-        cutoff_index = int(calendar.searchsorted(exclusive_end, side="left")) - 1
+        # O cutoff de data inclui sessoes de qualquer horario nesse dia UTC.
+        cutoff_date = pd.Timestamp(data_corte).date()
+        cutoff_index = bisect_right(
+            [pd.Timestamp(t).tz_convert("UTC").date() for t in calendar],
+            cutoff_date,
+        ) - 1
     else:
-        cutoff_index = int(calendar.searchsorted(cutoff, side="right")) - 1
-    baseline_positions = {s: j + 1 for j, s in enumerate(baseline_symbols)}
-    out = []
+        cutoff_ts = pd.Timestamp(data_corte)
+        if cutoff_ts.tzinfo is None:
+            cutoff_ts = cutoff_ts.tz_localize("UTC")
+        cutoff_index = bisect_right(calendar_ns, _utc_nanoseconds(cutoff_ts)) - 1
+
+    # Precalcular indices dos alvos sem reindex / as_unit.
+    targets = {}
+    for symbol, frame in frames.items():
+        if "forward_risk_adjusted_utility" not in frame:
+            raise ValueError(f"{symbol}: alvo da utilidade ausente")
+        idx = pd.DatetimeIndex(frame.index)
+        if idx.tz is None or not idx.is_monotonic_increasing or idx.has_duplicates:
+            raise ValueError(f"{symbol}: indice temporal invalido")
+        keys = [_utc_nanoseconds(t) for t in idx]
+        values = frame["forward_risk_adjusted_utility"].to_numpy(dtype=float)
+        targets[symbol] = (keys, values)
+
+    baseline_positions = {symbol: j + 1 for j, symbol in enumerate(baseline_symbols)}
+    rows = []
     for state in states:
         fold = int(state.fold_id)
-        dates = pd.DatetimeIndex(state.decision_dates)[:-1]
-        for date in dates:
-            t = pd.Timestamp(date).tz_convert("UTC")
-            ix = int(calendar.searchsorted(t, side="left"))
-            if ix >= len(calendar) or calendar[ix] != t:
+        base_cache = {_utc_nanoseconds(t): v for t, v in state.decision_cache.items()}
+        extras = {
+            symbol: {
+                _utc_nanoseconds(t): v
+                for t, v in candidate_caches[symbol][fold].decision_cache.items()
+            }
+            for symbol in candidate_frames
+        }
+        # A ultima data nao corresponde a uma decisao, e a sentinela.
+        for date in pd.DatetimeIndex(state.decision_dates)[:-1]:
+            t = pd.Timestamp(date)
+            key = _utc_nanoseconds(t)
+            ix = bisect_left(calendar_ns, key)
+            if ix >= len(calendar_ns) or calendar_ns[ix] != key:
                 raise ValueError(f"Data fora do calendario: {t}")
             maturity = ix + int(horizon_maximo) <= cutoff_index
-            base_vector = state.decision_cache.get(pd.Timestamp(date))
+            base_vector = base_cache.get(key)
             if base_vector is None:
                 raise ValueError(f"Cache base ausente no fold {fold}: {t}")
-            for symbol, frame in frames.items():
+            for symbol, (target_keys, target_values) in targets.items():
                 if symbol in baseline_positions:
-                    position = baseline_positions[symbol]
-                    score = float(base_vector[position])
+                    score = float(base_vector[baseline_positions[symbol]])
                 else:
-                    one = candidate_caches[symbol][fold].decision_cache.get(pd.Timestamp(date))
+                    one = extras[symbol].get(key)
                     if one is None:
                         raise ValueError(f"Cache candidato ausente: {symbol} {t}")
                     score = float(one[1])
-                observed = frame["forward_risk_adjusted_utility"].reindex([t]).iloc[0]
-                out.append({
+                target_pos = bisect_left(target_keys, key)
+                observed = (float(target_values[target_pos])
+                            if target_pos < len(target_keys) and target_keys[target_pos] == key
+                            else np.nan)
+                rows.append({
                     "data_decisao": t.isoformat(), "ativo": symbol, "fold": fold,
                     "previsao": score if math.isfinite(score) else np.nan,
-                    "observado": float(observed) if pd.notna(observed) else np.nan,
+                    "observado": observed if math.isfinite(observed) else np.nan,
                     "label_maturado": bool(maturity),
-                    # Nao assumir eventos revisados so porque o CSV e RAW.
-                    "split_validado": bool(splits_auditados.get(symbol, False) if isinstance(splits_auditados, dict) else splits_auditados),
+                    "split_validado": bool(
+                        splits_auditados.get(symbol, False)
+                        if isinstance(splits_auditados, dict) else splits_auditados
+                    ),
                 })
-    return pd.DataFrame.from_records(out, columns=list(COLUNAS))
+    return pd.DataFrame.from_records(rows, columns=list(COLUNAS))
 
 
 def _bool_strict(s: pd.Series, coluna: str) -> pd.Series:
