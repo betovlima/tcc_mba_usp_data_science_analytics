@@ -105,6 +105,33 @@ class ExportadorOOSTest(unittest.TestCase):
         self.assertFalse(rows[rows.ativo=="B"].split_validado.any())
         self.assertEqual(int(rows.label_maturado.sum()),6)
 
+
+class CutoffSemNanossegundosTest(unittest.TestCase):
+    def test_cutoff_inclusivo_com_calendario_em_microssegundos(self):
+        from types import SimpleNamespace
+        from reproducao.validacao_preditiva import exportar_previsoes_oos
+        dates = pd.date_range("2026-01-05 04:00:00+00:00", periods=5, freq="D").as_unit("us")
+        state = SimpleNamespace(
+            fold_id=1,
+            decision_dates=dates[:4],
+            decision_cache={t: [0.0, 0.2] for t in dates[:4]},
+        )
+        frame = pd.DataFrame(
+            {"forward_risk_adjusted_utility": [0.2] * len(dates)},
+            index=dates,
+        )
+        result = exportar_previsoes_oos(
+            states=[state],
+            baseline_frames={"AAA": frame},
+            baseline_symbols=["AAA"],
+            common_dates=dates,
+            horizon_maximo=1,
+            data_corte="2026-01-07",
+            splits_auditados=True,
+        )
+        self.assertEqual(result["label_maturado"].tolist(), [True, True, False])
+        self.assertTrue(result["split_validado"].all())
+
 if __name__ == "__main__":
     unittest.main()
 
