@@ -10,7 +10,7 @@ from validar_backtest_economico_raw_spyder import (
 
 
 def test_final_replay_spec_is_frozen_not_optimize_again() -> None:
-    assert VERSION == "1.25.0"
+    assert VERSION == "1.25.1"  # revisão do relatório; protocolo de dados inalterado
     assert CUTOFF == "2026-10-06"
     assert SNAPSHOT_SHA256 == (
         "595b7a03dc2c8978487975cd3554b1ea65608741893f13208938dc624cb273cc"
