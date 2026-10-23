@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import zipfile
 
 from reproducao.dados import SnapshotPaths, validate_snapshot
 from reproducao.universo_fixo75 import universo_75, reproduzir_universo_fixo75
@@ -61,9 +62,29 @@ def _verify_source(root: Path) -> tuple[SnapshotPaths, tuple[str, ...]]:
     )
 
 
+def _file_sha256(path: Path) -> str:
+    with path.open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+def _snapshot_file_hashes(
+    source: SnapshotPaths, assets: tuple[str, ...],
+) -> dict[str, str]:
+    return {
+        f"bars/{symbol}.csv": _file_sha256(source.raw_bars / f"{symbol}.csv")
+        for symbol in assets
+    } | {
+        f"actions/{symbol}.csv": _file_sha256(
+            source.corporate_actions / f"{symbol}.csv"
+        )
+        for symbol in assets
+    }
+
+
 def executar(*, root: Path = ROOT) -> dict:
     root = Path(root).resolve()
     source, assets = _verify_source(root)
+    hashes_before = _snapshot_file_hashes(source, assets)
     versioned_output = (
         root / "output" / "validacao_economica_raw_75"
         / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -83,6 +104,9 @@ def executar(*, root: Path = ROOT) -> dict:
         execution_schema=SCHEMA,
         economic_raw_split_mode=True,
     )
+    hashes_after = _snapshot_file_hashes(source, assets)
+    if hashes_before != hashes_after:
+        raise RuntimeError("Snapshot RAW/Corporate Actions foi modificado!")
     metrics = result["metrics"]
     output_capital = float(metrics["strategy_ending_capital"])
     if not (0. <= output_capital < float("inf")):
@@ -116,13 +140,23 @@ def executar(*, root: Path = ROOT) -> dict:
             "sem slippage configurado e permitindo frações de ações. "
             "O novo capital NÃO prova ausência de overfitting."
         ),
+        "input_raw_and_actions_sha256": hashes_before,
+        "input_raw_and_actions_files_verified": len(hashes_before),
         "full_result_json": "reproducao_universo.json",
         "package_name": "pacote_validacao_economica_raw.zip",
     }
-    (versioned_output / "interpretacao_resultado.json").write_text(
+    interpretation_path = versioned_output / "interpretacao_resultado.json"
+    interpretation_path.write_text(
         json.dumps(interpretation, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    # O pacote é produzido dentro do executor; incluir este manifesto
+    # complementar DEPOIS da execução e conferir que ele existe.
+    package_path = versioned_output / "pacote_validacao_economica_raw.zip"
+    if not package_path.is_file():
+        raise RuntimeError("Executor não produziu o pacote exigido.")
+    with zipfile.ZipFile(package_path, mode="a", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.write(interpretation_path, arcname="interpretacao_resultado.json")
     print(
         f"[RAW v{VERSION}] capital_simulado=US$ {output_capital:,.2f}; "
         f"versus_89mi=US$ {interpretation['delta_vs_updated_legacy_processing']:,.2f}",
