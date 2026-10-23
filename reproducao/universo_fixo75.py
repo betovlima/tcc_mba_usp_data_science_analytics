@@ -106,11 +106,12 @@ def reproduzir_universo_fixo75(
         frames, common_dates, calendar_source, symbols, folds,
         decision_dates, decision_to_fold, decision_metadata,
     ) = motor._construir_contexto_execucao(modeling_view, config)
+    # A calibração walk-forward usa apenas o painel econômico, inclusive
+    # suas transições de preço; o replay separado usa preços brutos da
+    # corretora e atualiza a quantidade em custódia na ex-date.
+    replay_frames = frames
     if economic_raw_split_mode:
-        # Labels e indicadores vêm da vista econômica causal; negociação e
-        # marcação a mercado usam EXCLUSIVAMENTE OHLCV RAW. Os CSVs de
-        # origem não são modificados.
-        frames = {
+        replay_frames = {
             symbol: restaurar_execucao_raw(frames[symbol], prepared[symbol])
             for symbol in symbols
         }
@@ -128,7 +129,7 @@ def reproduzir_universo_fixo75(
     result = motor._simular_exato(
         "tcc_single_fixed_75",
         motor._politica_agendada(policies, decision_to_fold),
-        frames, symbols, decision_dates, config,
+        replay_frames, symbols, decision_dates, config,
         motor.calcular_taxas_referencia,
         motor.aplicar_deslizamento,
         decision_metadata=decision_metadata,
