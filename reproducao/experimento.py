@@ -360,6 +360,12 @@ def reproduzir_universo_congelado(
         predictive_summary["limites_temporais_alertas"] = int(
             (temporal_report["treinos_com_alvo_ainda_futuro"] > 0).sum()
         )
+        if predictive_summary["limites_temporais_alertas"] > 0:
+            predictive_summary["temporal_warning"] = (
+                "Os ultimos rotulos de treino podem depender de dados "
+                "das primeiras sessoes OOS. Resultado exploratorio ate "
+                "confirmacao da segregacao dos folds."
+            )
         print(
             f"[predictive-audit] status={predictive_summary['status']} "
             f"valid={predictive_summary['valid_rows']}/{predictive_summary['rows']} "
@@ -368,8 +374,17 @@ def reproduzir_universo_congelado(
             flush=True,
         )
     except Exception as exc:
-        predictive_summary = {"status": "failed", "reason": str(exc)[:1000]}
-        print(f"[predictive-audit] failed={exc!s}", flush=True)
+        import traceback
+        stack = traceback.format_exc()
+        predictive_summary = {
+            "status": "failed", "reason": str(exc)[:1000],
+            "traceback": stack[-8000:],
+        }
+        (output / "validacao_preditiva").mkdir(parents=True, exist_ok=True)
+        (output / "validacao_preditiva" / "erro_diagnostico.txt").write_text(
+            stack, encoding="utf-8"
+        )
+        print(f"[predictive-audit] failed={exc!s}\n{stack}", flush=True)
 
     payload = {
         "reproduction_version": version,
