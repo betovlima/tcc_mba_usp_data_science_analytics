@@ -52,4 +52,4 @@ def test_o_controle_ainda_usa_parada_se_checkpoint_nao_coincidir():
     assert "EXPECTED_OLD_CAPITAL" in source
     assert "math.isclose(capital, EXPECTED_OLD_CAPITAL" in source
     assert "raise RuntimeError" in source
-    assert "output/mitigacao_overfitting_v1258" in source
+    assert '"mitigacao_overfitting_v1258"' in source
