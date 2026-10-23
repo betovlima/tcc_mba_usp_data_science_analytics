@@ -1,3 +1,11 @@
+## v1.25.5 — consolidação visual retrospectiva do risco de overfitting (23/10/2026)
+
+**Branch única:** `research/v1.23.1-fresh-snapshot-20261022`; `main` intacta. **Executor:** `consolidar_evidencias_overfitting_spyder.py`; relatório: `evidencias/resultado_consolidacao_risco_tcc_v1255.md`. Reutiliza sem novos treinos ou backtests o ZIP de generalização v1.25.4 e a reprodução histórica v1.23.0, com hashes e checkpoint conferidos; incorpora PBO histórico da v1.4.1 e contrafactual das 73 barras de maio/2018, explicitamente identificados como resultados pré-existentes.
+
+**Sete gráficos:** treino x OOS; gap por fold; skill OOS contra média do alvo no treino; retorno local de rotação x manter; capital histórico x buy-and-hold; PBO de seleção; capitais dos dois vintages. No pacote de referência, 224/225 gaps positivos, mediana +161,32%, 29/225 skills OOS positivos, 222/354 rotações com `rotation_value_added` positivo; PBO 53,57% (log-growth) e 59,52% (Sharpe). **Não inferir 222 decisões causalmente corretas nem conferir independência prospectiva às divisões OOS internas após a seleção retrospectiva de universo e hiperparâmetros.** O código produz relatório explicativo por figura e o ZIP `pacote_consolidacao_overfitting_v1255.zip`. Execução local de desenvolvimento passou em ambos os pacotes; execução na máquina do pesquisador pendente. Proibido escolher parâmetros ou novos vintages para aumentar a capitalização desta auditoria.
+
+---
+
 ## v1.25.4 — correcao da auditoria de generalizacao preditiva (23/10/2026)
 
 **Branch unica:** `research/v1.23.1-fresh-snapshot-20261022`; `main` intocada. **Arquivo:** `auditar_generalizacao_587m_spyder.py`; versao `1.25.4`.
