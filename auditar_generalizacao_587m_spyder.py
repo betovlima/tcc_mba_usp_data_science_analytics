@@ -145,7 +145,7 @@ def _recalcular_apenas_modelos(pesquisa, contract, base_symbols, selected):
     (
         frames, common_dates, _, symbols, folds, dates, _, _
     ) = pesquisa._construir_contexto_execucao(frames_base, config)
-    if tuple(symbols) != base_symbols or len(folds) != 3:
+    if set(symbols) != set(base_symbols) or len(folds) != 3:
         raise RuntimeError("Contexto de folds/ativos diferente do historico.")
 
     print("[generalizacao] ajustando LightGBM base; SEM backtest...", flush=True)
