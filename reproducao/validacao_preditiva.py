@@ -184,3 +184,40 @@ def gerar_relatorios(df: pd.DataFrame, out: Path):
         json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8"
     )
     return report
+
+
+def auditar_limites_temporais(*, states, common_dates, horizon_maximo: int) -> pd.DataFrame:
+    """Detecta possivel vazamento de rotulos de treino sobre calibracao e OOS.
+
+    O diagnostico considera cada rotulo conhecido somente apos o horizonte
+    completo. Um alerta requer checagem no treino original e nao autoriza
+    alterar o modelo historico para forcar determinado capital.
+    """
+    dates = pd.DatetimeIndex(common_dates)
+    if not dates.is_monotonic_increasing or dates.has_duplicates:
+        raise ValueError("Calendario temporal deve ser ordenado e unico")
+    if int(horizon_maximo) < 1:
+        raise ValueError("Horizonte maximo invalido")
+    rows = []
+    for state in states:
+        for stage, training, future in (
+            ("ajuste_calibracao", state.train_dates, state.calibration_dates),
+            ("ajuste_final", state.final_fit_dates, state.decision_dates),
+        ):
+            train = pd.DatetimeIndex(training)
+            test = pd.DatetimeIndex(future)
+            if train.empty or test.empty:
+                raise ValueError(f"Datas ausentes na etapa {stage}")
+            boundary = int(dates.searchsorted(test.min(), side="left"))
+            train_pos = dates.get_indexer(train)
+            if (train_pos < 0).any():
+                raise ValueError("Datas de treino fora do calendario")
+            immature = train_pos + int(horizon_maximo) >= boundary
+            rows.append({
+                "fold": int(state.fold_id), "etapa": stage,
+                "primeira_data_avaliacao": test.min().isoformat(),
+                "ultima_data_treino": train.max().isoformat(),
+                "treinos_com_alvo_ainda_futuro": int(immature.sum()),
+                "status": "requer_verificacao_purge" if immature.any() else "sem_sobreposicao_por_horizonte",
+            })
+    return pd.DataFrame(rows)
