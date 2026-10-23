@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 import pandas as pd
+import numpy as np
 import requests
 from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical.stock import StockHistoricalDataClient
@@ -174,7 +175,9 @@ def load_alpaca_credentials(project_root: Path) -> AlpacaCredentials:
     return AlpacaCredentials(api_key, secret_key, str(env_file))
 
 
-def _normalize_alpaca_frame(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
+def _normalize_alpaca_frame(
+    frame: pd.DataFrame, symbol: str, *, strict_raw: bool = False,
+) -> pd.DataFrame:
     if frame is None or frame.empty:
         return pd.DataFrame()
     result = frame.copy()
@@ -188,9 +191,21 @@ def _normalize_alpaca_frame(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
         result = result.drop(columns=["symbol"])
     if "timestamp" not in result.columns:
         raise RuntimeError(f"{symbol}: timestamp ausente na resposta Alpaca.")
-    result["timestamp"] = pd.to_datetime(result["timestamp"], utc=True)
-    result = result.sort_values("timestamp")
-    result = result.drop_duplicates(subset=["timestamp"], keep="last")
+    result["timestamp"] = pd.to_datetime(
+        result["timestamp"], utc=True, errors="raise"
+    )
+    if strict_raw:
+        # Nunca remover ou reordenar barras em modo RAW auditavel.
+        if result["timestamp"].isna().any():
+            raise RuntimeError(f"{symbol}: timestamp ausente na resposta RAW.")
+        if result["timestamp"].duplicated().any():
+            raise RuntimeError(f"{symbol}: timestamp duplicado na resposta RAW.")
+        if not result["timestamp"].is_monotonic_increasing:
+            raise RuntimeError(f"{symbol}: RAW fora de ordem temporal.")
+    else:
+        # Somente pipeline historico, cuja reproducao deve permanecer igual.
+        result = result.sort_values("timestamp")
+        result = result.drop_duplicates(subset=["timestamp"], keep="last")
     required = ["open", "high", "low", "close", "volume"]
     missing = [col for col in required if col not in result.columns]
     if missing:
@@ -198,7 +213,21 @@ def _normalize_alpaca_frame(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
     optional = [col for col in ("trade_count", "vwap") if col in result.columns]
     result = result[["timestamp", *required, *optional]].copy()
     for column in [*required, *optional]:
-        result[column] = pd.to_numeric(result[column], errors="coerce")
+        result[column] = pd.to_numeric(
+            result[column], errors="raise" if strict_raw else "coerce"
+        )
+    if strict_raw:
+        for column in required:
+            if not np.isfinite(
+                result[column].to_numpy(dtype=np.float64)
+            ).all():
+                raise RuntimeError(f"{symbol}: RAW invalido em {column}.")
+        for column in ("open", "high", "low", "close"):
+            if (result[column] <= 0).any():
+                raise RuntimeError(f"{symbol}: preco RAW nao positivo em {column}.")
+        if (result["volume"] < 0).any():
+            raise RuntimeError(f"{symbol}: volume RAW negativo.")
+        return result.copy()  # Mesmo numero e ordem de barras recebidos.
     result = result.dropna(subset=["timestamp", *required])
     valid = (
         (result["open"] > 0)
@@ -238,6 +267,7 @@ def download_raw_bars(
     bar_snapshot_as_of_end: str,
     analysis_end_date: str,
     sip_delay_guard_minutes: int = 0,
+    strict_raw: bool = False,
 ) -> dict[str, Path]:
     """Baixa SIP/1Day/RAW, sem trocar o feed nem incluir SIP em tempo real."""
     paths.ensure()
@@ -288,7 +318,9 @@ def download_raw_bars(
             feed=DataFeed.SIP,
             limit=10_000,
         )
-        frame = _normalize_alpaca_frame(client.get_stock_bars(request).df, symbol)
+        frame = _normalize_alpaca_frame(
+            client.get_stock_bars(request).df, symbol, strict_raw=strict_raw
+        )
         if frame.empty:
             raise RuntimeError(f"Fresh Alpaca RAW snapshot returned no bars for {symbol}.")
         frame.to_csv(target, index=False, float_format="%.17g")
