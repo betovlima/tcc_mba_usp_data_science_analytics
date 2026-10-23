@@ -125,7 +125,7 @@ def prepare_once(p, manifest, selected):
         decision_to_fold, decision_metadata,
     ) = p._construir_contexto_execucao(raw_75, config)
 
-    if tuple(symbols) != tuple(selected) or len(symbols) != 75 or len(folds) != 3:
+    if set(symbols) != set(selected) or len(symbols) != 75 or len(folds) != 3:
         raise RuntimeError(
             "Violação do contrato fixed75: símbolos/folds de treino divergentes."
         )
