@@ -465,3 +465,5 @@ Nenhuma diferença material nas **5 utilidades individuais por horizonte nem nos
 
 **Próximo F5:** atualizar a mesma branch, reiniciar Spyder, executar `auditar_precisao_decimal_splits_spyder.py`. Resultado esperado: `output/decimais_raw_splits/<ID>/pacote_decimais_raw_splits.zip` com `resultado.json`; ainda não há resultado dessa inspeção textual real. **Jamais afirmar igualdade decimal de origem sem ler o novo pacote.** A reprodução histórica e os US$ 587,17 milhões permanecem congelados e não são corrigidos/promovidos por este teste.
 
+
+**Validação CI da implementação v1.24.8:** execução de testes associada ao HEAD `04978eaa8b0a936b411aca6bb354946d709febfc` concluída com **186 testes aprovados, 34 warnings, nenhuma falha**. Isso valida casos sintéticos e contratos do código; ainda não é resultado da inspeção dos números textuais reais de CAPR/YANG. Não concluir empate decimal real antes do ZIP gerado no Spyder.
