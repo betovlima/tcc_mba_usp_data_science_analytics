@@ -165,3 +165,75 @@ def test_real_preparation_feature_inputs_independent_of_future_action(
 def test_split_records_with_invalid_identity_or_ratio_rejected(invalid: dict) -> None:
     with pytest.raises(ValueError):
         split_from_action(invalid)
+
+
+def test_synthetic_lightgbm_ranking_unchanged_by_unannounced_future_split(
+    tmp_path: Path,
+) -> None:
+    """Miniatura de inferencia com LightGBM real; NAO e replay dos 75 ativos."""
+    from lightgbm import LGBMRegressor
+    from engine.configuracao import CONFIG
+    from engine.rotacao import ROTATION_FEATURES, construir_quadro_rotacao
+
+    base = synthetic_bars()
+    alternate = base.copy()
+    t = np.arange(len(alternate))
+    factor = 1 + .04 * np.sin(t * .081)
+    for field in ("open", "high", "low", "close"):
+        alternate[field] *= factor
+
+    choices = []
+    for with_future_event in (False, True):
+        scores = {}
+        for symbol, bars in (("AAA", base), ("BBB", alternate)):
+            paths = SnapshotPaths.from_root(
+                tmp_path / f"scenario_{int(with_future_event)}" / symbol
+            )
+            paths.ensure()
+            pd.DataFrame({
+                "timestamp": bars.index,
+                **{field: bars[field].to_numpy()
+                   for field in ("open", "high", "low", "close", "volume")},
+            }).to_csv(paths.raw_bars / f"{symbol}.csv",
+                      index=False, float_format="%.17g")
+            extra = action("2020-08-01T12:00:00Z") if with_future_event else None
+            if extra is None:
+                pd.DataFrame(columns=[
+                    "action_type", "symbol", "ex_date", "old_rate", "new_rate"
+                ]).to_csv(paths.corporate_actions / f"{symbol}.csv", index=False)
+            else:
+                extra["symbol"] = symbol
+                pd.DataFrame([extra]).to_csv(
+                    paths.corporate_actions / f"{symbol}.csv", index=False
+                )
+            prepared, exclusions, _, _ = prepare_model_frames(
+                paths, assets=(symbol,), strict_raw=True,
+                apply_split_adjustments=False, csv_float_precision="round_trip",
+            )
+            assert exclusions == []
+            cutoff = pd.Timestamp("2020-07-29", tz="UTC")
+            prefix = prepared[symbol].loc[
+                prepared[symbol].index < cutoff
+            ]
+            frame = construir_quadro_rotacao(prefix, CONFIG)
+            target = frame["forward_risk_adjusted_utility"]
+            trained = frame.loc[target.notna()]
+            assert len(trained) > 120
+            model = LGBMRegressor(
+                n_estimators=18, max_depth=3, num_leaves=6,
+                min_child_samples=10, random_state=42, n_jobs=1,
+                verbosity=-1,
+            )
+            model.fit(
+                trained.loc[:, ROTATION_FEATURES],
+                trained["forward_risk_adjusted_utility"],
+            )
+            scores[symbol] = float(model.predict(
+                frame.iloc[[-1]].loc[:, ROTATION_FEATURES],
+            )[0])
+        choices.append(scores)
+
+    assert choices[0] == choices[1]
+    assert max(choices[0], key=choices[0].get) == max(
+        choices[1], key=choices[1].get
+    )
