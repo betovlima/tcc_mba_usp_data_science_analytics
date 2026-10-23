@@ -312,6 +312,65 @@ def reproduzir_universo_congelado(
     if isinstance(getattr(result, "trades", None), pd.DataFrame):
         result.trades.to_csv(output / "trades.csv", index=False)
 
+
+    # Diagnosticos sao derivados de caches OOS ja calculados acima.
+    # Nao ajustam modelos nem interferem na estrategia / capital congelado.
+    predictive_summary = {"status": "not_run"}
+    try:
+        from reproducao.validacao_preditiva import (
+            auditar_limites_temporais,
+            auditar_normalizacao_splits,
+            exportar_previsoes_oos,
+            gerar_relatorios,
+        )
+
+        validated_splits, split_report = auditar_normalizacao_splits(
+            frames={**baseline_frames, **frames},
+            origem_base=pesquisa.BASE_DATA,
+            origem_candidatos=pesquisa.FULL_DATA,
+            candidatos=selected,
+        )
+        diagnostic_dir = output / "validacao_preditiva"
+        diagnostic_dir.mkdir(parents=True, exist_ok=True)
+        split_report.to_csv(diagnostic_dir / "auditoria_splits.csv", index=False)
+        horizon_maximo = max(int(h) for h in config.rotation_target_horizons)
+        temporal_report = auditar_limites_temporais(
+            states=states, common_dates=common_dates,
+            horizon_maximo=horizon_maximo,
+        )
+        temporal_report.to_csv(
+            diagnostic_dir / "auditoria_limites_temporais.csv", index=False
+        )
+        predictive_rows = exportar_previsoes_oos(
+            states=states, baseline_frames=baseline_frames,
+            baseline_symbols=baseline_symbols, common_dates=common_dates,
+            horizon_maximo=horizon_maximo, data_corte=contract["analysis_end_date"],
+            candidate_frames=frames, candidate_caches=caches,
+            splits_auditados=validated_splits,
+        )
+        predictive_rows.to_csv(
+            output / "previsoes_oos_por_ativo.csv",
+            index=False, float_format="%.17g",
+        )
+        predictive_summary = gerar_relatorios(predictive_rows, diagnostic_dir)
+        predictive_summary["normalizacao_consistente_ativos"] = int(
+            sum(bool(v) for v in validated_splits.values())
+        )
+        predictive_summary["normalizacao_total_ativos"] = len(validated_splits)
+        predictive_summary["limites_temporais_alertas"] = int(
+            (temporal_report["treinos_com_alvo_ainda_futuro"] > 0).sum()
+        )
+        print(
+            f"[predictive-audit] status={predictive_summary['status']} "
+            f"valid={predictive_summary['valid_rows']}/{predictive_summary['rows']} "
+            f"split_consistency={predictive_summary['normalizacao_consistente_ativos']}"
+            f"/{predictive_summary['normalizacao_total_ativos']}",
+            flush=True,
+        )
+    except Exception as exc:
+        predictive_summary = {"status": "failed", "reason": str(exc)[:1000]}
+        print(f"[predictive-audit] failed={exc!s}", flush=True)
+
     payload = {
         "reproduction_version": version,
         "execution_schema": execution_schema,
@@ -349,6 +408,7 @@ def reproduzir_universo_congelado(
             "decision_sessions": len(all_decision_dates) - 1,
         },
         "metrics": metrics,
+        "predictive_audit": predictive_summary,
         "baseline_reference": baseline_metrics,
         "runtime_seconds": time.perf_counter() - started,
     }
