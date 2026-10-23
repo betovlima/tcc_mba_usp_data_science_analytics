@@ -16,7 +16,7 @@ def test_one_ulp_close_can_change_strict_greater_than_after_legacy_division() ->
     # O fator 3:1 faz um preço um ULP maior virar um empate no float64.
     assert np.float64(one_ulp_above/3.) == np.float64(entry/3.)
     closes = np.full(60, entry, dtype=np.float64)
-    closes[17] = one_ulp_above
+    closes[0] = one_ulp_above  # proximo passo e queda, nao outra alta
     legacy_closes = closes / 3.
     dates = pd.bdate_range("2020-01-02", periods=60, tz="UTC")
     summary, rows = compare_positive_share(
