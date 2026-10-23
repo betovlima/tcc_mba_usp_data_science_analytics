@@ -185,8 +185,6 @@ def gerar_relatorios(df: pd.DataFrame, out: Path):
     )
 
     if report["status"] == "completed":
-        import matplotlib
-        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
         if not folds.empty:
