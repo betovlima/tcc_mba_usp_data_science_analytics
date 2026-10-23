@@ -58,3 +58,24 @@ Os folds 1 e 2, bem como a calibração, são os mesmos entre 06/10 e 21/10. Cap
 - Runner de coleta/avaliação U75: `8c2fd0ad05cf9af06021e0e0ad506cf2a18cbb7e`.
 - Testes de reuso/migração U77→U75: `78d473fb83d5ce2b89c3282f6b6ace4054c53bdc`.
 - Todos integrados em `research/v1.23.1-fresh-snapshot-20261022`. CI do commit `78d473fb83d5ce2b89c3282f6b6ace4054c53bdc`: **110 testes aprovados** (14 avisos reportados pela CI, sem falhas).
+
+## Resultado do contrafactual histórico de 2018 e teste fatorial — v1.23.8
+
+**Branch de pesquisa:** `research/v1.23.1-fresh-snapshot-20261022`. **Motor Control unificado de 75 ativos, referência executada:** v1.23.7, commit `78d473fb83d5ce2b89c3282f6b6ace4054c53bdc`. **`main` intacta:** `4667d2ccee3f3441ee4d2b362ce734311cedd5e3`. **Relatório científico integral:** `evidencias/auditoria_contrafactual_2018_v1237.md`, introduzido no commit `557171eb83e190ff355c43fad00178d1de70623c`.
+
+**Pacote de evidência recebido:** `pacote_contrafactual_2018.zip`, **SHA-256 `612d068d0fac97423a34a6da14c98b51ce2e3fffbb172954b619fc1990d9d21b`**; fonte U75 renovada SHA `595b7a03dc2c8978487975cd3554b1ea65608741893f13208938dc624cb273cc`, contrafactual SHA `0cae0311283e7d7419bef061b482e31c72eb972420c2f4178b0733a3d07a06f6`.
+
+| Corte em 06/10/2026, mesmo Control U75 | Capital final |
+|---|---:|
+| Snapshot renovado de 75 ativos (sem intervenção) | US$ 89.941.496,49095525 |
+| Mesmo snapshot, restaurando somente 73 barras OHLCV antigas de maio/2018 | **US$ 587.165.941,1330212** |
+| Release histórica v1.23.0 com snapshot congelado | **US$ 587.165.941,1330212** |
+
+A restauração controlada de **73 barras em 31 ativos efetivos**, das quais 12 em 01/05, 30 em 02/05 e 31 em 03/05/2018, foi **suficiente para recuperar exatamente o checkpoint econômico histórico**: +US$ 497.224.444,64 em relação ao controle, capital multiplicado por 6,52831. Contagens por campo: volume 73, máxima 57, mínima 54, abertura 16, fechamento 2 (sobreposição de campos por barra). DOC e CLMT não integraram a pesquisa.
+
+**Verificação reforçada:** o `trades.csv` restaurado tem **os mesmos bytes do arquivo histórico oficial**, com 710 registros; 1.560 escolhas e valores econômicos coincidentes. As únicas 552 diferenças de células do `predictions.csv` frente ao original são metadados `fold_test_end` do terceiro fold, não operações. A referência renovada tem 690 operações; as escolhas divergem em 192/1.560 sessões, começando em **28/07/2020, CXW (renovado) versus MGM (restaurado)**. Margens calibradas por fold: renovado **0,0100 / 0,0000 / 0,0100**; restaurado **0,0000 / 0,0100 / 0,0000**, iguais às originais.
+
+**Conclusão limitada aos dados e ao motor analisados:** as 73 diferenças pré-OOS de maio de 2018 são suficientes para explicar integralmente a divergência financeira entre estes dois replays. **Não está provado** quais linhas/campos/ativos dominam o efeito, nem qual versão de preços da Alpaca é economicamente correta, nem a possibilidade de realizar prospectivamente os US$ 587 milhões. Registros originais e scripts oficiais não devem ser sobrescritos. A dissertação deve destacar a forte sensibilidade do LightGBM/rotação a pequenas revisões históricas concentradas.
+
+**Novo teste fatorial v1.23.8 (não confundir com resultado já obtido):** `pesquisar_atribuicao_ohlc_volume_spyder.py` (implementação `592e371b9becdf774588774e79400d6cda52cfa1`, limpeza `860872a0ae8959dfbf550aa1aa1ae42aef3bfd33`, testes `a4f237a2997f51b5146dc34578f0ddcf3f2f4c13`). Apenas os dois cenários intermediários são calculados: **restaurar somente volume** ou **restaurar somente OHLC** sobre duas cópias descartáveis, recuperando por hash e manifesto os replays original e integral restaurado já disponíveis em `output/causal_drift_2018/`. Os quatro capitais compõem um fatorial 2×2 que permite examinar efeitos separados e interação não linear. **Ainda sem números financeiros desses novos dois cenários.** Nenhum download, ordem, alteração de 75 ativos ou troca de parâmetros. Saída `output/fatorial_drift_2018/<ID>/pacote_fatorial_ohlc_volume.zip`. Executar após atualizar a mesma branch, reiniciar o kernel e pressionar F5.
+
