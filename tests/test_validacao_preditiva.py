@@ -35,3 +35,19 @@ class DiagnosticosOOSTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AuditoriaTemporalTest(unittest.TestCase):
+    def test_detecta_alvo_que_ultrapassa_a_divisao(self):
+        from types import SimpleNamespace
+        from reproducao.validacao_preditiva import auditar_limites_temporais
+        calendar = pd.date_range("2026-01-01", periods=12, tz="UTC", freq="D")
+        state = SimpleNamespace(
+            fold_id=1, train_dates=calendar[:5],
+            calibration_dates=calendar[5:7], final_fit_dates=calendar[:7],
+            decision_dates=calendar[7:],
+        )
+        result = auditar_limites_temporais(states=[state], common_dates=calendar,
+                                          horizon_maximo=3)
+        self.assertEqual(list(result["treinos_com_alvo_ainda_futuro"]), [3,3])
+        self.assertTrue((result["status"] == "requer_verificacao_purge").all())
