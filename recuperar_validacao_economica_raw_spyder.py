@@ -67,7 +67,8 @@ def validar_resultado_salvo(
     if not result["metrics"].get("folds"):
         raise RuntimeError("Métricas de folds não foram registradas.")
 
-    # A última linha da curva é a liquidação final da carteira.
+    # A última linha da curva é patrimônio com liquidação (ou caixa
+    # se a estratégia terminou sem posição).
     final_equity = pd.read_csv(csv_path, usecols=["strategy_equity"])[
         "strategy_equity"
     ].iloc[-1]
@@ -76,8 +77,11 @@ def validar_resultado_salvo(
 
     trades = pd.read_csv(trade_path)
     last_trade = trades.iloc[-1]
-    if str(last_trade["action"]) != "FINAL_SELL":
-        raise RuntimeError("Não foi encontrada liquidação final.")
+    if str(last_trade["action"]) not in ("SELL", "FINAL_SELL"):
+        raise RuntimeError(
+            "A última operação não encerrou uma posição; "
+            "não é possível reconciliar o caixa final."
+        )
     if not math.isclose(
         float(last_trade["cash_after_trade"]), capital,
         abs_tol=0.01, rel_tol=0,
