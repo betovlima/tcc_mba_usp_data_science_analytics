@@ -1,3 +1,21 @@
+## Auditoria temporal de splits concluída e teste de impacto real — v1.24.2 (23/10/2026)
+
+**Branch:** `research/v1.23.1-fresh-snapshot-20261022`. **`main` preservada:** `4667d2ccee3f3441ee4d2b362ce734311cedd5e3`. **Relatório integral das evidências:** `evidencias/resultado_auditoria_temporal_splits_v1241.md`, criado em `6cf7207d5db1b64366be7d27b0fbac5f3464a25c`.
+
+**Pacote recebido e auditado:** `pacote_auditoria_temporal_splits.zip`, SHA-256 `840f42f48d4277bd6c4e65cc81c121ed073aa68169a8e9266c0d609587372ea4`. **Código executado:** v1.24.1, código HEAD `d86f148c9b39653a37191459c930ff934ef1e9f7`. **Snapshot do universo único de 75:** `595b7a03dc2c8978487975cd3554b1ea65608741893f13208938dc624cb273cc`.
+
+**Achados reais (cutoff 28/07/2020):** 75 ativos, **1.150 linhas históricas por ativo, 86.250 linhas ao todo**, sem edição RAW. **21 splits registrados em 17 ativos**, sendo **7 já efetivos e 14 com ex-date posterior** ao cutoff, estes distribuídos por 12 ativos (11 forward e 3 reverse). **Todos os 21 têm `first_seen_at_utc` ausente**: disponibilidade do anúncio em 2020 não comprovada; `evidence_available_at_decision=false` significa *sem evidência*, **não** anúncio comprovadamente desconhecido. O fato de a data efetiva ser futura não determina a data do anúncio.
+
+**Controle sintético v1.24.1:** em memória foi inserido um split fictício de NVDA com ex-date 12/08/2020 e first_seen posterior a 28/07. O motor reportou **52 atributos iguais em 951 linhas** ao usar RAW não modificado; **não treinou o LightGBM nesse pacote** e **não comparou scores ou rotações reais dos 75**. A normalização legada mostrou alterar preços antes da ex-date quando se introduz um evento futuro, fato que precisa ser medido no universo histórico real.
+
+**Nova bateria v1.24.2 — medir impacto retroativo real, não inferir sem dados:** script `auditar_impacto_splits_futuros_spyder.py` (commit `cea46639bb1c46c408f447064e1047ecbefe74b3`), testes sintéticos `tests/test_auditar_impacto_splits_futuros.py` (commit `98c9d6dbf77af48e978a98f0e8d93f524f96eaab`). Executar localmente F5, somente leitura, usando a mesma fotografia Alpaca U75. Para cada ativo, compara **dois cenários de normalização legada somente na memória**, um com todos os splits conhecidos pelo snapshot de 2026, outro limitado aos splits **já efetivados** até 28/07/2020. Compara quantas **linhas OHLCV antigas** e quantas **células de 52 atributos do TCC** mudam materialmente antes da decisão. Não escreve essas séries, não treina modelos, não consulta Alpaca, não altera universo nem capital.
+
+**Saída do próximo teste:** `output/impacto_splits_futuros/<ID>/pacote_impacto_splits_futuros.zip`, com `resumo.json`, `impacto_por_ativo.csv` e `impacto_por_atributo.csv`. **Ainda não há resultados desses impactos em dados reais.** O corte por ex-date é apenas comparação do efeito de efetivações futuras sobre o histórico; **não substitui prova de conhecimento do anúncio** nem autoriza ajustes em preços RAW.
+
+**Condição de conclusão científica:** quantificar primeiro se eventos efetivados depois da decisão modificaram apenas os níveis históricos ou também os atributos relativos do LightGBM. Alteração retrospectiva de OHLCV **não implica necessariamente** alteração de scores/decisões (vários atributos são invariantes à escala). Mesmo que os atributos mudem, não declarar vazamento econômico sem isolar treino temporal e inferência completos. Preservar snapshots e a reprodução de US$ 587.165.941,13 sem sobrescrever resultados oficiais.
+
+---
+
 ## Testes point-in-time de splits — v1.24.1 (23/10/2026)
 
 **Branch:** `research/v1.23.1-fresh-snapshot-20261022`. **Base da `main`, não modificada:** `4667d2ccee3f3441ee4d2b362ce734311cedd5e3`. **Relatório completo:** `evidencias/auditoria_temporal_splits_v1241.md` (commit de criação `196c9e4045278aa32f01f601f6e978f93606b701`).
