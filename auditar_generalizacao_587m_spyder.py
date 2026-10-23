@@ -15,6 +15,7 @@ from pathlib import Path
 import hashlib
 import json
 import math
+from zipfile import ZipFile, ZIP_DEFLATED
 
 import matplotlib
 matplotlib.use("Agg")
@@ -337,6 +338,12 @@ def main():
     (output / "resumo_generalizacao.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    package = output / "pacote_generalizacao_587m_v1253.zip"
+    with ZipFile(package, "w", compression=ZIP_DEFLATED) as archive:
+        for item in sorted(output.iterdir()):
+            if item.is_file() and item != package:
+                archive.write(item, arcname=item.name)
+    print(f"[generalizacao] pacote={package}", flush=True)
     print(f"[generalizacao] modelos={len(frame)}, "
           f"gap_mediano={summary['gap_rmse_mediano_percent']:.2f}%, "
           f"origem={origem}", flush=True)
