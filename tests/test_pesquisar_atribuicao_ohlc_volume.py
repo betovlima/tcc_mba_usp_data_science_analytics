@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 import pytest
 
 from pesquisar_atribuicao_ohlc_volume_spyder import restore_selected_fields
@@ -59,11 +60,11 @@ def test_ohlc_and_volume_interventions_are_separate_and_sources_immutable(
     with_prices = pd.read_csv(prices)
     assert len(restored_volume) == 3
     assert len(restored_prices) == 2
-    assert with_vol["volume"].equals(historical["volume"])
+    assert np.array_equal(with_vol["volume"].to_numpy(dtype=float), historical["volume"].to_numpy(dtype=float))
     for field in ("open", "high", "low", "close"):
-        assert with_vol[field].equals(current[field])
-        assert with_prices[field].equals(historical[field])
-    assert with_prices["volume"].equals(current["volume"])
+        assert np.array_equal(with_vol[field].to_numpy(dtype=float), current[field].to_numpy(dtype=float))
+        assert np.array_equal(with_prices[field].to_numpy(dtype=float), historical[field].to_numpy(dtype=float))
+    assert np.array_equal(with_prices["volume"].to_numpy(dtype=float), current["volume"].to_numpy(dtype=float))
     assert with_vol["trade_count"].equals(current["trade_count"])
     assert with_prices["trade_count"].equals(current["trade_count"])
     assert old.read_bytes() == old_bytes
