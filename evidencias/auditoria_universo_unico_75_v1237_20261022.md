@@ -57,4 +57,4 @@ Os folds 1 e 2, bem como a calibração, são os mesmos entre 06/10 e 21/10. Cap
 - Código de treinamento único U75: `d2f219cdd78cbee7770fd17f9634a432411f0ac1`.
 - Runner de coleta/avaliação U75: `8c2fd0ad05cf9af06021e0e0ad506cf2a18cbb7e`.
 - Testes de reuso/migração U77→U75: `78d473fb83d5ce2b89c3282f6b6ace4054c53bdc`.
-- Todos integrados em `research/v1.23.1-fresh-snapshot-20261022`. CI do commit `78d473fb83d5ce2b89c3282f6b6ace4054c53bdc`: **110 testes aprovados**, com dois avisos de dependências previamente documentados.
+- Todos integrados em `research/v1.23.1-fresh-snapshot-20261022`. CI do commit `78d473fb83d5ce2b89c3282f6b6ace4054c53bdc`: **110 testes aprovados** (14 avisos reportados pela CI, sem falhas).
