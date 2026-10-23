@@ -1,4 +1,4 @@
-"""Validacao, exclusoes estruturais e normalizacao local de splits."""
+"""Validacao do snapshot, leitura RAW estrita e rotina historica opcional de splits."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -66,6 +66,7 @@ def load_raw_bar_file(
     path: Path,
     *,
     float_precision: str | None = None,
+    strict_raw: bool = False,
 ) -> pd.DataFrame:
     frame = pd.read_csv(
         path,
@@ -77,11 +78,36 @@ def load_raw_bar_file(
         raise RuntimeError(
             f"{path.name}: colunas RAW ausentes: {', '.join(missing)}"
         )
-    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
-    frame = frame.set_index("timestamp").sort_index()
-    frame = frame[~frame.index.duplicated(keep="last")]
+    frame["timestamp"] = pd.to_datetime(
+        frame["timestamp"], utc=True, errors="raise"
+    )
+    frame = frame.set_index("timestamp")
+    if strict_raw:
+        # A pesquisa RAW nao corrige, reordena nem descarta linhas.
+        # Falhar torna toda anomalia visivel e auditavel.
+        if frame.index.hasnans:
+            raise RuntimeError(f"{path.name}: timestamp nulo em RAW.")
+        if frame.index.has_duplicates:
+            raise RuntimeError(f"{path.name}: timestamps duplicados em RAW.")
+        if not frame.index.is_monotonic_increasing:
+            raise RuntimeError(f"{path.name}: RAW fora de ordem cronologica.")
+    else:
+        # Reproducao historica v1.23.0, preservada exatamente.
+        frame = frame.sort_index()
+        frame = frame[~frame.index.duplicated(keep="last")]
     for column in ("open", "high", "low", "close", "volume"):
         frame[column] = pd.to_numeric(frame[column], errors="raise").astype(float)
+        if strict_raw and (
+            frame[column].isna().any()
+            or not np.isfinite(frame[column].to_numpy()).all()
+        ):
+            raise RuntimeError(f"{path.name}: valor RAW ausente/infinito em {column}.")
+    if strict_raw:
+        for column in ("open", "high", "low", "close"):
+            if (frame[column] <= 0).any():
+                raise RuntimeError(f"{path.name}: preco RAW nao positivo em {column}.")
+        if (frame["volume"] < 0).any():
+            raise RuntimeError(f"{path.name}: volume RAW negativo.")
     return frame[["open", "high", "low", "close", "volume"]].copy()
 
 
@@ -207,13 +233,18 @@ def prepare_model_frames(
     assets: tuple[str, ...] = ASSETS,
     allow_structural_assets: frozenset[str] = frozenset(),
     csv_float_precision: str | None = None,
+    apply_split_adjustments: bool = True,
+    strict_raw: bool = False,
 ) -> tuple[
     dict[str, pd.DataFrame],
     list[dict[str, Any]],
     list[dict[str, Any]],
     dict[str, Any],
 ]:
-    """Carrega o snapshot, exclui identidades quebradas e normaliza splits.
+    """Carrega dados para o modelo com politica explicita de alteracao de precos.
+
+    O padrao historico aplica splits para preservar a reproducao v1.23.0.
+    Pesquisa v1.24.0: apply_split_adjustments=False e strict_raw=True.
 
     allow_structural_assets existe apenas para campanhas de sensibilidade:
     o evento estrutural continua auditado, mas o ativo pode ser mantido no
@@ -235,6 +266,7 @@ def prepare_model_frames(
         raw = load_raw_bar_file(
             raw_path,
             float_precision=csv_float_precision,
+            strict_raw=strict_raw,
         )
         actions = load_actions_file(action_path)
         issue = structural_identity_issue(symbol, actions)
@@ -276,14 +308,23 @@ def prepare_model_frames(
                 flush=True,
             )
 
-        normalized, applied = split_normalize(raw, actions)
-        frames[symbol] = normalized
+        if apply_split_adjustments:
+            normalized, applied = split_normalize(raw, actions)
+            frames[symbol] = normalized
+        else:
+            # Sem normalizacao de SPLIT ou dividendos, sem alterar RAW.
+            applied = []
+            frames[symbol] = raw
         diagnostics.append(
             {
                 "symbol": symbol,
                 "raw_rows": len(raw),
                 "corporate_actions": len(actions),
                 "splits_applied": len(applied),
+                "data_mode": (
+                    "split_adjusted_legacy"
+                    if apply_split_adjustments else "alpaca_raw_unchanged"
+                ),
                 "excluded": False,
                 "exclusion_reason": None,
                 "structural_override": bool(structural_override),
@@ -295,7 +336,9 @@ def prepare_model_frames(
         )
         print(
             f"[data] {position}/{len(assets)} {symbol} "
-            f"raw_rows={len(raw)} ca={len(actions)} splits={len(applied)}",
+            f"raw_rows={len(raw)} ca={len(actions)} "
+            f"splits_applied={len(applied)} "
+            f"mode={'legacy_split' if apply_split_adjustments else 'raw_unchanged'}",
             flush=True,
         )
 
@@ -313,6 +356,11 @@ def prepare_model_frames(
         "eligible_assets": len(frames),
         "actual_total_eligible_raw_rows": actual_rows,
         "actual_total_splits_applied": actual_splits,
+        "price_transform_policy": (
+            "split_adjusted_legacy" if apply_split_adjustments
+            else "alpaca_raw_unchanged"
+        ),
+        "raw_strict_validation": strict_raw,
         "excluded_assets": exclusions,
     }
     print(
