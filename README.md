@@ -448,3 +448,5 @@ Nenhuma diferença material nas **5 utilidades individuais por horizonte nem nos
 
 **Para obter evidência real:** atualizar a mesma branch, reiniciar kernel, F5 em `diagnosticar_empates_utilidade_splits_spyder.py`; enviar `output/empates_utilidade_splits/<ID>/pacote_empates_utilidade_splits.zip`. Até então, classificar como quase equivalência de labels, **não equivalência completa**; não publicar backtest RAW nem substituir o checkpoint histórico dos US$ 587 milhões. O uso de labels supervisionados só após maturidade já foi auditado no teste anterior (450 grupos, zero violações), mas nenhum destes programas reproduziu a performance de capital.
 
+
+**Validação final v1.24.7:** o teste de empate float64 foi refinado no commit `8fec45997c57cd58fdd6b8c5f7a5201a44488bf2`, sem alterar regras ou preços. GitHub Actions da revisão: **179 testes aprovados, 34 advertências, zero falhas**. O teste sintético prova a possibilidade de empate de ULP, mas somente o ZIP do diagnóstico local identificará os três casos reais de CAPR/YANG.
