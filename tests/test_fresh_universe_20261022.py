@@ -154,3 +154,68 @@ def test_only_75_downloaded_and_two_cutoffs_use_same_snapshot(
     assert len(calls) == 2  # Os dados foram reaproveitados; sem nova coleta.
     assert second["snapshot_sha256"] == first["snapshot_sha256"]
     assert len(simulations) == 4
+
+
+def test_legacy_77_snapshot_migrates_to_75_without_touching_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_contract = json.loads(
+        (fresh.ROOT / "evidencias" / "manifest_universo_congelado.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    (tmp_path / "evidencias").mkdir()
+    (tmp_path / "evidencias" / "manifest_universo_congelado.json").write_text(
+        json.dumps(original_contract), encoding="utf-8"
+    )
+    monkeypatch.setattr(fresh, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        fresh, "LEGACY_77_DATA_ROOT", tmp_path / "dados" / ".u67_fresh_runs"
+    )
+    legacy = fresh.SnapshotPaths.from_root(
+        fresh.LEGACY_77_DATA_ROOT / "asof_2026-10-22_sample" / "universe_77"
+    )
+    legacy.ensure()
+    historical77 = (
+        *fresh.U67_REQUESTED_ASSETS,
+        *original_contract["selected_assets"],
+    )
+    assets = universo_75(original_contract, ())
+    raws, actions = {}, {}
+    for symbol in historical77:
+        raw = legacy.raw_bars / f"{symbol}.csv"
+        raw.write_text(
+            "timestamp,open,high,low,close,volume\n"
+            "2026-10-22T04:00:00Z,1,1,1,1,100\n",
+            encoding="utf-8",
+        )
+        action = legacy.corporate_actions / f"{symbol}.csv"
+        action.write_text("action_type\n", encoding="utf-8")
+        raws[symbol], actions[symbol] = raw, action
+    previous = fresh.build_snapshot_manifest(
+        legacy, raws, actions,
+        assets=historical77,
+        bar_snapshot_as_of_end="2026-10-22",
+        analysis_end_date="2026-10-22",
+        snapshot_name="legacy77-source",
+    )
+    previous_manifest_bytes = legacy.manifest.read_bytes()
+
+    run_dir = tmp_path / "dados" / ".u75_fresh_runs" / "asof_2026-10-22_migration"
+    migrated = fresh.reuse_legacy_snapshot_as_75(
+        "2026-10-22", assets, run_dir
+    )
+    assert migrated is not None
+    source75, new_manifest, provenance = migrated
+    assert provenance == previous["snapshot_sha256"]
+    assert new_manifest["snapshot_sha256"] != provenance
+    assert tuple(new_manifest["assets"]) == assets
+    assert len(list(source75.raw_bars.glob("*.csv"))) == 75
+    assert len(list(source75.corporate_actions.glob("*.csv"))) == 75
+    assert not (source75.raw_bars / "DOC.csv").exists()
+    assert not (source75.raw_bars / "CLMT.csv").exists()
+    assert legacy.manifest.read_bytes() == previous_manifest_bytes
+    assert len(list(legacy.raw_bars.glob("*.csv"))) == 77
+    assert fresh.validate_snapshot(source75)["snapshot_sha256"] == new_manifest[
+        "snapshot_sha256"
+    ]
