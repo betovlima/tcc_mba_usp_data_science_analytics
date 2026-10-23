@@ -327,3 +327,17 @@ A restauração controlada de **73 barras em 31 ativos efetivos**, das quais 12 
 
 **Branch e proveniência:** `research/v1.23.1-fresh-snapshot-20261022`, PR #18 Draft, main mantida em `4667d2ccee3f3441ee4d2b362ce734311cedd5e3`. A campanha v1.24.0 representa **nova política de dados e potencial alteração metodológica material**; não comparar seu futuro capital diretamente aos US$ 587 milhões como se a única diferença fosse o cutoff.
 
+## Testes point-in-time de splits — v1.24.1 (23/10/2026)
+
+**Branch:** `research/v1.23.1-fresh-snapshot-20261022`. **Base da `main`, não modificada:** `4667d2ccee3f3441ee4d2b362ce734311cedd5e3`. **Relatório completo:** `evidencias/auditoria_temporal_splits_v1241.md` (commit de criação `196c9e4045278aa32f01f601f6e978f93606b701`).
+
+**Commits de implementação:** `41dde42d74e408a107805356103d6fcbbc5df796` (`reproducao/splits_temporais.py`); `2d15b011eb33f288a6bf5627e524dcbdf7583355` (`auditar_temporalidade_splits_spyder.py`); `d411219b0253d9e5e2b07a9a1b731a38acbcbef1` (testes de disponibilidade/atributos/custódia); `a2c7ca93c20c1d5d04328e6dbbb319c1be85150e` (teste de ranking LightGBM sintético). **CI do último código:** **141 testes aprovados**, com advertências de dependência, sem falhas.
+
+**Regra experimental:** separar `first_seen_at_utc` (primeira observação comprovada do anúncio pelo sistema), `ex_date` (data econômica de efetivação) e `process_date` (data de processamento, **não substitui** primeira observação). Um evento futuro **não anunciado e desconhecido** não pode modificar atributos ou decisões calculados antes de sua disponibilidade. Um evento **anunciado mas não efetivado** pode constar dos metadados conhecidos, porém não permite mudar quantidades de ações antes da ex-date.
+
+**Resultados dos controles sintéticos:** a política RAW mantém inalterados os atributos do motor real e o ranking de um mini-LightGBM ao acrescentar anúncio posterior à data de decisão. O teste de aritmética de custódia confirma que um split 1:10 transforma 1 ação × US$ 100 em 10 ações × US$ 10 sem alterar a base de custo, e rejeita a reaplicação do mesmo evento. O comportamento legado `split_normalize` modifica retrospectivamente OHLCV anteriores ao evento: esse é o mecanismo que motivou a mudança de política, não um procedimento autorizado da versão RAW estrita.
+
+**Próxima execução real, sem downloads e sem modificar dados:** atualizar branch no Git e pressionar F5 em `auditar_temporalidade_splits_spyder.py`. O script lê o snapshot dos **75 ativos efetivos** em `dados/.u75_fresh_runs`, verifica o prefixo até **28/07/2020** e registra os splits e a evidência de disponibilidade histórica. Gera `output/auditoria_temporal_splits/<ID>/pacote_auditoria_temporal_splits.zip`. Ainda não existe resultado local do universo inteiro; não afirmar paridade das previsões OOS/LightGBM completo antes de completar simulação economicamente correta com contabilidade dos splits.
+
+**Limitação científica:** snapshot retrospectivo não prova quando o anúncio foi disponibilizado historicamente. Sem log contemporâneo `first_seen_at_utc`, classificar visibilidade como **desconhecida**, nunca presumir. A nova aritmética de custódia é um teste unitário; faltam integração com motor de negociação, fracionários/cash-in-lieu e retornos/labels ao atravessar splits. **Nenhum capital de novo backtest RAW foi produzido ou validado**. Preservar a reprodução oficial v1.23.0 (US$ 587.165.941,13), os dados congelados, os resultados anteriores e a aplicação operacional.
+
