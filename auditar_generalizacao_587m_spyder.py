@@ -432,7 +432,7 @@ def main():
     (output / "resumo_generalizacao.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    package = output / "pacote_generalizacao_587m_v1253.zip"
+    package = output / "pacote_generalizacao_587m_v1254.zip"
     with ZipFile(package, "w", compression=ZIP_DEFLATED) as archive:
         for item in sorted(output.iterdir()):
             if item.is_file() and item != package:
