@@ -41,3 +41,51 @@ identifica quantos rótulos da janela de treino ainda dependem de sessões
 posteriores ao início da calibração ou teste. Um alerta exige confirmar o
 uso efetivo desses rótulos e aplicar separação temporal apropriada no
 experimento futuro. Essa auditoria não altera a reprodução histórica.
+
+## Execucao integrada na branch desta entrega
+
+**Executor realmente disponivel no remoto:** `reproduzir_experimento.py`
+(v1.23.0, snapshot congelado da campanha historica). O codigo fonte
+das execucoes v1.25.0/v1.25.1 dos ZIPs recentes nao esta publicado no
+repositório consultado. NAO interpretar o replay v1.23 como reproduzindo
+a campanha economica raw v1.25.1 de US$ 42,6 milhoes.
+
+No console Git (sem mover ou alterar a main):
+
+```bash
+git fetch origin
+git switch research/v1.25.2-diagnosticos-preditivos
+git pull --ff-only origin research/v1.25.2-diagnosticos-preditivos
+```
+
+No Spyder, com os **mesmos dados locais congelados da v1.23** e seus
+hashes conferidos, execute o arquivo `reproduzir_experimento.py` com F5.
+O executor usa os mesmos modelos, margens e folds, testa a reproducao ao
+centavo e, depois, gera:
+
+```text
+output/reproducao_universo/
+    previsoes_oos_por_ativo.csv
+    validacao_preditiva/
+        diagnostico_preditivo.json
+        metricas_por_fold.csv
+        metricas_por_ativo_fold.csv
+        ranking_por_sessao.csv
+        auditoria_splits.csv
+        auditoria_limites_temporais.csv
+        erro_por_fold.png
+        spearman_temporal.png
+    pacote_reproducao_universo.zip
+```
+
+Os PNGs sao gerados apenas quando ha pares OOS validos; um erro de
+auditoria fica no campo `predictive_audit` do
+`reproducao_universo.json`, sem alterar o resultado economico.
+
+**Cuidado com a interpretacao:** a auditoria de splits confere se os
+OHLCV da modelagem correspondem a normalizacao deterministica das
+Corporate Actions locais. Nao confirma, por verificacao externa,
+a completude das Corporate Actions. Os intervalos dos folds ainda
+exigem conferir os avisos de rótulos incompletos na auditoria temporal.
+O conjunto de 75 ativos da v1.23 foi escolhido retrospectivamente,
+entao essas metricas OOS nao eliminam por si o viés de selecao.
