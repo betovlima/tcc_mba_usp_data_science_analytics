@@ -240,3 +240,22 @@ A execução renovada e a plataforma operacional apresentaram 1.571/1.571 escolh
 
 **Hipótese a verificar:** se os resultados dos dois replays mudarem fortemente apenas pela substituição das observações, teremos evidência experimental de sensibilidade financeira aos insumos de maio de 2018. Se não mudarem, será necessário investigar eventos, configuração do calendário de folds e demais diferenças controláveis; não presumir a explicação.
 
+## Política definitiva do universo efetivo — v1.23.7 (22/10/2026)
+
+**Decisão do pesquisador:** o **único universo da pesquisa é composto por 75 ativos**, sem DOC e CLMT. Os símbolos excluídos permanecem apenas nos manifestos de proveniência histórica e na reprodução oficial já congelada, **nunca na coleta, treinamento, calibração, simulação ou auditoria prospectiva do fluxo de pesquisa v1.23.7**. Nenhum ativo deve ser acrescentado, descoberto, substituído ou reabilitado automaticamente.
+
+A convenção anterior de 67 símbolos originalmente solicitados (65 elegíveis) acrescidos de dez selecionados pertence **exclusivamente à história do projeto**. Ela não define mais dois grupos de modelagem. Os 75 símbolos efetivos são derivados uma única vez do manifesto vencedor, removendo DOC e CLMT, e são tratados como **um painel fechado e único desde o primeiro fold**.
+
+**Identificação Git:** branch `research/v1.23.1-fresh-snapshot-20261022`. Código do novo executor unificado: commit `d2f219cdd78cbee7770fd17f9634a432411f0ac1` (`reproducao/universo_fixo75.py`); runner: `8c2fd0ad05cf9af06021e0e0ad506cf2a18cbb7e` (`executar_atualizacao_series_spyder.py`); contrafactual de 75 ativos: `1562b251e4d71718a3741d71bb3a01cd77441877` e `26e8feaf2db4903e543cb296dfe815d155019800`; auditoria offline limitada a 75: `87096850d6e0bbf0657be5c3642cf9263ea00e2e`.
+
+**Operação v1.23.7:**
+
+- `executar_atualizacao_series_spyder.py` (Spyder F5) usa **75 séries SIP/RAW/1Day**, sem DOC/CLMT, tanto na aquisição quanto no modelo. Se o usuário já possui o snapshot isolado legado de 77 em `dados/.u67_fresh_runs`, o programa primeiro valida integralmente seu SHA-256 e cria **uma nova cópia com somente os 75 arquivos correspondentes**, com manifesto novo e SHA próprio, sob `dados/.u75_fresh_runs`. O snapshot anterior não é modificado; a migração é offline. Sem snapshot legado, baixam-se somente os 75.
+- Os 75 modelos LightGBM por ativo são ajustados **em conjunto dentro do mesmo ciclo de folds**, e a margem de rotação é calibrada sobre os 75 ativos, sem formação de uma referência de 65 ativos seguida por adição de dez.
+- O programa avalia 06/10/2026 e 21/10/2026 com a mesma fotografia de 75 ativos, gera `output/fresh_universe_75/asof_<DATA>_<ID>/pacote_comparacao_cutoffs_75.zip`.
+- `auditar_drift_historico_spyder.py` considera apenas os 75. Das alterações históricas antes observadas, esperam-se **73 barras de 31 ativos efetivos**, pois duas barras eram de CLMT e não pertencem à pesquisa. As duas fontes históricas originais continuam inalteradas.
+- `pesquisar_causa_drift_2018_spyder.py` usa somente os 75 e faz a intervenção temporária nas 73 barras, com o mesmo motor unificado e cutoff de 06/10/2026. Não cria novos ativos, não escreve nos snapshots originais e não utiliza a aplicação operacional para pesquisa.
+
+**Advertência metodológica indispensável:** o resultado US$ 587.165.941,13 pertence ao executor histórico v1.23.0 e foi reproduzido com 75 ativos **efetivamente negociáveis**, mas o procedimento histórico ainda distinguia 65 ativos-base dos dez adicionais no treinamento. O novo procedimento de **treinamento conjunto de 75** é uma **mudança de desenho experimental**. Portanto, **não prometer que a execução v1.23.7 reproduzirá exatamente US$ 587 milhões ou US$ 76,15 milhões**, nem atribuir diferenças exclusivamente à atualização das séries sem um controle que preserve o motor antigo. Essas referências e todos os hashes continuam arquivados para comparação honesta.
+
+**Regra de integridade:** nenhum novo snapshot/resultado de v1.23.7 substitui `dados/u67`, `evidencias/manifest_universo_congelado.json` ou a release científica `v1.23.0`. A `main` permanece intocada. As razões documentadas para exclusão de DOC e CLMT são estruturais; não se deve afirmar, sem ensaio controlado específico, que eles necessariamente destruiriam o capital em qualquer cenário.
