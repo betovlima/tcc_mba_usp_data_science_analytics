@@ -129,3 +129,17 @@ def test_historical_default_split_normalization_still_reproducible(
     assert result["AAA"]["close"].iloc[0] == 10.0
     assert result["AAA"]["volume"].iloc[0] == 10000.0
     assert audit["actual_total_splits_applied"] == 1
+
+
+def test_rejects_mixed_raw_and_split_adjustment_policies(tmp_path: Path) -> None:
+    paths = SnapshotPaths.from_root(tmp_path / "snapshot")
+    with pytest.raises(ValueError, match="Modo de dados inconsistente"):
+        prepare_model_frames(
+            paths, assets=("AAA",), strict_raw=True,
+            apply_split_adjustments=True,
+        )
+    with pytest.raises(ValueError, match="Modo de dados inconsistente"):
+        prepare_model_frames(
+            paths, assets=("AAA",), strict_raw=False,
+            apply_split_adjustments=False,
+        )
