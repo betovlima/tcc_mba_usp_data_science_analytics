@@ -1948,3 +1948,26 @@ Preservar: 75 ativos, RAW imutável, experimentos v1.23.0 publicados, `main` e P
 
 **Política preservada:** único universo fixo de 75 ativos, snapshots Alpaca RAW imutáveis, resultados anteriores congelados, PR #18 Draft, nenhum merge na main.
 
+## 42. Maturidade dos rótulos v1.24.5 e utilidade RAW v1.24.6
+
+**Branch:** `research/v1.23.1-fresh-snapshot-20261022`; **`main` preservada:** `4667d2ccee3f3441ee4d2b362ce734311cedd5e3`; PR #18 Draft, sem merge. **Relatório completo:** `evidencias/resultado_maturidade_labels_u75_v1245.md`, commit de criação `7fc18de7eb2492a19c3c29750221b92956244f45`.
+
+**Evidência recebida:** `pacote_maturidade_labels_u75.zip`, **SHA-256 `48750a807bfc895e3d3ce8b0acd92d098569c8a4e09dc11c32d988a8ca2f185a`**. Snapshot U75 SHA-256 `595b7a03dc2c8978487975cd3554b1ea65608741893f13208938dc624cb273cc`. **Código executado:** `auditar_maturidade_labels_spyder.py` v1.24.5, commit `65c3d63d09d338645504533b6fa6455fab56c407`; testes `8ca1ad655b9144a79e2ad7ed905fc9a164c555c4`, `da817a6a3696157337b55504dcdb9d10f61a54de`.
+
+**Resultado observado:** **75 ativos × 3 folds × 2 fases de treinamento = 450 grupos auditados** sobre o calendário próprio de cada ativo, usando dados RAW estritos, máximo de **60 sessões de horizonte** e purge de **60 sessões**. **583.650 linhas de treino somadas sobre os grupos**, contando reutilizações entre folds e fases. **Zero rótulos que amadurecem depois ou na data de início da avaliação; zero grupos em violação.** O último alvo disponível amadureceu no pregão anterior à primeira sessão avaliada em todos os seis limites.
+
+| Fold | Fase | Linhas elegíveis / ativo | Último alvo amadurecido | Primeira avaliação |
+|---|---|---:|---|---|
+| 1 | Calibração | 700 | 23/10/2019 | 24/10/2019 |
+| 1 | Final | 886 | 21/07/2020 | 22/07/2020 |
+| 2 | Calibração | 1.204 | 22/10/2021 | 25/10/2021 |
+| 2 | Final | 1.390 | 21/07/2022 | 22/07/2022 |
+| 3 | Calibração | 1.708 | 25/10/2023 | 26/10/2023 |
+| 3 | Final | 1.894 | 24/07/2024 | 25/07/2024 |
+
+**Conclusão limitada:** o protocolo cronológico de ajuste dos rótulos `t+60` passou na auditoria de elegibilidade e maturidade; **não está provado** que todos os atributos, fontes e eventos corporativos sejam point-in-time, nem que os rótulos calculados ingênua e diretamente de RAW sem contabilizar splits sejam economicamente válidos. A auditoria reconstruiu quais amostras seriam elegíveis ao fit, sem treinar LightGBM ou executar nova carteira. Os US$ 587,17 milhões da v1.23.0 e a discrepância por 73 barras RAW de 2018 permanecem resultados históricos separados.
+
+**Próximo ensaio v1.24.6 implementado e validado em CI:** `auditar_utilidades_economicas_raw_spyder.py` (commit `8313aee49a6f17acc44afb2780b9b1ba16db3577`), testes `tests/test_auditar_utilidades_economicas_raw.py` (commit `f2a710cc6e7256397141a17553d965bcf8f94cc8`). **176 testes aprovados, 34 avisos** no GitHub Actions, sem falhas. Este diagnóstico offline deriva **15 rótulos econômicos completos** (cinco utilidades por horizonte, cinco retornos líquidos por horizonte, cinco componentes agregados) de preços RAW **sem tocar no histórico**, aplicando fatores de quantidade nos caminhos futuros. Compara os rótulos com a formulação histórica normalizada, calculada somente em memória, em janelas próximas aos splits registrados nos **mesmos 75 ativos**. Nenhum treinamento, nenhuma otimização, nenhuma simulação de capital. **Os resultados reais de utilidade ainda não existem**, não inferir equivalência pelo sucesso dos testes sintéticos.
+
+**Próximo passo no Spyder:** atualizar a mesma branch, reiniciar kernel, pressionar F5 em `auditar_utilidades_economicas_raw_spyder.py`. Enviar `output/utilidades_economicas_raw/<ID>/pacote_utilidades_economicas_raw.zip` para comparar `resumo.json`, `por_ativo.csv` e `divergencias_labels.csv` e registrar a identidade SHA do pacote e o resultado encontrado. Não alterar CSVs RAW, snapshots, versão oficial, universo de 75 ou main.
+
