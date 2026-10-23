@@ -51,3 +51,6 @@ class AuditoriaTemporalTest(unittest.TestCase):
                                           horizon_maximo=3)
         self.assertEqual(list(result["treinos_com_alvo_ainda_futuro"]), [3,3])
         self.assertTrue((result["status"] == "requer_verificacao_purge").all())
+
+if __name__ == "__main__":
+    unittest.main()
