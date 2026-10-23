@@ -42,7 +42,6 @@ SNAPSHOT_CUTOFF = FRESH_CUTOFF    # 22/10/2026: mesma fotografia Alpaca.
 EXPECTED_CHANGED_ROWS = 73
 EXPECTED_CHANGED_ASSETS = 31
 ALLOWED_DATES = frozenset({"2018-05-01", "2018-05-02", "2018-05-03"})
-WORK_ROOT = ROOT / "dados" / ".u67_fresh_runs"
 OUTPUT_ROOT = ROOT / "output" / "causal_drift_2018"
 
 
@@ -243,30 +242,6 @@ def run(*, root: Path = ROOT, output: Path | None = None) -> dict:
         ("fresh_reference", fresh, original_manifest),
         ("fresh_with_original_2018_bars", clone, manifest),
     ):
-        contract = {
-            "schema_version": 2,
-            "scope": "fixed_77_input_intervention_research",
-            "analysis_end_date": COMPARE_CUTOFF,
-            "snapshot_data_end_date": SNAPSHOT_CUTOFF,
-            "snapshot_sha256": manifest_payload["snapshot_sha256"],
-            "selected_assets": historical["selected_assets"],
-            "candidate_file_hashes": {
-                asset: {
-                    "raw_sha256": file_sha256(paths.raw_bars / f"{asset}.csv"),
-                    "corporate_actions_sha256": file_sha256(
-                        paths.corporate_actions / f"{asset}.csv"
-                    ),
-                }
-                for asset in historical["selected_assets"]
-            },
-            "baseline_ending_capital": None,
-            "expected_ending_capital": None,
-            "full_refresh": False,
-        }
-        contract_path = out / f"contract_{label}.json"
-        contract_path.write_text(
-            json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
         result = reproduzir_universo_fixo75(
             root=root,
             output=out / label,
