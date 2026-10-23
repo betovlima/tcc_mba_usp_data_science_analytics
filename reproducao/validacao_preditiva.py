@@ -183,6 +183,40 @@ def gerar_relatorios(df: pd.DataFrame, out: Path):
     (out / "diagnostico_preditivo.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8"
     )
+
+    if report["status"] == "completed":
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        if not folds.empty:
+            fig, ax = plt.subplots(figsize=(9, 4.5))
+            x = np.arange(len(folds))
+            ax.bar(x - 0.18, folds["mae"], width=0.36, label="MAE")
+            ax.bar(x + 0.18, folds["rmse"], width=0.36, label="RMSE")
+            ax.set_xticks(x, [f"Fold {int(f)}" for f in folds["fold"]])
+            ax.set_ylabel("Erro da utilidade prevista")
+            ax.set_title("Erro preditivo fora da amostra por fold")
+            ax.legend()
+            fig.tight_layout()
+            fig.savefig(out / "erro_por_fold.png", dpi=160)
+            plt.close(fig)
+
+        if not ranks.empty:
+            fig, ax = plt.subplots(figsize=(10, 4.5))
+            for fold, group in ranks.groupby("fold"):
+                ax.plot(
+                    pd.to_datetime(group["data_decisao"], utc=True),
+                    group["spearman"].rolling(20, min_periods=5).mean(),
+                    label=f"Fold {int(fold)}", linewidth=1.25,
+                )
+            ax.axhline(0.0, linewidth=0.7, linestyle=":")
+            ax.set_ylabel("Spearman medio em 20 sessoes")
+            ax.set_title("Estabilidade temporal da ordenacao OOS")
+            ax.legend()
+            fig.tight_layout()
+            fig.savefig(out / "spearman_temporal.png", dpi=160)
+            plt.close(fig)
     return report
 
 
