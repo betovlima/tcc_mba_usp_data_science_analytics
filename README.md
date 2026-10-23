@@ -467,3 +467,23 @@ Nenhuma diferença material nas **5 utilidades individuais por horizonte nem nos
 
 
 **Validação CI da implementação v1.24.8:** execução de testes associada ao HEAD `04978eaa8b0a936b411aca6bb354946d709febfc` concluída com **186 testes aprovados, 34 warnings, nenhuma falha**. Isso valida casos sintéticos e contratos do código; ainda não é resultado da inspeção dos números textuais reais de CAPR/YANG. Não concluir empate decimal real antes do ZIP gerado no Spyder.
+
+## Resultado real v1.24.8: empates decimais e serialização float64; fechamento v1.24.9 (23/10/2026)
+
+**Branch:** `research/v1.23.1-fresh-snapshot-20261022`; **`main` intacta:** `4667d2ccee3f3441ee4d2b362ce734311cedd5e3`; PR #18 permanece Draft e sem merge.
+
+**Pacote auditado:** `pacote_decimais_raw_splits.zip`, SHA-256 **`df22e249611f456fb4c742b6c350f491ca9dad5e7e503f61303fec9d76839253`**, íntegro (`ZipFile.testzip()=None`). **Snapshot U75** SHA `595b7a03dc2c8978487975cd3554b1ea65608741893f13208938dc624cb273cc`. O script v1.24.8 conferiu o contrato de 75 ativos e examinou **somente CAPR e YANG** e suas três decisões. **Relatório completo:** `evidencias/resultado_precisao_decimal_splits_v1248.md`, commit `63a13052fb65a90caa07886ce3c4f87f08de2443`.
+
+**Resultado confirmado, com aritmética racional exata sobre o TEXT0 gravado:** `exact_decimal_equal=0`, `exact_decimal_gt=3`; um reverse split por par.
+- CAPR decisão 20/05/2019: `open=0.32000000000000001`, `close=3.2000000000000002`, quantidade ×1/10, diferença **+1e-17**.
+- CAPR decisão 28/05/2019: `open=0.30199999999999999`, `close=3.02`, ×1/10, diferença **+1e-17**.
+- YANG decisão 16/10/2024: `open=3.9199999999999999`, `close=78.400000000000006`, ×1/20, diferença **+4e-16**.
+
+**Ponto técnico:** em `reproducao/dados.py`, a coleta Alpaca usa `Adjustment.RAW`, `DataFeed.SIP`, mas exporta os valores **numéricos float64** para CSV com `frame.to_csv(..., float_format="%.17g")`. Cada um dos seis textos no ZIP corresponde exatamente a `format(float(texto), '.17g')`. Já a forma de menor decimal com round-trip idêntico, `repr(float(texto))`, é **0.32/3.2**, **0.302/3.02**, **3.92/78.4**. Aplicando fatores de quantidade aos pares nessas representações mínimas, todos são empates decimais racionais. **Isso demonstra dependência da representação/aritmética usada no pipeline; não prova o formato textual do payload enviado originalmente pela Alpaca**, pois não capturamos bytes da resposta da API. Importante: o termo RAW caracteriza a modalidade de barras solicitadas, **não** certifica que o CSV armazenado seja cópia literal byte a byte da resposta.
+
+**Relação com resultados anteriores:** v1.24.7 confirmou três diferenças de apenas **1 ULP** nas comparações `close > entry`; daí surgiram os seis labels diferentes da v1.24.6 (três variações de `0,5/60=0,008333333` em persistência e três de `0,001666667` em utilidade agregada). As 11.980 comparações de retornos de preço econômicos da v1.24.4 continuam equivalentes ao legado; o motor completo e o capital não foram reexecutados. **Não alterar regra de decisão `>`, tolerância numérica, CSVs RAW ou parâmetros.**
+
+**Novo teste v1.24.9, sem alterar nada:** `auditar_serializacao_float64_spyder.py` commit `6a1b237fdff5e66c18247f8f06b6f33ef88f15a2`; `tests/test_auditar_serializacao_float64.py` commits `aff87e8d9a52b92cea74590ee0d7cdc8a469ff3d`, `ffbbaa70ce0198f85df3ab44ea24873da88609ef`. O script, em F5 no Spyder, lê as mesmas seis células das duas séries, compara texto `%.17g`, `repr(float)`, bits `float.hex()` e diferenças de preço como fração racional exata, registra hashes antes/depois e verifica contrato U75, sem tocar CSV e sem treinamento/backtest. **A evidência dos valores já está no ZIP v1.24.8**; este próximo ensaio cria a certificação automática e reproduzível do mecanismo de serialização, não é necessário para descobrir novos ativos nem produzir capital.
+
+**Próximo arquivo local:** `output/auditoria_serializacao_float64/<ID>/pacote_auditoria_serializacao_float64.zip`. **Limitação remanescente:** somente uma nova coleta especificamente instrumentada, com captura dos bytes brutos da resposta original, poderia demonstrar exatamente qual string ou representação foi enviada pela API — isso seria **outro snapshot, nunca uma substituição silenciosa da fotografia histórica**. Todos os 75 ativos e o histórico de 2018 continuam imutáveis; os US$ 587,17 milhões e US$ 89,94 milhões pertencem à investigação separada de 73 barras RAW revisadas.
+
