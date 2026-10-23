@@ -15,6 +15,7 @@ from pathlib import Path
 import hashlib
 import json
 import math
+import sys
 from zipfile import ZipFile, ZIP_DEFLATED
 
 import matplotlib
@@ -24,7 +25,7 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "1.25.3"
+VERSION = "1.25.4"
 OUT_ROOT = ROOT / "output" / "auditoria_generalizacao_587m"
 EXPECTED_CAPITAL = 587_165_941.1330212
 EXPECTED_FOLDS = (1, 2, 3)
@@ -164,7 +165,7 @@ def _recalcular_apenas_modelos(pesquisa, contract, base_symbols, selected):
                 train_dates=state.final_fit_dates,
                 decision_dates=state.decision_dates,
                 fit_diagnostics=state.fit_diagnostics.get(symbol),
-                oos_diagnostics=state.oos_diagnostics.get(symbol),
+                oos_diagnostics=(state.oos_diagnostics.get("by_asset") or {}).get(symbol),
             ))
 
     candidates, _, candidate_hashes = pesquisa._prepare_candidate_frames(
@@ -188,9 +189,78 @@ def _recalcular_apenas_modelos(pesquisa, contract, base_symbols, selected):
                 train_dates=state.final_fit_dates,
                 decision_dates=state.decision_dates,
                 fit_diagnostics=cache.fit_diagnostics,
-                oos_diagnostics=cache.oos_diagnostics.get(symbol),
+                oos_diagnostics=(cache.oos_diagnostics.get("by_asset") or {}).get(symbol),
             ))
     return pd.DataFrame(rows)
+
+
+def _recuperar_execucao_anterior(base_symbols, selected):
+    """Tenta salvar o dataframe de treino preso no traceback do Spyder.
+
+    As metricas OOS sao obtidas do diagnostico preditivo oficial, que deve
+    estar ao lado da reproducao historica do mesmo snapshot. Nenhum retreino.
+    Se nao houver traceback em memoria ou evidencias, retorna None.
+    """
+    previous = getattr(sys, "last_traceback", None)
+    raw = None
+    while previous is not None:
+        f = previous.tb_frame
+        if (
+            f.f_code.co_name == "main"
+            and Path(f.f_code.co_filename).name == Path(__file__).name
+        ):
+            value = f.f_locals.get("frame")
+            if isinstance(value, pd.DataFrame):
+                raw = value.copy()
+                break
+        previous = previous.tb_next
+    if raw is None:
+        print("[resgate] Traceback da execucao anterior indisponivel.", flush=True)
+        return None
+
+    pred = (
+        ROOT / "output" / "reproducao_universo" / "validacao_preditiva"
+        / "metricas_por_ativo_fold.csv"
+    )
+    if not pred.is_file():
+        print(f"[resgate] Diagnostico OOS nao encontrado: {pred}", flush=True)
+        return None
+    try:
+        df = pd.read_csv(pred).rename(columns={
+            "ativo": "asset", "fold": "fold_id", "rmse": "oos_rmse",
+            "mae": "oos_mae", "n": "oos_rows",
+        })
+        required = {"asset", "fold_id", "oos_rmse", "oos_rows"}
+        if not required.issubset(df):
+            return None
+        keys = ["asset", "fold_id"]
+        if df.duplicated(keys).any() or raw.duplicated(keys).any():
+            return None
+        # Aceitar o arquivo OOS somente quando todos os 225 pares
+        # coincidem com os modelos cujos treinos estao no traceback.
+        raw = raw.drop(columns=[
+            key for key in ("oos_rmse", "oos_mae", "oos_rows")
+            if key in raw.columns
+        ])
+        df = df[keys + ["oos_rmse", "oos_mae", "oos_rows"]]
+        merged = raw.merge(df, on=keys, validate="one_to_one", how="inner")
+        if (
+            len(merged) != 225
+            or set(merged["asset"]) != set(base_symbols) | set(selected)
+            or set(merged["fold_id"]) != set(EXPECTED_FOLDS)
+        ):
+            return None
+        # Este arquivo so e admissivel quando a reproducao local passou
+        # anteriormente pela verificacao de hashes em main().
+        print(
+            "[resgate] 225 metricas de treino recuperadas do traceback; "
+            "225 metricas OOS do diagnostico historico local.",
+            flush=True,
+        )
+        return merged
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        print(f"[resgate] Recuperacao nao concluida: {exc}", flush=True)
+        return None
 
 
 def _validar_e_calcular(frame: pd.DataFrame, base_symbols, selected):
@@ -216,7 +286,21 @@ def _validar_e_calcular(frame: pd.DataFrame, base_symbols, selected):
         or (frame["oos_rmse"] < 0).any()
         or (frame[["train_rows", "oos_rows"]] <= 0).any().any()
     ):
-        raise RuntimeError("Metricas incompletas ou invalidas; nao imputar dados.")
+        bad = frame.loc[
+            frame[["train_rmse", "oos_rmse", "train_rows", "oos_rows"]]
+            .isna().any(axis=1)
+            | (frame["train_rmse"] <= 0)
+            | (frame["oos_rmse"] < 0)
+            | (frame[["train_rows", "oos_rows"]] <= 0).any(axis=1),
+            ["asset", "fold_id", "train_rmse", "oos_rmse",
+             "train_rows", "oos_rows"],
+        ]
+        raise RuntimeError(
+            "Metricas incompletas/inconsistentes: "
+            + bad.head(12).to_string(index=False)
+            + "; diagnostico salvo em output/auditoria_generalizacao_587m/"
+              "ultima_execucao_metricas_brutas.csv"
+        )
     frame["gap_rmse_percent"] = (
         100.0 * (frame["oos_rmse"] / frame["train_rmse"] - 1.0)
     )
@@ -288,11 +372,21 @@ def main():
             raise RuntimeError("Capital da reproducao local nao confere.")
 
     frame = _reutilizar_diagnostico(contract, base, selected, hashes)
-    origem = "assurance_historica_verificada" if frame is not None else "somente_modelos_reajustados"
+    origem = "assurance_historica_verificada" if frame is not None else None
     if frame is None:
-        print("[generalizacao] CSV original indisponivel; recomputando "
-              "APENAS modelos sobre o snapshot imutavel...", flush=True)
+        frame = _recuperar_execucao_anterior(base, selected)
+        if frame is not None:
+            origem = "resgate_treino_traceback_oos_diagnostico_historico"
+    if frame is None:
+        print("[generalizacao] Nao foi possivel recuperar os valores "
+              "anteriores; recomputando apenas modelos.", flush=True)
         frame = _recalcular_apenas_modelos(pesquisa, contract, base, selected)
+        origem = "somente_modelos_reajustados"
+    # Salvar os valores brutos ANTES da validacao, para permitir auditoria
+    # diagnostica mesmo quando alguma metrica estiver ausente.
+    checkpoint = OUT_ROOT / "ultima_execucao_metricas_brutas.csv"
+    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(checkpoint, index=False)
     frame = _validar_e_calcular(frame, base, selected)
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
