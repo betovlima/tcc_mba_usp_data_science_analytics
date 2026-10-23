@@ -99,7 +99,8 @@ def compare_exact_decimal_raw(
     O texto RAW permanece intacto. Não supõe tick mínimo ou arredondamento.
     """
     if entry_day > future_day:
-        raise ValueError("A entrada deve anteced    # Fraction(Decimal(texto)) evita inclusive erro por divisao decimal
+        raise ValueError("A entrada deve anteceder ou coincidir com a saida.")
+    # Fraction(Decimal(texto)) evita inclusive erro por divisao decimal
     # periodica em splits como 1 para 3. O sinal é racional EXATO.
     entry = Fraction(decimal_rate(entry_open_literal, field="open"))
     close = Fraction(decimal_rate(future_close_literal, field="close"))
@@ -155,10 +156,7 @@ def compare_exact_decimal_raw(
             "frações racionais exatas; decimais de saída são apenas "
             "representações aproximadas, nunca critério de decisão."
         ),
-    }rio."
-            ),
-        }
-
+    }
 
 def audit(*, root: Path=ROOT) -> dict:
     root = Path(root).resolve()
