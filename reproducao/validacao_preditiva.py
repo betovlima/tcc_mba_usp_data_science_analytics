@@ -36,15 +36,18 @@ def exportar_previsoes_oos(*, states, baseline_frames, baseline_symbols,
     if horizon_maximo <= 0:
         raise ValueError("horizon_maximo deve ser positivo")
     cutoff = pd.Timestamp(data_corte)
-    # Cutoff YYYY-MM-DD inclui toda a sessao daquele dia em UTC.
-    if isinstance(data_corte, str) and len(data_corte) == 10:
-        cutoff += pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
     if cutoff.tzinfo is None:
         cutoff = cutoff.tz_localize("UTC")
     else:
         cutoff = cutoff.tz_convert("UTC")
     calendar = calendar.tz_convert("UTC")
-    cutoff_index = int(calendar.searchsorted(cutoff, side="right")) - 1
+    # Datas YYYY-MM-DD incluem a sessao inteira sem aritmetica
+    # de nanosegundos (incompativel com algumas resolucoes pandas 3).
+    if isinstance(data_corte, str) and len(data_corte) == 10:
+        exclusive_end = cutoff + pd.Timedelta(days=1)
+        cutoff_index = int(calendar.searchsorted(exclusive_end, side="left")) - 1
+    else:
+        cutoff_index = int(calendar.searchsorted(cutoff, side="right")) - 1
     baseline_positions = {s: j + 1 for j, s in enumerate(baseline_symbols)}
     out = []
     for state in states:
