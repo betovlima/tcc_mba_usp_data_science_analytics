@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent
-VERSAO = "1.25.5"
+VERSAO = "1.25.6"
 PACOTE_GENERALIZACAO = None  # Ou Path(r"C:\...\pacote_generalizacao_587m_v1254.zip")
 PACOTE_REPRODUCAO = None     # Ou Path(r"C:\...\pacote_reproducao_universo.zip")
 SAIDA = ROOT / "output" / "consolidacao_overfitting_tcc"
@@ -102,7 +102,9 @@ def verificar(pgen, prep):
 
 def salvar(fig, pasta, nome):
     fig.tight_layout()
-    fig.savefig(pasta / nome, dpi=165, bbox_inches="tight")
+    fig.savefig(pasta / nome, dpi=320, bbox_inches="tight")
+    fig.savefig(pasta / (Path(nome).stem + ".svg"), format="svg",
+                bbox_inches="tight")
     plt.close(fig)
 
 
@@ -210,7 +212,7 @@ def relatorio(g, valid, arquivos, meta, pgen, prep):
     if [a for a,_ in descricoes] != arquivos:
         raise RuntimeError("Descricoes de grafico nao correspondem aos arquivos.")
     lines = [
-        "# Consolidacao da evidencia de overfitting — v1.25.5", "",
+        "# Consolidacao da evidencia de overfitting — v1.25.6", "",
         "**Natureza da evidencia:** auditoria retrospectiva; nao foi criado novo holdout independente.",
         "**Fontes:** snapshots e relatorios ja congelados; sem retreino/backtest ou consultas externas.", "",
         "## Numeros medidos", "",
@@ -222,7 +224,8 @@ def relatorio(g, valid, arquivos, meta, pgen, prep):
         "## Leitura de cada grafico", ""
     ]
     for nome,explicacao in descricoes:
-        lines.extend([f"### {nome}", "", explicacao, "", f"![{nome}]({nome})", ""])
+        lines.extend([f"### {nome}", "", explicacao, "", f"![{nome}]({nome})",
+                      f"[Versao vetorial SVG]({Path(nome).stem}.svg)", ""])
     lines += [
         "## Resposta sobre a validacao independente", "",
         "As janelas 2020–2026 sao OOS INTERNAS em cada fold de treinamento. O universo de ativos, a configuracao e a busca de subconjuntos foram avaliados retrospectivamente nessa janela. Portanto esta consolidacao NAO certifica um teste economicamente independente do processo completo de desenvolvimento.",
@@ -263,10 +266,12 @@ def main():
         "sha256_generalization_zip": sha256(pgen),
         "sha256_reproduction_zip": sha256(prep),
         "charts": arquivos,
+        "charts_svg": [Path(a).stem + ".svg" for a in arquivos],
+        "rendering": "PNG 320 dpi; SVG vetorial sem perda de nitidez por ampliacao",
     }
     (pasta / "resumo_consolidado.json").write_text(
         json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
-    package = pasta / "pacote_consolidacao_overfitting_v1255.zip"
+    package = pasta / "pacote_consolidacao_overfitting_v1256.zip"
     with ZipFile(package, "w", compression=ZIP_DEFLATED) as z:
         for path in sorted(pasta.iterdir()):
             if path.is_file() and path != package:
