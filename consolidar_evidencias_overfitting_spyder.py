@@ -34,7 +34,7 @@ PBO_SHARPE = 59.52
 def sha256(p: Path) -> str:
     h = hashlib.sha256()
     with p.open("rb") as fp:
-        for chunk in iter(lambda: fp.read(1024 * 1024, b"")):
+        for chunk in iter(lambda: fp.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
 
