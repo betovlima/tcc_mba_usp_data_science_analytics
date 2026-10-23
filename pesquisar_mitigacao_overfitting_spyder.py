@@ -1,4 +1,4 @@
-"""Pesquisa pré-especificada de mitigação de overfitting LightGBM — v1.25.7.
+"""Pesquisa pré-especificada de mitigação de overfitting LightGBM — v1.25.8.
 
 Execute com F5 no Spyder. Usa exclusivamente os CSVs congelados já existentes.
 Executa controle e 3 intervenções ISOLADAS, mantendo universo, folds, labels,
@@ -25,11 +25,12 @@ import pandas as pd
 
 from reproducao.dados import validate_snapshot
 from reproducao.experimento import build_control_config
-from reproducao.preparacao import prepare_model_frames
+from reproducao.preparacao import (load_raw_bar_file, load_actions_file, split_normalize)
+from reproducao.universo_fixo75 import universo_75
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "1.25.7"
-OUTPUT_ROOT = ROOT / "output" / "mitigacao_overfitting_v1257"
+VERSION = "1.25.8"
+OUTPUT_ROOT = ROOT / "output" / "mitigacao_overfitting_v1258"
 EXPECTED_OLD_CAPITAL = 587_165_941.1330212
 
 # Hipóteses isoladas e fixadas ANTES de observar os resultados.
@@ -67,66 +68,73 @@ def finite(x):
 
 
 def check_inputs():
-    import pesquisar_expansao_u67_spyder as p
+    """Verifica identidade e SHA de dados ANTES de criar o painel único."""
+    import pesquisar_expansao_u67_spyder as p  # Motor matemático compartilhado.
     contract_path = ROOT / "evidencias" / "manifest_universo_congelado.json"
     manifest = json.loads(contract_path.read_text(encoding="utf-8"))
-    selected = tuple(manifest["selected_assets"])
-    if selected != tuple(p.DISCOVERY_SELECTED_CANDIDATES) or len(selected) != 10:
-        raise RuntimeError("Composição dos dez ativos divergiu do manifesto.")
+    selected = universo_75(manifest, ())  # Único universo imutável: 75 ativos.
+    if len(selected) != 75 or len(set(selected)) != 75:
+        raise RuntimeError("Exigidos exatamente 75 ativos fixos desde o fold 1.")
     if not math.isclose(float(manifest["expected_ending_capital"]),
                         EXPECTED_OLD_CAPITAL, rel_tol=0, abs_tol=.01):
-        raise RuntimeError("Checkpoint financeiro não corresponde ao vintage histórico.")
+        raise RuntimeError("Contrato do checkpoint histórico não corresponde.")
+    snapshot = validate_snapshot(p.BASE_DATA)
+    if snapshot["snapshot_sha256"] != manifest["snapshot_sha256"]:
+        raise RuntimeError("Vintage histórico divergente: não baixar ou ajustar dados.")
+    for symbol, hashes in manifest["candidate_file_hashes"].items():
+        if symbol not in selected:
+            raise RuntimeError(f"Ativo fora do painel fixo: {symbol}")
+        for key, filename in (
+            ("raw_sha256", p.FULL_DATA.raw_bars / f"{symbol}.csv"),
+            ("corporate_actions_sha256", p.FULL_DATA.corporate_actions / f"{symbol}.csv"),
+        ):
+            if not filename.is_file() or file_sha(filename) != hashes[key]:
+                raise RuntimeError(f"Cache congelado ausente/SHA divergente: {symbol} {key}")
+    return p, manifest, snapshot, selected
 
-    snap = validate_snapshot(p.BASE_DATA)
-    if snap.get("snapshot_sha256") != manifest["snapshot_sha256"]:
-        raise RuntimeError("Snapshot original diferente: proibição de atualizar dados.")
-    for symbol in selected:
-        paths = {
-            "raw_sha256": p.FULL_DATA.raw_bars / f"{symbol}.csv",
-            "corporate_actions_sha256":
-                p.FULL_DATA.corporate_actions / f"{symbol}.csv",
-        }
-        for key, path in paths.items():
-            if not path.is_file() or file_sha(path) != manifest["candidate_file_hashes"][symbol][key]:
-                raise RuntimeError(f"Cache antigo ausente ou SHA divergente: {symbol} {key}")
-    return p, manifest, snap, contract_path
 
+def prepare_once(p, manifest, selected):
+    """Uma ÚNICA etapa de carga e painel com os 75 ativos antes dos folds.
 
-def prepare_once(p, manifest):
-    raw, excluded, _, _ = prepare_model_frames(
-        p.BASE_DATA, assets=tuple(p.U67_REQUESTED_ASSETS),
-        csv_float_precision="round_trip",
-    )
-    exclusions = {str(row["symbol"]) for row in excluded}
-    if exclusions != set(p.U67_EXPECTED_EXCLUSIONS):
-        raise RuntimeError(f"Exclusões estruturais inesperadas: {exclusions}")
-    symbols_base = tuple(symbol for symbol in p.U67_REQUESTED_ASSETS if symbol in raw)
-    if len(symbols_base) != 65:
-        raise RuntimeError("Esperados 65 símbolos efetivos da base.")
+    Os CSVs do vintage histórico estão armazenados em duas pastas por
+    proveniência documental. ISSO NÃO cria dois universos de modelagem.
+    Nenhum treino, calibração ou replay é executado com 65 ativos.
+    """
+    raw_75 = {}
+    sources = set(p.U67_REQUESTED_ASSETS)  # Apenas localização física histórica.
+    for index, symbol in enumerate(selected, start=1):
+        origin = p.BASE_DATA if symbol in sources else p.FULL_DATA
+        path_bars = origin.raw_bars / f"{symbol}.csv"
+        path_actions = origin.corporate_actions / f"{symbol}.csv"
+        raw = load_raw_bar_file(path_bars, float_precision="round_trip")
+        actions = load_actions_file(path_actions)
+        issue = p._generic_identity_issue(symbol, actions)
+        if issue is not None:
+            raise RuntimeError(f"Ativo estruturalmente inconsistente: {symbol}: {issue}")
+        normalized, _ = split_normalize(raw, actions)
+        raw_75[symbol] = normalized
+        print(f"[painel_unico] {index}/75 {symbol}", flush=True)
 
-    base_raw = {symbol: raw[symbol] for symbol in symbols_base}
-    config = build_control_config(base_raw, p.CONFIG).copiar_modelo(
+    if tuple(raw_75) != tuple(selected) or len(raw_75) != 75:
+        raise RuntimeError("Um único painel de 75 ativos é obrigatório.")
+    config = build_control_config(raw_75, p.CONFIG).copiar_modelo(
         update={"analysis_end_date": manifest["analysis_end_date"]}
     )
     (
         frames, dates, calendar, symbols, folds, decision_dates,
         decision_to_fold, decision_metadata,
-    ) = p._construir_contexto_execucao(base_raw, config)
-    if set(symbols) != set(symbols_base) or len(folds) != 3:
-        raise RuntimeError("Folds ou universo de referência divergentes.")
+    ) = p._construir_contexto_execucao(raw_75, config)
 
-    selected = tuple(manifest["selected_assets"])
-    candidates, continuity, hashes = p._prepare_candidate_frames(
-        list(selected), dates, decision_dates, config, paths=p.FULL_DATA
-    )
-    if set(candidates) != set(selected):
-        raise RuntimeError("Falha estrutural em candidato. Não substituir ativo.")
-    for s in selected:
-        if hashes.get(s) != manifest["candidate_file_hashes"][s]:
-            raise RuntimeError(f"SHA do candidato divergiu após preparação: {s}")
+    if tuple(symbols) != tuple(selected) or len(symbols) != 75 or len(folds) != 3:
+        raise RuntimeError(
+            "Violação do contrato fixed75: símbolos/folds de treino divergentes."
+        )
+    if tuple(config.assets) != tuple(selected):
+        raise RuntimeError("O config Control não contém todos os 75 ativos.")
+    print("[contrato] 75 ativos juntos em treino, calibração e replay; 3 folds",
+          flush=True)
     return (config, frames, dates, symbols, folds, decision_dates,
-            decision_to_fold, decision_metadata, candidates)
-
+            decision_to_fold, decision_metadata)
 
 def settings_for(base_config, changes):
     model_settings = deepcopy(base_config.research_model_settings)
@@ -143,48 +151,39 @@ def settings_for(base_config, changes):
     return base_config.copiar_modelo(update={"research_model_settings": model_settings})
 
 
-def diagnostics_for_variant(p, states, symbols, frames, candidates, caches, selected):
+def diagnostics_for_variant(p, states, symbols, frames):
+    """Diagnóstico de 225 ajustes feitos na MESMA chamada de treino fixed75."""
     rows = []
     for state in states:
         by_asset = (state.oos_diagnostics or {}).get("by_asset") or {}
+        if set(state.fit_diagnostics) != set(symbols) or set(by_asset) != set(symbols):
+            raise RuntimeError(
+                f"Fold {state.fold_id}: foram exigidos 75 modelos/diagnósticos."
+            )
         for symbol in symbols:
             rows.append(p._fit_quality_row(
-                universe_role="base", symbol=symbol, fold_id=state.fold_id,
+                universe_role="fixed75", symbol=symbol, fold_id=state.fold_id,
                 frame=frames[symbol], train_dates=state.final_fit_dates,
                 decision_dates=state.decision_dates,
-                fit_diagnostics=state.fit_diagnostics.get(symbol),
-                oos_diagnostics=by_asset.get(symbol),
-            ))
-    for symbol in selected:
-        for state in states:
-            cache = caches[symbol][state.fold_id]
-            by_asset = (cache.oos_diagnostics or {}).get("by_asset") or {}
-            rows.append(p._fit_quality_row(
-                universe_role="selected", symbol=symbol, fold_id=state.fold_id,
-                frame=candidates[symbol], train_dates=state.final_fit_dates,
-                decision_dates=state.decision_dates,
-                fit_diagnostics=cache.fit_diagnostics,
-                oos_diagnostics=by_asset.get(symbol),
+                fit_diagnostics=state.fit_diagnostics[symbol],
+                oos_diagnostics=by_asset[symbol],
             ))
     df = pd.DataFrame(rows)
-    columns = ["asset", "fold_id", "train_rmse", "oos_rmse",
-               "train_rows", "oos_rows", "naive_oos_rmse"]
-    for col in columns[2:]:
+    required = ["asset", "fold_id", "train_rmse", "oos_rmse",
+                "train_rows", "oos_rows", "naive_oos_rmse"]
+    for col in required[2:]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     if (
         len(df) != 225 or df["asset"].nunique() != 75
         or set(df["fold_id"]) != {1, 2, 3}
         or df.duplicated(["asset", "fold_id"]).any()
-        or df[columns[2:]].isna().any().any()
-        or (df["train_rmse"] <= 0).any()
-        or (df["oos_rmse"] < 0).any()
+        or df[required[2:]].isna().any().any()
+        or (df["train_rmse"] <= 0).any() or (df["oos_rmse"] < 0).any()
         or (df[["train_rows", "oos_rows"]] <= 0).any().any()
     ):
-        bad = df.loc[df[columns[2:]].isna().any(axis=1), columns].head(15)
-        raise RuntimeError("Diagnósticos inválidos: " + bad.to_string(index=False))
+        raise RuntimeError("225 diagnósticos de 75 ativos x 3 folds inválidos.")
     df["gap_percent"] = 100 * (df["oos_rmse"] / df["train_rmse"] - 1)
     return df.sort_values(["asset", "fold_id"])
-
 
 def pooled_rmse(values, rows):
     return math.sqrt(float(np.sum((values.to_numpy(dtype=float) ** 2)
@@ -267,13 +266,13 @@ def charts(summaries, equities, destination):
 
 
 def main():
-    p, contract, snap, path_contract = check_inputs()
+    p, contract, snap, universe = check_inputs()
     original_snapshot_sha = snap["snapshot_sha256"]
     orig_candidate_hashes = contract["candidate_file_hashes"]
     (
         config, frames, common_dates, symbols, folds, all_dates,
-        decision_to_fold, decision_metadata, candidates,
-    ) = prepare_once(p, contract)
+        decision_to_fold, decision_metadata,
+    ) = prepare_once(p, contract, universe)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     output = OUTPUT_ROOT / run_id
     output.mkdir(parents=True, exist_ok=False)
@@ -287,23 +286,22 @@ def main():
         vdir = output / label
         vdir.mkdir()
         cfg = settings_for(config, changes)
-        states, _, baseline_calibration = p._train_baseline_states(
+        # UMA chamada por fold, contendo TODOS os 75 modelos e a política completa.
+        states, policies, calibration = p._train_baseline_states(
             frames, common_dates, symbols, folds, cfg
         )
-        caches = {}
-        for position, symbol in enumerate(contract["selected_assets"], start=1):
-            caches[symbol] = p._train_candidate_caches(
-                symbol, candidates[symbol], states, cfg
-            )
-            print(f"[candidate {label}] {position}/10 {symbol}", flush=True)
-        result, metrics, calibration = p._evaluate_scenario(
-            label, list(contract["selected_assets"]), frames, candidates,
-            symbols, states, caches, folds, all_dates,
-            decision_to_fold, decision_metadata, cfg,
+        result = p._simular_exato(
+            "tcc_single_fixed_75",
+            p._politica_agendada(policies, decision_to_fold),
+            frames, symbols, all_dates, cfg,
+            p.calcular_taxas_referencia,
+            p.aplicar_deslizamento,
+            decision_metadata=decision_metadata,
+            model_label="TCC Control - 75 ativos fixos desde o primeiro fold",
+            method_line="- 75 ativos ajustados e calibrados conjuntamente; sem expansão.",
         )
-        df = diagnostics_for_variant(
-            p, states, symbols, frames, candidates, caches, contract["selected_assets"]
-        )
+        metrics = p._scenario_metrics(result, folds, float(cfg.initial_capital))
+        df = diagnostics_for_variant(p, states, symbols, frames)
         decisions = result.predictions["selected_asset"].copy()
         if label == "controle_original":
             capital = float(metrics["ending_capital"])
@@ -320,9 +318,7 @@ def main():
         ]].copy()
         df.to_csv(vdir / "model_generalization_225.csv", index=False)
         pd.DataFrame(calibration).to_csv(vdir / "fold_calibration.csv", index=False)
-        pd.DataFrame(baseline_calibration).to_csv(
-            vdir / "baseline_fold_calibration.csv", index=False
-        )
+        
         result.predictions.to_csv(vdir / "predictions.csv",
                                   index=True, float_format="%.17g")
         save_json(vdir / "summary.json", summary)
@@ -335,7 +331,7 @@ def main():
               f"gap_mediano={summary['gap_median_percent']:.2f}%; "
               f"capital=US$ {summary['capital']:,.2f}; "
               f"changed={summary['changed_decisions_from_control']}", flush=True)
-        del states, caches, result
+        del states, policies, result
 
     if validate_snapshot(p.BASE_DATA)["snapshot_sha256"] != original_snapshot_sha:
         raise RuntimeError("Snapshot base foi modificado durante a execução.")
@@ -356,8 +352,11 @@ def main():
         "independent_prospective_holdout": False,
         "snapshot_sha256": original_snapshot_sha,
         "historical_checkpoint": EXPECTED_OLD_CAPITAL,
-        "requested_assets": 77,
+        "requested_assets": 75,
         "effective_assets": 75,
+        "research_design": "fixed_75_trained_together_from_first_fold",
+        "training_phases": "single_panel_75_only",
+        "legacy_65_plus_10_training": False,
         "folds": 3,
         "comparison_rule": (
             "Não escolher o maior capital ou menor gap dos folds históricos "
@@ -373,7 +372,7 @@ def main():
             if k != "fold_metrics" and k != "parameters_changed"
         }} for name,s in summaries.items()
     ]).to_csv(output / "comparacao_variantes.csv", index=False)
-    package = output / "pacote_mitigacao_overfitting_v1257.zip"
+    package = output / "pacote_mitigacao_overfitting_v1258.zip"
     with ZipFile(package, "w", compression=ZIP_DEFLATED) as z:
         for file in output.rglob("*"):
             if file.is_file() and file != package:
