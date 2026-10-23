@@ -132,6 +132,28 @@ class CutoffSemNanossegundosTest(unittest.TestCase):
         self.assertEqual(result["label_maturado"].tolist(), [True, True, False])
         self.assertTrue(result["split_validado"].all())
 
+
+class ResolucaoMistaOOSTest(unittest.TestCase):
+    def test_calendario_micro_alvo_nano_e_cache_micro(self):
+        from types import SimpleNamespace
+        from reproducao.validacao_preditiva import exportar_previsoes_oos
+        ns = pd.date_range("2026-01-05 04:00:00+00:00", periods=6, freq="D").as_unit("ns")
+        us = ns.as_unit("us")
+        state = SimpleNamespace(
+            fold_id=1, decision_dates=us[:5],
+            decision_cache={t: [0.0, 0.25] for t in us[:5]},
+        )
+        frame = pd.DataFrame({"forward_risk_adjusted_utility": [0.3]*len(ns)},
+                             index=ns)
+        out = exportar_previsoes_oos(
+            states=[state], baseline_frames={"AAA":frame},
+            baseline_symbols=["AAA"], common_dates=us,
+            horizon_maximo=1, data_corte="2026-01-08", splits_auditados=True,
+        )
+        self.assertEqual(len(out), 4)
+        self.assertEqual(out["label_maturado"].tolist(), [True,True,True,False])
+        self.assertEqual(out["observado"].tolist(), [0.3]*4)
+
 if __name__ == "__main__":
     unittest.main()
 
