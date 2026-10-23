@@ -75,7 +75,7 @@ def exportar_previsoes_oos(*, states, baseline_frames, baseline_symbols,
                     "observado": float(observed) if pd.notna(observed) else np.nan,
                     "label_maturado": bool(maturity),
                     # Nao assumir eventos revisados so porque o CSV e RAW.
-                    "split_validado": bool(splits_auditados),
+                    "split_validado": bool(splits_auditados.get(symbol, False) if isinstance(splits_auditados, dict) else splits_auditados),
                 })
     return pd.DataFrame.from_records(out, columns=list(COLUNAS))
 
@@ -221,3 +221,53 @@ def auditar_limites_temporais(*, states, common_dates, horizon_maximo: int) -> p
                 "status": "requer_verificacao_purge" if immature.any() else "sem_sobreposicao_por_horizonte",
             })
     return pd.DataFrame(rows)
+
+def auditar_normalizacao_splits(*, frames, origem_base, origem_candidatos, candidatos):
+    """Compara os OHLCV usados no treino com RAW e eventos congelados.
+
+    Confere a consistencia do processamento local, NAO comprova que a
+    fonte externa contem todos os eventos corporativos existentes.
+    """
+    from reproducao.preparacao import (
+        load_raw_bar_file, load_actions_file, split_normalize,
+    )
+    candidatos = set(candidatos)
+    statuses = {}
+    rows = []
+    for asset, prepared in frames.items():
+        root = origem_candidatos if asset in candidatos else origem_base
+        row = {"ativo": asset, "status": "nao_validado", "split_validado": False}
+        try:
+            raw = load_raw_bar_file(root.raw_bars / f"{asset}.csv",
+                                    float_precision="round_trip")
+            actions = load_actions_file(root.corporate_actions / f"{asset}.csv")
+            normalized, applied = split_normalize(raw, actions)
+            invalid = [a for a in actions if a.get("action_type") in
+                       {"forward_split", "reverse_split"} and (
+                           a.get("old_rate") is None or a.get("new_rate") is None
+                           or not a.get("ex_date")
+                       )]
+            if invalid:
+                raise ValueError("split sem taxa ou data")
+            shared = normalized.index.intersection(prepared.index)
+            raw_values = normalized.loc[shared, ["open", "high", "low", "close", "volume"]]
+            processed = prepared.loc[shared, ["open", "high", "low", "close", "volume"]]
+            complete = raw_values.notna().all(axis=1) & processed.notna().all(axis=1)
+            raw_values = raw_values.loc[complete]
+            processed = processed.loc[complete]
+            if len(raw_values) < 3:
+                raise ValueError("sobreposicao de precos insuficiente")
+            for col in raw_values.columns:
+                if not np.allclose(raw_values[col].to_numpy(dtype=float),
+                                   processed[col].to_numpy(dtype=float),
+                                   rtol=1e-10, atol=1e-8, equal_nan=False):
+                    raise ValueError("precos divergentes: " + col)
+            row.update({"status": "normalizacao_consistente",
+                        "split_validado": True, "sessoes_conferidas": int(len(raw_values)),
+                        "splits_aplicados": int(len(applied)),
+                        "eventos_arquivo": int(len(actions))})
+        except Exception as exc:
+            row["motivo"] = str(exc)[:300]
+        rows.append(row)
+        statuses[asset] = bool(row["split_validado"])
+    return statuses, pd.DataFrame(rows)
