@@ -8,7 +8,6 @@ Nunca altera snapshots de origem. No Spyder executar com F5.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -18,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from auditar_drift_historico_spyder import (
-    BARS, FRESH_CUTOFF, compare_bar_frames, file_sha256, original_extra_paths,
+    BARS, compare_bar_frames, file_sha256, original_extra_paths,
 )
 from engine.configuracao import U67_REQUESTED_ASSETS
 from executar_atualizacao_series_spyder import (
