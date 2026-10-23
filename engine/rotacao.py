@@ -742,7 +742,51 @@ def _executar_compra(cash: float, price: float, config: Any, fee_calculator: Cal
     fees = fee_calculator('BUY', quantity, execution_price, config)
     return (float(quantity), execution_price, fees)
 
-def _benchmark_pesos_iguais(frames: dict[str, pd.DataFrame], symbols: list[str], execution_dates: pd.DatetimeIndex, initial_capital: float, config: Any, fee_calculator: Callable, slippage: Callable) -> pd.Series:
+def _fator_custodia_entre_datas(
+    split_events_by_symbol: dict[
+        str, tuple[tuple[pd.Timestamp, float], ...]
+    ] | None,
+    symbol: str,
+    previous: pd.Timestamp,
+    current: pd.Timestamp,
+) -> tuple[float, list[dict[str, Any]]]:
+    """Fatores de quantidade efetivados DEPOIS do pregão prévio.
+
+    Quem compra na abertura da ex-date não recebe ações duas vezes.
+    A data futura de efetivação não modifica qualquer posição no passado.
+    """
+    if split_events_by_symbol is None:
+        return 1.0, []
+    prior = pd.Timestamp(previous)
+    now = pd.Timestamp(current)
+    if prior.tzinfo is None:
+        prior = prior.tz_localize("UTC")
+    if now.tzinfo is None:
+        now = now.tz_localize("UTC")
+    prior = prior.tz_convert("UTC").normalize()
+    now = now.tz_convert("UTC").normalize()
+    if now < prior:
+        raise RuntimeError("Calendário de custódia fora da ordem temporal.")
+    multiplier = 1.0
+    applied = []
+    for ex_date, factor in split_events_by_symbol.get(symbol, ()):
+        dt = pd.Timestamp(ex_date)
+        if dt.tzinfo is None:
+            dt = dt.tz_localize("UTC")
+        dt = dt.tz_convert("UTC").normalize()
+        if prior < dt <= now:
+            if not np.isfinite(factor) or factor <= 0:
+                raise RuntimeError("Split sem fator de quantidade válido.")
+            multiplier *= float(factor)
+            applied.append({
+                "asset": symbol,
+                "ex_date": dt.isoformat(),
+                "quantity_multiplier": float(factor),
+            })
+    return multiplier, applied
+
+
+def _benchmark_pesos_iguais(frames: dict[str, pd.DataFrame], symbols: list[str], execution_dates: pd.DatetimeIndex, initial_capital: float, config: Any, fee_calculator: Callable, slippage: Callable, *, split_events_by_symbol: dict[str, tuple[tuple[pd.Timestamp, float], ...]] | None = None) -> pd.Series:
     if len(execution_dates) < 2:
         return pd.Series(dtype=float)
     first = execution_dates[0]
@@ -784,7 +828,16 @@ def _benchmark_pesos_iguais(frames: dict[str, pd.DataFrame], symbols: list[str],
         quantities[symbol] = quantity
         residual += capital_per_asset - (quantity * buy_price + float(fees['total_fee']))
     values = []
+    previous_benchmark_date = first
     for timestamp in execution_dates:
+        if timestamp != first and split_events_by_symbol is not None:
+            for symbol in symbols:
+                factor, _ = _fator_custodia_entre_datas(
+                    split_events_by_symbol, symbol,
+                    previous_benchmark_date, timestamp,
+                )
+                quantities[symbol] *= factor
+        previous_benchmark_date = timestamp
         equity = residual
         for symbol, quantity in quantities.items():
             equity += quantity * float(frames[symbol].loc[timestamp, 'close'])
@@ -860,7 +913,7 @@ def _precalcular_diagnosticos_regime_mercado(
         }
     return output
 
-def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tuple[int, float]], frames: dict[str, pd.DataFrame], symbols: list[str], decision_dates: pd.DatetimeIndex, config: Any, fee_calculator: Callable, slippage: Callable, decision_metadata: dict[pd.Timestamp, dict[str, Any]] | None=None, policy_decision_diagnostics: dict[pd.Timestamp, dict[str, Any]] | None=None, trade_callback: Callable[[dict[str, Any]], None] | None=None, *, model_label: str='LightGBM Utility', method_line: str | None=None, simulation_progress_callback: Callable[[float, str], None] | None = None) -> RotationRunResult:
+def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tuple[int, float]], frames: dict[str, pd.DataFrame], symbols: list[str], decision_dates: pd.DatetimeIndex, config: Any, fee_calculator: Callable, slippage: Callable, decision_metadata: dict[pd.Timestamp, dict[str, Any]] | None=None, policy_decision_diagnostics: dict[pd.Timestamp, dict[str, Any]] | None=None, trade_callback: Callable[[dict[str, Any]], None] | None=None, *, model_label: str='LightGBM Utility', method_line: str | None=None, simulation_progress_callback: Callable[[float, str], None] | None = None, split_events_by_symbol: dict[str, tuple[tuple[pd.Timestamp, float], ...]] | None = None) -> RotationRunResult:
     if len(decision_dates) < 2:
         raise ValueError('The final-test interval is too short.')
 
@@ -886,6 +939,7 @@ def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tupl
         config,
         fee_calculator,
         slippage,
+        split_events_by_symbol=split_events_by_symbol,
     )
     benchmark_name = "Equal-weight buy-and-hold on the same fixed asset universe"
     simulation_timing["benchmark_seconds"] = time.perf_counter() - phase_started
@@ -911,6 +965,7 @@ def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tupl
     turnover = 0.0
     rotation_count = 0
     records: list[dict[str, Any]] = []
+    split_ledger: list[dict[str, Any]] = []
     prediction_rows: list[dict[str, Any]] = []
     equity_values: list[float] = []
     replay_started = time.perf_counter()
@@ -1010,6 +1065,28 @@ def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tupl
                 'days_current_not_top1': 0,
                 'consecutive_days_current_not_top1': 0,
             })
+        # Custódia: aplicar evento entre a última decisão (fechamento)
+        # e a sessão da execução, ANTES de vender ao novo preço RAW.
+        if position > 0 and split_events_by_symbol is not None:
+            held_symbol = symbols[position - 1]
+            factor, applied = _fator_custodia_entre_datas(
+                split_events_by_symbol, held_symbol,
+                decision_date, execution_date,
+            )
+            if applied:
+                qty_before = quantity
+                quantity *= factor
+                entry_price /= factor
+                if np.isfinite(position_peak_price):
+                    position_peak_price /= factor
+                if np.isfinite(position_low_price):
+                    position_low_price /= factor
+                split_ledger.extend({
+                    **item, "execution_date": pd.Timestamp(execution_date).isoformat(),
+                    "shares_before": float(qty_before),
+                    "shares_after": float(quantity),
+                    "entry_price_after": float(entry_price),
+                } for item in applied)
         day_trades: list[dict[str, Any]] = []
         if target_position != position:
             old_symbol = symbols[position - 1] if position > 0 else None
@@ -1270,6 +1347,13 @@ def _simular_exato(backend: str, policy: Callable[[pd.Timestamp, int, int], tupl
         "test_calendar_years": years,
     }
 
+    if split_events_by_symbol is not None:
+        metrics["split_accounting_mode"] = "RAW_OHLCV_SHARE_QUANTITY_EX_DATE"
+        metrics["split_events_applied_to_strategy"] = len(split_ledger)
+        metrics["split_ledger"] = split_ledger
+        metrics["fractional_shares_assumption"] = (
+            "Fractional shares allowed; cash-in-lieu not simulated."
+        )
     simulation_timing["portfolio_replay_seconds"] = time.perf_counter() - replay_started
     simulation_timing["policy_seconds"] = float(policy_seconds)
     simulation_timing["accounting_seconds"] = max(
