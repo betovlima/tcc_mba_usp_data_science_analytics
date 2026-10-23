@@ -1,3 +1,11 @@
+## v1.25.6 — gráficos vetoriais contra linhas pixeladas (23/10/2026)
+
+**Branch única:** `research/v1.23.1-fresh-snapshot-20261022`, main intocada. Pedido motivador: linhas dos gráficos de consolidação v1.25.5 parecem pixeladas na ampliação. Em `consolidar_evidencias_overfitting_spyder.py` aumentou-se o PNG de 165 para 320 DPI e acrescentou-se SVG vetorial para cada uma das sete figuras, preservando escala, métricas e dados. ZIP: `pacote_consolidacao_overfitting_v1256.zip` (sete PNG, sete SVG, relatório com links, resumo). Relatório de evidências: `evidencias/melhoria_exportacao_graficos_v1256.md`.
+
+**Teste local concluído com ambos os pacotes originais de hash verificado:** 225 ajustes, gap mediano **161,318209%**, 224/225 RMSE OOS > treino, 222/354 rotações localmente superiores à manutenção, PBO histórico 53,57% (log-growth) e 59,52% (Sharpe). Todos os resultados **idênticos à v1.25.5**. O gráfico de capital exportou PNG de 3477×1560 pixels e SVG vetorial. Nenhum novo treino, calibração, ordem, backtest, coleta Alpaca ou validação prospectiva.
+
+---
+
 ## v1.25.5 — consolidação visual retrospectiva do risco de overfitting (23/10/2026)
 
 **Branch única:** `research/v1.23.1-fresh-snapshot-20261022`; `main` intacta. **Executor:** `consolidar_evidencias_overfitting_spyder.py`; relatório: `evidencias/resultado_consolidacao_risco_tcc_v1255.md`. Reutiliza sem novos treinos ou backtests o ZIP de generalização v1.25.4 e a reprodução histórica v1.23.0, com hashes e checkpoint conferidos; incorpora PBO histórico da v1.4.1 e contrafactual das 73 barras de maio/2018, explicitamente identificados como resultados pré-existentes.
