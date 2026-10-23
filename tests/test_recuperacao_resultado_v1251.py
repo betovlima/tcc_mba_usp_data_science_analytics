@@ -120,3 +120,13 @@ def test_recovery_copies_original_zip_immutably(tmp_path: Path, monkeypatch) -> 
         assert z.testzip() is None
     with pytest.raises(FileExistsError, match="não sobrescrever"):
         recovery.recuperar(root=tmp_path)
+
+
+def test_saved_run_can_finish_in_cash_with_regular_sell(tmp_path: Path) -> None:
+    folder = make_run(tmp_path)
+    trades_path = folder / "trades.csv"
+    trades = pd.read_csv(trades_path)
+    trades.loc[1, "action"] = "SELL"
+    trades.to_csv(trades_path, index=False)
+    _, checks = recovery.validar_resultado_salvo(folder)
+    assert checks["capital"] == CAPITAL
