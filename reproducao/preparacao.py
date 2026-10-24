@@ -111,10 +111,22 @@ def load_raw_bar_file(
     return frame[["open", "high", "low", "close", "volume"]].copy()
 
 
+# Identificadores corporativos são TEXTO. A sequência "25460E521" é um
+# CUSIP válido, não 2.5460 * 10**525. Nunca deixar pandas inferir float,
+# notação científica, arredondar números ou eliminar zeros iniciais.
+CORPORATE_ACTION_IDENTIFIER_COLUMNS = (
+    "cusip", "old_cusip", "new_cusip",
+    "acquiree_cusip", "acquirer_cusip",
+)
+
+
 def load_actions_file(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         raise RuntimeError(f"Corporate Actions ausente: {path}")
-    frame = pd.read_csv(path)
+    frame = pd.read_csv(
+        path,
+        dtype={column: object for column in CORPORATE_ACTION_IDENTIFIER_COLUMNS},
+    )
     if frame.empty:
         return []
     return [_clean_record(item) for item in frame.to_dict(orient="records")]
