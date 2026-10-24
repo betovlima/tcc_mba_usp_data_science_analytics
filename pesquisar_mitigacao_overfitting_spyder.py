@@ -1,4 +1,4 @@
-"""Pesquisa pré-especificada de mitigação de overfitting LightGBM — v1.25.8.
+"""Pesquisa pré-especificada de mitigação de overfitting LightGBM — v1.25.9.
 
 Execute com F5 no Spyder. Usa exclusivamente os CSVs congelados já existentes.
 Executa controle e 3 intervenções ISOLADAS, mantendo universo, folds, labels,
@@ -29,8 +29,8 @@ from reproducao.preparacao import (load_raw_bar_file, load_actions_file, split_n
 from reproducao.universo_fixo75 import universo_75
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "1.25.8"
-OUTPUT_ROOT = ROOT / "output" / "mitigacao_overfitting_v1258"
+VERSION = "1.25.9"
+OUTPUT_ROOT = ROOT / "output" / "mitigacao_overfitting_v1259"
 EXPECTED_OLD_CAPITAL = 587_165_941.1330212
 
 # Hipóteses isoladas e fixadas ANTES de observar os resultados.
@@ -93,6 +93,39 @@ def check_inputs():
     return p, manifest, snapshot, selected
 
 
+def _verified_unrelated_meta_etf_action(symbol, issue, actions):
+    """Reconhece SOMENTE a colisão documentada de ticker META em 2022.
+
+    31/01/2022: ETF Roundhill META -> METV, CUSIP 53656F417.
+    09/06/2022: Meta Platforms FB -> META, CUSIP 30303M102.
+    O snapshot histórico verificado por SHA contém a série de FB/Meta Platforms.
+    Outros eventos/identidades continuam sendo bloqueados, sem reparo de preços.
+
+    Fontes: OCC memo 49960 (ETF), Nasdaq ECA2022-125 (companhia).
+    """
+    if symbol != "META" or issue is None:
+        return False
+    expected_etf = {
+        "action_type": "name_change",
+        "process_date": "2022-01-31",
+        "old_symbol": "META",
+        "new_symbol": "METV",
+        "old_cusip": "53656F417",
+        "new_cusip": "53656F417",
+    }
+    if any(str(issue.get(key) or "") != value for key, value in expected_etf.items()):
+        return False
+    return any(
+        str(row.get("action_type") or "") == "name_change"
+        and str(row.get("old_symbol") or "") == "FB"
+        and str(row.get("new_symbol") or "") == "META"
+        and str(row.get("old_cusip") or "") == "30303M102"
+        and str(row.get("new_cusip") or "") == "30303M102"
+        and str(row.get("process_date") or "") == "2022-06-09"
+        for row in actions
+    )
+
+
 def prepare_once(p, manifest, selected):
     """Uma ÚNICA etapa de carga e painel com os 75 ativos antes dos folds.
 
@@ -101,6 +134,7 @@ def prepare_once(p, manifest, selected):
     Nenhum treino, calibração ou replay é executado com 65 ativos.
     """
     raw_75 = {}
+    identity_audit = []
     sources = set(p.U67_REQUESTED_ASSETS)  # Apenas localização física histórica.
     for index, symbol in enumerate(selected, start=1):
         origin = p.BASE_DATA if symbol in sources else p.FULL_DATA
@@ -110,7 +144,25 @@ def prepare_once(p, manifest, selected):
         actions = load_actions_file(path_actions)
         issue = p._generic_identity_issue(symbol, actions)
         if issue is not None:
-            raise RuntimeError(f"Ativo estruturalmente inconsistente: {symbol}: {issue}")
+            if _verified_unrelated_meta_etf_action(symbol, issue, actions):
+                # A ação corporativa é do ETF homônimo, NÃO da Meta Platforms.
+                # Não modificar ou descartar registros do snapshot congelado.
+                identity_audit.append({
+                    "symbol": symbol,
+                    "classification": "unrelated_prior_issuer_ticker_reuse",
+                    "reported_event": dict(issue),
+                    "stock_cusip": "30303M102",
+                    "stock_prior_symbol": "FB",
+                    "price_series_modified": False,
+                    "decision": "retain_verified_meta_platforms_series",
+                })
+                print("[identity-audit] META: ETF META->METV identificado por "
+                      "CUSIP; preservada a série congelada de FB/Meta Platforms",
+                      flush=True)
+            else:
+                raise RuntimeError(
+                    f"Ativo estruturalmente inconsistente: {symbol}: {issue}"
+                )
         normalized, _ = split_normalize(raw, actions)
         raw_75[symbol] = normalized
         print(f"[painel_unico] {index}/75 {symbol}", flush=True)
@@ -134,7 +186,7 @@ def prepare_once(p, manifest, selected):
     print("[contrato] 75 ativos juntos em treino, calibração e replay; 3 folds",
           flush=True)
     return (config, frames, dates, symbols, folds, decision_dates,
-            decision_to_fold, decision_metadata)
+            decision_to_fold, decision_metadata, identity_audit)
 
 def settings_for(base_config, changes):
     model_settings = deepcopy(base_config.research_model_settings)
@@ -271,11 +323,17 @@ def main():
     orig_candidate_hashes = contract["candidate_file_hashes"]
     (
         config, frames, common_dates, symbols, folds, all_dates,
-        decision_to_fold, decision_metadata,
+        decision_to_fold, decision_metadata, identity_audit,
     ) = prepare_once(p, contract, universe)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     output = OUTPUT_ROOT / run_id
     output.mkdir(parents=True, exist_ok=False)
+    save_json(output / "identity_audit.json", {
+        "version": VERSION,
+        "snapshot_sha256": original_snapshot_sha,
+        "events_reviewed": identity_audit,
+        "data_files_modified": False,
+    })
     start = time.perf_counter()
     summaries = {}
     equities = {}
@@ -305,11 +363,16 @@ def main():
         decisions = result.predictions["selected_asset"].copy()
         if label == "controle_original":
             capital = float(metrics["ending_capital"])
-            if not math.isclose(capital, EXPECTED_OLD_CAPITAL, rel_tol=0, abs_tol=.01):
-                raise RuntimeError(
-                    "Controle NÃO reproduziu o checkpoint de US$ 587 mi. "
-                    f"Observado: {capital:.8f}. Interrompido sem tentar ajustar "
-                    "modelo/dados para obter lucro.")
+            # 587 mi é checkpoint do motor LEGADO, e NÃO da arquitetura
+            # unificada de 75 modelos. Nunca exigir igualdade entre desenhos.
+            # Registrar a diferença sem ajustar dados para recuperá-la.
+            print(
+                f"[legacy-reference] fixed75={capital:,.2f}; "
+                f"legacy_v1230={EXPECTED_OLD_CAPITAL:,.2f}; "
+                f"delta={capital - EXPECTED_OLD_CAPITAL:,.2f}; "
+                "arquiteturas distintas, sem imposição de paridade",
+                flush=True,
+            )
             original_decisions = decisions.copy()
         summary = summarize(df, metrics, changes, original_decisions, decisions)
         summaries[label] = summary
@@ -351,7 +414,12 @@ def main():
         "study_type": "retrospective_predefined_interventions",
         "independent_prospective_holdout": False,
         "snapshot_sha256": original_snapshot_sha,
-        "historical_checkpoint": EXPECTED_OLD_CAPITAL,
+        "legacy_historical_reference": EXPECTED_OLD_CAPITAL,
+        "legacy_reference_is_fixed75_checkpoint": False,
+        "control_legacy_reference_delta": (
+            summaries["controle_original"]["capital"] - EXPECTED_OLD_CAPITAL
+        ),
+        "identity_audit": identity_audit,
         "requested_assets": 75,
         "effective_assets": 75,
         "research_design": "fixed_75_trained_together_from_first_fold",
@@ -372,7 +440,7 @@ def main():
             if k != "fold_metrics" and k != "parameters_changed"
         }} for name,s in summaries.items()
     ]).to_csv(output / "comparacao_variantes.csv", index=False)
-    package = output / "pacote_mitigacao_overfitting_v1258.zip"
+    package = output / "pacote_mitigacao_overfitting_v1259.zip"
     with ZipFile(package, "w", compression=ZIP_DEFLATED) as z:
         for file in output.rglob("*"):
             if file.is_file() and file != package:
