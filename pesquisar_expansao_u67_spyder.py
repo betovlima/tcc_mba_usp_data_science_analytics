@@ -916,13 +916,16 @@ def _prepare_candidate_frames(
     common_dates: pd.DatetimeIndex,
     all_decision_dates: pd.DatetimeIndex,
     config: Any,
+    *,
+    paths: SnapshotPaths | None = None,
 ) -> tuple[dict[str, pd.DataFrame], pd.DataFrame, dict[str, dict[str, str]]]:
+    source_paths = paths if paths is not None else FULL_DATA
     frames: dict[str, pd.DataFrame] = {}
     audits = []
     hashes: dict[str, dict[str, str]] = {}
     for position, symbol in enumerate(symbols, start=1):
-        raw_path = FULL_DATA.raw_bars / f"{symbol}.csv"
-        action_path = FULL_DATA.corporate_actions / f"{symbol}.csv"
+        raw_path = source_paths.raw_bars / f"{symbol}.csv"
+        action_path = source_paths.corporate_actions / f"{symbol}.csv"
         row: dict[str, Any] = {"asset": symbol, "status": "rejected", "reason": None}
         try:
             raw = load_raw_bar_file(raw_path, float_precision="round_trip")

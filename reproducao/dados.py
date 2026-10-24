@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 import pandas as pd
+import numpy as np
 import requests
 from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical.stock import StockHistoricalDataClient
@@ -174,7 +175,9 @@ def load_alpaca_credentials(project_root: Path) -> AlpacaCredentials:
     return AlpacaCredentials(api_key, secret_key, str(env_file))
 
 
-def _normalize_alpaca_frame(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
+def _normalize_alpaca_frame(
+    frame: pd.DataFrame, symbol: str, *, strict_raw: bool = False,
+) -> pd.DataFrame:
     if frame is None or frame.empty:
         return pd.DataFrame()
     result = frame.copy()
@@ -188,9 +191,21 @@ def _normalize_alpaca_frame(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
         result = result.drop(columns=["symbol"])
     if "timestamp" not in result.columns:
         raise RuntimeError(f"{symbol}: timestamp ausente na resposta Alpaca.")
-    result["timestamp"] = pd.to_datetime(result["timestamp"], utc=True)
-    result = result.sort_values("timestamp")
-    result = result.drop_duplicates(subset=["timestamp"], keep="last")
+    result["timestamp"] = pd.to_datetime(
+        result["timestamp"], utc=True, errors="raise"
+    )
+    if strict_raw:
+        # Nunca remover ou reordenar barras em modo RAW auditavel.
+        if result["timestamp"].isna().any():
+            raise RuntimeError(f"{symbol}: timestamp ausente na resposta RAW.")
+        if result["timestamp"].duplicated().any():
+            raise RuntimeError(f"{symbol}: timestamp duplicado na resposta RAW.")
+        if not result["timestamp"].is_monotonic_increasing:
+            raise RuntimeError(f"{symbol}: RAW fora de ordem temporal.")
+    else:
+        # Somente pipeline historico, cuja reproducao deve permanecer igual.
+        result = result.sort_values("timestamp")
+        result = result.drop_duplicates(subset=["timestamp"], keep="last")
     required = ["open", "high", "low", "close", "volume"]
     missing = [col for col in required if col not in result.columns]
     if missing:
@@ -198,7 +213,21 @@ def _normalize_alpaca_frame(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
     optional = [col for col in ("trade_count", "vwap") if col in result.columns]
     result = result[["timestamp", *required, *optional]].copy()
     for column in [*required, *optional]:
-        result[column] = pd.to_numeric(result[column], errors="coerce")
+        result[column] = pd.to_numeric(
+            result[column], errors="raise" if strict_raw else "coerce"
+        )
+    if strict_raw:
+        for column in required:
+            if not np.isfinite(
+                result[column].to_numpy(dtype=np.float64)
+            ).all():
+                raise RuntimeError(f"{symbol}: RAW invalido em {column}.")
+        for column in ("open", "high", "low", "close"):
+            if (result[column] <= 0).any():
+                raise RuntimeError(f"{symbol}: preco RAW nao positivo em {column}.")
+        if (result["volume"] < 0).any():
+            raise RuntimeError(f"{symbol}: volume RAW negativo.")
+        return result.copy()  # Mesmo numero e ordem de barras recebidos.
     result = result.dropna(subset=["timestamp", *required])
     valid = (
         (result["open"] > 0)
@@ -210,6 +239,26 @@ def _normalize_alpaca_frame(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
     return result.loc[valid].copy()
 
 
+def _delayed_sip_end(
+    snapshot_end: str,
+    *,
+    now_utc: pd.Timestamp,
+    delay_minutes: int,
+) -> pd.Timestamp:
+    """Preserva SIP/RAW e respeita os 15 min da conta sem SIP em tempo real."""
+    if delay_minutes < 15:
+        raise ValueError("O SIP historico requer ao menos 15 minutos de atraso.")
+    current = pd.Timestamp(now_utc)
+    current = (
+        current.tz_localize("UTC")
+        if current.tzinfo is None
+        else current.tz_convert("UTC")
+    )
+    requested_exclusive = pd.Timestamp(snapshot_end, tz="UTC") + pd.Timedelta(days=1)
+    available_end = current - pd.Timedelta(minutes=delay_minutes)
+    return min(requested_exclusive, available_end)
+
+
 def download_raw_bars(
     credentials: AlpacaCredentials,
     paths: SnapshotPaths,
@@ -217,8 +266,10 @@ def download_raw_bars(
     assets: tuple[str, ...],
     bar_snapshot_as_of_end: str,
     analysis_end_date: str,
+    sip_delay_guard_minutes: int = 0,
+    strict_raw: bool = False,
 ) -> dict[str, Path]:
-    """Baixa SIP/1Day/RAW, um ativo por requisicao, e grava um CSV por ativo."""
+    """Baixa SIP/1Day/RAW, sem trocar o feed nem incluir SIP em tempo real."""
     paths.ensure()
     client = StockHistoricalDataClient(
         api_key=credentials.api_key,
@@ -226,13 +277,28 @@ def download_raw_bars(
     )
     start = pd.Timestamp(START_DATE, tz="UTC").to_pydatetime()
     bar_end = pd.Timestamp(bar_snapshot_as_of_end, tz="UTC")
-    api_end = (bar_end + pd.Timedelta(days=1)).to_pydatetime()
+    requested_end = bar_end + pd.Timedelta(days=1)
+    # A Alpaca bloqueia SIP se o argumento 'end' cair dentro dos ultimos
+    # 15 minutos, inclusive quando esse horario esta NO FUTURO.
+    # O guard de 20 minutos so e ativado pelo replay experimental.
+    api_end_ts = (
+        _delayed_sip_end(
+            bar_snapshot_as_of_end,
+            now_utc=pd.Timestamp.now(tz="UTC"),
+            delay_minutes=sip_delay_guard_minutes,
+        )
+        if sip_delay_guard_minutes else requested_end
+    )
+    if api_end_ts <= pd.Timestamp(start):
+        raise RuntimeError("Janela SIP vazia depois do limite de atraso.")
+    api_end = api_end_ts.to_pydatetime()
 
     print(
         "[alpaca-bars] loader=alpaca_raw_sip_daily "
         f"assets={len(assets)} feed=sip adjustment=raw timeframe=1Day "
         f"start={START_DATE} bar_asof_end={bar_snapshot_as_of_end} "
-        f"analysis_end={analysis_end_date}",
+        f"analysis_end={analysis_end_date} api_end={api_end_ts.isoformat()} "
+        f"sip_delay_guard_minutes={sip_delay_guard_minutes}",
         flush=True,
     )
 
@@ -252,7 +318,9 @@ def download_raw_bars(
             feed=DataFeed.SIP,
             limit=10_000,
         )
-        frame = _normalize_alpaca_frame(client.get_stock_bars(request).df, symbol)
+        frame = _normalize_alpaca_frame(
+            client.get_stock_bars(request).df, symbol, strict_raw=strict_raw
+        )
         if frame.empty:
             raise RuntimeError(f"Fresh Alpaca RAW snapshot returned no bars for {symbol}.")
         frame.to_csv(target, index=False, float_format="%.17g")
