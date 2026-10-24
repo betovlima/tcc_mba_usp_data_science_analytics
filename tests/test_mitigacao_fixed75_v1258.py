@@ -166,3 +166,14 @@ def test_auditoria_de_cusip_e_preservacao_de_dados_no_executor():
     assert "source_files_modified" in source
     assert "relevant_actions" in source
     assert "_train_candidate_caches" not in source
+
+
+def test_yang_runtime_loader_matches_real_identity_audit():
+    """Previous test used csv.DictReader, unlike the Spyder's pandas path."""
+    from reproducao.preparacao import auditar_identidade_cusip, load_actions_file
+    path = RUNNER.parent / "dados" / "u67" / "corporate_actions" / "YANG.csv"
+    rows = load_actions_file(path)
+    audit = auditar_identidade_cusip("YANG", rows)
+    assert audit["issue"] is None, audit["issue"]
+    assert set(audit["reference_cusips"]) == {"25460E521", "25461A460"}
+    assert len(audit["split_cusip_transitions"]) == 1
