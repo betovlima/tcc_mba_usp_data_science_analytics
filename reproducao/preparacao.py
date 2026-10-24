@@ -243,7 +243,11 @@ def auditar_identidade_cusip(
 
     # Somente evidências de pertencimento ao emissor, nunca o texto "META"
     # sozinho. A leitura de cotação é feita e verificada por SHA pelo executor.
+    # Um ticker pode ter sido usado por dois emissores. Dividendos marcados
+    # apenas com esse ticker NÃO podem definir a identidade prioritária
+    # quando há evento inequívoco de renomeação para o ticker atual.
     anchors: set[str] = set()
+    issuer_anchors: set[str] = set()
     split_edges: list[tuple[str, str]] = []
     successor_edges: list[tuple[str, str]] = []
     for action in actions:
@@ -252,12 +256,14 @@ def auditar_identidade_cusip(
         if code(action.get("symbol")) == ticker and code(action.get("cusip")):
             anchors.add(code(action["cusip"]))
         if kind == "name_change" and code(action.get("new_symbol")) == ticker and old and old == new:
+            issuer_anchors.add(new)
             anchors.add(new)
         if (
             kind in {"cash_merger", "stock_merger", "stock_and_cash_merger"}
             and code(action.get("acquirer_symbol")) == ticker
             and code(action.get("acquirer_cusip"))
         ):
+            issuer_anchors.add(code(action["acquirer_cusip"]))
             anchors.add(code(action["acquirer_cusip"]))
         if kind == "name_change":
             for documented in DOCUMENTED_ONE_TO_ONE_SUCCESSORS:
@@ -292,6 +298,16 @@ def auditar_identidade_cusip(
                 }
             split_edges.append((old, new))
             if code(action.get("symbol")) == ticker:
+                anchors.update((old, new))
+
+    # Eventos que transferiram um mesmo título para o ticker atual têm
+    # precedência sobre os dividendos do ticker antigo reutilizado. Isso é
+    # seleção de emissor POR CUSIP, não fusão dos históricos de duas empresas.
+    # Arestas de split/sucessão documentada preservam as transições legítimas.
+    if issuer_anchors:
+        anchors = set(issuer_anchors)
+        for old, new in split_edges + successor_edges:
+            if old in anchors or new in anchors:
                 anchors.update((old, new))
 
     # Ausência de dividendos é normal; uma mudança de ticker COM MESMO
@@ -337,6 +353,7 @@ def auditar_identidade_cusip(
         }
 
     relevant, ignored, renames, splits, successors = [], [], [], [], []
+    excluded_foreign_cash_dividends = 0
     issue = None
     for action in actions:
         kind = code(action.get("action_type")).lower()
@@ -356,6 +373,8 @@ def auditar_identidade_cusip(
                 "cusips": sorted(ids),
                 "reason": "other_issuer_cusip",
             })
+            if kind == "cash_dividend":
+                excluded_foreign_cash_dividends += 1
             continue
 
         if kind == "name_change":
@@ -421,6 +440,8 @@ def auditar_identidade_cusip(
 
     return {
         "symbol": ticker, "reference_cusips": sorted(lineage),
+        "identity_anchor_cusips": sorted(issuer_anchors),
+        "excluded_foreign_cash_dividends": excluded_foreign_cash_dividends,
         "ignored_events": ignored, "ticker_changes": renames,
         "split_cusip_transitions": splits,
         "successor_cusip_transitions": successors,
