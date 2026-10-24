@@ -1,4 +1,4 @@
-"""Pesquisa pré-especificada de mitigação de overfitting LightGBM — v1.25.9.
+"""Pesquisa pré-especificada de mitigação de overfitting LightGBM — v1.26.0.
 
 Execute com F5 no Spyder. Usa exclusivamente os CSVs congelados já existentes.
 Executa controle e 3 intervenções ISOLADAS, mantendo universo, folds, labels,
@@ -25,12 +25,15 @@ import pandas as pd
 
 from reproducao.dados import validate_snapshot
 from reproducao.experimento import build_control_config
-from reproducao.preparacao import (load_raw_bar_file, load_actions_file, split_normalize)
+from reproducao.preparacao import (
+    auditar_identidade_cusip, load_raw_bar_file, load_actions_file,
+    split_normalize,
+)
 from reproducao.universo_fixo75 import universo_75
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "1.25.9"
-OUTPUT_ROOT = ROOT / "output" / "mitigacao_overfitting_v1259"
+VERSION = "1.26.0"
+OUTPUT_ROOT = ROOT / "output" / "mitigacao_overfitting_v1260"
 EXPECTED_OLD_CAPITAL = 587_165_941.1330212
 
 # Hipóteses isoladas e fixadas ANTES de observar os resultados.
@@ -93,39 +96,6 @@ def check_inputs():
     return p, manifest, snapshot, selected
 
 
-def _verified_unrelated_meta_etf_action(symbol, issue, actions):
-    """Reconhece SOMENTE a colisão documentada de ticker META em 2022.
-
-    31/01/2022: ETF Roundhill META -> METV, CUSIP 53656F417.
-    09/06/2022: Meta Platforms FB -> META, CUSIP 30303M102.
-    O snapshot histórico verificado por SHA contém a série de FB/Meta Platforms.
-    Outros eventos/identidades continuam sendo bloqueados, sem reparo de preços.
-
-    Fontes: OCC memo 49960 (ETF), Nasdaq ECA2022-125 (companhia).
-    """
-    if symbol != "META" or issue is None:
-        return False
-    expected_etf = {
-        "action_type": "name_change",
-        "process_date": "2022-01-31",
-        "old_symbol": "META",
-        "new_symbol": "METV",
-        "old_cusip": "53656F417",
-        "new_cusip": "53656F417",
-    }
-    if any(str(issue.get(key) or "") != value for key, value in expected_etf.items()):
-        return False
-    return any(
-        str(row.get("action_type") or "") == "name_change"
-        and str(row.get("old_symbol") or "") == "FB"
-        and str(row.get("new_symbol") or "") == "META"
-        and str(row.get("old_cusip") or "") == "30303M102"
-        and str(row.get("new_cusip") or "") == "30303M102"
-        and str(row.get("process_date") or "") == "2022-06-09"
-        for row in actions
-    )
-
-
 def prepare_once(p, manifest, selected):
     """Uma ÚNICA etapa de carga e painel com os 75 ativos antes dos folds.
 
@@ -135,6 +105,7 @@ def prepare_once(p, manifest, selected):
     """
     raw_75 = {}
     identity_audit = []
+    identity_issues = []
     sources = set(p.U67_REQUESTED_ASSETS)  # Apenas localização física histórica.
     for index, symbol in enumerate(selected, start=1):
         origin = p.BASE_DATA if symbol in sources else p.FULL_DATA
@@ -142,30 +113,50 @@ def prepare_once(p, manifest, selected):
         path_actions = origin.corporate_actions / f"{symbol}.csv"
         raw = load_raw_bar_file(path_bars, float_precision="round_trip")
         actions = load_actions_file(path_actions)
-        issue = p._generic_identity_issue(symbol, actions)
-        if issue is not None:
-            if _verified_unrelated_meta_etf_action(symbol, issue, actions):
-                # A ação corporativa é do ETF homônimo, NÃO da Meta Platforms.
-                # Não modificar ou descartar registros do snapshot congelado.
-                identity_audit.append({
-                    "symbol": symbol,
-                    "classification": "unrelated_prior_issuer_ticker_reuse",
-                    "reported_event": dict(issue),
-                    "stock_cusip": "30303M102",
-                    "stock_prior_symbol": "FB",
-                    "price_series_modified": False,
-                    "decision": "retain_verified_meta_platforms_series",
-                })
-                print("[identity-audit] META: ETF META->METV identificado por "
-                      "CUSIP; preservada a série congelada de FB/Meta Platforms",
-                      flush=True)
-            else:
-                raise RuntimeError(
-                    f"Ativo estruturalmente inconsistente: {symbol}: {issue}"
-                )
-        normalized, _ = split_normalize(raw, actions)
+        audit = auditar_identidade_cusip(symbol, actions)
+        identity_audit.append({
+            "symbol": symbol,
+            "reference_cusips": audit["reference_cusips"],
+            "ignored_events": audit["ignored_events"],
+            "ticker_changes": audit["ticker_changes"],
+            "split_cusip_transitions": audit["split_cusip_transitions"],
+            "issue": audit["issue"],
+            "corporate_action_rows": len(actions),
+            "rows_used_in_model": len(audit["relevant_actions"]),
+            "source_files_modified": False,
+        })
+        if audit["issue"] is not None:
+            identity_issues.append(audit["issue"])
+            print(f"[identity-block] {symbol}: {audit['issue']}", flush=True)
+            continue
+        if audit["ignored_events"] or audit["ticker_changes"] or audit["split_cusip_transitions"]:
+            print(f"[identity-audit] {symbol}: CUSIPs={audit['reference_cusips']}; "
+                  f"other_issuer={len(audit['ignored_events'])}; "
+                  f"renames={len(audit['ticker_changes'])}; "
+                  f"documented_splits={len(audit['split_cusip_transitions'])}",
+                  flush=True)
+        # Nunca reescrever o CSV; apenas não atribuir eventos de outro
+        # emissor ao preço da companhia em memória.
+        normalized, _ = split_normalize(raw, audit["relevant_actions"])
         raw_75[symbol] = normalized
         print(f"[painel_unico] {index}/75 {symbol}", flush=True)
+
+    if identity_issues:
+        preflight = OUTPUT_ROOT / "_preflight"
+        preflight.mkdir(parents=True, exist_ok=True)
+        filename = preflight / (
+            datetime.now(timezone.utc).strftime("identity_%Y%m%dT%H%M%S%fZ.json")
+        )
+        save_json(filename, {
+            "status": "blocked_before_training", "version": VERSION,
+            "issues": identity_issues, "identity_audit": identity_audit,
+            "source_files_modified": False,
+        })
+        raise RuntimeError(
+            f"Auditoria CUSIP bloqueou {len(identity_issues)} ativo(s); "
+            f"detalhes em {filename}. Não retirar ativos nem reescrever CSVs. "
+            f"Ativos: {[row['symbol'] for row in identity_issues]}"
+        )
 
     if tuple(raw_75) != tuple(selected) or len(raw_75) != 75:
         raise RuntimeError("Um único painel de 75 ativos é obrigatório.")
@@ -440,7 +431,7 @@ def main():
             if k != "fold_metrics" and k != "parameters_changed"
         }} for name,s in summaries.items()
     ]).to_csv(output / "comparacao_variantes.csv", index=False)
-    package = output / "pacote_mitigacao_overfitting_v1259.zip"
+    package = output / "pacote_mitigacao_overfitting_v1260.zip"
     with ZipFile(package, "w", compression=ZIP_DEFLATED) as z:
         for file in output.rglob("*"):
             if file.is_file() and file != package:
