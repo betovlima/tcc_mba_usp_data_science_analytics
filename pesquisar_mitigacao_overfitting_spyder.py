@@ -1,4 +1,4 @@
-"""Pesquisa pré-especificada de mitigação de overfitting LightGBM — v1.26.0.
+"""Pesquisa pré-especificada de mitigação de overfitting LightGBM — v1.26.1.
 
 Execute com F5 no Spyder. Usa exclusivamente os CSVs congelados já existentes.
 Executa controle e 3 intervenções ISOLADAS, mantendo universo, folds, labels,
@@ -32,8 +32,8 @@ from reproducao.preparacao import (
 from reproducao.universo_fixo75 import universo_75
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "1.26.0"
-OUTPUT_ROOT = ROOT / "output" / "mitigacao_overfitting_v1260"
+VERSION = "1.26.1"
+OUTPUT_ROOT = ROOT / "output" / "mitigacao_overfitting_v1261"
 EXPECTED_OLD_CAPITAL = 587_165_941.1330212
 
 # Hipóteses isoladas e fixadas ANTES de observar os resultados.
@@ -120,7 +120,25 @@ def prepare_once(p, manifest, selected):
             "ignored_events": audit["ignored_events"],
             "ticker_changes": audit["ticker_changes"],
             "split_cusip_transitions": audit["split_cusip_transitions"],
+            "successor_cusip_transitions": audit.get("successor_cusip_transitions", []),
             "issue": audit["issue"],
+            "blocking_event_candidates": [
+                {
+                    key: action.get(key) for key in (
+                        "action_type", "process_date", "effective_date",
+                        "symbol", "old_symbol", "new_symbol",
+                        "old_cusip", "new_cusip", "cusip",
+                        "acquiree_symbol", "acquirer_symbol",
+                        "acquiree_cusip", "acquirer_cusip",
+                    )
+                }
+                for action in actions
+                if audit["issue"] is not None and action.get("action_type") in {
+                    "name_change", "stock_merger", "cash_merger",
+                    "stock_and_cash_merger", "redemption",
+                    "worthless_removal",
+                }
+            ],
             "corporate_action_rows": len(actions),
             "rows_used_in_model": len(audit["relevant_actions"]),
             "source_files_modified": False,
