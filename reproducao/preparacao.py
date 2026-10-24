@@ -170,6 +170,200 @@ def structural_identity_issue(
     return None
 
 
+
+def auditar_identidade_cusip(
+    symbol: str,
+    actions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Valida identidade por CUSIP antes do ticker, sem alterar dados congelados.
+
+    Simples renomeação com CUSIP constante não é troca de ativo. Eventos
+    corporativos de emissores homônimos são identificados por CUSIP e auditados.
+    Uma transição de CUSIP fora de split documentado, ou identidade ambígua,
+    é reportada para investigação; nunca se constrói bridge automaticamente.
+
+    Esta validação atende ao executor fixed75. O motor histórico de reprodução
+    mantém seu procedimento legado imutável.
+    """
+    ticker = str(symbol).strip().upper()
+
+    def code(value: Any) -> str:
+        return _normalize_identifier(value).strip().upper()
+
+    def event_cusips(action: dict[str, Any]) -> set[str]:
+        return {
+            code(action.get(key))
+            for key in (
+                "cusip", "old_cusip", "new_cusip",
+                "acquiree_cusip", "acquirer_cusip",
+            )
+            if code(action.get(key))
+        }
+
+    def describe_issue(reason: str, action: dict[str, Any] | None = None) -> dict[str, Any]:
+        result: dict[str, Any] = {"symbol": ticker, "reason": reason}
+        if action is not None:
+            for key in (
+                "action_type", "process_date", "old_symbol", "new_symbol",
+                "old_cusip", "new_cusip", "acquiree_symbol",
+                "acquirer_symbol",
+            ):
+                if code(action.get(key)):
+                    result[key] = code(action[key])
+        return result
+
+    # Somente evidências de pertencimento ao emissor, nunca o texto "META"
+    # sozinho. A leitura de cotação é feita e verificada por SHA pelo executor.
+    anchors: set[str] = set()
+    split_edges: list[tuple[str, str]] = []
+    for action in actions:
+        kind = code(action.get("action_type")).lower()
+        old, new = code(action.get("old_cusip")), code(action.get("new_cusip"))
+        if code(action.get("symbol")) == ticker and code(action.get("cusip")):
+            anchors.add(code(action["cusip"]))
+        if kind == "name_change" and code(action.get("new_symbol")) == ticker and old and old == new:
+            anchors.add(new)
+        if (
+            kind in {"cash_merger", "stock_merger", "stock_and_cash_merger"}
+            and code(action.get("acquirer_symbol")) == ticker
+            and code(action.get("acquirer_cusip"))
+        ):
+            anchors.add(code(action["acquirer_cusip"]))
+        if kind in {"forward_split", "reverse_split"} and old and new:
+            try:
+                valid_ratio = (
+                    float(action.get("old_rate")) > 0
+                    and float(action.get("new_rate")) > 0
+                )
+            except (ValueError, TypeError):
+                valid_ratio = False
+            if not valid_ratio:
+                return {
+                    "symbol": ticker, "issue": describe_issue("split_ratio_unverifiable", action),
+                    "reference_cusips": sorted(anchors), "ignored_events": [],
+                    "ticker_changes": [], "split_cusip_transitions": [],
+                    "relevant_actions": actions,
+                }
+            split_edges.append((old, new))
+            if code(action.get("symbol")) == ticker:
+                anchors.update((old, new))
+
+    # Ausência de dividendos é normal; uma mudança de ticker COM MESMO
+    # CUSIP constitui evidência de identidade se o símbolo de destino é o ativo.
+    if not anchors:
+        for action in actions:
+            if code(action.get("action_type")).lower() != "name_change":
+                continue
+            old, new = code(action.get("old_cusip")), code(action.get("new_cusip"))
+            if old and old == new and code(action.get("new_symbol")) == ticker:
+                anchors.add(new)
+
+    # Um grupamento comprovado liga CUSIPs anterior/posterior sem supor
+    # que uma reorganização societária de mesmo ticker seja equivalente.
+    lineage = set(anchors)
+    changed = True
+    while changed:
+        changed = False
+        for old, new in split_edges:
+            if old in lineage or new in lineage:
+                if old not in lineage or new not in lineage:
+                    lineage.update((old, new))
+                    changed = True
+    components = [{value} for value in anchors]
+    for old, new in split_edges:
+        overlapping = [part for part in components if part & {old, new}]
+        if overlapping:
+            united = {old, new}
+            for part in overlapping:
+                components.remove(part)
+                united |= part
+            components.append(united)
+    if len(components) > 1:
+        return {
+            "symbol": ticker, "issue": {
+                "symbol": ticker, "reason": "multiple_unlinked_cusip_identifiers",
+                "cusips": sorted(anchors),
+            },
+            "reference_cusips": sorted(lineage), "ignored_events": [],
+            "ticker_changes": [], "split_cusip_transitions": [],
+            "relevant_actions": actions,
+        }
+
+    relevant, ignored, renames, splits = [], [], [], []
+    issue = None
+    for action in actions:
+        kind = code(action.get("action_type")).lower()
+        ids = event_cusips(action)
+        old, new = code(action.get("old_cusip")), code(action.get("new_cusip"))
+        original = code(action.get("old_symbol"))
+        current = code(action.get("new_symbol"))
+        issuer_matches = bool(ids & lineage)
+
+        if ids and lineage and not issuer_matches:
+            # Eventos de outro CUSIP não pertencem à série. Mantê-los no
+            # CSV e registrar o descarte SOMENTE no contexto do modelo.
+            ignored.append({
+                "action_type": kind,
+                "process_date": action.get("process_date"),
+                "old_symbol": original or None, "new_symbol": current or None,
+                "cusips": sorted(ids),
+                "reason": "other_issuer_cusip",
+            })
+            continue
+
+        if kind == "name_change":
+            if not old or not new:
+                issue = describe_issue("name_change_missing_cusip", action)
+            elif old != new:
+                issue = describe_issue("non_split_cusip_transition", action)
+            else:
+                renames.append({
+                    "from": original or None, "to": current or None,
+                    "cusip": old, "date": action.get("process_date"),
+                })
+        elif kind in {"stock_merger", "cash_merger", "stock_and_cash_merger"}:
+            acquiree = code(action.get("acquiree_symbol"))
+            acquirer = code(action.get("acquirer_symbol"))
+            if acquiree == ticker and acquirer and acquirer != ticker:
+                issue = describe_issue("acquiree_identity_change", action)
+        elif kind in {"worthless_removal", "redemption"}:
+            if ticker in {
+                code(action.get("symbol")), original,
+                code(action.get("source_symbol")),
+            }:
+                issue = describe_issue("security_terminated", action)
+        elif kind in {"forward_split", "reverse_split"}:
+            if old and new and old != new:
+                splits.append({
+                    "from_cusip": old, "to_cusip": new,
+                    "date": action.get("process_date"),
+                    "action_type": kind,
+                })
+        if issue is not None:
+            break
+        relevant.append(action)
+
+    # Evitar aprovação por ticker quando há evento de identidade sem CUSIP.
+    if issue is None and not lineage and any(
+        code(a.get("action_type")).lower() in {
+            "name_change", "cash_merger", "stock_merger",
+            "stock_and_cash_merger", "redemption", "worthless_removal",
+        } for a in actions
+    ):
+        issue = {"symbol": ticker, "reason": "reference_cusip_unverifiable"}
+
+    # Exclusões históricas aprovadas seguem vinculantes.
+    if issue is None:
+        issue = structural_identity_issue(ticker, relevant)
+
+    return {
+        "symbol": ticker, "reference_cusips": sorted(lineage),
+        "ignored_events": ignored, "ticker_changes": renames,
+        "split_cusip_transitions": splits, "issue": issue,
+        "relevant_actions": relevant,
+    }
+
+
 def split_normalize(
     raw: pd.DataFrame,
     actions: list[dict[str, Any]],
