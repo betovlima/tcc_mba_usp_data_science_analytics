@@ -26,7 +26,7 @@ def _methods(function: ast.AST) -> list[str]:
 def test_painel_unico_de_75_antes_dos_folds():
     source, tree = _source_and_tree()
     functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
-    assert 'VERSION = "1.26.1"' in source
+    assert 'VERSION = "1.26.2"' in source
     assert 'raw_75 = {}' in source
     assert 'universe_role="fixed75"' in source
     assert 'len(symbols) != 75' in source
@@ -55,7 +55,7 @@ def test_legacy_reference_is_not_forced_on_new_fixed75_design():
     assert "EXPECTED_OLD_CAPITAL" in source
     assert "legacy_reference_is_fixed75_checkpoint" in source
     assert "math.isclose(capital, EXPECTED_OLD_CAPITAL" not in source
-    assert '"mitigacao_overfitting_v1261"' in source
+    assert '"mitigacao_overfitting_v1262"' in source
 
 
 
@@ -222,3 +222,76 @@ def test_mchb_simbolo_reutilizado_nao_eh_unificado_por_ticker():
     audit = auditar_identidade_cusip("MCHB", rows)
     assert audit["issue"] is not None
     assert audit["issue"]["reason"] == "multiple_unlinked_cusip_identifiers"
+
+def test_mchb_identity_from_frozen_cusip_events_is_hmst_not_old_otc():
+    """Regression for the actual 15-event frozen cache without uploading it."""
+    from reproducao.preparacao import auditar_identidade_cusip
+    events = [
+        {"action_type": "cash_dividend", "symbol": "MCHB",
+         "cusip": "583614102", "rate": 2569.0,
+         "ex_date": "2021-07-30"},
+        {"action_type": "cash_dividend", "symbol": "MCHB",
+         "cusip": "583614102", "rate": 467.0,
+         "ex_date": "2024-09-09"},
+        {"action_type": "cash_dividend", "symbol": "MCHB",
+         "cusip": "43785V102", "rate": 0.21,
+         "ex_date": "2025-12-08"},
+        {"action_type": "name_change", "old_symbol": "HMST",
+         "new_symbol": "MCHB", "old_cusip": "43785V102",
+         "new_cusip": "43785V102", "process_date": "2025-09-02"},
+        {"action_type": "stock_merger", "acquiree_symbol": "MCHB",
+         "acquirer_symbol": "MCHB", "acquiree_cusip": "583614102",
+         "acquirer_cusip": "43785V102", "process_date": "2025-09-02",
+         "acquiree_rate": 1, "acquirer_rate": 3301.092},
+    ]
+    audit = auditar_identidade_cusip("MCHB", events)
+    assert audit["issue"] is None
+    assert audit["reference_cusips"] == ["43785V102"]
+    assert audit["identity_anchor_cusips"] == ["43785V102"]
+    assert audit["excluded_foreign_cash_dividends"] == 2
+    assert len(audit["ignored_events"]) == 2
+    assert all(event["cusips"] == ["583614102"]
+               for event in audit["ignored_events"])
+    assert len(audit["relevant_actions"]) == 3
+    assert audit["ticker_changes"][0]["from"] == "HMST"
+    assert audit["ticker_changes"][0]["to"] == "MCHB"
+    assert not audit["split_cusip_transitions"]
+    assert not audit["successor_cusip_transitions"]
+
+
+def test_mchb_ticker_only_dividends_cannot_prove_continuity():
+    from reproducao.preparacao import auditar_identidade_cusip
+    # Without an issuer-anchoring event, old/new dividends must not be
+    # assumed to describe the same security merely because ticker matches.
+    events = [
+        {"action_type": "cash_dividend", "symbol": "MCHB",
+         "cusip": "583614102"},
+        {"action_type": "cash_dividend", "symbol": "MCHB",
+         "cusip": "43785V102"},
+    ]
+    result = auditar_identidade_cusip("MCHB", events)
+    assert result["issue"] is not None
+    assert result["issue"]["reason"] == "multiple_unlinked_cusip_identifiers"
+
+
+def test_mchb_wrong_receiver_does_not_anchor_old_dividends_to_new_issuer():
+    from reproducao.preparacao import auditar_identidade_cusip
+    events = [
+        {"action_type": "cash_dividend", "symbol": "MCHB",
+         "cusip": "583614102"},
+        {"action_type": "cash_dividend", "symbol": "MCHB",
+         "cusip": "43785V102"},
+        {"action_type": "name_change", "old_symbol": "HMST",
+         "new_symbol": "OTHER", "old_cusip": "43785V102",
+         "new_cusip": "43785V102"},
+    ]
+    result = auditar_identidade_cusip("MCHB", events)
+    assert result["issue"] is not None
+
+
+def test_mchb_audit_fields_surface_on_spyder_path():
+    source, _ = _source_and_tree()
+    assert '"identity_anchor_cusips"' in source
+    assert '"excluded_foreign_cash_dividends"' in source
+    assert '"blocking_event_candidates"' in source
+    assert 'split_normalize(raw, audit["relevant_actions"])' in source
