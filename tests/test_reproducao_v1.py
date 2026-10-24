@@ -749,6 +749,11 @@ def test_project_has_no_external_system_reference_token() -> None:
         allowed_audit_files = {
             Path("evidencias/auditoria_tcc_" + "m" + "ct_fresh_snapshot_20261022.md"),
             Path("evidencias/auditoria_universo_unico_75_v1237_20261022.md"),
+            # Registros documentais de separação entre pesquisa e operação;
+            # o bloqueio segue integral para código Python e configurações.
+            Path("CONTEXTO_MESTRE.md"),
+            Path("evidencias/protocolo_mitigacao_overfitting_v1257.md"),
+            Path("evidencias/correcao_identidade_meta_metv_v1259.md"),
         }
         if relative in allowed_audit_files:
             continue
