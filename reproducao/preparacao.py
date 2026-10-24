@@ -183,6 +183,23 @@ def structural_identity_issue(
 
 
 
+# Conversões de ações documentalmente comprovadas que preservam a
+# exposição econômica e a quantidade de ações, apesar da mudança de emissor.
+# Não é licença genérica para unir CUSIPs diferentes. Fontes oficiais:
+# SEC: https://www.sec.gov/Archives/edgar/data/2115436/000119312526292558/d159056ds8pos.htm
+# SEC: https://www.sec.gov/Archives/edgar/data/2115436/000119312526291990/d71068d8k12b.htm
+DOCUMENTED_ONE_TO_ONE_SUCCESSORS = (
+    {
+        "symbol": "XOM", "action_type": "name_change",
+        "old_symbol": "XOM", "new_symbol": "XOM",
+        "old_cusip": "30231G102", "new_cusip": "30233Q108",
+        "process_date": "2026-07-02", "effective_date": "2026-07-01",
+        "exchange_ratio": 1.0,
+        "source": "SEC 8-K and S-8 POS: ExxonMobil redomiciliation 2026",
+    },
+)
+
+
 def auditar_identidade_cusip(
     symbol: str,
     actions: list[dict[str, Any]],
@@ -228,6 +245,7 @@ def auditar_identidade_cusip(
     # sozinho. A leitura de cotação é feita e verificada por SHA pelo executor.
     anchors: set[str] = set()
     split_edges: list[tuple[str, str]] = []
+    successor_edges: list[tuple[str, str]] = []
     for action in actions:
         kind = code(action.get("action_type")).lower()
         old, new = code(action.get("old_cusip")), code(action.get("new_cusip"))
@@ -241,6 +259,22 @@ def auditar_identidade_cusip(
             and code(action.get("acquirer_cusip"))
         ):
             anchors.add(code(action["acquirer_cusip"]))
+        if kind == "name_change":
+            for documented in DOCUMENTED_ONE_TO_ONE_SUCCESSORS:
+                if (
+                    ticker == documented["symbol"]
+                    and all(
+                        code(action.get(key)) == code(documented[key])
+                        for key in (
+                            "action_type", "process_date",
+                            "old_symbol", "new_symbol",
+                            "old_cusip", "new_cusip",
+                        )
+                    )
+                ):
+                    successor_edges.append((old, new))
+                    anchors.update((old, new))
+                    break
         if kind in {"forward_split", "reverse_split"} and old and new:
             try:
                 valid_ratio = (
@@ -273,16 +307,17 @@ def auditar_identidade_cusip(
     # Um grupamento comprovado liga CUSIPs anterior/posterior sem supor
     # que uma reorganização societária de mesmo ticker seja equivalente.
     lineage = set(anchors)
+    verified_edges = split_edges + successor_edges
     changed = True
     while changed:
         changed = False
-        for old, new in split_edges:
+        for old, new in verified_edges:
             if old in lineage or new in lineage:
                 if old not in lineage or new not in lineage:
                     lineage.update((old, new))
                     changed = True
     components = [{value} for value in anchors]
-    for old, new in split_edges:
+    for old, new in verified_edges:
         overlapping = [part for part in components if part & {old, new}]
         if overlapping:
             united = {old, new}
@@ -301,7 +336,7 @@ def auditar_identidade_cusip(
             "relevant_actions": actions,
         }
 
-    relevant, ignored, renames, splits = [], [], [], []
+    relevant, ignored, renames, splits, successors = [], [], [], [], []
     issue = None
     for action in actions:
         kind = code(action.get("action_type")).lower()
@@ -327,7 +362,23 @@ def auditar_identidade_cusip(
             if not old or not new:
                 issue = describe_issue("name_change_missing_cusip", action)
             elif old != new:
-                issue = describe_issue("non_split_cusip_transition", action)
+                if (old, new) in successor_edges:
+                    documented = next(
+                        entry for entry in DOCUMENTED_ONE_TO_ONE_SUCCESSORS
+                        if entry["symbol"] == ticker
+                        and entry["old_cusip"] == old
+                        and entry["new_cusip"] == new
+                    )
+                    successors.append({
+                        "old_cusip": old, "new_cusip": new,
+                        "process_date": action.get("process_date"),
+                        "effective_date": documented["effective_date"],
+                        "exchange_ratio": documented["exchange_ratio"],
+                        "source": documented["source"],
+                        "price_series_modified": False,
+                    })
+                else:
+                    issue = describe_issue("non_split_cusip_transition", action)
             else:
                 renames.append({
                     "from": original or None, "to": current or None,
@@ -371,8 +422,9 @@ def auditar_identidade_cusip(
     return {
         "symbol": ticker, "reference_cusips": sorted(lineage),
         "ignored_events": ignored, "ticker_changes": renames,
-        "split_cusip_transitions": splits, "issue": issue,
-        "relevant_actions": relevant,
+        "split_cusip_transitions": splits,
+        "successor_cusip_transitions": successors,
+        "issue": issue, "relevant_actions": relevant,
     }
 
 
