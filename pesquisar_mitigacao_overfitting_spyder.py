@@ -1,4 +1,4 @@
-"""Pesquisa pré-especificada de mitigação de overfitting LightGBM — v1.26.1.
+"""Pesquisa pré-especificada de mitigação de overfitting LightGBM — v1.26.2.
 
 Execute com F5 no Spyder. Usa exclusivamente os CSVs congelados já existentes.
 Executa controle e 3 intervenções ISOLADAS, mantendo universo, folds, labels,
@@ -32,8 +32,8 @@ from reproducao.preparacao import (
 from reproducao.universo_fixo75 import universo_75
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "1.26.1"
-OUTPUT_ROOT = ROOT / "output" / "mitigacao_overfitting_v1261"
+VERSION = "1.26.2"
+OUTPUT_ROOT = ROOT / "output" / "mitigacao_overfitting_v1262"
 EXPECTED_OLD_CAPITAL = 587_165_941.1330212
 
 # Hipóteses isoladas e fixadas ANTES de observar os resultados.
@@ -117,6 +117,8 @@ def prepare_once(p, manifest, selected):
         identity_audit.append({
             "symbol": symbol,
             "reference_cusips": audit["reference_cusips"],
+            "identity_anchor_cusips": audit.get("identity_anchor_cusips", []),
+            "excluded_foreign_cash_dividends": audit.get("excluded_foreign_cash_dividends", 0),
             "ignored_events": audit["ignored_events"],
             "ticker_changes": audit["ticker_changes"],
             "split_cusip_transitions": audit["split_cusip_transitions"],
@@ -150,6 +152,7 @@ def prepare_once(p, manifest, selected):
         if audit["ignored_events"] or audit["ticker_changes"] or audit["split_cusip_transitions"]:
             print(f"[identity-audit] {symbol}: CUSIPs={audit['reference_cusips']}; "
                   f"other_issuer={len(audit['ignored_events'])}; "
+                  f"foreign_dividends={audit.get('excluded_foreign_cash_dividends', 0)}; "
                   f"renames={len(audit['ticker_changes'])}; "
                   f"documented_splits={len(audit['split_cusip_transitions'])}",
                   flush=True)
