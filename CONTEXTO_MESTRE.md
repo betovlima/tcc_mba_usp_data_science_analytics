@@ -1,3 +1,22 @@
+## v1.26.0 — identidade CUSIP antes de ticker, auditoria dos 75 ativos (23/10/2026)
+
+**Solicitação:** generalizar a correção da v1.25.9 para **CUSIP como identificador principal** de instrumento, mantendo o ticker como alias histórico. **Implementação:** nova função `auditar_identidade_cusip` em `reproducao/preparacao.py`; `pesquisar_mitigacao_overfitting_spyder.py` a utiliza **para todos os 75 ativos antes do treinamento**. A exceção específica `_verified_unrelated_meta_etf_action` foi eliminada. Não alterar o motor histórico de reprodução, snapshot, Corporate Actions gravados, seleção de ativos, folds, `main` ou aplicação operacional.
+
+**Regras:**
+- Troca `FB -> META`, mesmo CUSIP `30303M102`: renomeação contínua, aceita e registrada.
+- Evento `META -> METV`, CUSIP `53656F417`: outro emissor, descartado **somente dos eventos em memória do modelo**, preservado no CSV original e documentado em auditoria; não confundir ticker com identidade.
+- Splits com `old_cusip != new_cusip` **e** `old_rate/new_rate` positivos permitem linhagem auditada, sem alterar os insumos; exemplos MUX, PXLW, YANG. O motor já faz normalização histórica de splits neste experimento, não há novo ajuste.
+- Mudanças de CUSIP sem conversão de split confirmada, múltiplas identidades não conectadas, eventos de descontinuidade ou CUSIP ausente quando essencial: **bloquear e registrar**, não aceitar/excluir de forma silenciosa, não reconstruir séries.
+- Aquisições nas quais o ativo estudado é adquirente são distinguidas de eventos nos quais é adquirido.
+
+**Achado adicional crítico (antes do treino):** no snapshot congelado `dados/u67/corporate_actions/XOM.csv`, XOM mantém o ticker mas muda de CUSIP `30231G102` para `30233Q108` em 02/07/2026. Trata-se de reorganização para a companhia sucessora redomiciliada no Texas, com troca legal de ações 1:1 documentada no Form 8-K e Form 25. Fontes: [SEC / ExxonMobil Form 8-K](https://investor.exxonmobil.com/sec-filings/all-sec-filings/content/0001193125-26-291990/d71068d8k12b.htm), [Form 25](https://investor.exxonmobil.com/sec-filings/all-sec-filings/content/0000876661-26-000593/ruleprovisionnotice.htm). **Não classificar automaticamente como mudança de nome de mesmo CUSIP**, nem misturar duas classes jurídicas sem política documental. O pré-voo da v1.26.0 deve mostrar a questão ao pesquisador, antes de modelar 75 ativos; não trocar/excluir XOM automaticamente.
+
+**Diagnóstico:** `identity_audit.json` registra por ativo os CUSIPs, renomeações, splits e eventos de outro emissor. Se houver bloqueios, um JSON de pré-voo é gravado em `output/mitigacao_overfitting_v1260/_preflight/identity_<data>.json` com todos os problemas identificados, sem treino. Os dados históricos permanecem intocados. O estudo continua sendo avaliação retrospectiva, não holdout prospectivo.
+
+**Testes:** `tests/test_mitigacao_fixed75_v1258.py` atualizado para casos reais META, MUX, PXLW, YANG, DOC, CLMT, XOM e para os 67 ativos originais, e contratos fixed75. **Status:** mudanças enviadas à mesma branch `research/v1.23.1-fresh-snapshot-20261022`; execução científica com cache privado dos dez ativos adicionais ainda não feita. Verificar resultado final da CI. Não promover estratégia nem modificar `main`.
+
+---
+
 ## v1.25.9 — diagnóstico de identidade META/METV e checkpoint de referência (23/10/2026)
 
 **Falha confirmada na execução real:** v1.25.8 parou antes do treino ao aplicar `_generic_identity_issue` à série congelada de META: `name_change META -> METV`, 31/01/2022, CUSIP `53656F417`. **Causa investigada:** a corretora incluiu no arquivo `corporate_actions/META.csv` um evento verdadeiro, mas de outro emissor que utilizou o mesmo símbolo: o ETF Roundhill META, que virou METV. O mesmo arquivo contém a mudança efetiva `FB -> META` em 09/06/2022, CUSIP `30303M102`, pertencente à Meta Platforms; a série de preços congelada registra FB desde 2016 e fechamento US$ 313,26 em 31/01/2022. Fontes externas: OCC #49960 / Nasdaq ECA2022-125. **Não constitui evidência de histórico falso, nem justifica remover META.**
