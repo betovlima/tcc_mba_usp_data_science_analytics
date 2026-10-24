@@ -26,7 +26,7 @@ def _methods(function: ast.AST) -> list[str]:
 def test_painel_unico_de_75_antes_dos_folds():
     source, tree = _source_and_tree()
     functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
-    assert 'VERSION = "1.25.9"' in source
+    assert 'VERSION = "1.26.0"' in source
     assert 'raw_75 = {}' in source
     assert 'universe_role="fixed75"' in source
     assert 'len(symbols) != 75' in source
@@ -45,6 +45,9 @@ def test_uma_unica_rotina_de_treino_calibracao_e_replay_para_todos():
     assert "_train_candidate_caches" not in source
     assert "_evaluate_scenario" not in source
     assert "legacy_65_plus_10_training" in source
+    assert "auditar_identidade_cusip" in source
+    assert "p._generic_identity_issue" not in source
+    assert "_verified_unrelated_meta_etf_action" not in source
 
 
 def test_legacy_reference_is_not_forced_on_new_fixed75_design():
@@ -52,76 +55,114 @@ def test_legacy_reference_is_not_forced_on_new_fixed75_design():
     assert "EXPECTED_OLD_CAPITAL" in source
     assert "legacy_reference_is_fixed75_checkpoint" in source
     assert "math.isclose(capital, EXPECTED_OLD_CAPITAL" not in source
-    assert '"mitigacao_overfitting_v1259"' in source
+    assert '"mitigacao_overfitting_v1260"' in source
 
 
-def _load_identity_predicate():
-    """Executa somente a função pura de identidade, sem treinar modelos."""
-    _, tree = _source_and_tree()
-    func = next(
-        node for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "_verified_unrelated_meta_etf_action"
-    )
-    module = ast.fix_missing_locations(
-        ast.Module(body=[func], type_ignores=[])
-    )
-    namespace = {}
-    exec(compile(module, str(RUNNER), "exec"), namespace)
-    return namespace[func.name]
 
-
-def _meta_real_actions():
+def _real_actions(symbol: str):
     import csv
-    path = RUNNER.parent / "dados" / "u67" / "corporate_actions" / "META.csv"
+    path = RUNNER.parent / "dados" / "u67" / "corporate_actions" / f"{symbol}.csv"
     with path.open(encoding="utf-8", newline="") as file:
         return list(csv.DictReader(file))
 
 
-def test_evento_etf_homonimo_e_comprovado_por_cusip_e_data_no_snapshot():
+def test_meta_prior_etf_is_foreign_and_fb_rename_is_same_cusip():
+    from reproducao.preparacao import auditar_identidade_cusip
+    audit = auditar_identidade_cusip("META", _real_actions("META"))
+    assert audit["issue"] is None
+    assert audit["reference_cusips"] == ["30303M102"]
+    assert len(audit["ignored_events"]) == 1
+    assert audit["ignored_events"][0]["cusips"] == ["53656F417"]
+    assert audit["ignored_events"][0]["reason"] == "other_issuer_cusip"
+    assert audit["ticker_changes"][0]["from"] == "FB"
+    assert audit["ticker_changes"][0]["to"] == "META"
+    assert audit["ticker_changes"][0]["cusip"] == "30303M102"
+
+    # A série FB/META preservada de 2016 não corresponde ao ETF homônimo.
     import csv
-    validate = _load_identity_predicate()
-    actions = _meta_real_actions()
-    etf = next(
-        a for a in actions
-        if a["action_type"] == "name_change"
-        and a["old_symbol"] == "META" and a["new_symbol"] == "METV"
-    )
-    issuer = next(
-        a for a in actions
-        if a["action_type"] == "name_change"
-        and a["old_symbol"] == "FB" and a["new_symbol"] == "META"
-    )
-    assert etf["old_cusip"] == etf["new_cusip"] == "53656F417"
-    assert issuer["old_cusip"] == issuer["new_cusip"] == "30303M102"
-    assert validate("META", etf, actions) is True
-
-    # Evidência de que as barras congeladas são FB/Meta Platforms, não ETF.
-    prices = RUNNER.parent / "dados" / "u67" / "raw_bars" / "META.csv"
-    with prices.open(encoding="utf-8", newline="") as file:
-        rows = list(csv.DictReader(file))
-    end_january = next(row for row in rows
-                       if row["timestamp"].startswith("2022-01-31"))
-    assert abs(float(end_january["close"]) - 313.26) < 1e-8
+    path = RUNNER.parent / "dados" / "u67" / "raw_bars" / "META.csv"
+    with path.open(encoding="utf-8", newline="") as file:
+        price = next(row for row in csv.DictReader(file)
+                     if row["timestamp"].startswith("2022-01-31"))
+    assert abs(float(price["close"]) - 313.26) < 1e-8
 
 
-def test_outros_eventos_estruturais_sao_rejeitados():
-    validate = _load_identity_predicate()
-    actions = _meta_real_actions()
-    etf = next(a for a in actions
-               if a["old_symbol"] == "META" and a["new_symbol"] == "METV")
-    assert validate("OTHER", etf, actions) is False
-    assert validate("META", {**etf, "new_cusip": "OTHER"}, actions) is False
-    assert validate("META", {**etf, "new_symbol": "XYZ"}, actions) is False
-    assert validate("META", {**etf, "process_date": "2022-02-01"}, actions) is False
-    assert validate("META", etf, [etf]) is False
-    assert validate("CLMT", etf, actions) is False
+def test_renomeacao_generica_com_cusip_constante_nunca_bloqueia():
+    from reproducao.preparacao import auditar_identidade_cusip
+    actions = [
+        {"action_type": "cash_dividend", "symbol": "XYZ", "cusip": "123456789"},
+        {"action_type": "name_change", "old_symbol": "ABC", "new_symbol": "XYZ",
+         "old_cusip": "123456789", "new_cusip": "123456789"},
+    ]
+    result = auditar_identidade_cusip("XYZ", actions)
+    assert result["issue"] is None
+    assert result["ignored_events"] == []
+    assert result["ticker_changes"][0]["from"] == "ABC"
+
+    # Ausência de dividendos não invalida o identificador de evento de ingresso.
+    assert auditar_identidade_cusip("XYZ", actions[1:])["issue"] is None
 
 
-def test_identity_audit_not_silently_ignored_or_rewritten():
+def test_multiplas_corporate_actions_nao_sao_misturadas_por_ticker():
+    from reproducao.preparacao import auditar_identidade_cusip
+    actions = [
+        {"action_type": "cash_dividend", "symbol": "XYZ", "cusip": "123456789"},
+        {"action_type": "name_change", "old_symbol": "XYZ", "new_symbol": "OLD",
+         "old_cusip": "987654321", "new_cusip": "987654321"},
+        {"action_type": "name_change", "old_symbol": "AAA", "new_symbol": "XYZ",
+         "old_cusip": "123456789", "new_cusip": "123456789"},
+    ]
+    audit = auditar_identidade_cusip("XYZ", actions)
+    assert audit["issue"] is None
+    assert len(audit["ignored_events"]) == 1
+    assert len(audit["ticker_changes"]) == 1
+    assert len(audit["relevant_actions"]) == 2
+
+    # Mudança de CUSIP sem evento econômico corroborado continua bloqueada.
+    wrong = [{**actions[2], "new_cusip": "111111111"}]
+    assert auditar_identidade_cusip("XYZ", actions[:1] + wrong)["issue"] is not None
+
+
+def test_split_reverso_com_conversao_cusip_documentada_eh_permitido():
+    from reproducao.preparacao import auditar_identidade_cusip
+    for symbol in ("MUX", "PXLW", "YANG"):
+        audit = auditar_identidade_cusip(symbol, _real_actions(symbol))
+        assert audit["issue"] is None, (symbol, audit["issue"])
+        assert audit["split_cusip_transitions"], symbol
+
+
+def test_exclusoes_estruturais_antigas_sao_preservadas():
+    from reproducao.preparacao import auditar_identidade_cusip
+    assert auditar_identidade_cusip("CLMT", _real_actions("CLMT"))["issue"]
+    assert auditar_identidade_cusip("DOC", _real_actions("DOC"))["issue"]
+
+
+def test_reorganizacao_de_xom_nao_eh_confundida_com_mudanca_de_nome():
+    from reproducao.preparacao import auditar_identidade_cusip
+    result = auditar_identidade_cusip("XOM", _real_actions("XOM"))
+    assert result["issue"] is not None
+    assert result["issue"]["reason"] in {
+        "multiple_unlinked_cusip_identifiers", "non_split_cusip_transition",
+    }
+    assert set(result["reference_cusips"]) == {"30231G102", "30233Q108"}
+
+
+def test_todos_os_outros_ativos_base_ficam_livres_de_falsos_bloqueios():
+    from engine.configuracao import ASSETS
+    from reproducao.preparacao import auditar_identidade_cusip
+    for symbol in ASSETS:
+        if symbol in {"CLMT", "DOC", "XOM"}:
+            continue
+        audit = auditar_identidade_cusip(symbol, _real_actions(symbol))
+        assert audit["issue"] is None, (symbol, audit["issue"])
+
+
+def test_auditoria_de_cusip_e_preservacao_de_dados_no_executor():
     source, tree = _source_and_tree()
     assert "identity_audit.json" in source
-    assert "Ativo estruturalmente inconsistente" in source
-    assert "price_series_modified" in source
-    assert '"data_files_modified": False' in source
+    assert "auditar_identidade_cusip(symbol, actions)" in source
+    assert "rows_used_in_model" in source
+    assert "identity_issues" in source
+    assert "source_files_modified" in source
+    assert "relevant_actions" in source
     assert "_train_candidate_caches" not in source
