@@ -220,8 +220,13 @@ def test_mchb_simbolo_reutilizado_nao_eh_unificado_por_ticker():
          "new_cusip": "43785V102", "process_date": "2025-09-02"},
     ]
     audit = auditar_identidade_cusip("MCHB", rows)
-    assert audit["issue"] is not None
-    assert audit["issue"]["reason"] == "multiple_unlinked_cusip_identifiers"
+    # O ticker é reutilizado, mas a linhagem HMST tem CUSIP explícito.
+    # O antigo emissor não é aceito como identidade da série.
+    assert audit["issue"] is None
+    assert audit["reference_cusips"] == ["43785V102"]
+    assert audit["excluded_foreign_cash_dividends"] == 1
+    assert len(audit["ignored_events"]) == 1
+    assert audit["ignored_events"][0]["cusips"] == ["111111111"]
 
 def test_mchb_identity_from_frozen_cusip_events_is_hmst_not_old_otc():
     """Regression for the actual 15-event frozen cache without uploading it."""
