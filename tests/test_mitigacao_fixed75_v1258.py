@@ -185,9 +185,9 @@ def test_identifiers_are_read_as_strings_not_infinite_floats(tmp_path):
     from reproducao.preparacao import load_actions_file
     path = tmp_path / "corporate_actions.csv"
     path.write_text(
-        "action_type,cusip,old_cusip,new_cusip,symbol,old_rate,new_rate\\n"
-        "reverse_split,,25460E521,25461A460,YANG,20,1\\n"
-        "cash_dividend,000123456,,,YANG,,\\n",
+        "action_type,cusip,old_cusip,new_cusip,symbol,old_rate,new_rate\n"
+        "reverse_split,,25460E521,25461A460,YANG,20,1\n"
+        "cash_dividend,000123456,,,YANG,,\n",
         encoding="utf-8",
     )
     rows = load_actions_file(path)
