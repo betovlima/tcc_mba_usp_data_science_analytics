@@ -26,7 +26,7 @@ def _methods(function: ast.AST) -> list[str]:
 def test_painel_unico_de_75_antes_dos_folds():
     source, tree = _source_and_tree()
     functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
-    assert 'VERSION = "1.26.0"' in source
+    assert 'VERSION = "1.26.1"' in source
     assert 'raw_75 = {}' in source
     assert 'universe_role="fixed75"' in source
     assert 'len(symbols) != 75' in source
@@ -55,7 +55,7 @@ def test_legacy_reference_is_not_forced_on_new_fixed75_design():
     assert "EXPECTED_OLD_CAPITAL" in source
     assert "legacy_reference_is_fixed75_checkpoint" in source
     assert "math.isclose(capital, EXPECTED_OLD_CAPITAL" not in source
-    assert '"mitigacao_overfitting_v1260"' in source
+    assert '"mitigacao_overfitting_v1261"' in source
 
 
 
@@ -137,21 +137,24 @@ def test_exclusoes_estruturais_antigas_sao_preservadas():
     assert auditar_identidade_cusip("DOC", _real_actions("DOC"))["issue"]
 
 
-def test_reorganizacao_de_xom_nao_eh_confundida_com_mudanca_de_nome():
+def test_xom_conversao_um_para_um_documentada_na_sec():
     from reproducao.preparacao import auditar_identidade_cusip
     result = auditar_identidade_cusip("XOM", _real_actions("XOM"))
-    assert result["issue"] is not None
-    assert result["issue"]["reason"] in {
-        "multiple_unlinked_cusip_identifiers", "non_split_cusip_transition",
-    }
+    assert result["issue"] is None
     assert set(result["reference_cusips"]) == {"30231G102", "30233Q108"}
+    assert len(result["successor_cusip_transitions"]) == 1
+    conversion = result["successor_cusip_transitions"][0]
+    assert conversion["exchange_ratio"] == 1.0
+    assert conversion["process_date"] == "2026-07-02"
+    assert conversion["effective_date"] == "2026-07-01"
+    assert conversion["price_series_modified"] is False
 
 
 def test_todos_os_outros_ativos_base_ficam_livres_de_falsos_bloqueios():
     from engine.configuracao import ASSETS
     from reproducao.preparacao import auditar_identidade_cusip
     for symbol in ASSETS:
-        if symbol in {"CLMT", "DOC", "XOM"}:
+        if symbol in {"CLMT", "DOC"}:
             continue
         audit = auditar_identidade_cusip(symbol, _real_actions(symbol))
         assert audit["issue"] is None, (symbol, audit["issue"])
@@ -177,3 +180,45 @@ def test_yang_runtime_loader_matches_real_identity_audit():
     assert audit["issue"] is None, audit["issue"]
     assert set(audit["reference_cusips"]) == {"25460E521", "25461A460"}
     assert len(audit["split_cusip_transitions"]) == 1
+
+def test_identifiers_are_read_as_strings_not_infinite_floats(tmp_path):
+    from reproducao.preparacao import load_actions_file
+    path = tmp_path / "corporate_actions.csv"
+    path.write_text(
+        "action_type,cusip,old_cusip,new_cusip,symbol,old_rate,new_rate\\n"
+        "reverse_split,,25460E521,25461A460,YANG,20,1\\n"
+        "cash_dividend,000123456,,,YANG,,\\n",
+        encoding="utf-8",
+    )
+    rows = load_actions_file(path)
+    assert rows[0]["old_cusip"] == "25460E521"
+    assert rows[0]["new_cusip"] == "25461A460"
+    assert rows[1]["cusip"] == "000123456"
+    assert rows[0]["old_rate"] == 20.0
+
+
+def test_xom_successor_eh_estritamente_documentado():
+    from reproducao.preparacao import auditar_identidade_cusip
+    actions = _real_actions("XOM")
+    good = auditar_identidade_cusip("XOM", actions)
+    assert good["issue"] is None
+    name_change = next(x for x in actions if x["action_type"] == "name_change")
+    mutated = [{**x, "new_cusip": "999999999"}
+               if x is name_change else x for x in actions]
+    bad = auditar_identidade_cusip("XOM", mutated)
+    assert bad["issue"] is not None
+
+
+def test_mchb_simbolo_reutilizado_nao_eh_unificado_por_ticker():
+    from reproducao.preparacao import auditar_identidade_cusip
+    # MCHB antigo e HMST->MCHB novo são emissores diferentes.
+    # A Nasdaq DN2025-25 proíbe carregar o histórico do ticker antigo.
+    rows = [
+        {"action_type": "cash_dividend", "symbol": "MCHB", "cusip": "111111111"},
+        {"action_type": "name_change", "old_symbol": "HMST",
+         "new_symbol": "MCHB", "old_cusip": "43785V102",
+         "new_cusip": "43785V102", "process_date": "2025-09-02"},
+    ]
+    audit = auditar_identidade_cusip("MCHB", rows)
+    assert audit["issue"] is not None
+    assert audit["issue"]["reason"] == "multiple_unlinked_cusip_identifiers"
