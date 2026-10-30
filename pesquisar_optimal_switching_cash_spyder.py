@@ -34,7 +34,7 @@ from engine.rotacao import (
     construir_quadro_rotacao,
 )
 from pesquisa.optimal_switching_cash import (
-    SwitchingSettings, build_overlay, fit_switching_model,
+    SwitchingSettings, build_overlay, fit_switching_model, selecionar_peso_calibracao,
 )
 from pesquisa.pacote_analise_switching import gerar_zip_resultados
 from reproducao.dados import SnapshotPaths, validate_snapshot
@@ -54,14 +54,19 @@ UNIVERSE = ROOT / "pesquisa" / "universo_control_75.json"
 CALENDAR_CONTRACT = ROOT / "pesquisa" / "contrato_calendario_control_75.json"
 CONTRACT = ROOT / "evidencias" / "manifest_universo_congelado.json"
 OUTPUT = ROOT / "output" / "optimal_switching_cash"
-SCRIPT_VERSION = "optimal-switching-cash-reentry-v1.0.4"
-SCHEMA_VERSION = "optimal-switching-cash-v2"
+SCRIPT_VERSION = "optimal-switching-cash-reentry-v1.0.5"
+SCHEMA_VERSION = "optimal-switching-cash-v3"
 SETTINGS = SwitchingSettings(
     lookback=20,
     horizon=10,
-    downside_weight=1.0,
+    downside_weight=0.0,
     minimum_observations=126,
 )
+RISK_WEIGHT_CANDIDATES = (0.0, 0.05, 0.10, 0.20, 0.35, 0.50, 1.0)
+# Os candidatos sao fixados antes desta execucao. A pesquisa anterior (v1.0.4)
+# ja foi consultada ao propor esta reformulacao: o periodo de 2020-2026
+# nao constitui um conjunto de teste externo virgem nesta nova rodada.
+
 
 
 def _file_sha256(path: Path) -> str:
@@ -188,9 +193,10 @@ def ajustar_control_75(
     symbols: list[str],
     folds: list[dict],
     config: object,
-) -> tuple[dict, list[dict]]:
+) -> tuple[dict, list[dict], dict]:
     policies = {}
     calibration = []
+    calibration_policies = {}
     candidates = tuple(float(v) for v in config.rotation_switch_margin_candidates)
     for idx, fold in enumerate(folds, start=1):
         fold_id = int(fold["fold_id"])
@@ -230,6 +236,11 @@ def ajustar_control_75(
                 "calibration_score": growth,
                 "selected": bool(abs(margin - choice) <= 1e-12),
             })
+        calibration_policies[fold_id] = _politica_utilidade(
+            {}, frames, symbols, config, effective_margin,
+            fold_id=fold_id, calibrated_switch_margin=choice,
+            utility_cache=calibration_cache,
+        )
         print(f"[control-75] fold={idx}/{len(folds)} final_fit assets=75", flush=True)
         final_models = _ajustar_modelos_lightgbm(
             frames, symbols, final_fit, config,
@@ -244,7 +255,7 @@ def ajustar_control_75(
             utility_cache=cache,
         )
         del final_models
-    return policies, calibration
+    return policies, calibration, calibration_policies
 
 
 # %% 3 - Execucao sobre o universo completo
@@ -290,7 +301,7 @@ def _executar_experimento(output: Path) -> dict:
         f"[dados] official_assets={len(symbols)} folds={len(folds)} "
         f"snapshot={snapshot['snapshot_sha256']}", flush=True,
     )
-    policies, calibration = ajustar_control_75(
+    policies, calibration, calibration_policies = ajustar_control_75(
         frames, common_dates, symbols, folds, config,
     )
     base_policy = _politica_agendada(policies, decision_to_fold)
@@ -312,12 +323,79 @@ def _executar_experimento(output: Path) -> dict:
         f"[control-75] capital=US$ {control_metrics['ending_capital']:,.2f} "
         f"status=checkpoint_validado", flush=True,
     )
-# %% 4 - Ajustes estatisticos independentes: fechamento/abertura causais
-    models_by_fold = {}
-    model_rows = []
+    # %% 4 - Calibracao do peso de risco: treinar em train, escolher em calibration
+    # NUNCA utilizar as sessoes fora da amostra para a escolha do parametro.
+    models_by_fold: dict[int, dict] = {}
+    model_rows: list[dict] = []
+    risk_calibration_rows: list[dict] = []
+    risk_settings_by_fold: dict[int, SwitchingSettings] = {}
     for fold in folds:
         fid = int(fold["fold_id"])
+        train_end = pd.Timestamp(common_dates[int(fold["train_end_index"]) - 1])
+        cal_start = int(fold["calibration_start_index"])
+        cal_end = int(fold["calibration_end_index"])
+        calibration_dates = common_dates[cal_start:cal_end]
+        if not train_end < pd.Timestamp(calibration_dates[0]):
+            raise RuntimeError("Treino do Switching nao precede calibracao.")
+        if not pd.Timestamp(calibration_dates[-1]) < pd.Timestamp(fold["test_start"]):
+            raise RuntimeError("Calibracao usa dados do fold de teste.")
+        fold_models_cal = {}
+        for symbol in symbols:
+            fold_models_cal[symbol] = fit_switching_model(
+                symbol, frames[symbol], fit_end=train_end, settings=SETTINGS,
+            )
+        cal_mapping = {pd.Timestamp(t): fid for t in calibration_dates}
+        scores = []
+        for weight in RISK_WEIGHT_CANDIDATES:
+            fold_settings = SwitchingSettings(
+                lookback=SETTINGS.lookback,
+                horizon=SETTINGS.horizon,
+                minimum_observations=SETTINGS.minimum_observations,
+                downside_weight=weight,
+            )
+            diag: dict[pd.Timestamp, dict] = {}
+            calibrated_overlay = build_overlay(
+                calibration_policies[fid],
+                frames=frames, symbols=symbols,
+                decision_to_fold=cal_mapping,
+                models_by_fold={fid: fold_models_cal},
+                settings=fold_settings, config=config, diagnostics=diag,
+            )
+            score = float(_crescimento_politica_simples(
+                calibrated_overlay, frames, symbols, calibration_dates, config,
+            ))
+            scores.append((weight, score))
+        selected_weight = selecionar_peso_calibracao(scores)
+        risk_settings_by_fold[fid] = SwitchingSettings(
+            lookback=SETTINGS.lookback,
+            horizon=SETTINGS.horizon,
+            minimum_observations=SETTINGS.minimum_observations,
+            downside_weight=selected_weight,
+        )
+        for weight, score in scores:
+            risk_calibration_rows.append({
+                "fold_id": fid,
+                "train_end": train_end.isoformat(),
+                "calibration_start": pd.Timestamp(calibration_dates[0]).isoformat(),
+                "calibration_end": pd.Timestamp(calibration_dates[-1]).isoformat(),
+                "test_start": pd.Timestamp(fold["test_start"]).isoformat(),
+                "candidate_downside_weight": float(weight),
+                "calibration_score": score,
+                "selected": bool(weight == selected_weight),
+                "model_count": len(fold_models_cal),
+                "selection_policy": "Control trained before calibration",
+            })
+        print(
+            f"[risk-calibration] fold={fid}/{len(folds)} "
+            f"weight={selected_weight:.4f} training_before_calibration=true",
+            flush=True,
+        )
+
+        # Ajuste final do modelo estatistico: ate o corte ANTERIOR ao teste.
+        # O mesmo modelo final sera usado nas duas politicas fora da amostra.
         fit_end = pd.Timestamp(common_dates[int(fold["final_fit_end_index"]) - 1])
+        if not fit_end < pd.Timestamp(fold["test_start"]):
+            raise RuntimeError("Ajuste final do Switching invade o teste.")
         models_by_fold[fid] = {}
         for index, symbol in enumerate(symbols, start=1):
             model = fit_switching_model(
@@ -331,36 +409,68 @@ def _executar_experimento(output: Path) -> dict:
                 "observations": model.fit_observations,
                 "state_lower_boundary": model.boundaries[0],
                 "state_upper_boundary": model.boundaries[1],
-                **{f"expected_return_state_{i}": model.expected_returns[i] for i in range(3)},
-                **{f"downside_state_{i}": model.downside_losses[i] for i in range(3)},
+                **{f"expected_return_state_{i}": float(model.expected_returns[i])
+                   for i in range(3)},
+                **{f"downside_state_{i}": float(model.downside_losses[i])
+                   for i in range(3)},
                 **{f"adjusted_reward_state_{i}": (
-                    model.expected_returns[i] - SETTINGS.downside_weight * model.downside_losses[i]
+                    float(model.expected_returns[i]) -
+                    selected_weight * float(model.downside_losses[i])
                 ) for i in range(3)},
                 **{f"transition_{i}_{j}": float(model.transitions[i, j])
                    for i in range(3) for j in range(3)},
+                "calibrated_downside_weight": selected_weight,
             })
             if index % 15 == 0 or index == len(symbols):
-                print(f"[switching-fit] fold={fid} {index}/{len(symbols)}", flush=True)
+                print(
+                    f"[switching-fit] fold={fid} {index}/{len(symbols)}",
+                    flush=True,
+                )
 
-    # %% 5 - Replay da hipotese: mesmo motor financeiro, novas decisoes CASH
-    diagnostics = {}
-    overlay = build_overlay(
-        base_policy, frames=frames, symbols=symbols,
+    # %% 5 - Duas politicas independentes na MESMA validacao financeira
+    log_growth_diagnostics: dict[pd.Timestamp, dict] = {}
+    log_growth_overlay = build_overlay(
+        base_policy,
+        frames=frames, symbols=symbols,
         decision_to_fold=decision_to_fold,
         models_by_fold=models_by_fold,
-        settings=SETTINGS, config=config, diagnostics=diagnostics,
+        settings=SETTINGS, config=config, diagnostics=log_growth_diagnostics,
+    )
+    log_growth = _simular_exato(
+        "tcc_switching_expected_log_growth",
+        log_growth_overlay,
+        frames, symbols, decision_dates, config,
+        calcular_taxas_referencia, aplicar_deslizamento,
+        decision_metadata=decision_metadata,
+        policy_decision_diagnostics=log_growth_diagnostics,
+        model_label="Pesquisa Control75 + Switching Retorno Esperado",
+    )
+    log_growth_metrics = summarize_metrics(
+        log_growth, folds, float(config.initial_capital),
+    )
+
+    diagnostics: dict[pd.Timestamp, dict] = {}
+    overlay = build_overlay(
+        base_policy,
+        frames=frames, symbols=symbols,
+        decision_to_fold=decision_to_fold,
+        models_by_fold=models_by_fold,
+        settings=SETTINGS, settings_by_fold=risk_settings_by_fold,
+        config=config, diagnostics=diagnostics,
     )
     switching = _simular_exato(
-        "tcc_optimal_switching_experimental",
+        "tcc_switching_risk_calibrated",
         overlay,
         frames, symbols, decision_dates, config,
         calcular_taxas_referencia, aplicar_deslizamento,
         decision_metadata=decision_metadata,
         policy_decision_diagnostics=diagnostics,
-        model_label="Pesquisa Control 75 Switching CASH/Reentrada",
-        method_line="- Modulo matematico independente; regimes e Bellman ajustados apenas com historico anterior.",
+        model_label="Pesquisa Control75 + Switching Risco Calibrado",
+        method_line="- Peso de risco selecionado somente em calibracao anterior ao teste.",
     )
-    switching_metrics = summarize_metrics(switching, folds, float(config.initial_capital))
+    switching_metrics = summarize_metrics(
+        switching, folds, float(config.initial_capital),
+    )
 
     # %% 6 - Evidencias sem sobrescrever checkpoints ou testes anteriores
     # A pasta da execucao e criada antes do treino para permitir ZIP inclusive em falhas.
@@ -368,13 +478,20 @@ def _executar_experimento(output: Path) -> dict:
     control.trades.to_csv(output / "control_trades.csv", index=False)
     switching.predictions.to_csv(output / "switching_predictions.csv", float_format="%.17g")
     switching.trades.to_csv(output / "switching_trades.csv", index=False)
+    log_growth.predictions.to_csv(output / "log_growth_predictions.csv", float_format="%.17g")
+    log_growth.trades.to_csv(output / "log_growth_trades.csv", index=False)
     pd.DataFrame(model_rows).to_csv(output / "switching_fold_models.csv", index=False)
     pd.DataFrame(calibration).to_csv(output / "control_75_fold_calibration.csv", index=False)
+    pd.DataFrame(risk_calibration_rows).to_csv(output / "switching_risk_calibration.csv", index=False)
     decision_rows = [
         {"decision_date": timestamp.isoformat(), **values}
         for timestamp, values in sorted(diagnostics.items())
     ]
     pd.DataFrame(decision_rows).to_csv(output / "switching_decisions.csv", index=False)
+    pd.DataFrame([
+        {"decision_date": date.isoformat(), **values}
+        for date, values in sorted(log_growth_diagnostics.items())
+    ]).to_csv(output / "log_growth_decisions.csv", index=False)
     summary = {
         "version": SCRIPT_VERSION,
         "schema": SCHEMA_VERSION,
@@ -392,6 +509,16 @@ def _executar_experimento(output: Path) -> dict:
         "folds": len(folds),
         "decision_sessions": len(decision_dates) - 1,
         "settings": SETTINGS.__dict__,
+        "risk_calibration_grid": list(RISK_WEIGHT_CANDIDATES),
+        "risk_calibrated_weights_by_fold": {
+            str(fid): float(v.downside_weight)
+            for fid, v in risk_settings_by_fold.items()
+        },
+        "risk_calibration_method": (
+            "Maximize the frozen Control risk-adjusted calibration utility "
+            "over predeclared weights. Train models only before calibration; "
+            "final fit is before OOS."
+        ),
         "cost_approximation": "Bellman proportional; exact fees and slippage in common simulator",
         "switching_diagnostics": {
             "all_cash": bool(
@@ -418,16 +545,24 @@ def _executar_experimento(output: Path) -> dict:
             ),
         },
         "control_metrics": control_metrics,
+        "log_growth_metrics": log_growth_metrics,
+        "risk_calibrated_metrics": switching_metrics,
         "switching_metrics": switching_metrics,
         "comparison": {
             "delta_ending_capital": switching_metrics["ending_capital"] - control_metrics["ending_capital"],
+            "log_growth_delta_ending_capital": (
+                log_growth_metrics["ending_capital"] - control_metrics["ending_capital"]
+            ),
             "delta_maximum_drawdown": switching_metrics["maximum_drawdown"] - control_metrics["maximum_drawdown"],
             "delta_sharpe": switching_metrics["sharpe"] - control_metrics["sharpe"],
             "cash_days_control": int(control.metrics.get("cash_days", 0)),
+            "cash_days_log_growth": int(log_growth.metrics.get("cash_days", 0)),
             "cash_days_switching": int(switching.metrics.get("cash_days", 0)),
             "fees_control": float(control.metrics.get("total_transaction_fees", 0)),
+            "fees_log_growth": float(log_growth.metrics.get("total_transaction_fees", 0)),
             "fees_switching": float(switching.metrics.get("total_transaction_fees", 0)),
             "cash_exits": int((switching.trades.get("reason", pd.Series(dtype=str)) == "MOVE_TO_CASH").sum()),
+            "cash_exits_log_growth": int((log_growth.trades.get("reason", pd.Series(dtype=str)) == "MOVE_TO_CASH").sum()),
         },
         "scientific_limitations": [
             "Universe is frozen and historical; asset discovery was retrospective, not prospectively validated.",
@@ -435,6 +570,10 @@ def _executar_experimento(output: Path) -> dict:
             "Switching model treats the Control nominee as single risky asset; asset-to-asset costs are accounted in replay, not in two-state Bellman.",
             "Regime signal from trailing close prices; rewards from historical next-open to subsequent-open returns.",
             "Fold parameter training excludes current and future test observations.",
+            "The risk weights are selected on calibration performance, not an independent mathematical risk limit or CVaR constraint.",
+            "Calibration reuses the fold's Control margin selection, increasing selection-overfitting risk.",
+            "This v1.0.5 hypothesis was proposed after inspecting v1.0.4 OOS results: the frozen test is no longer untouched for cross-version claims.",
+            "State-conditional asset returns are not conditioned on nomination; the selection-conditioned calibration replay is only a partial remedy.",
             "Comparisons inherit universe selection and historical source limitations; later independent evaluation required.",
         ],
     }
@@ -447,11 +586,16 @@ def _executar_experimento(output: Path) -> dict:
         f"Control: US$ {control_metrics['ending_capital']:,.2f}; "
         f"Sharpe={control_metrics['sharpe']:.4f}; "
         f"MaxDD={control_metrics['maximum_drawdown']:.2%}.\n\n"
-        f"Switching: US$ {switching_metrics['ending_capital']:,.2f}; "
+        f"Switching log-growth: US$ {log_growth_metrics['ending_capital']:,.2f}; "
+        f"Sharpe={log_growth_metrics['sharpe']}; "
+        f"MaxDD={log_growth_metrics['maximum_drawdown']:.2%}.\\n\\n"
+        f"Switching risco calibrado: US$ {switching_metrics['ending_capital']:,.2f}; "
         f"Sharpe={switching_metrics['sharpe']}; "
         f"MaxDD={switching_metrics['maximum_drawdown']:.2%}.\n\n"
         f"Sessoes em CASH: Control={summary['comparison']['cash_days_control']}; "
-        f"Switching={summary['comparison']['cash_days_switching']}.\n\n"
+        f"Log-growth={summary['comparison']['cash_days_log_growth']}; "
+        f"Risco calibrado={summary['comparison']['cash_days_switching']}.\\n\\n"
+        f"Pesos por fold: {summary['risk_calibrated_weights_by_fold']}.\\n\\n"
         f"Decisoes CASH preferido: {diagnostic['cash_preferred_decisions']}; "
         f"regimes com recompensa ajustada positiva: "
         f"{diagnostic['adjusted_reward_positive_states']}/"
@@ -462,7 +606,8 @@ def _executar_experimento(output: Path) -> dict:
         encoding="utf-8",
     )
     print(f"[resultado] Control-75=US$ {control_metrics['ending_capital']:,.2f}", flush=True)
-    print(f"[resultado] Switching=US$ {switching_metrics['ending_capital']:,.2f}", flush=True)
+    print(f"[resultado] Log-growth=US$ {log_growth_metrics['ending_capital']:,.2f}", flush=True)
+    print(f"[resultado] Risk-calibrated=US$ {switching_metrics['ending_capital']:,.2f}", flush=True)
     print(f"[resultado] capital_delta=US$ {summary['comparison']['delta_ending_capital']:,.2f}", flush=True)
     print(f"[resultado] Control-75 cash_days={summary['comparison']['cash_days_control']}; Switching cash_days={summary['comparison']['cash_days_switching']}", flush=True)
     print(f"[arquivos] {output}", flush=True)

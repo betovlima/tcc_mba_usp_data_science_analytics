@@ -129,3 +129,45 @@ A cifra de US$ 587.165.941,13 continua como checkpoint imutavel. Os
 testes automatizados validam invariantes e nao substituem o replay completo
 dos dados historicos locais, que deve confirmar o valor ao centavo.
 O pacote ZIP automatico permanece ativo em sucessos e falhas.
+
+
+## v1.0.5: duas hipoteses matematicas sem contaminar o teste por fold
+
+O Control continua com **75 ativos**, 3 folds, 1.560 sessoes OOS e checkpoint
+US$ 587.165.941,13 imutavel. Sao testadas duas politicas de exposicao:
+
+1. **Log-growth**: mesma programacao dinamica, peso adicional de risco 0.
+   A recompensa utiliza o retorno logaritmico historico estimado para cada
+   regime. O objetivo e descobrir se a penalizacao extra explica a politica
+   degenerada observada em v1.0.4.
+2. **Risco calibrado**: pesos candidatos **0, 0.05, 0.10, 0.20, 0.35, 0.50,
+   1.00**, definidos antes da nova execucao. Em cada fold, modelos de regime
+   sao ajustados somente no trecho de treinamento (antes da calibracao).
+   Um Control treinado antes dessa calibracao indica os ativos candidatos.
+   O overlay simula cada peso na janela de calibracao, pontuado pela mesma
+   funcao de recompensa usada no procedimento historico. O peso escolhido
+   maximiza essa recompensa de calibracao; empate escolhe o menor peso.
+   Depois disso, os modelos estatisticos sao reajustados ate o fim do
+   trecho final de ajuste do fold, antes das datas OOS.
+
+Os dois overlays usam o mesmo ranking Control, o mesmo simulador financeiro,
+custos e calendario. Saida CASH e reentrada continuam sendo decididas
+na sessao de fechamento com execucao na abertura seguinte.
+
+**Limitacoes:** calibracao por ganho historico nao equivale a impor um limite
+estatistico de CVaR; as medias estimadas por regime continuam incondicionais
+a selecao feita pelo LightGBM, embora a calibracao avalie as decisoes de
+candidatos do Control. A margem de rotação do Control e o peso de risco usam
+a mesma janela de calibracao. Isso aumenta risco de sobreajuste.
+
+**Importante para o TCC:** esta versao foi planejada depois que os resultados
+OOS da v1.0.4 foram examinados. Portanto, embora cada fold evite vazamento
+futuro, o intervalo historico ja foi consultado em uma iteracao cientifica
+anterior. Os resultados nao podem ser tratados como uma validacao externa
+intocada para a escolha entre v1.0.4 e v1.0.5. Exige-se uma avaliacao temporal
+posterior e independente antes de qualquer promocao operacional.
+
+O ZIP automatico agora contem `control_*.csv`, `log_growth_*.csv`,
+`switching_*.csv` (risco calibrado), `switching_risk_calibration.csv`,
+`switching_fold_models.csv`, `resultado.json`, `resumo_para_analise.md`
+e `manifesto_pacote.json` com SHA-256. Se ocorrer erro, cria pacote de falha.

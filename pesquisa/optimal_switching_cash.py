@@ -179,6 +179,7 @@ def build_overlay(
     settings: SwitchingSettings,
     config: Any,
     diagnostics: dict[pd.Timestamp, dict[str, Any]],
+    settings_by_fold: dict[int, SwitchingSettings] | None = None,
 ) -> Callable[[pd.Timestamp, int, int], tuple[int, float]]:
     """Mexe exclusivamente na exposicao, nunca no ranking nem no fit Control."""
     buy_cost, sell_cost = switching_costs(config)
@@ -197,11 +198,12 @@ def build_overlay(
             }
             return 0, 0.0
         candidate = symbols[control_target - 1]
+        fold_settings = (settings_by_fold or {}).get(int(fold), settings)
         model = models_by_fold[int(fold)][candidate]
         state = model.state_at(frames[candidate], date)
         q_cash, q_invest = model.values(
             state, current_position > 0,
-            settings=settings,
+            settings=fold_settings,
             buy_cost=buy_cost,
             sell_cost=sell_cost,
         )
@@ -214,6 +216,7 @@ def build_overlay(
         diagnostics[date] = {
             "switching_fold": int(fold),
             "switching_state": state,
+            "switching_downside_weight": float(fold_settings.downside_weight),
             "switching_fit_end": model.fit_end.isoformat(),
             "switching_fit_observations": model.fit_observations,
             "switching_control_target": candidate,
@@ -226,3 +229,32 @@ def build_overlay(
         return (target, float(control_score)) if invest else (0, 0.0)
 
     return policy
+
+
+
+def selecionar_peso_calibracao(
+    resultados: list[tuple[float, float]],
+    *,
+    tolerance: float = 1e-12,
+) -> float:
+    """Escolhe peso por resultado APENAS de calibracao, desempate conservador.
+    
+    Os resultados ja precisam vir de datas de calibracao anteriores ao OOS;
+    o caller e responsavel pelo isolamento cronologico.
+    """
+    if not resultados:
+        raise ValueError("Calibracao de risco sem candidatos.")
+    if not np.isfinite(tolerance) or tolerance < 0:
+        raise ValueError("Tolerancia invalida.")
+    weights = [float(weight) for weight, _ in resultados]
+    scores = [float(score) for _, score in resultados]
+    if len(weights) != len(set(weights)) or not all(
+        np.isfinite(weight) and weight >= 0 for weight in weights
+    ) or not all(np.isfinite(score) for score in scores):
+        raise ValueError("Calibracao de risco contem valor invalido ou duplicado.")
+    best_score = max(scores)
+    candidates = [
+        weight for weight, score in zip(weights, scores)
+        if score >= best_score - tolerance
+    ]
+    return min(candidates)

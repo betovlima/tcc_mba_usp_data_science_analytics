@@ -353,3 +353,52 @@ def test_chronology_contract_rejects_wrong_fold_count_before_training(tmp_path, 
         research.verificar_protocolo_cronologico(
             calendar, [{"fold_id": i} for i in range(4)], decisions,
         )
+
+
+def test_select_risk_weight_uses_only_supplied_calibration_scores():
+    from pesquisa.optimal_switching_cash import selecionar_peso_calibracao
+
+    assert selecionar_peso_calibracao([
+        (0.0, 0.8), (0.1, 1.2), (0.5, 1.2), (1.0, -0.7),
+    ]) == 0.1
+    assert selecionar_peso_calibracao([(0.0, -0.2), (0.5, -0.1)]) == 0.5
+    assert selecionar_peso_calibracao([(0.0, 0.0), (1.0, 0.0)]) == 0.0
+    with pytest.raises(ValueError):
+        selecionar_peso_calibracao([(0.0, 1.0), (0.0, 2.0)])
+    with pytest.raises(ValueError):
+        selecionar_peso_calibracao([(0.0, float("nan"))])
+
+
+def test_risk_calibration_weight_is_fold_specific():
+    from pesquisa.optimal_switching_cash import SwitchingSettings
+
+    dates = pd.date_range("2024-01-01", periods=2, tz="UTC")
+    registry = {
+        fold: {"AAA": SimpleNamespace(
+            fit_end=dates[0], fit_observations=100,
+            state_at=lambda _frame, _date: 1,
+            values=lambda _state, invested, *, settings, **kw: (
+                0.0, 0.01 - settings.downside_weight * 0.02
+            ),
+        )}
+        for fold in (1, 2)
+    }
+    diagnostics = {}
+    policy = build_overlay(
+        lambda date, current, holding: (1, 0.5),
+        frames={"AAA": pd.DataFrame({"close": [10.0, 11.0]}, index=dates)},
+        symbols=["AAA"],
+        decision_to_fold={dates[0]: 1, dates[1]: 2},
+        models_by_fold=registry,
+        settings=SwitchingSettings(downside_weight=0),
+        settings_by_fold={
+            1: SwitchingSettings(downside_weight=0),
+            2: SwitchingSettings(downside_weight=1),
+        },
+        config=CONFIG,
+        diagnostics=diagnostics,
+    )
+    assert policy(dates[0], 0, 0)[0] == 1
+    assert policy(dates[1], 0, 0)[0] == 0
+    assert diagnostics[dates[0]]["switching_downside_weight"] == 0
+    assert diagnostics[dates[1]]["switching_downside_weight"] == 1
