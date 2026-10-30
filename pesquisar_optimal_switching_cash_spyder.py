@@ -37,6 +37,9 @@ from pesquisa.optimal_switching_cash import (
     SwitchingSettings, build_overlay, fit_switching_model, selecionar_peso_calibracao,
 )
 from pesquisa.pacote_analise_switching import gerar_zip_resultados
+from pesquisa.persistencia_resultados import (
+    salvar_csv, salvar_json, salvar_texto,
+)
 from reproducao.dados import SnapshotPaths, validate_snapshot
 from reproducao.experimento import summarize_metrics
 from reproducao.preparacao import (
@@ -54,7 +57,7 @@ UNIVERSE = ROOT / "pesquisa" / "universo_control_75.json"
 CALENDAR_CONTRACT = ROOT / "pesquisa" / "contrato_calendario_control_75.json"
 CONTRACT = ROOT / "evidencias" / "manifest_universo_congelado.json"
 OUTPUT = ROOT / "output" / "optimal_switching_cash"
-SCRIPT_VERSION = "optimal-switching-cash-reentry-v1.0.5"
+SCRIPT_VERSION = "optimal-switching-cash-reentry-v1.0.7"
 SCHEMA_VERSION = "optimal-switching-cash-v3"
 SETTINGS = SwitchingSettings(
     lookback=20,
@@ -474,24 +477,24 @@ def _executar_experimento(output: Path) -> dict:
 
     # %% 6 - Evidencias sem sobrescrever checkpoints ou testes anteriores
     # A pasta da execucao e criada antes do treino para permitir ZIP inclusive em falhas.
-    control.predictions.to_csv(output / "control_predictions.csv", float_format="%.17g")
-    control.trades.to_csv(output / "control_trades.csv", index=False)
-    switching.predictions.to_csv(output / "switching_predictions.csv", float_format="%.17g")
-    switching.trades.to_csv(output / "switching_trades.csv", index=False)
-    log_growth.predictions.to_csv(output / "log_growth_predictions.csv", float_format="%.17g")
-    log_growth.trades.to_csv(output / "log_growth_trades.csv", index=False)
-    pd.DataFrame(model_rows).to_csv(output / "switching_fold_models.csv", index=False)
-    pd.DataFrame(calibration).to_csv(output / "control_75_fold_calibration.csv", index=False)
-    pd.DataFrame(risk_calibration_rows).to_csv(output / "switching_risk_calibration.csv", index=False)
+    salvar_csv(control.predictions, output / "control_predictions.csv", float_format="%.17g")
+    salvar_csv(control.trades, output / "control_trades.csv", index=False)
+    salvar_csv(switching.predictions, output / "switching_predictions.csv", float_format="%.17g")
+    salvar_csv(switching.trades, output / "switching_trades.csv", index=False)
+    salvar_csv(log_growth.predictions, output / "log_growth_predictions.csv", float_format="%.17g")
+    salvar_csv(log_growth.trades, output / "log_growth_trades.csv", index=False)
+    salvar_csv(pd.DataFrame(model_rows), output / "switching_fold_models.csv", index=False)
+    salvar_csv(pd.DataFrame(calibration), output / "control_75_fold_calibration.csv", index=False)
+    salvar_csv(pd.DataFrame(risk_calibration_rows), output / "switching_risk_calibration.csv", index=False)
     decision_rows = [
         {"decision_date": timestamp.isoformat(), **values}
         for timestamp, values in sorted(diagnostics.items())
     ]
-    pd.DataFrame(decision_rows).to_csv(output / "switching_decisions.csv", index=False)
-    pd.DataFrame([
+    salvar_csv(pd.DataFrame(decision_rows), output / "switching_decisions.csv", index=False)
+    salvar_csv(pd.DataFrame([
         {"decision_date": date.isoformat(), **values}
         for date, values in sorted(log_growth_diagnostics.items())
-    ]).to_csv(output / "log_growth_decisions.csv", index=False)
+    ]), output / "log_growth_decisions.csv", index=False)
     summary = {
         "version": SCRIPT_VERSION,
         "schema": SCHEMA_VERSION,
@@ -577,9 +580,9 @@ def _executar_experimento(output: Path) -> dict:
             "Comparisons inherit universe selection and historical source limitations; later independent evaluation required.",
         ],
     }
-    _write_json(output / "resultado.json", summary)
+    salvar_json(output / "resultado.json", summary, _write_json)
     diagnostic = summary["switching_diagnostics"]
-    (output / "resumo_para_analise.md").write_text(
+    salvar_texto(output / "resumo_para_analise.md",
         "# Optimal Switching: resumo da execucao\n\n"
         f"Versao: {SCRIPT_VERSION}\n\n"
         f"Universo: {len(symbols)} ativos; dados ate {contract['analysis_end_date']}.\n\n"
@@ -621,27 +624,32 @@ def main() -> dict:
     output.mkdir(parents=True, exist_ok=False)
     try:
         result = _executar_experimento(output)
+        package = gerar_zip_resultados(
+            output, versao=SCRIPT_VERSION, status="completed",
+        )
+        print(f"[pacote] ZIP de analise pronto: {package}", flush=True)
     except Exception as exc:
-        _write_json(output / "erro_execucao.json", {
-            "status": "failed",
-            "version": SCRIPT_VERSION,
-            "universe_expected_assets": 75,
-            "error_type": type(exc).__name__,
-            "message": str(exc),
-            "traceback": traceback.format_exc(limit=20),
-        })
+        # Se o diretorio sumiu durante o processamento, este salvamento
+        # o recria antes de gerar o pacote de erro.
         try:
+            salvar_json(output / "erro_execucao.json", {
+                "status": "failed",
+                "version": SCRIPT_VERSION,
+                "universe_expected_assets": 75,
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "traceback": traceback.format_exc(limit=20),
+            }, _write_json)
             package = gerar_zip_resultados(
                 output, versao=SCRIPT_VERSION, status="failed",
             )
-            print(f"[pacote] erro registrado, envie o ZIP para analise: {package}", flush=True)
-        except Exception as package_error:
-            print(f"[pacote] falha ao criar ZIP: {package_error}", flush=True)
+            print(
+                f"[pacote] erro registrado, envie o ZIP para analise: {package}",
+                flush=True,
+            )
+        except Exception as archive_error:
+            print(f"[pacote] falha ao registrar erro: {archive_error}", flush=True)
         raise
-    package = gerar_zip_resultados(
-        output, versao=SCRIPT_VERSION, status="completed",
-    )
-    print(f"[pacote] ZIP de analise pronto: {package}", flush=True)
     return result
 
 

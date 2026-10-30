@@ -38,8 +38,9 @@ from pesquisa.vantagem_cash_contrafactual import (
     build_counterfactual_overlay,
 )
 from pesquisa.pacote_analise_switching import gerar_zip_resultados
+from pesquisa.persistencia_resultados import salvar_csv, salvar_json, salvar_texto
 
-SCRIPT_VERSION = "cash-counterfactual-continuation-v1.0.6"
+SCRIPT_VERSION = "cash-counterfactual-continuation-v1.0.7"
 EXPERIMENT_SCHEMA = "counterfactual-cash-continuation-v1"
 SETTINGS = CounterfactualSettings(
     horizon=10,
@@ -106,9 +107,9 @@ def _run(output: Path) -> dict:
             f"observado={control_metrics['ending_capital']:.8f} "
             f"esperado={expected:.8f}"
         )
-    control.predictions.to_csv(output / "control_predictions.csv", float_format="%.17g")
-    control.trades.to_csv(output / "control_trades.csv", index=False)
-    pd.DataFrame(margin_calibration).to_csv(
+    salvar_csv(control.predictions, output / "control_predictions.csv", float_format="%.17g")
+    salvar_csv(control.trades, output / "control_trades.csv", index=False)
+    salvar_csv(pd.DataFrame(margin_calibration), 
         output / "control_75_fold_calibration.csv", index=False,
     )
     print(
@@ -182,20 +183,20 @@ def _run(output: Path) -> dict:
             f"train={fitted.training_rows} validation={fitted.validation_rows} "
             f"MAE={fitted.validation_mae:.6f}", flush=True,
         )
-    pd.concat(samples_parts, ignore_index=True).to_csv(
+    salvar_csv(pd.concat(samples_parts, ignore_index=True), 
         output / "calibration_counterfactual_labels.csv", index=False,
     )
-    pd.concat(validation_parts, ignore_index=True).to_csv(
+    salvar_csv(pd.concat(validation_parts, ignore_index=True), 
         output / "inner_validation_predictions.csv", index=False,
     )
-    pd.DataFrame(diagnostics_by_fold).to_csv(
+    salvar_csv(pd.DataFrame(diagnostics_by_fold), 
         output / "counterfactual_fold_models.csv", index=False,
     )
-    _write_json(output / "counterfactual_model_manifest.json", {
+    salvar_json(output / "counterfactual_model_manifest.json", {
         "settings": SETTINGS.__dict__,
         "fold_models": diagnostics_by_fold,
         "features": list(FEATURE_COLUMNS),
-    })
+    }, _write_json)
 
     # %% 4 - Decisoes OOS, unica nova politica versus Control
     diagnostics: dict[pd.Timestamp, dict] = {}
@@ -222,17 +223,17 @@ def _run(output: Path) -> dict:
     switching_metrics = summarize_metrics(
         switching, folds, float(config.initial_capital),
     )
-    switching.predictions.to_csv(
+    salvar_csv(switching.predictions, 
         output / "counterfactual_predictions.csv", float_format="%.17g",
     )
-    switching.trades.to_csv(
+    salvar_csv(switching.trades, 
         output / "counterfactual_trades.csv", index=False,
     )
     decision_rows = [
         {"decision_date": date.isoformat(), **row}
         for date, row in sorted(diagnostics.items())
     ]
-    pd.DataFrame(decision_rows).to_csv(
+    salvar_csv(pd.DataFrame(decision_rows), 
         output / "counterfactual_decisions.csv", index=False,
     )
 
@@ -301,7 +302,7 @@ def _run(output: Path) -> dict:
             "No model or result is promoted to the operational application.",
         ],
     }
-    _write_json(output / "resultado.json", summary)
+    salvar_json(output / "resultado.json", summary, _write_json)
     report = (
         "# CASH versus continuar Control: evidencia experimental\n\n"
         f"Versao: {SCRIPT_VERSION}. Universo: {len(symbols)} ativos.\n"
@@ -320,7 +321,7 @@ def _run(output: Path) -> dict:
         "validacao externa independente, pois pesquisas anteriores ja "
         "exploraram o mesmo intervalo de teste.\n"
     )
-    (output / "resumo_para_analise.md").write_text(report, encoding="utf-8")
+    salvar_texto(output / "resumo_para_analise.md", report, encoding="utf-8")
     print(
         f"[resultado] Control=US$ {control_metrics['ending_capital']:,.2f} "
         f"Contrafactual=US$ {switching_metrics['ending_capital']:,.2f}",
@@ -336,24 +337,24 @@ def main() -> dict:
     output.mkdir(parents=True, exist_ok=False)
     try:
         result = _run(output)
+        package = gerar_zip_resultados(output, versao=SCRIPT_VERSION, status="completed")
+        print(f"[pacote] ZIP para analise: {package}", flush=True)
     except Exception as exc:
-        _write_json(output / "erro_execucao.json", {
-            "version": SCRIPT_VERSION,
-            "status": "failed",
-            "error_type": type(exc).__name__,
-            "message": str(exc),
-            "traceback": traceback.format_exc(limit=30),
-        })
         try:
+            salvar_json(output / "erro_execucao.json", {
+                "version": SCRIPT_VERSION,
+                "status": "failed",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "traceback": traceback.format_exc(limit=30),
+            }, _write_json)
             package = gerar_zip_resultados(
                 output, versao=SCRIPT_VERSION, status="failed",
             )
             print(f"[pacote] erro registrado: {package}", flush=True)
         except Exception as archive_error:
-            print(f"[pacote] falha na compactacao: {archive_error}", flush=True)
+            print(f"[pacote] falha ao compactar erro: {archive_error}", flush=True)
         raise
-    package = gerar_zip_resultados(output, versao=SCRIPT_VERSION, status="completed")
-    print(f"[pacote] ZIP para analise: {package}", flush=True)
     return result
 
 

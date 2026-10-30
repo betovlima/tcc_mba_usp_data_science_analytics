@@ -86,3 +86,29 @@ Control e contrafactual, `calibration_counterfactual_labels.csv`,
 `resumo_para_analise.md` e `manifesto_pacote.json`, com SHA-256.
 Em falha, `erro_execucao.json` e evidencias ja produzidas sao
 compactados. Dados RAW, eventos corporativos e segredos nao sao incluidos.
+
+## v1.0.7: tolerancia a desaparecimento da pasta de resultados
+
+Corrigido `OSError: Cannot save file into a non-existent directory` em
+`pesquisar_optimal_switching_cash_spyder.py` e a falha secundaria ao
+tentar escrever `erro_execucao.json` no mesmo caminho apagado.
+
+As duas rotinas Spyder de pesquisa agora utilizam
+`pesquisa/persistencia_resultados.py`, que garante a existencia da pasta
+imediatamente antes de **cada** gravacao CSV/JSON/Markdown. Se a pasta
+desaparecer durante o treinamento, as escritas posteriores a recriam.
+O motor matematico, a definicao de universo, o checkpoint e os periodos
+walk-forward permanecem inalterados.
+
+A compactacao ZIP ocorre dentro do tratamento de falhas. Se o experimento
+interromper, o programa tenta recriar a pasta e salvar
+`erro_execucao.json` e um ZIP com `status=failed`, sem substituir o
+erro original por um segundo traceback de escrita.
+
+Testes adicionados simulam explicitamente a exclusao da pasta entre o
+inicio do processamento e a fase de persistencia. Tambem verificam
+geracao dos ZIPs de sucesso e falha nos dois executores.
+
+Esta correcao impede perda de resultados por diretorio ausente no
+momento da escrita, mas nao identifica o processo externo que pode
+ter removido o diretorio e nao recupera arquivos ja apagados.
