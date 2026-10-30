@@ -131,7 +131,6 @@ def test_future_change_cannot_modify_observable_features_or_fitted_model():
 
 
 def test_policy_can_choose_cash_then_reenter_from_fitted_predictions():
-    from types import SimpleNamespace
     from pesquisa.vantagem_cash_contrafactual import CounterfactualFit
 
     dates = pd.date_range("2024-02-01", periods=2, tz="UTC")
