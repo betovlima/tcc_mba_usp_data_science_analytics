@@ -300,5 +300,5 @@ def test_analysis_zip_also_exists_for_failed_run(tmp_path):
         assert manifest["status"] == "failed"
     empty = tmp_path / "empty"
     empty.mkdir()
-    with pytest.raises(RuntimeError, match="arquivo principal"):
+    with pytest.raises(RuntimeError, match="Arquivo principal"):
         gerar_zip_resultados(empty, versao="v1-test", status="completed")
