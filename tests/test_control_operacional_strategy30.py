@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from hashlib import sha256
-from io import BytesIO
 import json
 from zipfile import ZipFile, ZIP_DEFLATED
 
