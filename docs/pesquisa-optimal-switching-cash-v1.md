@@ -1,8 +1,8 @@
 # Pesquisa: Optimal Switching CASH/Reentrada v1.0.0
 
 **Branch:** `research/optimal-switching-cash-reentry-v1`.
-**Estado:** prototipo cientifico implementado, execucao financeira longa deve
-ser feita localmente (Spyder). Nao e alteracao do MCT operacional.
+**Estado:** piloto cientifico v1.0.1, execucao financeira completa deve
+ser feita localmente (Spyder). Nao e alteracao do aplicação externa operacional.
 
 ## Problema
 
@@ -44,15 +44,14 @@ na DP: isso limita a otimalidade do prototipo e sera estudado posteriormente.
 
 ## Reproducao
 
-A primeira campanha usa apenas o **U67 base congelado** (67 solicitados;
-65 ativos efetivos). O script exige SHA-256 do snapshot identico ao
+O experimento usa o **universo oficial U67+10**, com **77 ativos solicitados e 75 efetivos**. Sao 65 ativos elegiveis da base e os dez candidatos históricos CRT, NBR, CAPR, PNBK, PENN, JBL, STAG, MCHB, LAD e TOWN. O script exige SHA-256 do snapshot identico ao
 manifesto historico de corte **06/10/2026**. Nao baixa dados da Alpaca,
 nao acessa banco, nao altera os CSVs nem o codigo oficial do Control.
 
 1. Atualizar a branch de pesquisa e instalar `requirements.txt`.
 2. Abrir `pesquisar_optimal_switching_cash_spyder.py` no Spyder,
    com diretorio de trabalho na raiz, e executar F5.
-3. O Control e obrigatoriamente reproduzido ao centavo: **US$ 76.927.051,39**.
+3. O Control oficial U67+10 e obrigatoriamente reproduzido ao centavo: **US$ 587.165.941,13**.
    Qualquer divergencia aborta o experimento **antes** de comparar.
 4. O overlay usa exatamente os mesmos folds, caches de previsao, taxas,
    janelas temporais e simulador; so altera a escolha de exposicao/CASH.
@@ -68,10 +67,28 @@ nao acessa banco, nao altera os CSVs nem o codigo oficial do Control.
 - O corte historico exclui a queda de CAPR entre 20 e 30/10/2026.
 - Nenhum resultado financeiro novo foi medido na criacao da branch;
   o experimento completo precisa ser executado.
-- A selecao historica de ativos e a realizabilidade financeira nao
+- A selecao historica dos dez ativos adicionais e a realizabilidade financeira nao
   sao comprovadas por este teste. O universo de 75 ativos selecionados
   requer cache externo preservado e validado por SHA; nao comparar os
   US$ 587 milhoes diretamente com os resultados do U67 base.
 - Nao escolher novos parametros observando o desempenho do teste.
-- Nao alterar a politica operacional do MCT antes de validar a hipotese
+- Nao alterar politicas operacionais externas antes de validar a hipotese
   em janelas independentes e executar os testes de custos e liquidez.
+
+## Correcao v1.0.1 (30/10/2026)
+
+A versao anterior executava incorretamente apenas os 65 ativos da base U67 e
+validava US$ 76.927.051,39. O usuario apontou que esse **nao e o Control
+oficial** desta pesquisa. A v1.0.1 utiliza os 75 ativos efetivos e valida o
+checkpoint U67+10 de US$ 587.165.941,13, com os 20 hashes dos arquivos
+externos antes de iniciar o treino. O script deixou de usar a base reduzida
+como referencia final.
+
+Tambem foi corrigido o erro `ValueError: Out of range float values are not
+JSON compliant: nan`: o arquivo `resultado.json` agora e escrito pela rotina
+existente `pesquisa._write_json`, que converte valores nao finitos em
+`null` e preserva o formato JSON estrito.
+
+O modulo de pesquisa foi movido de `engine/` para `pesquisa/` para cumprir o
+contrato que preserva o motor Control oficial intacto. Nao houve mudanca no
+modelo matematico do piloto, apenas em sua integracao e na auditoria dos dados.

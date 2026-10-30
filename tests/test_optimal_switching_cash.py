@@ -4,8 +4,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 import numpy as np
 import pandas as pd
+import pytest
 
-from engine.optimal_switching_cash import (
+from pesquisa.optimal_switching_cash import (
     SwitchingModel,
     SwitchingSettings,
     build_overlay,
@@ -142,3 +143,46 @@ def test_risk_feature_is_no_leak_when_future_high_is_modified():
     changed.loc[changed.index > chosen, "high"] *= 1000
     changed.loc[changed.index > chosen, "low"] /= 1000
     assert model.state_at(bars, chosen) == model.state_at(changed, chosen)
+
+def test_official_75_asset_universe_is_mandatory(tmp_path, monkeypatch):
+    """Nenhum arquivo do universo selecionado pode ser substituido silenciosamente."""
+    import pesquisar_optimal_switching_cash_spyder as research
+    from types import SimpleNamespace
+    selected = (
+        "CRT", "NBR", "CAPR", "PNBK", "PENN", "JBL",
+        "STAG", "MCHB", "LAD", "TOWN",
+    )
+    raw = tmp_path / "raw_bars"
+    actions = tmp_path / "corporate_actions"
+    raw.mkdir()
+    actions.mkdir()
+    monkeypatch.setattr(
+        research.pesquisa, "FULL_DATA",
+        SimpleNamespace(raw_bars=raw, corporate_actions=actions),
+    )
+    contract = {
+        "selected_assets": list(selected),
+        "candidate_file_hashes": {
+            name: {"raw_sha256": "", "corporate_actions_sha256": ""}
+            for name in selected
+        },
+    }
+    with pytest.raises(RuntimeError, match="Cache historico faltando"):
+        research._verify_selected_cache(contract)
+
+
+def test_json_serialization_maps_nan_and_inf_to_null(tmp_path):
+    import json
+    import numpy as np
+    import pesquisar_expansao_u67_spyder as pesquisa
+    path = tmp_path / "resultado.json"
+    pesquisa._write_json(path, {
+        "capital": 123.0,
+        "optional": np.nan,
+        "nested": [{"sharpe": float("inf"), "maxdrawdown": -0.3}],
+    })
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["capital"] == 123
+    assert saved["optional"] is None
+    assert saved["nested"][0]["sharpe"] is None
+    assert saved["nested"][0]["maxdrawdown"] == -0.3
