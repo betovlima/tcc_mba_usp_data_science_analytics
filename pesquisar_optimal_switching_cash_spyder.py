@@ -13,6 +13,7 @@ from pathlib import Path
 import hashlib
 import json
 import math
+import traceback
 
 import numpy as np
 import pandas as pd
@@ -34,6 +35,7 @@ from engine.rotacao import (
 from pesquisa.optimal_switching_cash import (
     SwitchingSettings, build_overlay, fit_switching_model,
 )
+from pesquisa.pacote_analise_switching import gerar_zip_resultados
 from reproducao.dados import SnapshotPaths, validate_snapshot
 from reproducao.experimento import summarize_metrics
 from reproducao.preparacao import (
@@ -50,7 +52,7 @@ CANDIDATE_SOURCE = SnapshotPaths.from_root(
 UNIVERSE = ROOT / "pesquisa" / "universo_control_75.json"
 CONTRACT = ROOT / "evidencias" / "manifest_universo_congelado.json"
 OUTPUT = ROOT / "output" / "optimal_switching_cash"
-SCRIPT_VERSION = "optimal-switching-cash-reentry-v1.0.2"
+SCRIPT_VERSION = "optimal-switching-cash-reentry-v1.0.3"
 SCHEMA_VERSION = "optimal-switching-cash-v2"
 SETTINGS = SwitchingSettings(
     lookback=20,
@@ -197,7 +199,7 @@ def ajustar_control_75(
 
 
 # %% 3 - Execucao sobre o universo completo
-def main() -> dict:
+def _executar_experimento(output: Path) -> dict:
     raw, contract, snapshot, universe = carregar_universo_oficial()
     config = construir_configuracao_controle(
         CONFIG, assets=tuple(sorted(raw)),
@@ -271,6 +273,11 @@ def main() -> dict:
                 "state_upper_boundary": model.boundaries[1],
                 **{f"expected_return_state_{i}": model.expected_returns[i] for i in range(3)},
                 **{f"downside_state_{i}": model.downside_losses[i] for i in range(3)},
+                **{f"adjusted_reward_state_{i}": (
+                    model.expected_returns[i] - SETTINGS.downside_weight * model.downside_losses[i]
+                ) for i in range(3)},
+                **{f"transition_{i}_{j}": float(model.transitions[i, j])
+                   for i in range(3) for j in range(3)},
             })
             if index % 15 == 0 or index == len(symbols):
                 print(f"[switching-fit] fold={fid} {index}/{len(symbols)}", flush=True)
@@ -296,9 +303,7 @@ def main() -> dict:
     switching_metrics = summarize_metrics(switching, folds, float(config.initial_capital))
 
     # %% 6 - Evidencias sem sobrescrever checkpoints ou testes anteriores
-    created = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    output = OUTPUT / created
-    output.mkdir(parents=True, exist_ok=False)
+    # A pasta da execucao e criada antes do treino para permitir ZIP inclusive em falhas.
     control.predictions.to_csv(output / "control_predictions.csv", float_format="%.17g")
     control.trades.to_csv(output / "control_trades.csv", index=False)
     switching.predictions.to_csv(output / "switching_predictions.csv", float_format="%.17g")
@@ -327,6 +332,30 @@ def main() -> dict:
         "decision_sessions": len(decision_dates) - 1,
         "settings": SETTINGS.__dict__,
         "cost_approximation": "Bellman proportional; exact fees and slippage in common simulator",
+        "switching_diagnostics": {
+            "all_cash": bool(
+                (switching.predictions["selected_asset"] == "CASH").all()
+            ),
+            "cash_preferred_decisions": sum(
+                v.get("switching_reason") == "cash_preferred"
+                for v in diagnostics.values()
+            ),
+            "cash_q_beats_invest_q": sum(
+                v.get("switching_q_cash", float("-inf")) >
+                v.get("switching_q_invest", float("inf"))
+                for v in diagnostics.values()
+                if "switching_q_cash" in v
+            ),
+            "adjusted_reward_positive_states": sum(
+                row[f"adjusted_reward_state_{state}"] > 0
+                for row in model_rows for state in range(3)
+            ),
+            "adjusted_reward_state_count": len(model_rows) * 3,
+            "note": (
+                "All-CASH is a measured research outcome, not a validated "
+                "improvement of Control. Do not tune parameters on OOS results."
+            ),
+        },
         "control_metrics": control_metrics,
         "switching_metrics": switching_metrics,
         "comparison": {
@@ -349,12 +378,65 @@ def main() -> dict:
         ],
     }
     _write_json(output / "resultado.json", summary)
+    diagnostic = summary["switching_diagnostics"]
+    (output / "resumo_para_analise.md").write_text(
+        "# Optimal Switching: resumo da execucao\n\n"
+        f"Versao: {SCRIPT_VERSION}\n\n"
+        f"Universo: {len(symbols)} ativos; dados ate {contract['analysis_end_date']}.\n\n"
+        f"Control: US$ {control_metrics['ending_capital']:,.2f}; "
+        f"Sharpe={control_metrics['sharpe']:.4f}; "
+        f"MaxDD={control_metrics['maximum_drawdown']:.2%}.\n\n"
+        f"Switching: US$ {switching_metrics['ending_capital']:,.2f}; "
+        f"Sharpe={switching_metrics['sharpe']}; "
+        f"MaxDD={switching_metrics['maximum_drawdown']:.2%}.\n\n"
+        f"Sessoes em CASH: Control={summary['comparison']['cash_days_control']}; "
+        f"Switching={summary['comparison']['cash_days_switching']}.\n\n"
+        f"Decisoes CASH preferido: {diagnostic['cash_preferred_decisions']}; "
+        f"regimes com recompensa ajustada positiva: "
+        f"{diagnostic['adjusted_reward_positive_states']}/"
+        f"{diagnostic['adjusted_reward_state_count']}.\n\n"
+        "**Interpretacao:** registros historicos simulados. O resultado "
+        "pode refletir penalizacao excessiva de risco; nao constitui "
+        "validacao prospectiva nem recomendacao de operacao.\n",
+        encoding="utf-8",
+    )
     print(f"[resultado] Control-75=US$ {control_metrics['ending_capital']:,.2f}", flush=True)
     print(f"[resultado] Switching=US$ {switching_metrics['ending_capital']:,.2f}", flush=True)
     print(f"[resultado] capital_delta=US$ {summary['comparison']['delta_ending_capital']:,.2f}", flush=True)
     print(f"[resultado] Control-75 cash_days={summary['comparison']['cash_days_control']}; Switching cash_days={summary['comparison']['cash_days_switching']}", flush=True)
     print(f"[arquivos] {output}", flush=True)
     return summary
+
+
+def main() -> dict:
+    """Sempre entrega ZIP de auditoria, inclusive para execucao interrompida."""
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    output = OUTPUT / run_id
+    output.mkdir(parents=True, exist_ok=False)
+    try:
+        result = _executar_experimento(output)
+    except Exception as exc:
+        _write_json(output / "erro_execucao.json", {
+            "status": "failed",
+            "version": SCRIPT_VERSION,
+            "universe_expected_assets": 75,
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+            "traceback": traceback.format_exc(limit=20),
+        })
+        try:
+            package = gerar_zip_resultados(
+                output, versao=SCRIPT_VERSION, status="failed",
+            )
+            print(f"[pacote] erro registrado, envie o ZIP para analise: {package}", flush=True)
+        except Exception as package_error:
+            print(f"[pacote] falha ao criar ZIP: {package_error}", flush=True)
+        raise
+    package = gerar_zip_resultados(
+        output, versao=SCRIPT_VERSION, status="completed",
+    )
+    print(f"[pacote] ZIP de analise pronto: {package}", flush=True)
+    return result
 
 
 if __name__ == "__main__":

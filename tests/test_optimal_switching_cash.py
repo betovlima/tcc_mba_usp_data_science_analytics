@@ -238,3 +238,67 @@ def test_json_serialization_maps_nan_and_inf_to_null(tmp_path):
     assert saved["optional"] is None
     assert saved["nested"][0]["sharpe"] is None
     assert saved["nested"][0]["maxdrawdown"] == -0.3
+
+
+def test_analysis_zip_has_required_evidence_and_file_hashes(tmp_path):
+    import hashlib
+    import json
+    from zipfile import ZipFile
+
+    from pesquisa.pacote_analise_switching import gerar_zip_resultados
+
+    folder = tmp_path / "run_001"
+    folder.mkdir()
+    (folder / "resultado.json").write_text(
+        json.dumps({"status": "completed", "effective_asset_count": 75}),
+        encoding="utf-8",
+    )
+    (folder / "switching_predictions.csv").write_text(
+        "timestamp,selected_asset\n2026-10-01,CASH\n", encoding="utf-8",
+    )
+    (folder / "switching_decisions.csv").write_text(
+        "date,reason\n2026-10-01,cash_preferred\n", encoding="utf-8",
+    )
+    (folder / "secreto.env").write_text("SECRET", encoding="utf-8")
+    package = gerar_zip_resultados(folder, versao="v1-test", status="completed")
+    assert package.is_file()
+    with ZipFile(package) as archive:
+        names = set(archive.namelist())
+        assert "resultado.json" in names
+        assert "switching_predictions.csv" in names
+        assert "switching_decisions.csv" in names
+        assert "manifesto_pacote.json" in names
+        assert "secreto.env" not in names
+        manifest = json.loads(archive.read("manifesto_pacote.json"))
+        assert manifest["file_count"] == 3
+        assert manifest["status"] == "completed"
+        assert manifest["data_raw_included"] is False
+        for info in manifest["files"]:
+            content = archive.read(info["name"])
+            assert info["sha256"] == hashlib.sha256(content).hexdigest()
+        assert archive.testzip() is None
+    with pytest.raises(FileExistsError):
+        gerar_zip_resultados(folder, versao="v1-test", status="completed")
+
+
+def test_analysis_zip_also_exists_for_failed_run(tmp_path):
+    import json
+    from zipfile import ZipFile
+
+    from pesquisa.pacote_analise_switching import gerar_zip_resultados
+
+    folder = tmp_path / "failed_001"
+    folder.mkdir()
+    (folder / "erro_execucao.json").write_text(
+        json.dumps({"status": "failed", "error_type": "RuntimeError"}),
+        encoding="utf-8",
+    )
+    package = gerar_zip_resultados(folder, versao="v1-test", status="failed")
+    with ZipFile(package) as archive:
+        assert "erro_execucao.json" in archive.namelist()
+        manifest = json.loads(archive.read("manifesto_pacote.json"))
+        assert manifest["status"] == "failed"
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(RuntimeError, match="arquivo principal"):
+        gerar_zip_resultados(empty, versao="v1-test", status="completed")

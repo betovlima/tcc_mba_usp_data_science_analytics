@@ -70,3 +70,36 @@ superioridade do modulo sem resultados fora da amostra e testes de
 liquidez.
 
 **Esta pesquisa nao modifica o codigo Control oficial nem a main.**
+
+
+## Pacote automatico de auditoria, versao v1.0.3
+
+Cada execucao pelo Spyder gera **automaticamente** um ZIP:
+
+`output/optimal_switching_cash/pacote_optimal_switching_cash_<id_da_execucao>.zip`
+
+O pacote usa apenas os resultados daquela execucao, incluindo:
+- `resultado.json`: metricas Control vs Switching, parametros, folds e verificacao de universo;
+- `control_predictions.csv`, `control_trades.csv`, `control_75_fold_calibration.csv`;
+- `switching_predictions.csv`, `switching_trades.csv`, `switching_decisions.csv`;
+- `switching_fold_models.csv`: recompensas, perdas e matriz de transicao dos regimes;
+- `resumo_para_analise.md`: resumo numerico e alerta para politica degenerada que so escolhe CASH;
+- `manifesto_pacote.json`: versao, identidade da execucao, arquivos, tamanho e SHA-256.
+
+Mesmo quando um erro interrompe o experimento, o runner cria um ZIP marcado como
+`failed` contendo `erro_execucao.json` e as evidencias ja escritas. O erro
+continua sendo exibido no Spyder. Um pacote `failed` nao pode ser confundido
+com resultado completo.
+
+O ZIP nao inclui RAW/SIP, eventos corporativos, arquivos `.env`, credenciais
+ou o banco de dados. O arquivo e testado internamente por integridade. Uma
+execucao nunca sobrescreve o ZIP de outra.
+
+### Observacao sobre a execucao inicial de 30/10/2026
+
+O ZIP recebido exibiu 1.560/1.560 decisoes `cash_preferred` sobre o
+universo oficial de 75 ativos. O Switching terminou em US$ 10.000,
+sem operacoes, enquanto o Control reproduziu US$ 587.165.941,13.
+A recompensa ajustada ficou negativa em todos os 675 estados-modelo
+(75 ativos x 3 folds x 3 regimes). A pesquisa nao deve ser ajustada
+usando o proprio teste fora da amostra como criterio de selecao.
