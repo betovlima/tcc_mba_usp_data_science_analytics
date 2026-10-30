@@ -144,31 +144,83 @@ def test_risk_feature_is_no_leak_when_future_high_is_modified():
     changed.loc[changed.index > chosen, "low"] /= 1000
     assert model.state_at(bars, chosen) == model.state_at(changed, chosen)
 
-def test_official_75_asset_universe_is_mandatory(tmp_path, monkeypatch):
-    """Nenhum arquivo do universo selecionado pode ser substituido silenciosamente."""
-    import pesquisar_optimal_switching_cash_spyder as research
+def test_loader_reads_exactly_75_assets_in_one_pass(tmp_path, monkeypatch):
+    """Nenhuma logica de universo intermediario ou exclusoes e executada."""
+    import json
     from types import SimpleNamespace
-    selected = (
-        "CRT", "NBR", "CAPR", "PNBK", "PENN", "JBL",
-        "STAG", "MCHB", "LAD", "TOWN",
-    )
-    raw = tmp_path / "raw_bars"
-    actions = tmp_path / "corporate_actions"
-    raw.mkdir()
-    actions.mkdir()
-    monkeypatch.setattr(
-        research.pesquisa, "FULL_DATA",
-        SimpleNamespace(raw_bars=raw, corporate_actions=actions),
-    )
+    import pesquisar_optimal_switching_cash_spyder as research
+
+    official = json.loads(research.UNIVERSE.read_text(encoding="utf-8"))
+    assert official["effective_asset_count"] == 75
+    assert len(official["assets"]) == 75
+    assert len(set(official["assets"])) == 75
+    source = tmp_path / "snapshot"
+    raw = source / "raw_bars"
+    actions = source / "corporate_actions"
+    raw.mkdir(parents=True)
+    actions.mkdir(parents=True)
+    for symbol in official["assets"]:
+        (raw / f"{symbol}.csv").write_text("bar", encoding="utf-8")
+        (actions / f"{symbol}.csv").write_text("action", encoding="utf-8")
     contract = {
-        "selected_assets": list(selected),
-        "candidate_file_hashes": {
-            name: {"raw_sha256": "", "corporate_actions_sha256": ""}
-            for name in selected
-        },
+        "selected_assets": [],
+        "snapshot_sha256": "snapshot-test",
+        "candidate_file_hashes": {},
     }
-    with pytest.raises(RuntimeError, match="Cache historico faltando"):
-        research._verify_selected_cache(contract)
+    cpath = tmp_path / "contract.json"
+    cpath.write_text(json.dumps(contract), encoding="utf-8")
+    monkeypatch.setattr(research, "CONTRACT", cpath)
+    monkeypatch.setattr(research, "SOURCE", SimpleNamespace(
+        raw_bars=raw, corporate_actions=actions,
+    ))
+    monkeypatch.setattr(
+        research, "validate_snapshot",
+        lambda _paths: {"snapshot_sha256": "snapshot-test"},
+    )
+    seen = []
+    monkeypatch.setattr(
+        research, "load_raw_bar_file",
+        lambda path, **kwargs: seen.append(path.stem) or pd.DataFrame(
+            {"open": [10.0], "close": [10.0]}, index=[pd.Timestamp("2020-01-02", tz="UTC")],
+        ),
+    )
+    monkeypatch.setattr(research, "load_actions_file", lambda _path: [])
+    monkeypatch.setattr(research, "split_normalize", lambda frame, _actions: (frame, []))
+    frames, _, _, _ = research.carregar_universo_oficial()
+    assert len(frames) == 75
+    assert sorted(seen) == official["assets"]
+
+
+def test_loader_refuses_missing_asset_instead_of_excluding_it(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    import pesquisar_optimal_switching_cash_spyder as research
+
+    official = json.loads(research.UNIVERSE.read_text(encoding="utf-8"))
+    source = tmp_path / "snapshot"
+    raw = source / "raw_bars"
+    actions = source / "corporate_actions"
+    raw.mkdir(parents=True)
+    actions.mkdir(parents=True)
+    # Apenas um ativo disponivel: a carga deve abortar antes de qualquer treino.
+    symbol = official["assets"][0]
+    (raw / f"{symbol}.csv").write_text("bar", encoding="utf-8")
+    (actions / f"{symbol}.csv").write_text("action", encoding="utf-8")
+    cpath = tmp_path / "contract.json"
+    cpath.write_text(
+        json.dumps({"selected_assets": [], "snapshot_sha256": "snapshot-test"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(research, "CONTRACT", cpath)
+    monkeypatch.setattr(research, "SOURCE", SimpleNamespace(
+        raw_bars=raw, corporate_actions=actions,
+    ))
+    monkeypatch.setattr(
+        research, "validate_snapshot",
+        lambda _paths: {"snapshot_sha256": "snapshot-test"},
+    )
+    with pytest.raises(RuntimeError, match="arquivos congelados ausentes"):
+        research.carregar_universo_oficial()
 
 
 def test_json_serialization_maps_nan_and_inf_to_null(tmp_path):
