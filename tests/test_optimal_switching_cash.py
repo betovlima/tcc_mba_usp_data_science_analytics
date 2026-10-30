@@ -311,6 +311,9 @@ def test_processed_calendar_removes_indicators_warmup_before_folds():
         _construir_folds_walk_forward, _datas_decisao_analise,
     )
     base = _bars(length=2705)
+    # Volume nao constante para validar os atributos volume_zscore.
+    ticks = np.arange(len(base), dtype=float)
+    base["volume"] = 1e6 + 1e5 * np.sin(ticks / 9.0) + 1e4 * np.cos(ticks / 11.0)
     dates = base.index
     # Sem calendario de fechamento real, esta amostra sintetica testa
     # contagem de sessoes, nao a data literal do checkpoint historico.
