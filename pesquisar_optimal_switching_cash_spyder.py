@@ -31,6 +31,7 @@ from engine.rotacao import (
     _politica_utilidade,
     _politica_agendada,
     _simular_exato,
+    construir_quadro_rotacao,
 )
 from pesquisa.optimal_switching_cash import (
     SwitchingSettings, build_overlay, fit_switching_model,
@@ -50,9 +51,10 @@ CANDIDATE_SOURCE = SnapshotPaths.from_root(
     ROOT / "dados" / ".u67_expansion_cache" / "full_raw_20261006"
 )
 UNIVERSE = ROOT / "pesquisa" / "universo_control_75.json"
+CALENDAR_CONTRACT = ROOT / "pesquisa" / "contrato_calendario_control_75.json"
 CONTRACT = ROOT / "evidencias" / "manifest_universo_congelado.json"
 OUTPUT = ROOT / "output" / "optimal_switching_cash"
-SCRIPT_VERSION = "optimal-switching-cash-reentry-v1.0.3"
+SCRIPT_VERSION = "optimal-switching-cash-reentry-v1.0.4"
 SCHEMA_VERSION = "optimal-switching-cash-v2"
 SETTINGS = SwitchingSettings(
     lookback=20,
@@ -132,6 +134,53 @@ def carregar_universo_oficial() -> tuple[dict[str, pd.DataFrame], dict, dict, di
     return frames, contract, snapshot, definition
 
 
+def construir_calendario_control_75(raw: dict[str, pd.DataFrame], config: object) -> pd.DatetimeIndex:
+    """Calendario apos os indicadores de 200 sessoes, nunca OHLCV bruto.
+
+    Identico ao calendario AAPL utilizado pela reproducao oficial.
+    Exclui do calendario APENAS as sessoes iniciais sem atributos completos;
+    nenhum ativo e retirado do universo de 75.
+    """
+    if "AAPL" not in raw:
+        raise RuntimeError("O ativo de referencia AAPL nao consta do universo oficial.")
+    prepared = construir_quadro_rotacao(raw["AAPL"], config)
+    calendar = pd.DatetimeIndex(prepared.index)
+    if calendar.empty or not calendar.is_monotonic_increasing:
+        raise RuntimeError("Calendario oficial preparado esta vazio/desordenado.")
+    return calendar
+
+
+def verificar_protocolo_cronologico(
+    calendar: pd.DatetimeIndex,
+    folds: list[dict],
+    decision_dates: pd.DatetimeIndex,
+) -> dict:
+    """Bloqueia regressao de folds antes de ajustar qualquer LightGBM."""
+    contract = json.loads(CALENDAR_CONTRACT.read_text(encoding="utf-8"))
+    expected = {
+        "prepared_sessions": len(calendar),
+        "walk_forward_folds": len(folds),
+        "out_of_sample_sessions": len(decision_dates) - 1,
+    }
+    for key, observed in expected.items():
+        if int(contract[key]) != observed:
+            raise RuntimeError(
+                "Protocolo cronologico do Control de 75 ativos divergente "
+                f"({key}): observado={observed} esperado={contract[key]}. "
+                "Treinamento bloqueado. Verifique o calendario de atributos."
+            )
+    first_exec = pd.Timestamp(decision_dates[1]).date().isoformat()
+    last_exec = pd.Timestamp(decision_dates[-1]).date().isoformat()
+    if (first_exec != contract["first_execution_date"]
+        or last_exec != contract["last_execution_date"]):
+        raise RuntimeError(
+            "Datas cronologicas do checkpoint oficial divergentes: "
+            f"observado={first_exec}..{last_exec}, "
+            f"esperado={contract['first_execution_date']}..{contract['last_execution_date']}."
+        )
+    return contract
+
+
 # %% 2 - Calibracao e treinamento Control sobre os 75 simultaneamente
 def ajustar_control_75(
     frames: dict[str, pd.DataFrame],
@@ -206,9 +255,10 @@ def _executar_experimento(output: Path) -> dict:
     ).copiar_modelo(
         update={"analysis_end_date": contract["analysis_end_date"]}
     )
-    # AAPL e a origem de calendario atestada no documento historico.
-    # Fornece o mesmo calendario para TODOS os ativos sem escolher subconjuntos.
-    reference_calendar = pd.DatetimeIndex(raw["AAPL"].index)
+    # A fonte de calendario e AAPL, mas APOS computar os atributos.
+    # O calendario bruto adicionava 199 sessoes invalidas ao protocolo,
+    # gerando 4 folds e um resultado financeiro nao comparavel.
+    reference_calendar = construir_calendario_control_75(raw, config)
     (
         frames, common_dates, calendar, symbols, folds,
         decision_dates, decision_to_fold, decision_metadata,
@@ -218,6 +268,16 @@ def _executar_experimento(output: Path) -> dict:
     )
     if len(symbols) != 75 or tuple(symbols) != tuple(universe["assets"]):
         raise RuntimeError("O motor nao recebeu integralmente os 75 ativos.")
+    chronological_contract = verificar_protocolo_cronologico(
+        common_dates, folds, decision_dates,
+    )
+    print(
+        "[calendar] reference=AAPL "
+        f"raw_sessions={len(raw['AAPL'])} "
+        f"prepared_sessions={len(common_dates)} "
+        f"folds={len(folds)} oos_sessions={len(decision_dates) - 1}",
+        flush=True,
+    )
     # Checagem de precos executaveis: falhar, jamais excluir um ativo.
     execution_dates = decision_dates[1:]
     for symbol in symbols:
@@ -328,6 +388,7 @@ def _executar_experimento(output: Path) -> dict:
         "effective_asset_count": 75,
         "universe_id": universe["universe_id"],
         "calendar": calendar,
+        "calendar_contract": chronological_contract,
         "folds": len(folds),
         "decision_sessions": len(decision_dates) - 1,
         "settings": SETTINGS.__dict__,

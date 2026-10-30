@@ -103,3 +103,29 @@ sem operacoes, enquanto o Control reproduziu US$ 587.165.941,13.
 A recompensa ajustada ficou negativa em todos os 675 estados-modelo
 (75 ativos x 3 folds x 3 regimes). A pesquisa nao deve ser ajustada
 usando o proprio teste fora da amostra como criterio de selecao.
+
+
+## v1.0.4: calendario cronologico do Control restaurado
+
+A execucao anterior com 75 ativos falhou o checkpoint ao gerar 4 folds
+(e capital US$ 667.225,51), em vez dos 3 folds originais do Control.
+A causa foi utilizar as 2.705 datas de OHLCV bruto de AAPL como calendario.
+
+O motor `construir_quadro_rotacao` exige indicadores com janelas de
+ate 200 sessoes e descarta 199 datas iniciais sem atributos suficientes.
+A reproducao valida possui **2.506 sessoes de calendario preparado**,
+3 folds e **1.560 sessoes fora da amostra**, com primeiro replay em
+22/07/2020 e ultimo em 06/10/2026.
+
+A v1.0.4 reutiliza diretamente o indice da serie preparada de AAPL,
+aplica-o aos 75 ativos e valida a estrutura cronologica **antes de qualquer
+treinamento**. O contrato de calendario esta em
+`pesquisa/contrato_calendario_control_75.json`, elaborado com os metadados
+do checkpoint historico entregue pelo pesquisador.
+A contagem de 75 ativos permanece obrigatoria. Nao ha exclusao nem
+reconstrucao de ativos.
+
+A cifra de US$ 587.165.941,13 continua como checkpoint imutavel. Os
+testes automatizados validam invariantes e nao substituem o replay completo
+dos dados historicos locais, que deve confirmar o valor ao centavo.
+O pacote ZIP automatico permanece ativo em sucessos e falhas.

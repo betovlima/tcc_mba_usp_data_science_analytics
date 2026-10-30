@@ -302,3 +302,51 @@ def test_analysis_zip_also_exists_for_failed_run(tmp_path):
     empty.mkdir()
     with pytest.raises(RuntimeError, match="Arquivo principal"):
         gerar_zip_resultados(empty, versao="v1-test", status="completed")
+
+
+def test_processed_calendar_removes_indicators_warmup_before_folds():
+    """Regressao: o calendario de OHLCV bruto gerava um fold adicional."""
+    import pesquisar_optimal_switching_cash_spyder as research
+    from engine.rotacao import (
+        _construir_folds_walk_forward, _datas_decisao_analise,
+    )
+    base = _bars(length=2705)
+    dates = base.index
+    # Sem calendario de fechamento real, esta amostra sintetica testa
+    # contagem de sessoes, nao a data literal do checkpoint historico.
+    prepared = research.construir_calendario_control_75({"AAPL": base}, CONFIG)
+    assert len(dates) == 2705
+    assert len(prepared) == 2506
+    assert prepared[0] == dates[199]
+    folds = _construir_folds_walk_forward(prepared, CONFIG)
+    assert len(folds) == 3
+    test_dates = _datas_decisao_analise(
+        prepared, folds, CONFIG.copiar_modelo(update={"analysis_end_date": None}),
+    )
+    assert len(test_dates) - 1 == 1560
+    assert len(_construir_folds_walk_forward(dates, CONFIG)) == 4
+
+
+def test_chronology_contract_rejects_wrong_fold_count_before_training(tmp_path, monkeypatch):
+    import json
+    import pesquisar_optimal_switching_cash_spyder as research
+
+    calendar = pd.date_range("2016-12-01", periods=2506, freq="B", tz="UTC")
+    decisions = pd.date_range("2020-07-21", periods=1561, freq="B", tz="UTC")
+    contract = {
+        "prepared_sessions": 2506,
+        "walk_forward_folds": 3,
+        "out_of_sample_sessions": 1560,
+        "first_execution_date": str(decisions[1].date()),
+        "last_execution_date": str(decisions[-1].date()),
+    }
+    manifest = tmp_path / "calendar.json"
+    manifest.write_text(json.dumps(contract), encoding="utf-8")
+    monkeypatch.setattr(research, "CALENDAR_CONTRACT", manifest)
+    assert research.verificar_protocolo_cronologico(
+        calendar, [{"fold_id": 1}, {"fold_id": 2}, {"fold_id": 3}], decisions,
+    )["prepared_sessions"] == 2506
+    with pytest.raises(RuntimeError, match="walk_forward_folds"):
+        research.verificar_protocolo_cronologico(
+            calendar, [{"fold_id": i} for i in range(4)], decisions,
+        )

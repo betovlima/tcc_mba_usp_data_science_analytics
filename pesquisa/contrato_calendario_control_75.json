@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "universe_id": "tcc_control_75_frozen_20261006",
+  "source": "Reproducao validada no arquivo 20261030T212456Z.zip, 20261030T213502Z/resultado.json",
+  "calendar_source": "AAPL",
+  "prepared_sessions": 2506,
+  "walk_forward_folds": 3,
+  "out_of_sample_sessions": 1560,
+  "first_execution_date": "2020-07-22",
+  "last_execution_date": "2026-10-06",
+  "control_expected_ending_capital": 587165941.1330212
+}
