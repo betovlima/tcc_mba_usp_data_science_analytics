@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "current_control_id": "operational_strategy30_20261028",
+  "contract_path": "pesquisa/control_oficial_strategy30.json",
+  "source": "backtest operacional Strategy #30 em 29/10/2026",
+  "historical_references_are_not_current_control": true,
+  "requires_same_calendar_and_market_data": true
+}
