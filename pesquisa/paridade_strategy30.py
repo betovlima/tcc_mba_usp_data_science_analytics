@@ -168,13 +168,38 @@ def compare_control_trajectories(
     contract: dict[str, Any],
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     """Impede declarar reprodução se qualquer sessão, posição ou capital divergir."""
-    left = reference[["timestamp", "selected_asset", "walk_forward_fold", "strategy_equity"]].copy()
-    right = calculated[["timestamp", "selected_asset", "walk_forward_fold", "strategy_equity"]].copy()
-    for table in (left, right):
-        table["timestamp"] = pd.to_datetime(table["timestamp"], utc=True)
-        table.sort_values("timestamp", inplace=True)
-        if table["timestamp"].duplicated().any():
-            raise RuntimeError("Sessões duplicadas na comparação.")
+    columns = ["selected_asset", "walk_forward_fold", "strategy_equity"]
+
+    def normalizar_tabela(frame: pd.DataFrame, label: str) -> pd.DataFrame:
+        """Aceita timestamp como coluna (ZIP) ou DatetimeIndex (motor)."""
+        if "timestamp" in frame.columns:
+            result = frame[["timestamp", *columns]].copy()
+        elif isinstance(frame.index, pd.DatetimeIndex):
+            result = frame[columns].copy()
+            result.insert(0, "timestamp", frame.index)
+        else:
+            raise RuntimeError(
+                f"{label}: sem timestamp em coluna ou DatetimeIndex."
+            )
+        result["timestamp"] = pd.to_datetime(
+            result["timestamp"], utc=True, errors="coerce",
+        )
+        if result["timestamp"].isna().any():
+            raise RuntimeError(f"{label}: timestamp ausente/invalido.")
+        if result["timestamp"].duplicated().any():
+            raise RuntimeError(f"{label}: sessoes duplicadas na comparacao.")
+        result["strategy_equity"] = pd.to_numeric(
+            result["strategy_equity"], errors="coerce",
+        )
+        if not np.isfinite(result["strategy_equity"]).all():
+            raise RuntimeError(f"{label}: patrimonio nao numerico/finito.")
+        if result["selected_asset"].isna().any():
+            raise RuntimeError(f"{label}: ativo selecionado ausente.")
+        result.sort_values("timestamp", inplace=True)
+        return result.reset_index(drop=True)
+
+    left = normalizar_tabela(reference, "Control de referencia")
+    right = normalizar_tabela(calculated, "Control reproduzido")
     left = left.rename(columns={
         "selected_asset": "reference_asset", "walk_forward_fold": "reference_fold",
         "strategy_equity": "reference_equity",

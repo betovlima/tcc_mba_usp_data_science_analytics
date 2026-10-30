@@ -144,3 +144,55 @@ def test_replay_runner_retains_original_error_in_failure_zip(tmp_path, monkeypat
         assert archive.testzip() is None
         error = json.loads(archive.read("erro_execucao.json"))
         assert error["status"] == "failed"
+
+
+
+def test_parity_accepts_datetimeindex_emitted_by_frozen_engine():
+    """Regressao: o motor retorna timestamp no indice, nao como coluna."""
+    reference = _tiny_traces()
+    replay = reference.set_index("timestamp")
+    assert isinstance(replay.index, pd.DatetimeIndex)
+    assert "timestamp" not in replay.columns
+    audit, detail = compare_control_trajectories(
+        reference, replay, contract={"expected_rows": 2},
+    )
+    assert audit["fully_reproduced"] is True
+    assert audit["mismatch_sessions"] == 0
+    assert list(detail["same_asset"]) == [True, True]
+
+
+def test_parity_rejects_datetimeindex_asset_mismatch():
+    reference = _tiny_traces()
+    replay = reference.set_index("timestamp")
+    replay.loc[replay.index[0], "selected_asset"] = "NVDA"
+    audit, detail = compare_control_trajectories(
+        reference, replay, contract={"expected_rows": 2},
+    )
+    assert audit["fully_reproduced"] is False
+    assert audit["mismatch_sessions"] == 1
+    assert detail.loc[0, "same_asset"] == False
+
+
+def test_prediction_csv_roundtrip_preserves_index_timestamp(tmp_path):
+    """A gravacao da reproducao nao deve apagar a chave de conciliacao."""
+    replay = _tiny_traces().set_index("timestamp")
+    target = tmp_path / "reproducao_predictions.csv"
+    replay.to_csv(
+        target, index=True, index_label="timestamp", float_format="%.17g",
+    )
+    loaded = pd.read_csv(target)
+    assert "timestamp" in loaded.columns
+    audit, _ = compare_control_trajectories(
+        _tiny_traces(), loaded, contract={"expected_rows": 2},
+    )
+    assert audit["fully_reproduced"] is True
+
+
+def test_parity_rejects_invalid_timestamp_without_silent_nat():
+    reference = _tiny_traces()
+    replay = reference.copy()
+    replay.loc[0, "timestamp"] = "data-invalida"
+    with pytest.raises(RuntimeError, match="timestamp ausente/invalido"):
+        compare_control_trajectories(
+            reference, replay, contract={"expected_rows": 2},
+        )

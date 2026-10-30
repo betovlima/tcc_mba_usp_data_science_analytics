@@ -54,3 +54,23 @@ usar a curva de capital importada como substituta de uma politica executavel.
 O checkpoint anterior de US$ 587.165.941,13 permanece arquivado como
 resultado de outra configuracao e periodo e nunca entra na aprovacao
 da reproduçao atual.
+
+
+## v1.0.2: normalizacao do timestamp para comparacao
+
+O motor congelado devolve `predictions` com `DatetimeIndex` denominado
+`timestamp`, enquanto o ZIP de referencia guarda a data como coluna.
+A primeira versao da rotina de comparacao exigia coluna em ambos os casos
+e falhava com `KeyError: ['timestamp'] not in index` **depois** do
+treinamento dos 75 ativos.
+
+A v1.0.2 reconhece tanto `DatetimeIndex` quanto coluna, converte ambos
+para UTC, recusa datas ausentes/duplicadas e preserva a coluna de data no
+`reproducao_predictions.csv`. A verificacao estrita de 1.576 sessoes,
+ativo, fold e diferenca de patrimonio de ate US$ 0,01 permanece igual.
+
+O treinamento e o resultado financeiro nao foram ajustados por esta
+correcao. O snapshot ja baixado em `dados/strategy30_snapshot` pode ser
+reutilizado. Execute apenas `pesquisar_paridade_strategy30_spyder.py`.
+Um resultado de paridade ainda precisa ser verificado por meio do ZIP
+completo; testes de codigo nao comprovam identidade com o backtest.

@@ -38,7 +38,7 @@ from pesquisa.pacote_analise_switching import gerar_zip_resultados
 from pesquisar_controle_strategy30_spyder import localizar_zip_original
 from pesquisar_expansao_u67_spyder import _write_json
 
-SCRIPT_VERSION = "control-strategy30-independent-parity-v1.0.1"
+SCRIPT_VERSION = "control-strategy30-independent-parity-v1.0.2"
 OUTPUT = ROOT / "output" / "paridade_strategy30"
 SNAPSHOT = ROOT / "dados" / "strategy30_snapshot"
 
@@ -124,9 +124,11 @@ def _run(output: Path) -> dict:
     if len(results) != 1:
         raise RuntimeError(f"Esperava uma repetição, recebeu {len(results)}.")
     run = results[0]
+    # O motor retorna DatetimeIndex chamado timestamp. Preservar as
+    # datas no CSV de auditoria; index=False apagaria a coluna temporal.
     salvar_csv(
         run.predictions, output / "reproducao_predictions.csv",
-        index=False, float_format="%.17g",
+        index=True, index_label="timestamp", float_format="%.17g",
     )
     salvar_csv(run.trades, output / "reproducao_trades.csv", index=False)
     salvar_json(output / "reproducao_metricas.json", {
