@@ -10,7 +10,7 @@ O universo cientifico permanece **um conjunto unico de 75 ativos**.
 Mesmo calendario (AAPL com atributos preparados, 2506 sessoes), 3 folds,
 1560 sessoes fora da amostra, custos e modelo Control de referencia,
 com checkpoint inalterado **US$ 587.165.941,13**. Sem acessar banco de
-dados ou baixar historicos, sem tocar a `main` ou o MCT operacional.
+dados ou baixar historicos, sem tocar a `main` ou qualquer aplicacao operacional.
 
 ## Definicao contrafactual
 
