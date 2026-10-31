@@ -1,11 +1,12 @@
 # Diagnóstico do universo U75: fraqueza coletiva e posições efetivas
 
-**Versão de pesquisa:** `u75-universe-stress-diagnostics-v1.0.0`.
-**Branch:** `research/u75-stress-positions-diagnostics-v1`.
+**Versão de pesquisa:** `u75-universe-stress-diagnostics-v1.0.1`.
+**Branch:** `research/u75-stress-dynamic-cash-v1`.
 **Origem:** Control congelado Strategy #30, US$ 80.685.454,79,
 75 ativos, 1.576 sessões, 22/07/2020 a 28/10/2026.
 **Implementação operacional:** nenhuma alteração.
 **Status:** diagnóstico exploratório, NÃO uma nova estratégia aprovada.
+**Mudança 1.0.1:** removida a trava de cinco pregões em dinheiro.
 
 ## Pergunta científica
 
@@ -58,19 +59,37 @@ O sinal usa as características do **fechamento t**. A posição efetiva
 se o Control estiver investido, houver estresse coletivo E não
 existir candidato técnico no U75.
 
-Para isolar uma decisão, partimos do mesmo patrimônio e da mesma
-posição do Control: em um replay impomos CASH durante **5 decisões**
-e, a seguir, devolvemos o controle à política original, que decide
-usando o estado real da carteira. Comparamos o patrimônio após
-**10 sessões**, com o mesmo simulador e suas taxas. Cada replay
-individual recomeça com todo o histórico do Control até o episódio,
-não é apenas uma subtração simplista de retornos de preços.
+**Correção de protocolo na versão 1.0.1:** a versão 1.0.0
+introduziu uma permanência artificial de cinco pregões em CASH. Essa
+regra não havia sido solicitada e impediu a reentrada imediata.
+Os resultados financeiros da versão 1.0.0 (US$ 73,68 milhões no
+replay com prazo fixo) permanecem evidência histórica desse
+**desenho inadequado**, não da política de proteção diária.
 
-Episódios contíguos viram uma única ocorrência. Episódios com janelas
-de comparação que se sobrepõem não entram duas vezes na contagem.
-Além disso, rodamos uma carteira alternativa com todas as intervenções
-não sobrepostas, apenas como cenário exploratório. Nenhuma decisão é
-tomada escolhendo retrospectivamente os episódios com melhor resultado.
+**Nenhuma duração mínima ou máxima em CASH é imposta.** Em cada
+fechamento t, todos os 75 ativos são reavaliados com os mesmos
+critérios coletivos. Se houver estresse E nenhum candidato técnico,
+a posição-alvo é CASH, com execução no pregão seguinte. Se qualquer
+uma dessas condições cessar, a política original volta a escolher
+a posição imediatamente, inclusive a partir do estado CASH.
+A carteira não entra e sai de CASH na mesma sessão, pois há
+apenas uma decisão por pregão.
+
+Para isolar uma ocorrência, partimos exatamente do patrimônio e
+posição do Control; ativamos a verificação diária apenas durante o
+intervalo **de avaliação de dez pregões**. Em cada pregão desse intervalo
+o capital só fica em CASH enquanto o critério coletivo estiver
+verdadeiro; se deixar de estar, a simulação permite reentrada
+no pregão imediatamente seguinte. Dez pregões é somente o
+**horizonte para comparar patrimônios**, nunca uma trava de CASH.
+O replay de cada ocorrência começa no histórico completo do
+Control até a decisão inicial, com o mesmo simulador e taxas.
+
+Episódios contíguos viram uma única ocorrência para análise; horizontes
+sobrepostos são excluídos da comparação **individual**. No replay
+completo, TODAS as decisões do U75 são reavaliadas diariamente,
+sem excluir episódios e sem escolher um número fixo de dias
+para proteção. Nenhuma decisão depende da valorização posterior.
 
 **Os ganhos/perdas dos replays individuais NÃO são somáveis.** A
 simulação completa com intervenções consecutivas pode ter outra

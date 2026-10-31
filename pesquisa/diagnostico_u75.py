@@ -23,14 +23,12 @@ class StressSettings:
     max_positive_share_20: float = 0.45
     min_below_ma50_share: float = 0.55
     max_median_return_20: float = -0.015
-    cash_sessions: int = 5
+    # Horizonte exclusivo para comparar resultados, NUNCA permanencia minima em CASH.
     audit_sessions: int = 10
 
     def __post_init__(self) -> None:
-        if self.min_valid_assets < 1 or self.cash_sessions < 1:
-            raise ValueError("Parametros de estresse invalidos.")
-        if self.audit_sessions <= self.cash_sessions:
-            raise ValueError("Horizonte de auditoria deve exceder tempo em CASH.")
+        if self.min_valid_assets < 1 or self.audit_sessions < 1:
+            raise ValueError("Parametros de estresse ou auditoria invalidos.")
 
 
 def _valid_date_index(dates: pd.DatetimeIndex) -> pd.DatetimeIndex:
@@ -368,16 +366,44 @@ if(rows.length)show(rows[0]);
     )
 
 
-def construir_politica_episodio(base_policy, decision_dates, start_index, cash_days):
-    """Forca apenas o intervalo definido; depois Control avalia estado REAL."""
-    dates = _valid_date_index(decision_dates)
-    if start_index < 0 or start_index + cash_days >= len(dates) - 1:
-        raise ValueError("Episodio CASH fora do periodo avaliavel.")
-    blocked = set(dates[start_index:start_index + cash_days])
+def construir_politica_protecao_diaria(
+    base_policy,
+    daily: pd.DataFrame,
+    *,
+    active_dates: pd.DatetimeIndex | None = None,
+):
+    """Reavaliar a condicao do U75 a CADA pregao, sem prazo fixo em CASH.
+
+    O fechamento t determina a posicao efetiva em t+1.
+    Quando o sinal cessa, a politica original e chamada imediatamente
+    com a posicao/tempo de permanencia REAIS, inclusive CASH.
+    O intervalo active_dates serve apenas a simulacoes locais de
+    atribuicao, nao define nem prolonga o estado CASH.
+    """
+    required = {"decision_date", "stress_without_candidate"}
+    if not required.issubset(daily.columns):
+        raise ValueError("Tabela diaria incompleta para protecao de mercado.")
+    rows = daily[list(required)].copy()
+    rows["decision_date"] = pd.to_datetime(rows["decision_date"], utc=True)
+    if rows["decision_date"].isna().any() or rows["decision_date"].duplicated().any():
+        raise ValueError("Datas de protecao invalidas ou duplicadas.")
+    if rows["stress_without_candidate"].isna().any():
+        raise ValueError("Nao tratar ausencia de sinal como decisao segura.")
+    signals = {
+        pd.Timestamp(dt): bool(s)
+        for dt, s in rows.itertuples(index=False, name=None)
+    }
+    allowed = (
+        None if active_dates is None
+        else set(_valid_date_index(active_dates))
+    )
 
     def policy(date, position, holding):
-        if pd.Timestamp(date) in blocked:
+        dt = pd.Timestamp(date)
+        if dt not in signals:
+            raise KeyError(f"Sem avaliacao do U75 para {dt}.")
+        if (allowed is None or dt in allowed) and signals[dt]:
             return 0, 0.0
-        return base_policy(date, position, holding)
+        return base_policy(dt, position, holding)
 
     return policy

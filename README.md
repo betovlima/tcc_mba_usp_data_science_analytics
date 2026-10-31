@@ -10,7 +10,7 @@ reproduzida em 1.576 sessoes, 75 ativos, ate 28/10/2026, com
 US$ 587,17 milhoes descrito nas secoes de release abaixo esta arquivado
 e **nao e o Control das proximas pesquisas**.
 
-O diagnostico atual analisa estresse coletivo do U75, contagem de
+**Correcao v1.0.1:** a politica reavalia a protecao em cada pregao,\nsem qualquer permanencia minima ou maxima em CASH. A versao 1.0.0\nusava erroneamente uma trava artificial de cinco sessoes, abandonada\nna avaliacao corrigida.\n\nO diagnostico atual analisa estresse coletivo do U75, contagem de
 oportunidades tecnicas, posicionamento efetivo do capital e
 contrafactuais exploratorios de CASH. Ele exporta um mapa de calor
 mensal com clique, com TODOS os ativos que compuseram a carteira

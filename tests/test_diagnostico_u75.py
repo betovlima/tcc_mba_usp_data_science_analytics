@@ -11,7 +11,7 @@ import pytest
 from pesquisa.diagnostico_u75 import (
     StressSettings, calcular_indicadores_u75, juntar_decisoes,
     extrair_episodios, posicoes_mensais, serializar_mapa_html,
-    construir_politica_episodio,
+    construir_politica_protecao_diaria,
 )
 from pesquisa.pacote_visual_u75 import gerar_zip_visual
 
@@ -109,26 +109,94 @@ def test_stress_episode_horizons_do_not_overlap():
         "decision_date": dt, "invested_without_candidate": flags,
     })
     episodes = extrair_episodios(
-        joined, settings=StressSettings(audit_sessions=10, cash_sessions=5),
+        joined, settings=StressSettings(audit_sessions=10),
     )
     assert episodes["start_index"].tolist() == [2, 9, 25]
     assert episodes["audit_eligible"].tolist() == [True, False, True]
 
 
-def test_forced_cash_reenters_using_actual_portfolio_state():
+def test_cash_reenters_after_one_session_when_universe_recovers():
     dates = pd.date_range("2025-01-02", periods=18, freq="B", tz="UTC")
+    signals = pd.DataFrame({
+        "decision_date": dates,
+        "stress_without_candidate": [False, False, True, False, True, True, False]
+                                    + [False] * 11,
+    })
     states = []
     def base(_dt, position, holding):
         states.append((position, holding))
         return (1 if position == 0 else 2, 0.5)
-    wrapper = construir_politica_episodio(
-        base, dates, start_index=2, cash_days=5,
-    )
+    wrapper = construir_politica_protecao_diaria(base, signals)
     assert wrapper(dates[2], 1, 3)[0] == 0
-    assert wrapper(dates[3], 0, 0)[0] == 0
-    assert wrapper(dates[6], 0, 0)[0] == 0
-    assert wrapper(dates[7], 0, 0)[0] == 1
-    assert states == [(0, 0)]
+    # A condicao some no fechamento seguinte; recompra na execucao t+1.
+    assert wrapper(dates[3], 0, 0)[0] == 1
+    assert wrapper(dates[4], 1, 1)[0] == 0
+    assert wrapper(dates[5], 0, 0)[0] == 0
+    assert wrapper(dates[6], 0, 0)[0] == 1
+    assert states == [(0, 0), (0, 0)]
+
+
+def test_cash_can_last_longer_than_five_sessions_without_maximum():
+    dates = pd.date_range("2025-01-02", periods=20, freq="B", tz="UTC")
+    signals = pd.DataFrame({
+        "decision_date": dates,
+        "stress_without_candidate": [False] * 2 + [True] * 9 + [False] * 9,
+    })
+    def base(_dt, position, _holding):
+        return (1 if position == 0 else 2, 0.5)
+    wrapper = construir_politica_protecao_diaria(base, signals)
+    for i in range(2, 11):
+        assert wrapper(dates[i], 0, 0)[0] == 0
+    assert wrapper(dates[11], 0, 0)[0] == 1
+
+
+def test_signal_covers_entire_universe_not_current_asset():
+    dates = pd.date_range("2025-01-02", periods=3, freq="B", tz="UTC")
+    signals = pd.DataFrame({
+        "decision_date": dates,
+        "stress_without_candidate": [False, True, False],
+    })
+    def weak_base(_dt, _position, _holding):
+        return (2, -2.5)
+    wrapper = construir_politica_protecao_diaria(weak_base, signals)
+    assert wrapper(dates[0], 7, 11)[0] == 2
+    assert wrapper(dates[1], 7, 11)[0] == 0
+    assert wrapper(dates[2], 0, 0)[0] == 2
+
+
+def test_episode_window_limits_attribution_not_cash_duration():
+    dates = pd.date_range("2025-01-02", periods=15, freq="B", tz="UTC")
+    signals = pd.DataFrame({
+        "decision_date": dates,
+        "stress_without_candidate": [False] * 2 + [True] * 10 + [False] * 3,
+    })
+    def base(_dt, position, _holding):
+        return (1 if position == 0 else 2, .5)
+    wrapper = construir_politica_protecao_diaria(
+        base, signals, active_dates=dates[2:5],
+    )
+    for i in (2, 3, 4):
+        assert wrapper(dates[i], 0, 0)[0] == 0
+    # Em um replay local, a janela so delimita a comparacao financeira.
+    assert wrapper(dates[5], 0, 0)[0] == 1
+
+
+def test_daily_signal_rejects_missing_or_duplicate_dates():
+    dates = pd.date_range("2025-01-02", periods=3, freq="B", tz="UTC")
+    data = pd.DataFrame({
+        "decision_date": dates,
+        "stress_without_candidate": [False, True, False],
+    })
+    wrapper = construir_politica_protecao_diaria(
+        lambda _d, _p, _h: (1, 0.1), data,
+    )
+    with pytest.raises(KeyError, match="Sem avaliacao"):
+        wrapper(dates[-1] + pd.Timedelta(days=3), 0, 0)
+    with pytest.raises(ValueError, match="duplicadas"):
+        construir_politica_protecao_diaria(
+            lambda _d, _p, _h: (1, .1),
+            pd.concat([data, data.iloc[[0]]], ignore_index=True),
+        )
 
 
 def test_monthly_heatmap_counts_effective_positions_and_click_details():

@@ -42,7 +42,7 @@ from pesquisa.referencia_strategy30.execucao import (
 from pesquisa.diagnostico_u75 import (
     StressSettings, calcular_indicadores_u75, juntar_decisoes,
     extrair_episodios, posicoes_mensais, serializar_mapa_html,
-    construir_politica_episodio,
+    construir_politica_protecao_diaria,
 )
 from pesquisa.figuras_u75 import (
     grafico_forca_universo, grafico_capital_e_estresse,
@@ -53,7 +53,7 @@ from pesquisa.persistencia_resultados import salvar_csv, salvar_json, salvar_tex
 from pesquisar_controle_strategy30_spyder import localizar_zip_original
 from pesquisar_expansao_u67_spyder import _write_json
 
-SCRIPT_VERSION = "u75-universe-stress-diagnostics-v1.0.0"
+SCRIPT_VERSION = "u75-universe-stress-diagnostics-v1.0.1"
 OUTPUT = ROOT / "output" / "diagnostico_u75"
 SNAPSHOT = ROOT / "dados" / "strategy30_snapshot"
 SETTINGS = StressSettings(
@@ -62,7 +62,6 @@ SETTINGS = StressSettings(
     max_positive_share_20=0.45,
     min_below_ma50_share=0.55,
     max_median_return_20=-0.015,
-    cash_sessions=5,
     audit_sessions=10,
 )
 
@@ -263,8 +262,9 @@ def _run(output: Path) -> dict:
             raise RuntimeError("Decisao do episodio nao coincide com calendario.")
         alternative = _simulacao(
             f"cash_episodio_{k}",
-            construir_politica_episodio(
-                base, decisions, i, SETTINGS.cash_sessions,
+            construir_politica_protecao_diaria(
+                base, joined,
+                active_dates=pd.DatetimeIndex(decisions[i:i + SETTINGS.audit_sessions]),
             ),
             frames, symbols, decisions, config, decision_metadata,
             benchmark=benchmark,
@@ -282,11 +282,17 @@ def _run(output: Path) -> dict:
         until = i + SETTINGS.audit_sessions - 1
         actual_end = float(control.predictions.iloc[until]["strategy_equity"])
         other_end = float(alternative.predictions.iloc[until]["strategy_equity"])
+        local_decisions = alternative.predictions.iloc[i:until + 1]
+        local_cash = local_decisions["selected_asset"].eq("CASH")
+        local_reentry = (
+            ~local_cash & local_cash.shift(fill_value=False)
+        )
         audited.append({
             "decision_date": pd.Timestamp(decisions[i]).isoformat(),
             "evaluation_end": pd.Timestamp(decisions[i + SETTINGS.audit_sessions]).isoformat(),
             "original_asset": joined.iloc[i]["selected_asset"],
-            "cash_sessions_forced": SETTINGS.cash_sessions,
+            "cash_sessions_observed": int(local_cash.sum()),
+            "reentries_observed": int(local_reentry.sum()),
             "starting_capital": prior,
             "control_capital_at_horizon": actual_end,
             "cash_capital_at_horizon": other_end,
@@ -302,7 +308,7 @@ def _run(output: Path) -> dict:
         )
     episode_finance = pd.DataFrame(audited, columns=[
         "decision_date", "evaluation_end", "original_asset",
-        "cash_sessions_forced", "starting_capital",
+        "cash_sessions_observed", "reentries_observed", "starting_capital",
         "control_capital_at_horizon", "cash_capital_at_horizon",
         "difference_usd_at_horizon", "difference_return_points",
         "avoided_loss", "comparison",
@@ -310,21 +316,12 @@ def _run(output: Path) -> dict:
     salvar_csv(episode_finance, output / "contrafactual_por_episodio.csv",
                index=False, float_format="%.17g")
 
-    # %% 7 - Replay conjunto: criterio FIXO e exploratorio, nao otimizado
-    blocked: set[pd.Timestamp] = set()
-    for i in selected_starts:
-        blocked.update(
-            pd.Timestamp(x)
-            for x in decisions[i:i + SETTINGS.cash_sessions]
-        )
-
-    def protective_policy(date, position, holding):
-        if pd.Timestamp(date) in blocked:
-            return 0, 0.0
-        return base(date, position, holding)
-
+    # %% 7 - Protecao do universo reavaliada TODOS os pregoes, sem trava
+    # Se o sinal deixar de existir no fechamento t, o Control ja pode
+    # escolher a recompra para a execucao seguinte, usando posicao CASH.
+    protective_policy = construir_politica_protecao_diaria(base, joined)
     protected = _simulacao(
-        "cash_protecao_u75_fixa", protective_policy,
+        "cash_protecao_u75_diaria", protective_policy,
         frames, symbols, decisions, config, decision_metadata,
         benchmark=benchmark,
     )
@@ -334,6 +331,29 @@ def _run(output: Path) -> dict:
         index=False, float_format="%.17g",
     )
     salvar_csv(protected.trades, output / "protecao_operacoes.csv", index=False)
+    protected_daily = protected.predictions.reset_index().merge(
+        joined[[
+            "decision_date", "universe_stress",
+            "stress_without_candidate", "technical_candidates_count",
+        ]], on="decision_date", validate="one_to_one", how="left", indicator=True,
+    )
+    if len(protected_daily) != len(joined) or not protected_daily["_merge"].eq("both").all():
+        raise RuntimeError("Protecao diaria sem correspondencia completa de datas.")
+    protected_daily = protected_daily.drop(columns="_merge")
+    cash_flags = protected_daily["selected_asset"].eq("CASH")
+    previous_cash = cash_flags.shift(fill_value=False)
+    reentries = ~cash_flags & previous_cash
+    cash_entries = cash_flags & ~previous_cash
+    protected_daily["entry_to_cash"] = cash_entries
+    protected_daily["reentry_from_cash"] = reentries
+    protected_daily["decision_reason"] = np.where(
+        protected_daily["stress_without_candidate"],
+        "protecao_do_universo", "seguir_control",
+    )
+    salvar_csv(
+        protected_daily, output / "decisoes_protecao_diaria.csv",
+        index=False, float_format="%.17g",
+    )
 
     # %% 8 - Resultado e limites da pesquisa
     metrics = ("strategy_ending_capital", "strategy_sharpe",
@@ -357,8 +377,14 @@ def _run(output: Path) -> dict:
         ),
         "stress_episodes": len(episodes),
         "auditable_disjoint_episodes": len(selected_starts),
-        "counterfactual_cash_days": SETTINGS.cash_sessions,
-        "counterfactual_horizon_sessions": SETTINGS.audit_sessions,
+        "counterfactual_evaluation_horizon_sessions": SETTINGS.audit_sessions,
+        "cash_minimum_holding_sessions": 0,
+        "cash_maximum_holding_sessions": None,
+        "market_condition_recomputed_each_session": True,
+        "protection_signal_sessions": int(joined["stress_without_candidate"].sum()),
+        "actual_protected_cash_sessions": int(cash_flags.sum()),
+        "cash_periods": int(cash_entries.sum()),
+        "cash_reentries": int(reentries.sum()),
         "episodes_where_cash_protected": int(
             episode_finance["avoided_loss"].sum()
         ) if len(episode_finance) else 0,
@@ -372,9 +398,9 @@ def _run(output: Path) -> dict:
         ),
         "cautions": [
             "Estresse e oportunidade tecnica sao indicadores retrospectivos do universo; nao estimativas calibradas de probabilidade futura.",
-            "Limiar de estresse e janela de CASH foram predeclarados para diagnostico; nao houve busca por melhor patrimonio no OOS.",
+            "Limites de estresse foram predeclarados; o estado CASH e reavaliado por dia, sem duracao fixa. Horizonte de 10 sessoes e apenas avaliacao financeira.",
             "Pontuacoes de modelo originais nao entram no filtro: a fonte congelada consulta precos futuros para checar elegibilidade.",
-            "Episodios com horizontes sobrepostos nao sao auditados duas vezes.",
+            "Episodios com horizontes de comparacao sobrepostos nao sao auditados duas vezes; politica completa usa todos os sinais diarios.",
             "Deltas locais de patrimonio nao sao aditivos entre episodios.",
             "Resultados OOS deste periodo ja foram estudados anteriormente e nao sao teste prospectivo virgem.",
             "Nao usar o replay exploratorio para operar ou afirmar ausencia de sobreajuste.",
@@ -391,6 +417,9 @@ def _run(output: Path) -> dict:
         f"Estresse sem candidato tecnico: "
         f"{result['invested_under_stress_without_technical_candidate']}\n"
         f"Episodios auditados: {len(selected_starts)}\n"
+        f"Protecao reavaliada por pregao, SEM trava de duracao: "
+        f"{int(cash_flags.sum())} sessoes CASH em {int(cash_entries.sum())} periodos; "
+        f"{int(reentries.sum())} reentradas.\n"
         f"Replay exploratorio: US$ "
         f"{protected.metrics['strategy_ending_capital']:,.2f}; "
         f"diferenca: US$ {result['exploratory_final_difference_usd']:+,.2f}\n\n"
