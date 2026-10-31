@@ -94,6 +94,10 @@ def test_state_dependent_policy_exits_cash_then_reenters_next_session():
         def predict(self, features):
             return 0.05 if features["cash_position"] < 0.5 else -0.05
     class Fit:
+        training_rows = 80
+        calibration_rows = 110
+        fit_last_label_date = dates[2]
+
         def predict(self, features):
             return StateModel().predict(features)
     decisions = {}
