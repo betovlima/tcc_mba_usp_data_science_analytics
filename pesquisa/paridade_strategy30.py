@@ -195,6 +195,9 @@ def compare_control_trajectories(
             raise RuntimeError(f"{label}: patrimonio nao numerico/finito.")
         if result["selected_asset"].isna().any():
             raise RuntimeError(f"{label}: ativo selecionado ausente.")
+        # Remove o indice original ANTES da ordenacao: pandas considera
+        # ambiguo ter nivel e coluna chamados timestamp ao mesmo tempo.
+        result = result.reset_index(drop=True)
         result.sort_values("timestamp", inplace=True)
         return result.reset_index(drop=True)
 

@@ -191,6 +191,8 @@ def test_prediction_csv_roundtrip_preserves_index_timestamp(tmp_path):
 def test_parity_rejects_invalid_timestamp_without_silent_nat():
     reference = _tiny_traces()
     replay = reference.copy()
+    # Converte para object para reproduzir um CSV com data textual invalida.
+    replay["timestamp"] = replay["timestamp"].astype(object)
     replay.loc[0, "timestamp"] = "data-invalida"
     with pytest.raises(RuntimeError, match="timestamp ausente/invalido"):
         compare_control_trajectories(
