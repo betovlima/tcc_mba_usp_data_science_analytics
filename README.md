@@ -2,6 +2,27 @@
 
 **Release oficial: `v1.23.0` — universo selecionado reproduzido.** O executor usa o motor Control histórico (`v1.22.1`) e as rotinas de expansão pesquisadas na `v1.4.1`. O encerramento da release está na seção 28 de [MANIFEST.md](MANIFEST.md); as seções anteriores preservam os experimentos históricos.
 
+## Pesquisa vigente nesta branch: Control Strategy #30 (US$ 80,69 milhoes)
+
+Nesta branch de pesquisa, o **Control atual** e a Strategy #30,
+reproduzida em 1.576 sessoes, 75 ativos, ate 28/10/2026, com
+**US$ 80.685.454,79** de patrimonio final. O resultado historico de
+US$ 587,17 milhoes descrito nas secoes de release abaixo esta arquivado
+e **nao e o Control das proximas pesquisas**.
+
+O diagnostico atual analisa estresse coletivo do U75, contagem de
+oportunidades tecnicas, posicionamento efetivo do capital e
+contrafactuais exploratorios de CASH. Ele exporta um mapa de calor
+mensal com clique, com TODOS os ativos que compuseram a carteira
+no mes, mais graficos PNG e CSVs verificaveis.
+
+Leia [o protocolo detalhado](docs/diagnostico_u75_estresse_posicoes_v1.md)
+e execute `pesquisar_diagnostico_u75_spyder.py` no Spyder.
+E necessario o snapshot `dados/strategy30_snapshot/` e o ZIP
+original da Strategy #30 em `evidencias/` ou `Downloads`.
+**Nao baixar novamente o snapshot, nem alterar a aplicacao operacional.**
+Os criterios de estresse sao exploratorios, nao uma politica validada.
+
 ## Requisitos
 
 - Python 3.12
