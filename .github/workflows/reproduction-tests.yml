@@ -96,3 +96,42 @@ jobs:
               tag -a "$RELEASE_TAG" "$RELEASE_SHA" \
               -m 'Release v1.23.0: reproducao validada US$ 587.165.941,13 e contrato congelado'
           git push origin "refs/tags/$RELEASE_TAG"
+
+
+  tag_research_cash_state_aware_v1:
+    needs: tests
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/research/control30-cash-state-aware-v1' &&
+      startsWith(github.event.head_commit.message, 'Evidence CASH Strategy #30 v1.0.0:')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Conferir referencias congeladas e criar tag anotada
+        env:
+          EVIDENCE_TAG: research-cash-state-aware-strategy30-v1.0.0-20261031
+          EVIDENCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -f docs/evidencias/cash_state_aware_strategy30_20261031.md
+          test -f docs/evidencias/INDICE.md
+          grep -Fq '6ca625b338895c009aee53212f53e0dbf5526167' docs/evidencias/cash_state_aware_strategy30_20261031.md
+          grep -Fq '584f379fbe9c39f0a088a1508e495d1b5fb6b8a07ce6addc45b5a3bb511d5c0b' docs/evidencias/cash_state_aware_strategy30_20261031.md
+          grep -Fq '80.685.454,79' docs/evidencias/cash_state_aware_strategy30_20261031.md
+          grep -Fq '16.733.706,35' docs/evidencias/cash_state_aware_strategy30_20261031.md
+          if git show-ref --verify --quiet "refs/tags/$EVIDENCE_TAG"; then
+            test "$(git rev-parse "$EVIDENCE_TAG^{}")" = "$EVIDENCE_SHA"
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              tag -a "$EVIDENCE_TAG" "$EVIDENCE_SHA" \
+              -m 'Evidencia cientifica: CASH state-aware v1.0.0, 75 ativos, 1576 sessoes' \
+              -m 'Control final USD 80,685,454.79; CASH final USD 16,733,706.35; desempenho relativo -79.26%; CASH 348 dias em 115 periodos; Sharpe Control 2.317719, CASH 2.195560' \
+              -m 'Codigo testado 6ca625b338895c009aee53212f53e0dbf5526167; SHA256 ZIP 584f379fbe9c39f0a088a1508e495d1b5fb6b8a07ce6addc45b5a3bb511d5c0b'
+          git push origin "refs/tags/$EVIDENCE_TAG"
