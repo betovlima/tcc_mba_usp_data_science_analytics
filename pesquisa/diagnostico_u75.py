@@ -383,7 +383,8 @@ def construir_politica_protecao_diaria(
     required = {"decision_date", "stress_without_candidate"}
     if not required.issubset(daily.columns):
         raise ValueError("Tabela diaria incompleta para protecao de mercado.")
-    rows = daily[list(required)].copy()
+    # Nunca usar a ordem de um set para iterar datas e sinais.
+    rows = daily[["decision_date", "stress_without_candidate"]].copy()
     rows["decision_date"] = pd.to_datetime(rows["decision_date"], utc=True)
     if rows["decision_date"].isna().any() or rows["decision_date"].duplicated().any():
         raise ValueError("Datas de protecao invalidas ou duplicadas.")
