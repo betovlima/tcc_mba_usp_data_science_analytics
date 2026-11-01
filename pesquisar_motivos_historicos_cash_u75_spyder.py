@@ -279,7 +279,7 @@ def _run(out: Path):
     (out/"resumo.md").write_text(
         "# U75 / motivos historicos e CASH\n\n"+
         "Control foi reproduzido antes de comparar alternativas.\n\n"+
-        comparison.to_markdown(index=False)+"\n\n"+
+        comparison.to_string(index=False)+"\n\n"+
         "\n".join("- "+str(x) for x in payload["limitations"])+"\n",
         encoding="utf-8",
     )
