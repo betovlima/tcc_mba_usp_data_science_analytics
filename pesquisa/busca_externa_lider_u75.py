@@ -14,7 +14,7 @@ from sklearn.linear_model import Ridge
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-SCRIPT_VERSION = "u75-external-leader-search-v1.0.0"
+SCRIPT_VERSION = "u75-external-leader-search-v1.0.2"
 FEATURES = (
     "return_5", "return_20", "vol_20", "ema_distance_20",
     "ema_distance_50", "rsi_14", "atr_pct_14", "distance_from_high_20",
