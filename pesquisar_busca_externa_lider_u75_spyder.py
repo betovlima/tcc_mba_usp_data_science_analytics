@@ -7,8 +7,8 @@ Antes do F5:
   1. Ter o snapshot Strategy #30 validado em dados/strategy30_snapshot.
   2. Ter a shortlist congelada (24 ativos) e respectivo snapshot auditado em
      dados/cluster_candidate_search (produzido pelas pesquisas anteriores).
-  3. Copiar o ZIP MCT com o ranking U75 para evidencias/, ou definir
-     MCT_BACKTEST_ZIP com seu caminho absoluto.
+  3. Deixar o ZIP MCT congelado em output/ (inclusive subpastas).
+     MCT_BACKTEST_ZIP permite outro ZIP explicitamente.
   4. Disponibilizar o ZIP Control Strategy #30 conforme o executor original
      pesquisar_diagnostico_u75_spyder.py (CONTROL_STRATEGY30_ZIP).
 
@@ -34,6 +34,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from pesquisa.localizacao_zip_u75 import locate_mct_zip
 from pesquisa.busca_externa_lider_u75 import (
     FEATURES, SCRIPT_VERSION, ResearchSettings,
     make_panel,evaluate_expanding_years,summarize,
@@ -52,20 +53,8 @@ CANDIDATE_ROOT=ROOT/'dados'/'cluster_candidate_search'
 CANDIDATE_SNAPSHOT=SnapshotPaths.from_root(CANDIDATE_ROOT/'snapshot')
 FREEZE=CANDIDATE_ROOT/'cluster_shortlist_freeze.json'
 RESEARCH=ResearchSettings()
-# Se múltiplos ZIPs MCT existirem, informe explicitamente a variável de ambiente.
-BACKTEST_ZIP=os.environ.get('MCT_BACKTEST_ZIP','').strip()
-
-
-def locate_mct_zip()->Path:
-    if BACKTEST_ZIP:
-        path=Path(BACKTEST_ZIP).expanduser()
-        if not path.is_file():raise FileNotFoundError(path)
-        return path
-    roots=[ROOT/'evidencias',ROOT,Path.home()/'Downloads']
-    found=sorted({p.resolve() for root in roots if root.exists() for p in root.glob('market_cycle_trader_*.zip')})
-    if len(found)!=1:
-        raise RuntimeError(f'Esperado um ZIP MCT ou MCT_BACKTEST_ZIP explícito; encontrados={len(found)}')
-    return found[0]
+# O seletor congelado pesquisa recursivamente output/ e verifica SHA-256.
+# MCT_BACKTEST_ZIP permite trocar a referência explicitamente.
 
 
 def read_leaders(path:Path,universe:set[str])->tuple[pd.DataFrame,dict]:
@@ -184,7 +173,7 @@ def main()->dict:
     OUT.mkdir(parents=True,exist_ok=True)
     # %% 1. Dados/identidade
     base,external,universe,config,source=load_snapshots()
-    mct=locate_mct_zip()
+    mct=locate_mct_zip(ROOT,explicit=os.environ.get('MCT_BACKTEST_ZIP',''))
     leaders,archive_meta=read_leaders(mct,universe)
     # %% 2. União por data, sem reamostrar e sem reconstruir séries
     raw=build_feature_rows(leaders,{**base,**external},config)
