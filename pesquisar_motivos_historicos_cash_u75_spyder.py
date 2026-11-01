@@ -357,11 +357,11 @@ def main():
             fallback = ROOT / "output" / (
                 f"ultimo_erro_motivos_historicos_{output.name}.txt"
             )
+            fallback_text = details + f"\nLog failure: {log_error!r}\n"
             write_with_parent(
                 fallback,
                 lambda destination: destination.write_text(
-                    details + f"\nLog failure: {log_error!r}\n",
-                    encoding="utf-8",
+                    fallback_text, encoding="utf-8",
                 ),
             )
             print(f"[erro] Log alternativo: {fallback}", flush=True)
