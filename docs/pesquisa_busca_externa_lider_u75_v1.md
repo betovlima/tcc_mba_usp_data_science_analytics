@@ -1,4 +1,4 @@
-# Pesquisa v1.0.0: candidato externo semelhante ao líder do U75
+# Pesquisa v1.0.1: candidato externo semelhante ao líder do U75
 
 **Branch:** `research/u75-external-leader-search-v1`  
 **Motor operacional:** nenhum arquivo do MCT modificado.  
@@ -55,7 +55,7 @@ python -m unittest discover -s tests -p 'test_busca_externa_lider_u75.py' -v
 
 Se a saída do experimento anterior `dados/cluster_candidate_search/` não existir, **não refaça automaticamente a busca e não escolha candidatos ex post**. Reconstitua primeiro o snapshot original e verifique os hashes do manifesto congelado; se isso for impossível, interrompa esta linha e prepare um novo experimento com outro contrato de seleção de candidatos.
 
-Coloque **um único** pacote `market_cycle_trader_*.zip` em `evidencias/` ou defina o caminho exato pela variável de ambiente `MCT_BACKTEST_ZIP`. O ZIP Control Strategy #30 também deve ser localizável pelo `localizar_zip_original()` original. Execute F5 no Spyder.
+O ZIP de referência do MCT deve estar em **`output/` do próprio repositório TCC**, inclusive em uma subpasta. A versão v1.0.1 procura recursivamente o arquivo exato `market_cycle_trader_20261101T021336-83e49685.zip` e verifica seu SHA-256 `6c0f55543734250168f90ca2d04db6d7a39a1a14e8e952e7400aa8efd9adfebe`. A presença de outros ZIPs não é erro, e o script nunca escolhe o último arquivo por acaso. Não copie para `evidencias/` ou `Downloads`. Para mudar conscientemente a execução de referência, defina `MCT_BACKTEST_ZIP` com o caminho exato do novo ZIP (absoluto ou relativo à raiz do TCC). O ZIP Control Strategy #30 permanece localizado pelo método `localizar_zip_original()` do projeto. Execute F5 no Spyder.
 
 ## Limitações científicas que impedem promoção
 
@@ -66,3 +66,9 @@ Coloque **um único** pacote `market_cycle_trader_*.zip` em `evidencias/` ou def
 - Se houver melhora exploratória, ainda serão obrigatórios: amostra de candidatos externos redescoberta somente com informação disponível em t, eliminação ou sensibilidade do vazamento do motor de referência, validação com calendário/execução/custos exatos, avaliação de múltiplos testes, robustez por blocos e comparação de drawdown/Expected Shortfall da política completa.
 
 **Critério de avanço:** só propor replay de patrimônio se a estratégia contextual superar o líder em períodos futuros não usados para treino, com cobertura adequada e confiança estatística; ainda assim, os resultados desta shortlist não homologam a alteração no MCT.
+
+## Correção v1.0.1: busca automática em output
+
+- Novo módulo `pesquisa/localizacao_zip_u75.py`: seleção determinística por nome e SHA-256 da evidência; pesquisa `output/**`.
+- Testes `tests/test_localizacao_zip_u75.py`: 4 ZIPs simultâneos, ausência da referência, hash incorreto, override explícito e caminho inválido.
+- Não mexe em decisões, regressão Ridge, snapshots, U75 ou backtest.
