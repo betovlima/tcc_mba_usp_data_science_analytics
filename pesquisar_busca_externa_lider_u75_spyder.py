@@ -7,7 +7,8 @@ Antes do F5:
   1. Ter o snapshot Strategy #30 validado em dados/strategy30_snapshot.
   2. Ter a shortlist congelada (24 ativos) e respectivo snapshot auditado em
      dados/cluster_candidate_search (produzido pelas pesquisas anteriores).
-  3. Deixar o ZIP MCT congelado em output/ (inclusive subpastas).
+  3. O ZIP MCT validado sera buscado no output/, na raiz,
+     em evidencias/ ou Downloads, e copiado para output/ se preciso.
      MCT_BACKTEST_ZIP permite outro ZIP explicitamente.
   4. Disponibilizar o ZIP Control Strategy #30 conforme o executor original
      pesquisar_diagnostico_u75_spyder.py (CONTROL_STRATEGY30_ZIP).
