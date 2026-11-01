@@ -116,12 +116,12 @@ def locate_mct_zip(
 
     if mismatches:
         raise RuntimeError(
-            "Foram localizados ZIPs com nomes esperados, mas nenhum possui "
+            "SHA-256 divergente: foram localizados ZIPs com nomes esperados, mas nenhum possui "
             "SHA-256 da evidencia congelada. Divergencias: "
             + "; ".join(mismatches)
         )
     raise FileNotFoundError(
-        f"ZIP MCT de referencia nao encontrado em {output} (inclusive "
+        f"ZIP MCT de referência nao encontrado em {output} (inclusive "
         "subpastas), na raiz do TCC, em evidencias/ ou em Downloads. "
         "Coloque o ZIP fornecido no output/ do projeto ou informe "
         "MCT_BACKTEST_ZIP com o caminho exato."
