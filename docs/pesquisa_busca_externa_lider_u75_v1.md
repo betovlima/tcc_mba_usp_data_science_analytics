@@ -1,4 +1,4 @@
-# Pesquisa v1.0.1: candidato externo semelhante ao líder do U75
+# Pesquisa v1.0.2: candidato externo semelhante ao líder do U75
 
 **Branch:** `research/u75-external-leader-search-v1`  
 **Motor operacional:** nenhum arquivo do MCT modificado.  
@@ -72,3 +72,9 @@ O ZIP de referência do MCT deve estar em **`output/` do próprio repositório T
 - Novo módulo `pesquisa/localizacao_zip_u75.py`: seleção determinística por nome e SHA-256 da evidência; pesquisa `output/**`.
 - Testes `tests/test_localizacao_zip_u75.py`: 4 ZIPs simultâneos, ausência da referência, hash incorreto, override explícito e caminho inválido.
 - Não mexe em decisões, regressão Ridge, snapshots, U75 ou backtest.
+
+## Correção v1.0.2: importação local segura
+
+O F5 não exige que o pesquisador copie manualmente o ZIP MCT: o localizador examina `output/**`, a raiz do TCC, `evidencias/` e `Downloads` para o nome exato de cada uma das duas execuções auditadas. A execução mais recente (02:13 UTC) tem prioridade. Caso esteja ausente, aceita exclusivamente a anterior (00:50 UTC), pois os CSVs financeiros e do ranking foram verificados como idênticos byte a byte. **Não seleciona qualquer outro ZIP automaticamente.** Confere SHA-256 antes e depois de copiar, mantém o original intacto e armazena o pacote em `output/busca_externa_lider_u75/referencia_mct/`. Sem fonte válida, emite erro com instrução para salvar o ZIP no `output/`, em vez de inventar dados ou refazer o backtest. `MCT_BACKTEST_ZIP` continua permitindo escolha consciente de outra execução.
+
+Para repetir a pesquisa na branch de correção, execute somente `pesquisar_busca_externa_lider_u75_spyder.py` no Spyder; não execute novamente o diagnóstico U75.
