@@ -74,6 +74,8 @@ def build_collective_panel(
     historical_20 = np.log(close / close.shift(20))
     records = []
     for i, date in enumerate(dates):
+        if i and i % 100 == 0:
+            print(f'[matematica] U75 dia={i}/{len(dates)}', flush=True)
         row = {'decision_date':date.strftime('%Y-%m-%d'), 'status':'insufficient_history',
                'valid_assets_t':int(coverage.get(date, 0)),
                'maturity_date':None, 'realized_future_log_return':np.nan}
