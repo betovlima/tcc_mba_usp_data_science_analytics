@@ -1,3 +1,7 @@
+## 2026-10-31 — Pesquisa U75 | risco sistêmico de cauda e preservação estatística de capital
+
+Branch `research/u75-systemic-tail-risk-review-v1`, derivada da pesquisa U75 dinâmica v1.0.1. O relatório `PESQUISA_U75_PRESERVACAO_ESTATISTICA_CAPITAL.md` compila evidências do backtest MCT `20261101T005056-0acb4c89` e estuda CVaR, correlações de queda, covariância Ledoit-Wolf, Mahalanobis e detecção de mudanças de regime. A regra permanente é **proteção somente por risco agregado U75, nunca por ativo individual**, sem critérios numéricos arbitrários nem prazo fixo de CASH. Há referências científicas, hipóteses concorrentes, nested walk-forward, bootstrap e SPA; **nenhuma nova política foi executada, validada, promovida ou aplicada ao MCT**.
+
 # CONTEXTO_MESTRE — reprodução científica do TCC
 
 **Atualização:** 21/10/2026. **Projeto:** `betovlima/tcc_mba_usp_data_science_analytics`. Este documento é a referência inicial para um novo assistente ou nova sessão. **Separação de ambientes:** o TCC utiliza dados congelados em pesquisa; a aplicação operacional independente utiliza cotações Alpaca atuais.
