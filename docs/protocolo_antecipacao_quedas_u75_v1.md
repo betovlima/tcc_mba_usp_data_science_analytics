@@ -1,6 +1,6 @@
 # Protocolo científico: antecipação de períodos desfavoráveis do universo U75
 
-**Versão do protocolo:** `u75-downside-regime-avoidance-v1.0.0`  
+**Versão do protocolo:** `u75-downside-regime-avoidance-v1.1.0`  
 **Branch:** `research/u75-downside-regime-avoidance-v1`  
 **Natureza:** correção de objetivo e plano de pesquisa. **Não é um algoritmo executado, nem resultado validado.**  
 **Ambiente:** exclusivamente TCC. Não alterar nem consultar o MCT operacional para tomar decisões ou treinar modelos.
@@ -87,3 +87,74 @@ Criar um executor Spyder **independente**, com seções `# %%`, sem downloads in
 - relatório de cobertura/hashes, limitações, figuras e ZIP de auditoria.
 
 Só avançar para P2–P3 após verificar se existe previsão de risco coletiva minimamente confiável fora do ajuste. Evitar definir limiar numérico arbitrário para disparo de CASH, veto ou compra. Nenhum resultado novo é alegado por este protocolo.
+
+## 8. Métodos matemáticos e estatísticos prioritários (v1.1.0, 01/11/2026)
+
+**Registro de alinhamento com os diálogos anteriores:** os mecanismos de proteção precisam decorrer de quantidades estatísticas calculáveis e auditáveis sobre o universo U75 completo, e não de travas manuais de CASH ou de uma otimização sobre capital final. O classificador supervisionado, se estudado, é benchmark e não pré-requisito de abordagem matemática.
+
+### 8.1 O objeto é o risco COLETIVO, não a perda de um ativo isolado
+
+Para os retornos diários \(r_{i,t}\) dos 75 ativos e conjunto \(V_t\) de dados elegíveis estritamente conhecidos em \(t\):
+
+- Força interna: \(B_t=|V_t|^{-1}\sum_{i\in V_t}\mathbb{1}[r_{i,t}>0]\).
+- Retorno equal-weight *descritivo*: \(\bar r_t=|V_t|^{-1}\sum_{i\in V_t}r_{i,t}\).
+- Dependência coletiva: proporção da variância de retornos explicada pela primeira componente principal, com fator estimado em janela móvel anterior à data de decisão.
+- Frequência conjunta de perdas extremas: coexcedência da cauda negativa e suas incertezas, estimadas somente com observações anteriores à decisão.
+
+Não substituir o universo congelado por outro devido à falta de dados futuros. Critérios de cobertura devem ser definidos antes do teste; lacunas precisam aparecer em CSV de auditoria, sem classificação automática de risco baixo.
+
+### 8.2 Covariância robusta e turbulência multivariada
+
+Estimar \(\widehat\mu_{t-1}\) e \(\widehat\Sigma_{t-1}\) em janelas anteriores a \(t\), utilizando shrinkage de Ledoit-Wolf ou outra estimativa robusta predefinida. Definir turbulência observável no fechamento:
+
+\[
+D_t^2=(\mathbf r_t-\widehat\mu_{t-1})^\top
+\widehat\Sigma_{t-1}^{-1}
+(\mathbf r_t-\widehat\mu_{t-1}).
+\]
+
+Uma turbulência alta caracteriza retorno incomum em múltiplos ativos, **não necessariamente queda**: cruzar com \(\bar r_t\), \(B_t\), comportamento conjunto das caudas e direção do componente comum. Para evitar instabilidade numérica, registrar condicionamento da matriz e eventuais exceções estatísticas. Não usar \(\Sigma\) calculada com retornos do período de teste inteiro.
+
+Fundamentação: Ledoit e Wolf (2004), *A well-conditioned estimator for large-dimensional covariance matrices* (Journal of Multivariate Analysis, 88, 365–411); medida de turbulência de Mahalanobis da literatura de risco sistêmico (Kritzman e Li).
+
+### 8.3 Expected Shortfall condicional: quantificar risco de cauda
+
+Para perda futura de horizonte \(h\), \(L_{t,h}\), estimar **usando apenas informação \(\mathcal F_t\)**:
+
+\[
+\mathrm{ES}_{\alpha,t,h} =
+\mathbb E[L_{t,h}\mid L_{t,h}\geq
+\mathrm{VaR}_{\alpha,t,h},\mathcal F_t].
+\]
+
+Em distribuições discretas, usar a definição integral generalizada da cauda, com massa no quantil tratada corretamente. Diferenciar ES condicional *estimado em t* de ES realizado *ex post*. Primeiro definir se o alvo é a perda do índice equal-weight do U75, da posição efetiva do Control ou de ambas, registrando as duas séries separadamente. Testar métodos como simulação histórica filtrada e estimação condicional por regimes com validação temporal e incerteza.
+
+Fundamentação: Rockafellar e Uryasev (2001), *Conditional Value-at-Risk for General Loss Distributions*.
+
+### 8.4 Mudanças de regime e detecção sequencial
+
+Comparar métodos estatísticos independentes: (a) CUSUM e detecção de mudanças nas distribuições/retornos agregados; (b) PCA dinâmica; (c) modelo oculto de Markov com probabilidades **filtradas** usando dados até t. **Não usar probabilidades suavizadas por todo o histórico**, porque dependem de informação futura. A detecção de uma ruptura já observada não é previsão de queda subsequente: medir separadamente tempo de detecção, antecedência real, falsos positivos, probabilidades de queda por horizonte e estabilidade dos regimes.
+
+Não combinar todas as técnicas com pesos fixos inventados. Estudar cada componente isoladamente, com benchmark técnico e ingênuo; quando houver evidência de contribuição incremental, definir combinação por seleção exclusivamente temporal.
+
+### 8.5 Critério de decisão derivado de distribuição e custos, não de regra arbitrária
+
+Para política \(a\) entre U75, ativo externo e CASH, estimar a distribuição condicional do resultado financeiro de cada alternativa, riscos e custos. Uma rotação só se justifica quando o benefício de reduzir risco ou perdas futuras tiver evidência estatística suficiente **para compensar os custos e a oportunidade perdida** no cenário de avaliação. Reportar a fronteira risco-retorno, em vez de converter múltiplas medidas em um score com penalidades de pesos escolhidos retroativamente.
+
+Primeiro validar previsões estatísticas **shadow/P1** (sem transação). Só então executar contrafactuais de decisão **P2/P3** com uma única avaliação diária, entradas na abertura seguinte, custos, reentrada sem duração mínima forçada em CASH e política completa do Control.
+
+### 8.6 Critérios de rigor
+
+- No fechamento t, apenas recursos observáveis em t. Ajustes de covariância, PCA, parâmetros de regime, quantis de cauda e calibração ocorrem em janelas do passado; maturação de alvos com embargo correspondente.
+- Para cada horizonte pré-especificado, reportar qualidade da previsão de perda coletiva (erro de calibração, Brier, curva de confiabilidade, lead time e alarmes falsos), além de ES95, drawdown e perdas efetivamente evitadas por política após o replay.
+- Usar validação cronológica/aninhada, comparação com benchmark ingênuo, estimativa de incerteza por reamostragem em blocos e controle do número de alternativas investigadas.
+- Os trabalhos de Bellman/Optimal Switching CASH, regressão Ridge contrafactual e indicadores de estresse já foram executados; **a combinação prospetiva de ES condicional, Ledoit-Wolf, turbulência, PCA e regimes para U75 ainda não foi demonstrada**. Não apresentar metodologia como resultado.
+- Hiperparametrização LightGBM/CARO e os US$ 587 milhões são história/checkpoint técnico, **não objetivo científico deste estudo**.
+
+### Referências metodológicas a consultar na redação
+
+- Ledoit, O.; Wolf, M. (2004). *A well-conditioned estimator for large-dimensional covariance matrices*. Journal of Multivariate Analysis, 88(2), 365–411. DOI: 10.1016/S0047-259X(03)00096-4.
+- Rockafellar, R. T.; Uryasev, S. P. (2001). *Conditional Value-at-Risk for General Loss Distributions*. Manuscrito de 2001 (SSRN 267256).
+- Kritzman, M.; Li, Y. (2010). *Skulls, Financial Turbulence, and Risk Management*. Financial Analysts Journal, referência de contexto a conferir na revisão bibliográfica antes de citar formalmente.
+
+**Estado da v1.1.0: atualização de protocolo; não implementa o detector e não produz resultados financeiros.**
