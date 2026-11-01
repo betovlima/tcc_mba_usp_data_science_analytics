@@ -1,0 +1,28 @@
+name: historical-motifs-cash-tests
+on:
+  push:
+    branches:
+      - research/u75-historical-motifs-cash-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  motif-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install mathematical and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy pandas scipy scikit-learn pytest ruff
+      - name: Static imports and syntax
+        run: |
+          python -m compileall -q pesquisa/motivos_historicos_cash_u75.py pesquisar_motivos_historicos_cash_u75_spyder.py tests/test_motivos_historicos_cash_u75.py
+          python -m ruff check pesquisa/motivos_historicos_cash_u75.py pesquisar_motivos_historicos_cash_u75_spyder.py tests/test_motivos_historicos_cash_u75.py --select F821,F811
+      - name: Synthetic causal and state tests
+        run: python -m pytest -q tests/test_motivos_historicos_cash_u75.py
