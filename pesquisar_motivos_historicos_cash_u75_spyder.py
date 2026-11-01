@@ -44,8 +44,14 @@ from pesquisa.motivos_historicos_cash_u75 import (
     HistoricalMotifRisk, wrap_cash_policy,
 )
 from pesquisar_controle_strategy30_spyder import localizar_zip_original
+from pesquisa.saida_resiliente_motivos_u75 import (
+    write_with_parent, check_required_files,
+)
 
-OUTPUT = ROOT / "output" / "motivos_historicos_cash_u75"
+RUNNER_VERSION = "u75-historical-motifs-cash-v1.0.1"
+OUTPUT = Path(os.environ.get(
+    "TCC_MOTIFS_OUTPUT_DIR", str(ROOT / "output" / "motivos_historicos_cash_u75"),
+)).expanduser()
 SNAPSHOT = ROOT / "dados" / "strategy30_snapshot"
 
 # Fixed before looking at this experiment's results. No capital optimization.
@@ -57,12 +63,23 @@ EXPERIMENTS = (
 
 
 def _write_csv(frame, path):
-    frame.to_csv(path, index=False, float_format="%.17g")
+    write_with_parent(
+        path, lambda destination: frame.to_csv(
+            destination, index=False, float_format="%.17g",
+        ),
+    )
 
 
 def _write_json(payload, path):
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2,
-                               default=str, allow_nan=False), encoding="utf-8")
+    serialized = json.dumps(
+        payload, ensure_ascii=False, indent=2,
+        default=str, allow_nan=False,
+    )
+    write_with_parent(
+        path, lambda destination: destination.write_text(
+            serialized, encoding="utf-8",
+        ),
+    )
 
 
 def _simulate(label, policy, frames, symbols, dates, config, metadata,
@@ -114,6 +131,7 @@ def _run(out: Path):
         raise RuntimeError("Wrong frozen U75 calendar, members or fold protocol")
     _write_csv(snapshot.records, out / "snapshot_identidade.csv")
     print("[fonte] Control Strategy #30, 75 ativos, 3 folds", flush=True)
+    print(f"[saida] {out.resolve()}", flush=True)
 
     # %% 2 - Refit original models/rotation margin once, no new optimization
     policies = {}
@@ -157,6 +175,7 @@ def _run(out: Path):
             utility_cache=cache,
         )
 
+    check_required_files(out, ("snapshot_identidade.csv",))
     base = _politica_agendada(policies, decision_to_fold)
     control = _simulate("Control Strategy #30", base, frames, symbols,
                         decisions, config, metadata)
@@ -165,6 +184,10 @@ def _run(out: Path):
     )
     _write_json(parity, out / "control_paridade.json")
     _write_csv(detail, out / "control_paridade_diaria.csv")
+    check_required_files(
+        out, ("snapshot_identidade.csv", "control_paridade.json",
+              "control_paridade_diaria.csv"),
+    )
     if not parity.get("fully_reproduced") or not math.isclose(
         float(control.metrics["strategy_ending_capital"]),
         float(contract["ending_capital"]), rel_tol=0, abs_tol=.01
@@ -248,7 +271,10 @@ def _run(out: Path):
     ax.set_title("U75: Control versus CASH por analogos historicos (pesquisa)")
     ax.set_ylabel("Patrimonio simulado (log)")
     ax.grid(alpha=.2); ax.legend(loc="best"); fig.tight_layout()
-    fig.savefig(out/"patrimonio_comparado.png",dpi=140)
+    write_with_parent(
+        out / "patrimonio_comparado.png",
+        lambda destination: fig.savefig(destination, dpi=140),
+    )
     plt.close(fig)
     comparison = pd.DataFrame([
         {"scenario":"Control",**baseline_metrics},
@@ -258,7 +284,8 @@ def _run(out: Path):
     ])
     _write_csv(comparison,out/"metricas_pareadas.csv")
     payload={
-        "version":VERSION, "status":"completed", "study":"DTW past-only + CASH",
+        "version":RUNNER_VERSION, "mathematical_engine_version": VERSION,
+        "status":"completed", "study":"DTW past-only + CASH",
         "reference":validation,
         "control_parity":parity, "control":baseline_metrics,
         "scenarios":runs, "universe_size":len(symbols),
@@ -276,12 +303,15 @@ def _run(out: Path):
         ]
     }
     _write_json(payload, out / "resultado.json")
-    (out/"resumo.md").write_text(
+    summary = (
         "# U75 / motivos historicos e CASH\n\n"+
         "Control foi reproduzido antes de comparar alternativas.\n\n"+
         comparison.to_string(index=False)+"\n\n"+
-        "\n".join("- "+str(x) for x in payload["limitations"])+"\n",
-        encoding="utf-8",
+        "\n".join("- "+str(x) for x in payload["limitations"])+"\n"
+    )
+    write_with_parent(
+        out / "resumo.md",
+        lambda destination: destination.write_text(summary, encoding="utf-8"),
     )
     return payload
 
@@ -289,23 +319,71 @@ def _run(out: Path):
 def main():
     output = OUTPUT / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     output.mkdir(parents=True, exist_ok=False)
+    print(f"[saida] Diretorio da execucao: {output.resolve()}", flush=True)
+    success = False
+    result = None
     try:
         result = _run(output)
+        expected = (
+            "snapshot_identidade.csv",
+            "control_paridade.json",
+            "control_paridade_diaria.csv",
+            "control_posicoes.csv",
+            "indice_u75_cobertura.csv",
+            "patrimonio_cenarios.csv",
+            "patrimonio_comparado.png",
+            "metricas_pareadas.csv",
+            "resultado.json",
+            "resumo.md",
+        )
+        for label, _, _ in EXPERIMENTS:
+            expected += (f"{label}_decisoes_posicoes.csv",
+                         f"{label}_operacoes.csv")
+        check_required_files(output, expected)
         success = True
     except Exception:
-        success = False
-        (output / "ultimo_erro.txt").write_text(
-            traceback.format_exc(), encoding="utf-8",
-        )
-        result = None
+        details = traceback.format_exc()
+        print("[erro] Falha da pesquisa. Traceback:\n" + details, flush=True)
+        try:
+            write_with_parent(
+                output / "ultimo_erro.txt",
+                lambda destination: destination.write_text(
+                    details, encoding="utf-8",
+                ),
+            )
+        except Exception as log_error:
+            # Keep trace outside the timestamp directory if storage keeps
+            # removing it. Never silence a failure or declare success.
+            fallback = ROOT / "output" / (
+                f"ultimo_erro_motivos_historicos_{output.name}.txt"
+            )
+            fallback_text = details + f"\nLog failure: {log_error!r}\n"
+            write_with_parent(
+                fallback,
+                lambda destination: destination.write_text(
+                    fallback_text, encoding="utf-8",
+                ),
+            )
+            print(f"[erro] Log alternativo: {fallback}", flush=True)
     pack = output / f"pacote_motivos_historicos_cash_u75_{output.name}.zip"
-    with ZipFile(pack, "w", ZIP_DEFLATED) as z:
-        for f in sorted(output.iterdir()):
-            if f.is_file() and f != pack and f.suffix in (".csv",".md",".json",".png",".txt"):
-                z.write(f,arcname=f.name)
-    print(f"[pacote] {pack} status={'completed' if success else 'failed'}",flush=True)
+    def _package(destination):
+        with ZipFile(destination, "w", ZIP_DEFLATED) as z:
+            for f in sorted(output.iterdir()):
+                if f.is_file() and f != destination and f.suffix in (
+                    ".csv", ".md", ".json", ".png", ".txt",
+                ):
+                    z.write(f, arcname=f.name)
+    try:
+        write_with_parent(pack, _package)
+        print(f"[pacote] {pack} status={'completed' if success else 'failed'}",
+              flush=True)
+    except Exception as package_error:
+        print(f"[erro] Falha na gravacao do ZIP: {package_error!r}", flush=True)
+        raise
     if not success:
-        raise RuntimeError(f"Research aborted; see {output/'ultimo_erro.txt'}")
+        raise RuntimeError(
+            f"Pesquisa interrompida; consultar {output / 'ultimo_erro.txt'}"
+        )
     return result
 
 
