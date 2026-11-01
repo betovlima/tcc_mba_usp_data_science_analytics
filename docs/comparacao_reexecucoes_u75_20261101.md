@@ -33,7 +33,7 @@ A regra exige `u75_market_stress=true`, cobertura válida de todos os 75 e **0**
 
 ## Conclusão científica
 
-A execução repetida comprova **reprodutibilidade das decisões e resultados financeiros sob o mesmo snapshot/configuração**, e a correção visual da linha verde não alterou a política. **Não comprova que a saída para CASH evitou perdas**. Para isso é necessário comparar U75 com overlay versus a mesma estratégia Control **sem overlay de CASH** no mesmo motor, calendário, dados e custos. O `buy_hold_equity` do ZIP não representa esse controle contrafactual.
+A execução repetida comprova **reprodutibilidade das decisões e resultados financeiros exportados nos dois pacotes**. Os hashes dos snapshots temporários diferem entre as execuções; por isso a igualdade byte a byte dos CSVs não prova, sozinha, que todos os bytes brutos dos dados subjacentes tenham sido iguais. A correção visual da linha verde não alterou a política. **Não comprova que a saída para CASH evitou perdas**. Para isso é necessário comparar U75 com overlay versus a mesma estratégia Control **sem overlay de CASH** no mesmo motor, calendário, dados e custos. O `buy_hold_equity` do ZIP não representa esse controle contrafactual.
 
 O maior drawdown −41,68% ocorreu no episódio CAPR entre 27 e 31/07/2026, quando o estresse coletivo não foi acionado no fundo. Uma queda idiossincrática do ativo escolhido não implica risco sistêmico dos 75 e, portanto, não demonstra defeito da guarda coletiva. A pesquisa deve distinguir proteção coletiva do risco de concentração antes de propor alterações matemáticas. Em nenhuma hipótese ajustar parâmetros usando as perdas já conhecidas e apresentar esse mesmo período como avaliação independente.
 
