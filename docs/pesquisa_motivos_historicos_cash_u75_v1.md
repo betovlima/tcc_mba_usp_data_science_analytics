@@ -3,7 +3,7 @@
 **Versão:** \`u75-historical-motifs-cash-v1.0.0\`  
 **Branch:** \`research/u75-historical-motifs-cash-v1\`  
 **Executor Spyder:** \`pesquisar_motivos_historicos_cash_u75_spyder.py\`  
-**Escopo:** TCC somente; nenhuma alteração no MCT, no Control ou nos parâmetros atuais.
+**Escopo:** TCC somente; nenhuma alteração no ambiente operacional, no Control ou nos parâmetros atuais.
 
 ## Hipótese
 
@@ -91,4 +91,4 @@ Os testes sintéticos cobrem: distância nula em sequências iguais, invariânci
 
 Se os sinais reduzirem drawdowns e ES95 sem excesso de falsos alertas nem prejuízo desproporcional nas recuperações, o próximo trabalho será (a) medir intervalos de confiança por episódios não sobrepostos e (b) validar em dados de corte posterior que não foram usados para formular essa hipótese.
 
-Não promover ao MCT por esta execução exploratória. A pesquisa externa ao U75 fica para uma etapa separada; primeiro verificar se manter CASH teria servido como proteção.
+Não promover ao ambiente operacional por esta execução exploratória. A pesquisa externa ao U75 fica para uma etapa separada; primeiro verificar se manter CASH teria servido como proteção.
