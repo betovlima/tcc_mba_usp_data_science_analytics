@@ -57,5 +57,59 @@ class LocalizacaoZipU75Test(unittest.TestCase):
                 locate_mct_zip(Path(d), explicit='output/inexistente.zip')
 
 
+    def test_copia_zip_validado_da_raiz_para_output(self):
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            source = root / "market_cycle_trader_referencia_da_raiz.zip"
+            source.write_bytes(b"conteudo de backtest verificado")
+            original_digest = sha256(source.read_bytes()).hexdigest()
+            (root / "output").mkdir()
+            selected = locate_mct_zip(
+                root, reference_name=source.name, reference_sha256=original_digest
+            )
+            self.assertEqual(
+                selected,
+                root / "output" / "busca_externa_lider_u75" / "referencia_mct" / source.name,
+            )
+            self.assertEqual(sha256(selected.read_bytes()).hexdigest(), original_digest)
+            self.assertEqual(source.read_bytes(), b"conteudo de backtest verificado")
+            self.assertEqual(
+                locate_mct_zip(
+                    root, reference_name=source.name,
+                    reference_sha256=original_digest
+                ),
+                selected,
+            )
+
+    def test_copia_zip_de_evidencias_sem_mover_original(self):
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            evidence = root / "evidencias"
+            evidence.mkdir()
+            source = evidence / "market_cycle_trader_referencia_evidencias.zip"
+            source.write_bytes(b"arquivo validado em evidencias")
+            selected = locate_mct_zip(
+                root, reference_name=source.name,
+                reference_sha256=sha256(source.read_bytes()).hexdigest(),
+            )
+            self.assertTrue(selected.is_file())
+            self.assertTrue(source.is_file())
+            self.assertEqual(selected.read_bytes(), source.read_bytes())
+
+    def test_nao_importa_zip_com_mesmo_nome_sem_hash_identico(self):
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            root.mkdir(exist_ok=True)
+            (root / "output").mkdir()
+            source = root / "market_cycle_trader_referencia_invalida.zip"
+            source.write_bytes(b"zip adulterado")
+            with self.assertRaisesRegex(RuntimeError, "SHA-256 divergente"):
+                locate_mct_zip(
+                    root, reference_name=source.name,
+                    reference_sha256=sha256(b"conteudo original").hexdigest(),
+                )
+
+
+
 if __name__ == '__main__':
     unittest.main()
