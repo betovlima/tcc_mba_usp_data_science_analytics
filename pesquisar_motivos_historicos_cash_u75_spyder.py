@@ -2,7 +2,7 @@
 
 Scientific protocol v1.0.0: two prespecified lookback/horizon combinations.
 Full Control parity is mandatory before any protected financial simulation.
-No downloads, no database, no new universe, no changes to MCT.
+No downloads, no database, no new universe, no changes to ambiente operacional.
 """
 # %% 0 - Contract and dependencies
 from __future__ import annotations
