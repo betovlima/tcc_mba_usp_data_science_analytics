@@ -48,8 +48,9 @@ from pesquisa.saida_resiliente_motivos_u75 import (
     write_with_parent, check_required_files,
 )
 from pesquisa.andamento_motivos_u75 import record_progress, last_progress
+from pesquisa.validacao_dimensoes_motivos_u75 import validar_dimensoes_reproducao
 
-RUNNER_VERSION = "u75-historical-motifs-cash-v1.0.2"
+RUNNER_VERSION = "u75-historical-motifs-cash-v1.0.3"
 OUTPUT = Path(os.environ.get(
     "TCC_MOTIFS_OUTPUT_DIR", str(ROOT / "output" / "motivos_historicos_cash_u75"),
 )).expanduser()
@@ -128,11 +129,14 @@ def _run(out: Path):
     config = config_from_frozen_manifest(strategy, contract)
     (frames, calendar, calendar_source, symbols, folds, decisions,
      decision_to_fold, metadata) = _construir_contexto_execucao(snapshot.frames, config)
-    if len(symbols) != 75 or len(folds) != 3 or len(decisions) != 1577:
-        raise RuntimeError("Wrong frozen U75 calendar, members or fold protocol")
+    # A referencia e congelada, mas os tamanhos pertencem ao manifesto:
+    # nao repetir no executor as contagens historicas de outra versao.
+    dimensions = validar_dimensoes_reproducao(
+        symbols, folds, decisions, decision_to_fold, contract,
+    )
     _write_csv(snapshot.records, out / "snapshot_identidade.csv")
     record_progress(out, "snapshot_validado", details={
-        "ativos": len(symbols), "folds": len(folds),
+        **dimensions,
         "arquivo": "snapshot_identidade.csv",
     })
     print("[fonte] Control Strategy #30, 75 ativos, 3 folds", flush=True)
