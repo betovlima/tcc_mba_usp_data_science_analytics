@@ -225,6 +225,12 @@ def simular_ate_alvo(
 
     curve = pd.DataFrame(rows).set_index("timestamp")
     trade_df = pd.DataFrame(trades)
+    if trade_df.empty:
+        trade_df = pd.DataFrame(columns=[
+            "timestamp", "fold", "action", "asset", "reason",
+            "price", "shares", "position_return", "holding_sessions",
+            "fees", "cash_after_trade",
+        ])
     equity = curve["strategy_equity"].to_numpy(dtype=float)
     initial = float(config.initial_capital)
     returns = equity / np.r_[initial, equity[:-1]] - 1.
