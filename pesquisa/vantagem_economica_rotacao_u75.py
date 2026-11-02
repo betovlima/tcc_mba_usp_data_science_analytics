@@ -19,7 +19,7 @@ from sklearn.preprocessing import StandardScaler
 from pesquisa.risco_reversao_antecipado_u75 import FEATURES
 
 
-VERSION = "u75-economic-rotation-recovery-v1.0.0"
+VERSION = "u75-economic-rotation-recovery-v1.0.1"
 
 
 @dataclass(frozen=True)
