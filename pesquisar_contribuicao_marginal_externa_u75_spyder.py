@@ -20,7 +20,6 @@ from pathlib import Path
 import traceback
 from zipfile import ZipFile, ZIP_DEFLATED
 
-import numpy as np
 import pandas as pd
 
 from pesquisa.control_operacional_strategy30 import (
