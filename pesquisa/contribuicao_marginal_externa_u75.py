@@ -24,7 +24,8 @@ def normalizar_decisoes(frame: pd.DataFrame, descricao: str) -> pd.DataFrame:
             raise ValueError(f"{descricao}: timestamp ausente")
         data = data.reset_index()
         data.rename(columns={data.columns[0]: "timestamp"}, inplace=True)
-    data = data[["timestamp", *COLUMNS]].reset_index(drop=True)
+    optional = ["raw_best_asset"] if "raw_best_asset" in data.columns else []
+    data = data[["timestamp", *COLUMNS, *optional]].reset_index(drop=True)
     data["timestamp"] = pd.to_datetime(data["timestamp"], utc=True, errors="coerce")
     data["strategy_equity"] = pd.to_numeric(data["strategy_equity"], errors="coerce")
     if data["timestamp"].isna().any() or data["timestamp"].duplicated().any():
@@ -53,6 +54,14 @@ def comparar_trajetorias(base: pd.DataFrame, challenger: pd.DataFrame, candidato
         "capital_control": left["strategy_equity"],
         "capital_challenger": right["strategy_equity"],
     })
+    # O Top-1 (maior score bruto) nao equivale necessariamente a posicao
+    # efetiva, pois a politica respeita margem de troca e tempo de holding.
+    has_top1 = "raw_best_asset" in left.columns and "raw_best_asset" in right.columns
+    if has_top1:
+        out["top1_control"] = left["raw_best_asset"].to_numpy()
+        out["top1_challenger"] = right["raw_best_asset"].to_numpy()
+        out["candidato_top1"] = out["top1_challenger"].eq(candidato)
+        out["mudou_top1"] = out["top1_control"] != out["top1_challenger"]
     out["mudou_posicao"] = out["asset_control"] != out["asset_challenger"]
     out["candidato_selecionado"] = out["asset_challenger"] == candidato
     out["mudou_sem_selecionar_candidato"] = (
@@ -75,6 +84,13 @@ def comparar_trajetorias(base: pd.DataFrame, challenger: pd.DataFrame, candidato
         "changed_positions": int(out["mudou_posicao"].sum()),
         "direct_candidate_days": int(out["candidato_selecionado"].sum()),
         "indirect_changed_days": int(out["mudou_sem_selecionar_candidato"].sum()),
+        "top1_diagnostic_available": bool(has_top1),
+        "external_top1_days": int(out["candidato_top1"].sum()) if has_top1 else None,
+        "changed_top1_days": int(out["mudou_top1"].sum()) if has_top1 else None,
+        "external_top1_not_held_days": (
+            int((out["candidato_top1"] & ~out["candidato_selecionado"]).sum())
+            if has_top1 else None
+        ),
         "first_changed_session": changed.iloc[0].isoformat() if len(changed) else None,
         "last_changed_session": changed.iloc[-1].isoformat() if len(changed) else None,
         "control_ending_capital": initial,
