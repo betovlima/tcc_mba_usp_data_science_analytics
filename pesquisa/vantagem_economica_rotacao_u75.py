@@ -19,7 +19,7 @@ from sklearn.preprocessing import StandardScaler
 from pesquisa.risco_reversao_antecipado_u75 import FEATURES
 
 
-VERSION = "u75-economic-rotation-recovery-v1.0.2"
+VERSION = "u75-economic-rotation-recovery-v1.0.3"
 
 
 @dataclass(frozen=True)
@@ -354,14 +354,18 @@ def politica_vantagem_economica(
                         target = 0
                         decision = "ECONOMIC_CASH_LAST_RESORT"
 
-        if base > 0 and base not in available:
-            # Sem retorno comparavel no ativo escolhido, nao inferir
-            # falta de oportunidade nem vetar a escolha original.
-            target, decision = base, "CONTROL_MODEL_UNAVAILABLE"
-        if not ready:
-            target, decision = base, "CONTROL_INSUFFICIENT_COVERAGE"
+        # Prioridade dos motivos de preservacao:
+        # 1) trava de permanencia; 2) previsao ausente no alvo do
+        # Control; 3) cobertura global insuficiente. A ordem importa
+        # quando duas condicoes acontecem no mesmo pregao.
         if diagnostics.get(ts, {}).get("decision_reason") == "MIN_HOLD_GUARD":
             target, decision = base, "CONTROL_MIN_HOLD_GUARD"
+        elif base > 0 and base not in available:
+            # Nao inventar retorno da escolha original. Mesmo se a
+            # cobertura tambem for baixa, registrar a causa especifica.
+            target, decision = base, "CONTROL_MODEL_UNAVAILABLE"
+        elif not ready:
+            target, decision = base, "CONTROL_INSUFFICIENT_COVERAGE"
         # Auditoria financeira deve refletir a acao FINAL apos todos
         # os guards de disponibilidade, cobertura e min-holding.
         final_net = net_value(target)
