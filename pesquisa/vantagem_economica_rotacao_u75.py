@@ -287,7 +287,7 @@ def politica_vantagem_economica(
             and forecast.get(names[i], {}).get(key) is not None
             and np.isfinite(float(forecast[names[i]][key]))
         }
-        coverage = len(available) / max(1, int(np.isfinite(utilities[1:]).sum()))
+        coverage = len(available) / max(1, int(sum(\n            np.isfinite(float(u)) and float(u) > minimum_score\n            for u in utilities[1:]\n        )))
         # Uma parte muito pequena do universo seria vies para CASH.
         ready = coverage >= settings.minimum_model_coverage_fraction
         base_value = 0.0 if base == 0 else available.get(base)
