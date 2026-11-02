@@ -392,7 +392,7 @@ def evaluate(features: pd.DataFrame, labels: pd.DataFrame, cfg: Settings,
             breadth = labels[f"future_breadth_down_{h}"]
             matured = labels[f"maturity_{h}"]
             historical = ((np.arange(len(index)) < first)
-                          & (matured.to_numpy() < index[first].to_datetime64())
+                          & ((matured < index[first]).fillna(False).to_numpy())
                           & outcome.notna().to_numpy() & breadth.notna().to_numpy())
             idx_train_all = np.flatnonzero(historical)
             if len(idx_train_all) < cfg.min_training_dates:
@@ -416,15 +416,19 @@ def evaluate(features: pd.DataFrame, labels: pd.DataFrame, cfg: Settings,
                                             idx_train_all, cfg.random_state)
             extra.iloc[idx_train_all, extra.columns.get_loc("markov_stress")] = train_markov[:, 0]
             extra.iloc[idx_train_all, extra.columns.get_loc("markov_transition_stress")] = train_markov[:, 1]
+            # Same evaluation dates and training rows for all algorithms.
+            shared_columns = sorted({x for cols in METHOD_FEATURES.values() for x in cols})
+            shared_train = idx_train_all[np.isfinite(extra.iloc[idx_train_all][shared_columns].to_numpy(float)).all(axis=1)]
+            shared_test = test_positions[np.isfinite(extra.iloc[test_positions][shared_columns].to_numpy(float)).all(axis=1)]
+            shared_test = shared_test[(outcome.iloc[shared_test].notna() & breadth.iloc[shared_test].notna()).to_numpy()]
             for method in methods:
                 cols = METHOD_FEATURES.get(method, ())
                 if method == "LightGBM_multivariado":
                     cols = METHOD_FEATURES["Logistica_multivariada"]
                 if method == "Base_historica":
                     cols = ("market_r1",)
-                tr = idx_train_all[np.isfinite(extra.iloc[idx_train_all][list(cols)].to_numpy(float)).all(axis=1)]
-                te = test_positions[np.isfinite(extra.iloc[test_positions][list(cols)].to_numpy(float)).all(axis=1)]
-                te = te[(outcome.iloc[te].notna() & breadth.iloc[te].notna()).to_numpy()]
+                tr = shared_train
+                te = shared_test
                 positive = int(event.iloc[tr].sum()) if len(tr) else 0
                 if len(tr) < cfg.min_training_dates or positive < cfg.min_positive_events or not len(te):
                     audit.append({"year":int(year), "horizon":h,"method":method,
