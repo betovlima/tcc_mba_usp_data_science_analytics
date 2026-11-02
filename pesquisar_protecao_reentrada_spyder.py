@@ -408,6 +408,52 @@ def executar_pesquisa() -> dict[str, Any]:
     fig.tight_layout()
     fig.savefig(OUT / "comparacao_drawdown.png", dpi=160)
     plt.close(fig)
+    # Figuras legiveis por alvo: Control, TP puro e tres regras de protecao.
+    for pct in TARGETS:
+        key = f"tp_{int(round(pct * 1000)):03d}"
+        subset = ["control", key, f"{key}_confirm2",
+                  f"{key}_stop10", f"{key}_confirm2_stop10"]
+        for suffix, field, y_label in (
+            ("patrimonio", "strategy_equity", "Patrimonio (US$, escala log)"),
+            ("drawdown", "strategy_equity", "Drawdown (%)"),
+        ):
+            fig, ax = plt.subplots(figsize=(11, 5))
+            for scenario_name in subset:
+                series = scenarios[scenario_name].curve[field].astype(float)
+                if suffix == "drawdown":
+                    series = (series / series.cummax() - 1.) * 100.
+                ax.plot(series.index, series,
+                        label=scenario_name.replace("_", " "), linewidth=1.2)
+            if suffix == "patrimonio":
+                ax.set_yscale("log")
+            ax.set_ylabel(y_label)
+            ax.set_title(f"TP {pct*100:g}%: reentrada e protecao independente")
+            ax.legend(fontsize=8)
+            ax.grid(alpha=.3)
+            fig.autofmt_xdate()
+            fig.tight_layout()
+            fig.savefig(OUT / f"comparacao_{suffix}_{key}.png", dpi=160)
+            plt.close(fig)
+
+    # Principais quedas de pico a vale, sem fixar datas na metodologia.
+    events = []
+    for scenario_name, result in scenarios.items():
+        series = result.curve["strategy_equity"].astype(float)
+        peak = series.cummax()
+        dd = series / peak - 1.
+        trough = dd.idxmin()
+        peak_before_trough = series.loc[:trough].idxmax()
+        events.append(dict(
+            scenario=scenario_name,
+            peak_date=peak_before_trough,
+            trough_date=trough,
+            peak_equity=float(series.loc[peak_before_trough]),
+            trough_equity=float(series.loc[trough]),
+            maximum_drawdown_pct=100. * float(dd.loc[trough]),
+            trough_asset=str(result.curve.loc[trough, "selected_asset"]),
+        ))
+    pd.DataFrame(events).to_csv(OUT / "maiores_quedas.csv", index=False)
+
     print(pd.DataFrame(summary)[[
         "scenario", "ending_capital", "maximum_drawdown_pct",
         "cash_sessions", "tp_exits", "stop_exits", "total_fees",
