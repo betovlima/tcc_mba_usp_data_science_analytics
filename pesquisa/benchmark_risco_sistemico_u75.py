@@ -384,6 +384,17 @@ def evaluate(features: pd.DataFrame, labels: pd.DataFrame, cfg: Settings,
         first = test_positions[0]
         if first < cfg.min_training_dates + max(cfg.horizons):
             continue
+        # The HMM emissions and transitions depend on the training-year
+        # boundary, not on the forecast horizon: fit only ONCE per year.
+        markov_positions = np.arange(int(test_positions[-1]) + 1)
+        markov_result = _markov_features(
+            features, np.arange(first), markov_positions, cfg.random_state)
+        extra = features.copy()
+        extra["markov_stress"] = np.nan
+        extra["markov_transition_stress"] = np.nan
+        extra.iloc[markov_positions, extra.columns.get_loc("markov_stress")] = markov_result[:, 0]
+        extra.iloc[markov_positions, extra.columns.get_loc("markov_transition_stress")] = markov_result[:, 1]
+        shared_columns = sorted({x for cols in METHOD_FEATURES.values() for x in cols})
         for h in cfg.horizons:
             if progress:
                 progress(year, h)
@@ -399,24 +410,7 @@ def evaluate(features: pd.DataFrame, labels: pd.DataFrame, cfg: Settings,
             threshold = float(np.quantile(outcome.iloc[idx_train_all], cfg.tail_quantile))
             event = ((outcome <= threshold) &
                      (breadth >= cfg.future_breadth_fraction))
-            # All features share a per-fold causal snapshot. Each method uses its
-            # own eligible rows; log exact denominators to prevent hidden bias.
-            markov_positions = np.arange(first, min(len(index), int(test_positions[-1])+1))
-            markov_result = _markov_features(
-                features, idx_train_all, markov_positions, cfg.random_state)
-            extra = features.copy()
-            extra["markov_stress"] = np.nan
-            extra["markov_transition_stress"] = np.nan
-            extra.iloc[markov_positions, extra.columns.get_loc("markov_stress")] = markov_result[:, 0]
-            extra.iloc[markov_positions, extra.columns.get_loc("markov_transition_stress")] = markov_result[:, 1]
-            # Markov calibrator training must be fitted on training-filtered
-            # probabilities from exactly the same train-fitted emission parameters.
-            train_markov = _markov_features(features, idx_train_all,
-                                            idx_train_all, cfg.random_state)
-            extra.iloc[idx_train_all, extra.columns.get_loc("markov_stress")] = train_markov[:, 0]
-            extra.iloc[idx_train_all, extra.columns.get_loc("markov_transition_stress")] = train_markov[:, 1]
-            # Same evaluation dates and training rows for all algorithms.
-            shared_columns = sorted({x for cols in METHOD_FEATURES.values() for x in cols})
+            # Shared sample guarantees identical dates for all models.
             shared_train = idx_train_all[np.isfinite(extra.iloc[idx_train_all][shared_columns].to_numpy(float)).all(axis=1)]
             shared_test = test_positions[np.isfinite(extra.iloc[test_positions][shared_columns].to_numpy(float)).all(axis=1)]
             shared_test = shared_test[(outcome.iloc[shared_test].notna() & breadth.iloc[shared_test].notna()).to_numpy()]
