@@ -1,6 +1,6 @@
 # Pesquisa econômica de rotação, risco de queda e recuperação
 
-**Versão:** `u75-economic-rotation-recovery-v1.0.0`
+**Versão:** `u75-economic-rotation-recovery-v1.0.1`
 **Branch:** `research/u75-economic-rotation-recovery-v1`
 **Programa Spyder:** `pesquisar_vantagem_economica_rotacao_u75_spyder.py`
 
@@ -165,3 +165,22 @@ sem relaxar os critérios retroativamente.
 O estudo de descoberta de novos ativos para datas futuras continua
 separado em `pesquisar_catalogo_ativos_futuros_spyder.py`; nenhum novo
 ativo pode entrar retrospectivamente no U75 congelado.
+
+## Correção v1.0.1 (02/11/2026)
+
+A versão v1.0.0 continha três sequências de barra invertida seguidas da
+letra `n` gravadas como caracteres literais no cálculo de cobertura
+`coverage` em `pesquisa/vantagem_economica_rotacao_u75.py`. Isso impedia
+até a importação do módulo por `SyntaxError`. A v1.0.1 substitui as
+sequências por quebras reais de linha. Nenhuma regra de seleção,
+parametrização ou dado de entrada foi alterado.
+
+Antes de rodar o backtest, conferir sintaxe e testes:
+
+```bash
+python -m py_compile pesquisa/vantagem_economica_rotacao_u75.py pesquisar_vantagem_economica_rotacao_u75_spyder.py
+python -m unittest discover -s tests -p "test_vantagem_economica_rotacao_u75.py" -v
+```
+
+Os testes exigem execução local; a publicação do commit não é atestado
+de teste aprovado ou de resultado financeiro.
