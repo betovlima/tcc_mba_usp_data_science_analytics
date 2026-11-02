@@ -7,7 +7,7 @@ import pytest
 
 from pesquisa.benchmark_risco_sistemico_u75 import (
     METHODS, Settings, _bocpd_series, _cusum_series,
-    _markov_features, evaluate, make_panel,
+    evaluate, make_panel,
 )
 
 
@@ -72,7 +72,6 @@ def _feature_label_frame(n=560):
     features["market_r1"]=rng.normal(0,.02,n)
     features["breadth_down5"]=np.clip(rng.normal(.5,.15,n),0,1)
     labels=pd.DataFrame(index=index)
-    h=1
     labels["future_market_1"] = features["market_r1"].shift(-1)
     labels["future_breadth_down_1"] = np.where(
         labels["future_market_1"]<0,.8,.2)
