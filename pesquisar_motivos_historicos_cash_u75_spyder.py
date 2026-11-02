@@ -216,8 +216,14 @@ def _run(out: Path):
     baseline_metrics = _risk_metrics(control.predictions, float(config.initial_capital))
 
     # %% 3 - Build observables at each daily close. Prices AFTER t are not features.
+    coverage_levels = {
+        setting.minimum_coverage_fraction for _, setting, _ in EXPERIMENTS
+    }
+    if len(coverage_levels) != 1:
+        raise RuntimeError("Scenarios have inconsistent U75 coverage settings")
     market_level, asset_levels, audit = build_series(
         snapshot.frames, symbols, calendar,
+        minimum_coverage_fraction=next(iter(coverage_levels)),
     )
     _write_csv(audit, out / "indice_u75_cobertura.csv")
     record_progress(out, "indice_coletivo_construido")
