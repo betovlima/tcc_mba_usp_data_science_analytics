@@ -354,12 +354,6 @@ def politica_vantagem_economica(
                         target = 0
                         decision = "ECONOMIC_CASH_LAST_RESORT"
 
-        final_net = net_value(target)
-        if base_net is not None and final_net is not None:
-            advantage = final_net - base_net
-        cost = settings.estimated_switch_cost * (
-            int(target != current) - int(base != current)
-        )
         if base > 0 and base not in available:
             # Sem retorno comparavel no ativo escolhido, nao inferir
             # falta de oportunidade nem vetar a escolha original.
@@ -368,6 +362,14 @@ def politica_vantagem_economica(
             target, decision = base, "CONTROL_INSUFFICIENT_COVERAGE"
         if diagnostics.get(ts, {}).get("decision_reason") == "MIN_HOLD_GUARD":
             target, decision = base, "CONTROL_MIN_HOLD_GUARD"
+        # Auditoria financeira deve refletir a acao FINAL apos todos
+        # os guards de disponibilidade, cobertura e min-holding.
+        final_net = net_value(target)
+        if base_net is not None and final_net is not None:
+            advantage = final_net - base_net
+        cost = settings.estimated_switch_cost * (
+            int(target != current) - int(base != current)
+        )
         final_utility = (float(utilities[target]) if target > 0 else 0.0)
         if target != base:
             row = diagnostics.setdefault(ts, {})
