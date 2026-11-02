@@ -333,7 +333,13 @@ def adaptar_politica_rotacao(
                 # Nenhum candidato seguro: CASH e alternativa de ultima instancia.
                 target, score = 0, 0.0
                 reason = "RISK_NO_ACCEPTABLE_ROTATION"
-        elif (enable_recovery and eligible and target > 0 and not base_high):
+        elif (enable_recovery and eligible and target > 0 and not base_high
+              and not (
+                  decision_diagnostics is not None
+                  and decision_diagnostics.get(ts, {}).get("decision_reason")
+                  == "MIN_HOLD_GUARD"
+              )):
+            # Recuperacao nunca rompe a permanencia minima do Control.
             candidates = [
                 j for j in eligible
                 if p_recovery.get(j) is not None
