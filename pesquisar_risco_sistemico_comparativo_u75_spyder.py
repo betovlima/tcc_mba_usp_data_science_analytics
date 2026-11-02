@@ -50,10 +50,10 @@ def _save_fig(fig, out, filename, figures):
 # %% 1 - Graficos comparativos: gerados e exibidos no Spyder
 def _charts(features, labels, predictions, summary, out):
     figures = []
-    for metric, higher_better, filename in [
-        ("brier", False, "01_brier_por_metodo_horizonte.png"),
-        ("average_precision", True, "02_precision_recall_area.png"),
-        ("roc_auc", True, "03_auc_roc.png"),
+    for metric, filename in [
+        ("brier", "01_brier_por_metodo_horizonte.png"),
+        ("average_precision", "02_precision_recall_area.png"),
+        ("roc_auc", "03_auc_roc.png"),
     ]:
         matrix = summary.pivot(index="method", columns="horizon", values=metric)
         matrix = matrix.reindex(list(METHODS))
@@ -224,9 +224,10 @@ def _run(out):
                 "event_start_decision_date":str(group.iloc[pos].date),
                 "early_signal_in_previous_h_sessions":bool(len(early)),
                 "earliest_alert_in_window":str(early.iloc[0].date) if len(early) else None,
-                "lead_sessions_in_decision_calendar":int(pos-early.index[0]) if False else (
-                    int(pos - int(np.flatnonzero(
-                        earliest.alert.to_numpy(bool))[0] + beginning)) if len(early) else None
+                "lead_sessions_in_decision_calendar":(
+                    int(pos - (int(np.flatnonzero(
+                        earliest.alert.to_numpy(bool))[0]) + beginning))
+                    if len(early) else None
                 ),
             })
     _csv(pd.DataFrame(onset), out / "eventos_e_antecedencia.csv")
@@ -239,7 +240,7 @@ def _run(out):
         "study":"Risco de queda generalizada do universo; pesquisa shadow",
         "settings":CFG.__dict__,
         "methods":list(METHODS),
-        "comparison":metrics.to_dict(orient="records"),
+        "comparison":json.loads(metrics.to_json(orient="records")),
         "source_identity":identity,
         "universe_size":len(contract["assets"]),
         "graphs":graphics,
