@@ -19,7 +19,7 @@ from sklearn.preprocessing import StandardScaler
 from pesquisa.risco_reversao_antecipado_u75 import FEATURES
 
 
-VERSION = "u75-economic-rotation-recovery-v1.0.1"
+VERSION = "u75-economic-rotation-recovery-v1.0.2"
 
 
 @dataclass(frozen=True)
@@ -297,23 +297,37 @@ def politica_vantagem_economica(
         target = base
         decision = "CONTROL_PRESERVED"
         advantage = None
+        candidate_advantage = None
         cost = None
-        if (ready and base_value is not None
+        winner = None
+
+        def net_value(position: int) -> float | None:
+            # CASH tem retorno esperado zero antes do custo de saida.
+            # Manter a posicao atual nao gera custo de troca.
+            value = 0.0 if position == 0 else available.get(position)
+            if value is None:
+                return None
+            return float(value) - settings.estimated_switch_cost * int(
+                position != current
+            )
+
+        base_net = net_value(base)
+        cash_net = net_value(0)
+        if (ready and base_net is not None
                 and diagnostics.get(ts, {}).get("decision_reason") != "MIN_HOLD_GUARD"):
             if available:
-                winner = max(available, key=lambda i: (available[i], -i))
-                winner_value = available[winner]
-                # Comparar o CUSTO ADICIONAL da nova escolha com a
-                # decisao alternativa que Control ja teria executado.
-                extra_turnover = (
-                    int(winner != current) - int(base != current)
-                )
-                cost = settings.estimated_switch_cost * extra_turnover
-                advantage = winner_value - base_value - cost
-                if (winner != base
-                        and advantage >= settings.minimum_incremental_log_edge
-                        and winner_value - settings.estimated_switch_cost
-                            * int(winner != current) > 0):
+                # Comparar oportunidades em unidade identica: log-retorno
+                # previsto descontado do custo de trocar a posicao EFETIVA.
+                net_candidates = {i: net_value(i) for i in available}
+                winner = max(net_candidates, key=lambda i: (net_candidates[i], -i))
+                winner_net = net_candidates[winner]
+                candidate_advantage = winner_net - base_net
+
+                # Primeiro, uma rotacao que tenha retorno liquido positivo
+                # e supere economicamente a escolha do Control.
+                if (winner != base and winner_net > 0.0
+                        and candidate_advantage
+                        >= settings.minimum_incremental_log_edge):
                     target = winner
                     decision = (
                         "RECOVERY_ECONOMIC_ROTATION"
@@ -321,12 +335,31 @@ def politica_vantagem_economica(
                             "expected_recovery_log_return_5d") is not None
                         else "RISK_ECONOMIC_ROTATION"
                     )
-                # CASH apenas se TUDO indica ganho esperado nao positivo,
-                # e a escolha do Control apresenta perspectiva bem negativa.
-                elif (base > 0 and max(available.values()) <= 0
+                # Se TODAS as alternativas de compra sao negativas apos
+                # custo, nunca tratar score bruto ligeiramente positivo
+                # como motivo para manter uma compra muito desfavoravel.
+                elif (base > 0 and winner_net <= 0.0
                       and base_value <= -settings.cash_loss_buffer):
-                    target = 0
-                    decision = "ECONOMIC_CASH_LAST_RESORT"
+                    # Se ja estamos em ativo elegivel e mantê-lo custa menos
+                    # que sair para CASH, a melhor defesa e nao rotacionar.
+                    if (current > 0 and current in net_candidates
+                            and net_candidates[current] > cash_net
+                            and net_candidates[current] - base_net
+                            >= settings.minimum_incremental_log_edge
+                            and current != base):
+                        target = current
+                        decision = "ECONOMIC_AVOID_NEGATIVE_ROTATION"
+                    elif (cash_net - base_net
+                          >= settings.minimum_incremental_log_edge):
+                        target = 0
+                        decision = "ECONOMIC_CASH_LAST_RESORT"
+
+        final_net = net_value(target)
+        if base_net is not None and final_net is not None:
+            advantage = final_net - base_net
+        cost = settings.estimated_switch_cost * (
+            int(target != current) - int(base != current)
+        )
         if base > 0 and base not in available:
             # Sem retorno comparavel no ativo escolhido, nao inferir
             # falta de oportunidade nem vetar a escolha original.
@@ -358,6 +391,9 @@ def politica_vantagem_economica(
                 available.get(target) if target > 0 else 0.0
             ),
             "incremental_net_edge": advantage, "estimated_cost_delta": cost,
+            "best_candidate_incremental_net_edge": candidate_advantage,
+            "control_net_score": base_net, "final_net_score": final_net,
+            "cash_net_score": cash_net,
             "model_coverage": coverage, "model_ready": ready,
             "p_downside_control": (
                 forecast.get(names[base], {}).get("p_downside") if base else None
