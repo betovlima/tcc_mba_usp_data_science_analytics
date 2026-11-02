@@ -138,6 +138,7 @@ output/vantagem_economica_rotacao_u75/
     economico_reversao_predictions.csv
     economico_reversao_trades.csv
     comparacao_dia_a_dia.csv
+    comparacao_por_fold.csv
     maiores_diferencas_pregao.csv
     patrimonio_tres_politicas.png
     drawdowns_tres_politicas.png
