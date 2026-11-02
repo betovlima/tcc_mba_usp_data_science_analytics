@@ -392,6 +392,22 @@ def run(out: Path) -> dict:
         comparison["recovery_return"] - comparison["control_return"]
     )
     save_frame(out / "comparacao_dia_a_dia.csv", comparison)
+
+    fold_rows = []
+    fold_series = base.predictions["walk_forward_fold"].to_numpy()
+    for fold_id in sorted(set(int(x) for x in fold_series)):
+        positions = np.flatnonzero(fold_series == fold_id)
+        first, last = int(positions[0]), int(positions[-1])
+        if last - first + 1 != len(positions):
+            raise RuntimeError("Sessoes de teste nao contiguas no fold")
+        entry = {"fold": fold_id, "sessions": int(len(positions))}
+        for name, key in zip(scenarios, ("control", "risk", "recovery")):
+            equity = runs[name].predictions["strategy_equity"].to_numpy(float)
+            starting = float(config.initial_capital) if first == 0 else float(equity[first-1])
+            entry[key + "_return"] = float(equity[last] / starting - 1.0)
+        fold_rows.append(entry)
+    save_frame(out / "comparacao_por_fold.csv", pd.DataFrame(fold_rows))
+
     most_changed = comparison.assign(
         absolute_difference=comparison["recovery_daily_difference"].abs(),
     ).nlargest(30, "absolute_difference")
