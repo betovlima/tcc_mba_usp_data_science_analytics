@@ -145,6 +145,7 @@ def consolidar(pacotes: list[Path]) -> dict:
     assert expected is not None
     missing_symbols = sorted(set(expected) - set(records))
     incomplete = {k: v["missing_evidence"] for k, v in records.items() if v["missing_evidence"]}
+    unresolved_failures = {k: v for k, v in failures.items() if k not in records}
     rows = []
     for sym, value in records.items():
         r = dict(value["result"])
@@ -154,7 +155,7 @@ def consolidar(pacotes: list[Path]) -> dict:
         rows.append(r)
     rows.sort(key=lambda r: (-float(r["delta_compound_log_growth"]), r["symbol"]))
     status = ("completed_exploratory" if (not missing_symbols and not incomplete
-              and not failures) else "incomplete")
+              and not unresolved_failures) else "incomplete")
     return {
         "schema_version": 1,
         "version": VERSION,
@@ -168,7 +169,8 @@ def consolidar(pacotes: list[Path]) -> dict:
         "measured_candidates": len(records),
         "missing_candidates": missing_symbols,
         "incomplete_evidence": incomplete,
-        "failed_candidates": failures,
+        "failed_candidates": unresolved_failures,
+        "historical_failed_attempts": failures,
         "packages": sources,
         "results": rows,
     }
