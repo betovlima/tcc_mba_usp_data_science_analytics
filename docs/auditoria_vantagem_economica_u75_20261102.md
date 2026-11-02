@@ -119,3 +119,34 @@ No Spyder (F5):
 Sem dados novos a nova execução é um **replay de depuração exploratório**,
 não avaliação prospectiva independente. Uma melhoria financeira posterior
 não comprovará generalização. Não promover ao MCT apenas com esse replay.
+
+## Correção de diagnósticos v1.0.3: previsão ausente e cobertura
+
+Após a correção financeira v1.0.2, o teste
+`test_previsao_faltante_preserva_control` detectou uma inconsistência
+na **classificação do motivo**. Quando faltava previsão para a escolha
+do Control, a cobertura disponível também diminuía, e o código
+registrava `CONTROL_INSUFFICIENT_COVERAGE` por último, sobrescrevendo
+`CONTROL_MODEL_UNAVAILABLE`.
+
+A v1.0.3 estabelece prioridade explícita para a auditoria:
+
+1. `CONTROL_MIN_HOLD_GUARD`, quando a permanência mínima obriga manter.
+2. `CONTROL_MODEL_UNAVAILABLE`, quando faltam previsões no alvo escolhido.
+3. `CONTROL_INSUFFICIENT_COVERAGE`, quando há previsão do alvo, mas menos
+   de 90% das alternativas elegíveis estão cobertas.
+
+Essa correção **não modifica a posição final, o retorno econômico,
+os custos, a escolha CASH ou o algoritmo de treino**. Somente o motivo
+registrado no CSV de decisões ganha a prioridade correta.
+
+Os testes de regressão sintéticos também cobrem a combinação das
+duas causas, a ausência isolada de cobertura e a precedência de
+permanência mínima. Publicação de código não significa teste local
+aprovado; execute ambos os arquivos antes do novo replay:
+
+```bash
+python -m py_compile pesquisa/vantagem_economica_rotacao_u75.py pesquisar_vantagem_economica_rotacao_u75_spyder.py
+python -m unittest discover -s tests -p "test_vantagem_economica_rotacao_u75.py" -v
+python -m unittest discover -s tests -p "test_economia_liquida_cash_v102.py" -v
+```
