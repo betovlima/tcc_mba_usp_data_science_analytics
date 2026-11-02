@@ -115,7 +115,8 @@ def _charts(features, labels, predictions, summary, out):
         if not calib.empty:
             ax.plot(calib.predicted, calib.observed, marker=".", alpha=.8, label=method)
     ax.plot([0, 1], [0, 1], "k--", lw=1, label="Calibracao perfeita")
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
     ax.set_xlabel("Probabilidade prevista")
     ax.set_ylabel("Frequencia observada")
     ax.set_title(f"Calibracao anual OOS combinada, horizonte {selected_h}")
@@ -132,7 +133,8 @@ def _charts(features, labels, predictions, summary, out):
     axes[2].plot(features.index, features.dcc_mean_corr, lw=.8)
     axes[2].set_ylabel("Correlacao dinamica")
     axes[2].set_xlabel("Data")
-    for ax in axes: ax.grid(alpha=.2)
+    for ax in axes:
+        ax.grid(alpha=.2)
     fig.suptitle("Indicadores coletivos causais do universo U75")
     _save_fig(fig, out, "06_indicadores_risco_coletivo.png", figures)
 
