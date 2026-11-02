@@ -76,7 +76,37 @@ class HistoricalMotifTests(unittest.TestCase):
     def test_missing_universe_asset_is_not_silently_removed(self):
         raw={"U00":pd.DataFrame({"close":np.exp(self.market)},index=self.days)}
         with self.assertRaises(ValueError):
-            build_series(raw,["U00"],self.days)
+            build_series(raw,["U00", "U01"],self.days)
+
+    def test_different_universe_sizes_preserve_relative_coverage(self):
+        from math import ceil
+        for size in (65, 75, 82):
+            names=[f"U{i:03d}" for i in range(size)]
+            bars={
+                symbol:pd.DataFrame({
+                    "close":100*np.exp(self.market+idx*.00001*np.arange(len(self.days)))
+                },index=self.days)
+                for idx,symbol in enumerate(names)
+            }
+            market, assets, audit = build_series(bars,names,self.days)
+            self.assertEqual(len(assets),size)
+            self.assertEqual(audit["universe_assets"].iloc[-1],size)
+            self.assertEqual(audit["required_assets"].iloc[-1],ceil(.90*size))
+            self.assertTrue(np.isfinite(market[100]))
+
+    def test_insufficient_relative_coverage_is_not_filled(self):
+        names=[f"U{i:03d}" for i in range(65)]
+        bars={
+            symbol:pd.DataFrame({"close":100*np.exp(self.market)},index=self.days)
+            for symbol in names
+        }
+        # 55 returns out of 65, below the 59 required at 90%.
+        for symbol in names[:10]:
+            bars[symbol].loc[self.days[100],"close"]=np.nan
+        market, assets, audit = build_series(bars,names,self.days)
+        self.assertEqual(audit["required_assets"].iloc[100],59)
+        self.assertEqual(audit["status"].iloc[100],"insufficient_coverage")
+        self.assertTrue(np.isnan(market[100]))
 
     def test_policy_receives_real_position_and_can_enter_cash(self):
         class Dummy:

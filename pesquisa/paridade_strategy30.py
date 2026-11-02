@@ -37,11 +37,11 @@ def config_from_frozen_manifest(
     settings = deepcopy(effective["research_model_settings"])
     if settings.get("soft_horizon_consensus", {}).get("enabled"):
         raise RuntimeError("O Control não pode usar Soft Horizon.")
-    if len(contract["assets"]) != 75:
-        raise RuntimeError("Contrato exige os 75 ativos.")
+    if len(contract["assets"]) != int(contract["effective_asset_count"]):
+        raise RuntimeError("Quantidade de ativos difere do manifesto do Control.")
     source_assets = sorted(str(x) for x in effective["assets"])
     if source_assets != contract["assets"]:
-        raise RuntimeError("Universo da configuração não coincide com os 75 ativos.")
+        raise RuntimeError("Universo da configuração não coincide com o Control.")
     base = construir_configuracao_controle(
         CONFIG, assets=tuple(contract["assets"]),
     )
@@ -102,8 +102,8 @@ def load_snapshot_strategy30(
     actions_folder = root / "corporate_actions"
     signatures = experiment_manifest["market_data_signatures"]
     expected = contract["assets"]
-    if sorted(signatures) != expected or len(expected) != 75:
-        raise RuntimeError("Assinaturas de mercado não cobrem os 75 ativos.")
+    if sorted(signatures) != expected or len(expected) != int(contract["effective_asset_count"]):
+        raise RuntimeError("Assinaturas de mercado não cobrem os ativos do contrato.")
     missing = [
         str(directory / f"{symbol}.csv")
         for symbol in expected
@@ -156,7 +156,7 @@ def load_snapshot_strategy30(
             raise RuntimeError(f"{symbol}: preços não finitos ou inválidos.")
         bars[symbol] = normalized
         rows.append(report)
-        if index % 15 == 0 or index == 75:
+        if index % 15 == 0 or index == len(expected):
             print(f"[snapshot] {index}/75 ativos conferidos", flush=True)
     return SnapshotReport(frames=bars, records=pd.DataFrame(rows))
 

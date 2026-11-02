@@ -24,12 +24,13 @@ UNIVERSE_PATH = ROOT / "pesquisa" / "universo_control_75.json"
 def carregar_contrato(path: Path = CONTRACT_PATH) -> dict[str, Any]:
     contract = json.loads(Path(path).read_text(encoding="utf-8"))
     assets = list(contract["assets"])
-    if len(assets) != 75 or assets != sorted(set(assets)):
-        raise RuntimeError("O contrato exige 75 ativos oficiais distintos.")
+    expected_count = int(contract["effective_asset_count"])
+    if expected_count < 1 or len(assets) != expected_count or assets != sorted(set(assets)):
+        raise RuntimeError("Quantidade de ativos inconsistente com o contrato.")
     # Uma unica definicao canonica. Alterar o universo invalida o Control.
     official = json.loads(UNIVERSE_PATH.read_text(encoding="utf-8"))
     if assets != list(official["assets"]):
-        raise RuntimeError("Contrato Control diverge do universo canonico de 75 ativos.")
+        raise RuntimeError("Contrato Control diverge do universo canonico da referencia.")
     if contract["role"] != "official_research_control":
         raise RuntimeError("Pacote nao esta identificado como Control oficial de pesquisa.")
     return contract
@@ -80,8 +81,8 @@ def validar_control_strategy30(
         raise RuntimeError("Configuracao efetiva do motor divergente.")
     if metrics["market_data_signature_sha256"] != contract["market_data_signature_sha256"]:
         raise RuntimeError("Assinatura dos dados de mercado divergente.")
-    if experiment["eligible_asset_count"] != 75 or sorted(metrics["assets"]) != contract["assets"]:
-        raise RuntimeError("O universo do Control nao corresponde aos 75 ativos oficiais.")
+    if experiment["eligible_asset_count"] != int(contract["effective_asset_count"]) or sorted(metrics["assets"]) != contract["assets"]:
+        raise RuntimeError("Universo do Control nao corresponde aos ativos declarados no manifesto.")
     if len(predictions) != contract["expected_rows"]:
         raise RuntimeError("Total de sessoes do Control divergente.")
     dates = pd.to_datetime(predictions["timestamp"], utc=True)
@@ -133,7 +134,7 @@ def validar_control_strategy30(
         "strategy_configuration_hash": contract["strategy_configuration_hash"],
         "market_data_signature_sha256": contract["market_data_signature_sha256"],
         "effective_assets": contract["assets"],
-        "effective_asset_count": 75,
+        "effective_asset_count": int(contract["effective_asset_count"]),
         "first_session": contract["first_session"],
         "last_session": contract["last_session"],
         "sessions": len(predictions),
