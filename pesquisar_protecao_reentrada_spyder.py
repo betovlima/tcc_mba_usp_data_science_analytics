@@ -114,6 +114,7 @@ def simular_alvo(
     def buy(timestamp, target_position, fold):
         nonlocal cash, position, qty, held, entry_price, entry_date
         nonlocal total_fees, same_symbol_reentries
+        nonlocal last_forced_symbol, last_forced_date, consecutive_reentry_signals
         symbol = symbols[target_position - 1]
         quantity, executed, fees = _buy(
             cash, price(symbol, timestamp, "open"),
@@ -127,6 +128,9 @@ def simular_alvo(
         entry_price, entry_date = executed, timestamp
         if last_tp_symbol == symbol and last_tp_date is not None and timestamp > last_tp_date:
             same_symbol_reentries += 1
+        # A exigencia de confirmacao so vale ate a proxima compra.
+        last_forced_symbol, last_forced_date = None, None
+        consecutive_reentry_signals = 0
         trades.append(dict(timestamp=timestamp, fold=fold, action="BUY", asset=symbol,
                            reason="MODEL_ENTRY", price=executed, shares=qty,
                            entry_date=timestamp, entry_price=executed,
