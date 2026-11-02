@@ -1,0 +1,28 @@
+name: contextual-cash-advantage-tests
+on:
+  push:
+    branches:
+      - research/u75-contextual-cash-advantage-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  causal-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install research test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy pandas scipy scikit-learn matplotlib pytest ruff
+      - name: Static syntax and defined names
+        run: |
+          python -m compileall -q pesquisa/risco_contextual_cash_u75.py pesquisar_vantagem_cash_contextual_u75_spyder.py tests/test_risco_contextual_cash_u75.py
+          python -m ruff check pesquisa/risco_contextual_cash_u75.py pesquisar_vantagem_cash_contextual_u75_spyder.py tests/test_risco_contextual_cash_u75.py --select F821,F811
+      - name: Context, causality, state and outcome tests
+        run: python -m pytest -q tests/test_risco_contextual_cash_u75.py tests/test_motivos_historicos_cash_u75.py tests/test_validacao_dimensoes_motivos_u75.py
