@@ -182,3 +182,23 @@ A integração da pesquisa histórica (commit `13e5ed39ed0e700d2eb8c90bc8bee64ad
 `reproduzir_experimento.py` agora executa o **mesmo replay financeiro de dez candidatos** usado na pesquisa de expansão, e não somente a referência base. O arquivo do executor usa nomenclatura genérica; a adaptação preserva a rotina histórica por trás de `reproducao/experimento.py`, sem duplicar a matemática. A saída é `output/reproducao_universo/pacote_reproducao_universo.zip`.
 
 O código valida primeiro a identidade do snapshot, a composição do universo e os **20 hashes dos CSVs** (barras e eventos de dez ativos). Depois treina a referência e os candidatos por fold, calibra conjuntamente e compara o capital simulado ao checkpoint congelado. Nenhuma chamada de download é feita pelo executor. O cenário é histórico, não uma previsão de resultado futuro. **A execução completa foi concluída no Spyder em 21/10/2026**, sobre o cache histórico preservado, com `status=completed`, `reproduced_exact_to_cent=true`, capital de **US$ 587.165.941,1330212** e diferença de **US$ 0,00**. O ZIP conferido é `pacote_reproducao_universo.zip`, SHA-256 `0c3518387556f147897baf121cb089f532f8355a8bb074c91fe0a6b5ec4b6ac8`. O pacote contém 29 arquivos, incluindo `predictions.csv` (1.560 sessões), `trades.csv` (710 registros), `reproducao_universo.json` e análises gráficas. O checkpoint foi confirmado também pelos modos de pesquisa `decision_validation` e `assurance_validation` sobre o mesmo recorte congelado. O cache local continua **não versionado**: clones limpos não têm, por si só, os arquivos suficientes para refazer o replay.
+
+## Pesquisa paralela: risco precoce, fundos e rotacao preservada (v1.0.0)
+
+Na branch `research/u75-early-risk-bottom-reversal-v1`, a pesquisa
+`pesquisar_risco_reversao_u75_spyder.py` compara **Control**, **Control +
+risco de continuidade de queda** e **Control + risco + oportunidade de
+reversao** na mesma Strategy #30 e no mesmo U75 congelado.
+
+O Control realiza a escolha original primeiro; risco pode levar a outra
+acao com utilidade positiva, e CASH e ultimo recurso. A pesquisa exige
+paridade financeira do Control **antes** de executar as variacoes.
+A descoberta de novos ativos fica em script **independente**,
+`pesquisar_catalogo_ativos_futuros_spyder.py`, que le o catalogo atual
+Alpaca e nunca promove novos simbolos automaticamente.
+
+Protocolo, comandos, metricas e limites cientificos:
+[pesquisa_risco_antecipado_fundos_rotacao_u75_v1.md](docs/pesquisa_risco_antecipado_fundos_rotacao_u75_v1.md).
+
+**Status: implementacao experimental publicada, resultados financeiros
+ainda nao executados nem homologados.** O MCT operacional permanece intocado.
