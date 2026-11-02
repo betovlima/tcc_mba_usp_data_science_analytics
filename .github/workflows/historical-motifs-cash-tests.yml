@@ -5,6 +5,7 @@ on:
       - research/u75-historical-motifs-cash-v1
       - fix/u75-motifs-output-directory-v1
       - fix/u75-motifs-progress-diagnostics-v1
+      - fix/u75-motifs-manifest-driven-dimensions-v1
   workflow_dispatch:
 
 permissions:
@@ -24,7 +25,7 @@ jobs:
           python -m pip install numpy pandas scipy scikit-learn pytest ruff
       - name: Static imports and syntax
         run: |
-          python -m compileall -q pesquisa/motivos_historicos_cash_u75.py pesquisa/saida_resiliente_motivos_u75.py pesquisa/andamento_motivos_u75.py pesquisar_motivos_historicos_cash_u75_spyder.py tests/test_motivos_historicos_cash_u75.py tests/test_saida_resiliente_motivos_u75.py tests/test_andamento_motivos_u75.py
+          python -m compileall -q pesquisa/motivos_historicos_cash_u75.py pesquisa/saida_resiliente_motivos_u75.py pesquisa/andamento_motivos_u75.py pesquisa/validacao_dimensoes_motivos_u75.py pesquisar_motivos_historicos_cash_u75_spyder.py tests/test_motivos_historicos_cash_u75.py tests/test_saida_resiliente_motivos_u75.py tests/test_andamento_motivos_u75.py tests/test_validacao_dimensoes_motivos_u75.py
           python -m ruff check pesquisa/motivos_historicos_cash_u75.py pesquisar_motivos_historicos_cash_u75_spyder.py tests/test_motivos_historicos_cash_u75.py --select F821,F811
       - name: Synthetic causal and state tests
-        run: python -m pytest -q tests/test_motivos_historicos_cash_u75.py tests/test_saida_resiliente_motivos_u75.py tests/test_andamento_motivos_u75.py
+        run: python -m pytest -q tests/test_motivos_historicos_cash_u75.py tests/test_saida_resiliente_motivos_u75.py tests/test_andamento_motivos_u75.py tests/test_validacao_dimensoes_motivos_u75.py
