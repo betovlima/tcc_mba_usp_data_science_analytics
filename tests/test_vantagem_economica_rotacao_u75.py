@@ -90,6 +90,30 @@ class EconomicRotationTests(unittest.TestCase):
         self.assertEqual(chosen, 1)
         self.assertEqual(self.audit[-1]["reason"], "CONTROL_MODEL_UNAVAILABLE")
 
+    def test_previsao_faltante_tambem_reduz_cobertura(self):
+        # Motivo especifico prevalece mesmo com cobertura < 90%.
+        sig = self._signals((None, None), (.5, .5))
+        chosen, _ = self._policy(sig)(self.date, 1, 3)
+        self.assertEqual(chosen, 1)
+        self.assertEqual(self.audit[-1]["reason"], "CONTROL_MODEL_UNAVAILABLE")
+        self.assertFalse(self.audit[-1]["model_ready"])
+        self.assertAlmostEqual(self.audit[-1]["model_coverage"], 0.5)
+        self.assertFalse(self.audit[-1]["changed_control_action"])
+
+    def test_previsao_do_control_disponivel_cobertura_insuficiente(self):
+        # Distinto do caso anterior: so outra acao fica sem previsao.
+        sig = self._signals((.01, .01), (None, None))
+        chosen, _ = self._policy(sig)(self.date, 1, 3)
+        self.assertEqual(chosen, 1)
+        self.assertEqual(self.audit[-1]["reason"], "CONTROL_INSUFFICIENT_COVERAGE")
+        self.assertAlmostEqual(self.audit[-1]["model_coverage"], 0.5)
+
+    def test_trava_minima_tem_prioridade_sobre_previsao_faltante(self):
+        sig = self._signals((None, None), (.5, .5))
+        chosen, _ = self._policy(sig, guard=True)(self.date, 1, 1)
+        self.assertEqual(chosen, 1)
+        self.assertEqual(self.audit[-1]["reason"], "CONTROL_MIN_HOLD_GUARD")
+
     def test_ausencia_preco_intermediario_nao_inventa_alvo(self):
         s = EarlyRiskSettings()
         n = 80
