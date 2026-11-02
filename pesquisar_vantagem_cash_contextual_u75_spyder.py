@@ -142,7 +142,10 @@ def _run(out: Path):
         **dimensions,
         "arquivo": "snapshot_identidade.csv",
     })
-    print("[fonte] Control Strategy #30, 75 ativos, 3 folds", flush=True)
+    print(
+        f"[fonte] Control Strategy #30, {len(symbols)} ativos, "
+        f"{len(folds)} folds", flush=True,
+    )
     print(f"[saida] {out.resolve()}", flush=True)
 
     # %% 2 - Refit original models/rotation margin once, no new optimization
@@ -158,7 +161,7 @@ def _run(out: Path):
                 and final_train[-1] < fold["test_start"]):
             raise RuntimeError(f"Temporal violation in fold {fid}")
         record_progress(out, "calibracao_inicio", details={"fold": fid})
-        print(f"[modelo] fold {fid}/3 calibrando", flush=True)
+        print(f"[modelo] fold {fid}/{len(folds)} calibrando", flush=True)
         models = _ajustar_modelos_lightgbm(
             frames, symbols, train, config, phase=f"motifs_fold_{fid}_calibration",
         )
@@ -177,7 +180,7 @@ def _run(out: Path):
                      float(choice["selected_candidate_margin"]))
         del models
         record_progress(out, "treinamento_final_inicio", details={"fold": fid})
-        print(f"[modelo] fold {fid}/3 ajuste final", flush=True)
+        print(f"[modelo] fold {fid}/{len(folds)} ajuste final", flush=True)
         trained = _ajustar_modelos_lightgbm(
             frames, symbols, final_train, config, phase=f"motifs_fold_{fid}_final",
         )
@@ -434,6 +437,13 @@ def main():
                          f"{label}_avaliacao_futura.csv")
         check_required_files(output, expected)
         record_progress(output, "evidencias_verificadas")
+        record_progress(
+            output, "execucao_concluida", status="completed",
+            details={
+                "cenarios": len(EXPERIMENTS),
+                "arquivo_zip":f"pacote_vantagem_cash_contextual_u75_{output.name}.zip",
+            },
+        )
         success = True
     except Exception:
         details = traceback.format_exc()
