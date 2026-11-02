@@ -202,3 +202,22 @@ Protocolo, comandos, metricas e limites cientificos:
 
 **Status: implementacao experimental publicada, resultados financeiros
 ainda nao executados nem homologados.** O MCT operacional permanece intocado.
+
+## Experimento adicional: vantagem economica e recuperacao (v1.0.0)
+
+A branch `research/u75-economic-rotation-recovery-v1` implementa
+`pesquisar_vantagem_economica_rotacao_u75_spyder.py`, que preserva
+a rotacao original do Control e compara a troca economica entre ativos
+por retorno projetado, risco de cauda, custo adicional e recuperacao.
+Nao utiliza veto por limiar fixo da probabilidade de queda para
+restringir o modelo B.
+
+Executar com Spyder F5 e os mesmos snapshots/ZIP Strategy #30.
+O programa exige paridade exata antes de avaliar qualquer modificacao,
+e gera pacote rastreavel em `output/vantagem_economica_rotacao_u75/`.
+
+[Protocolo de pesquisa e instrucoes](docs/pesquisa_vantagem_economica_rotacao_u75_v1.md).
+
+**Estado:** implementacao publicada, ainda sem replay financeiro novo
+ou aprovacao dos testes na maquina do pesquisador. U75, `main`,
+MCT e parametros de producao nao sao modificados.
