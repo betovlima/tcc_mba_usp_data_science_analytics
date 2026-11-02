@@ -421,11 +421,6 @@ def evaluate(features: pd.DataFrame, labels: pd.DataFrame, cfg: Settings,
             shared_test = test_positions[np.isfinite(extra.iloc[test_positions][shared_columns].to_numpy(float)).all(axis=1)]
             shared_test = shared_test[(outcome.iloc[shared_test].notna() & breadth.iloc[shared_test].notna()).to_numpy()]
             for method in methods:
-                cols = METHOD_FEATURES.get(method, ())
-                if method == "LightGBM_multivariado":
-                    cols = METHOD_FEATURES["Logistica_multivariada"]
-                if method == "Base_historica":
-                    cols = ("market_r1",)
                 tr = shared_train
                 te = shared_test
                 positive = int(event.iloc[tr].sum()) if len(tr) else 0
