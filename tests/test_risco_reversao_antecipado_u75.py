@@ -91,6 +91,22 @@ class RiskBottomResearchTests(unittest.TestCase):
         self.assertEqual(chosen, 2)
         self.assertEqual(audit[0]["reason"], "RECOVERY_OPPORTUNITY_ROTATION")
 
+    def test_reversao_respeita_min_holding_control(self):
+        self.cache[self.date][2] = .101
+        diagnostic = {}
+        def base(ts, current, holding):
+            diagnostic[ts] = {"decision_reason": "MIN_HOLD_GUARD"}
+            return 1, .10
+        audit = []
+        p = adaptar_politica_rotacao(
+            base, self.symbols, self.cache, _signals(recovery_b=.99),
+            self.settings, enable_recovery=True, audit=audit,
+            decision_diagnostics=diagnostic,
+        )
+        chosen, _ = p(self.date, 1, 1)
+        self.assertEqual(chosen, 1)
+        self.assertEqual(audit[0]["reason"], "CONTROL_PRESERVED")
+
     def test_modelo_ausente_nao_altera_decisao(self):
         p, audit, _ = self._policy(1, {self.date: {}})
         chosen, _ = p(self.date, 1, 5)
