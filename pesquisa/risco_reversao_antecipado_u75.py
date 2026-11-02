@@ -259,6 +259,7 @@ def adaptar_politica_rotacao(
     *,
     enable_recovery: bool,
     audit: list[dict],
+    decision_diagnostics: dict[pd.Timestamp, dict[str, Any]] | None = None,
 ) -> Callable[[pd.Timestamp, int, int], tuple[int, float]]:
     """A rotação do Control e SEMPRE a primeira avaliacao.
 
@@ -350,6 +351,24 @@ def adaptar_politica_rotacao(
                     reason = "RECOVERY_OPPORTUNITY_ROTATION"
         # Se nao ha score de risco (warmup/modelo indisponivel) preservar Control,
         # inclusive holding, switch-margin e reentrada original.
+        if decision_diagnostics is not None:
+            diagnostic = decision_diagnostics.setdefault(ts, {})
+            diagnostic["risk_reversal_control_target"] = names[int(base_action)]
+            diagnostic["risk_reversal_final_target"] = names[int(target)]
+            diagnostic["risk_reversal_reason"] = reason
+            diagnostic["risk_reversal_changed_target"] = bool(target != base_action)
+            diagnostic["risk_reversal_p_downside_target"] = base_risk
+            if target != base_action:
+                # A decisao no replay deve corresponder ao ativo efetivamente
+                # executado, nao ao alvo original do Control.
+                diagnostic["final_action_asset"] = names[int(target)]
+                diagnostic["final_action_score"] = float(score)
+                diagnostic["decision_reason"] = reason
+                diagnostic["q_final_action"] = float(score)
+                diagnostic["decision_is_exit_to_cash"] = bool(current > 0 and target == 0)
+                diagnostic["decision_is_rotation"] = bool(
+                    current > 0 and target > 0 and current != target
+                )
         audit.append({
             "decision_date": ts.isoformat(),
             "current_asset": names[current],
