@@ -43,7 +43,7 @@ from pesquisar_expansao_u67_spyder import _write_json
 
 
 # %% Parametros OPERACIONAIS de processamento, nao hiperparametros do modelo.
-SCRIPT_VERSION = "u75-external-marginal-capital-v1.0.0"
+SCRIPT_VERSION = "u75-external-marginal-capital-v1.0.1"
 OUTPUT = ROOT / "output" / "contribuicao_marginal_externa_u75"
 START_INDEX = int(os.getenv("U75_EXTERNAL_BATCH_START", "0"))
 BATCH_SIZE = int(os.getenv("U75_EXTERNAL_BATCH_SIZE", "3"))
@@ -56,6 +56,32 @@ def _require(condition: bool, message: str) -> None:
 
 def _hash_file(path: Path) -> str:
     return sha256(path.read_bytes()).hexdigest()
+
+
+def _conferir_evidencias(out: Path, symbols: list[str]) -> None:
+    """Falha em vez de declarar completed para um pacote incompleto."""
+    required = [
+        "contrato_e_lote.json",
+        "auditoria_paridade.json",
+        "auditoria_paridade_diaria.csv",
+        "control_predictions.csv",
+        "baseline_metricas.json",
+        "comparacao_capital.csv",
+        "comparacao_por_fold.csv",
+        "candidatos_reprovados.json",
+        "resultado.json",
+        "resumo.md",
+    ]
+    for symbol in symbols:
+        required.extend([
+            f"decisoes_{symbol}.csv",
+            f"trades_{symbol}.csv",
+            f"identidade_{symbol}.json",
+        ])
+    missing = [name for name in required if not (out / name).is_file()]
+    _require(not missing, "Evidencias obrigatorias ausentes: " + ", ".join(missing))
+    empty = [name for name in required if (out / name).stat().st_size == 0]
+    _require(not empty, "Evidencias obrigatorias vazias: " + ", ".join(empty))
 
 
 def _empacotar_resultados(out: Path, status: str) -> Path:
@@ -289,9 +315,11 @@ def main() -> dict:
             text.extend(["", "## Candidatos com erro", ""])
             text.extend(f"- {i['symbol']}: {i['error']}" for i in errors)
         salvar_texto(out / "resumo.md", "\n".join(text) + "\n")
+        _conferir_evidencias(out, [row["symbol"] for row in rows])
         print(f"[concluido] {out}", flush=True)
         return data
     except Exception as exc:
+        status = "failed"
         data["status"] = "failed"
         data["failure"] = {"type": type(exc).__name__, "message": str(exc),
                            "traceback": traceback.format_exc(limit=20)}
