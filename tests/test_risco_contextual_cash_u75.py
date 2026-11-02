@@ -1,8 +1,6 @@
 """Synthetic causal tests for U75 context, next-open outcomes, CASH utility."""
 from __future__ import annotations
 
-from dataclasses import replace
-
 import numpy as np
 import pandas as pd
 import pytest
