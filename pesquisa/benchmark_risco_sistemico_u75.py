@@ -7,11 +7,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import ceil
-import warnings
 
 import numpy as np
 import pandas as pd
-from scipy.special import gammaln, logsumexp
+from scipy.special import logsumexp
 from scipy.stats import genpareto, t as student_t
 from sklearn.covariance import LedoitWolf
 from sklearn.linear_model import LogisticRegression
@@ -86,7 +85,6 @@ def _bocpd_series(standardized, cfg):
     kappas = np.array([1.])
     alphas = np.array([2.])
     betas = np.array([2.])
-    prev_mean = 0.
     for i, obs in enumerate(x):
         if not np.isfinite(obs):
             posterior, mus, kappas, alphas, betas = (
@@ -112,7 +110,6 @@ def _bocpd_series(standardized, cfg):
         cp[i] = posterior[0]
         # Change-point probability * current negative level, not only any shift.
         down[i] = cp[i] * max(0., -obs)
-        prev_mean = obs
     return cp, down
 
 
@@ -231,7 +228,6 @@ def make_panel(raw: dict[str, pd.DataFrame], symbols: list[str],
     simple = np.expm1(returns)
     market = np.log1p(simple.mean(axis=1).where(valid_count >= minimum))
     # Continuous h-step future labels require no missing market-return session.
-    level = market.fillna(0.).cumsum()
     r5 = market.rolling(5, min_periods=5).sum()
     r20 = market.rolling(20, min_periods=20).sum()
     vol20 = market.rolling(20, min_periods=20).std()
@@ -241,8 +237,10 @@ def make_panel(raw: dict[str, pd.DataFrame], symbols: list[str],
     daily_vol = returns.rolling(20, min_periods=20).std()
     extreme_down = (returns < (-1.645 * daily_vol.shift(1))).where(
         returns.notna() & daily_vol.shift(1).notna())
-    breadth20_return = close.diff(20)
-    breadth5_return = close.diff(5)
+    complete20 = returns.notna().rolling(20, min_periods=20).sum().eq(20)
+    complete5 = returns.notna().rolling(5, min_periods=5).sum().eq(5)
+    breadth20_return = close.diff(20).where(complete20)
+    breadth5_return = close.diff(5).where(complete5)
     breadth_down20 = (breadth20_return < 0).sum(axis=1) / breadth20_return.notna().sum(axis=1).replace(0, np.nan)
     breadth_down5 = (breadth5_return < 0).sum(axis=1) / breadth5_return.notna().sum(axis=1).replace(0, np.nan)
     coexceed = extreme_down.sum(axis=1) / extreme_down.notna().sum(axis=1).replace(0, np.nan)
@@ -268,7 +266,8 @@ def make_panel(raw: dict[str, pd.DataFrame], symbols: list[str],
     for h in cfg.horizons:
         future = pd.concat([market.shift(-lag) for lag in range(1, h + 1)], axis=1)
         future_market = future.sum(axis=1, min_count=h)
-        future_asset = close.shift(-h) - close
+        future_contiguous = returns.notna().rolling(h, min_periods=h).sum().eq(h).shift(-h).fillna(False)
+        future_asset = (close.shift(-h) - close).where(future_contiguous)
         count = future_asset.notna().sum(axis=1)
         down = ((future_asset < 0).sum(axis=1) / count.replace(0, np.nan)).where(count >= minimum)
         labels[f"future_market_{h}"] = future_market
