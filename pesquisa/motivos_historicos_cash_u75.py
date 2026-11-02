@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from math import sqrt
+from math import sqrt, ceil
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-VERSION = "u75-historical-motifs-cash-v1.0.0"
+VERSION = "u75-historical-motifs-cash-v1.0.1"
 
 
 @dataclass(frozen=True)
@@ -26,12 +26,13 @@ class PatternSettings:
     neighbours: int = 16
     dtw_radius: int = 4
     upper_bound_z: float = 1.645
-    minimum_assets: int = 68
+    minimum_coverage_fraction: float = 0.90
 
     def __post_init__(self):
         if (self.window < 5 or self.horizon < 1 or self.minimum_history < self.window
                 or self.candidates < self.neighbours or self.neighbours < 3
-                or self.dtw_radius < 0 or self.upper_bound_z <= 0):
+                or self.dtw_radius < 0 or self.upper_bound_z <= 0
+                or not 0 < self.minimum_coverage_fraction <= 1):
             raise ValueError("Invalid prespecified pattern protocol")
 
 
@@ -47,11 +48,15 @@ def build_series(
     symbols: list[str],
     calendar: pd.DatetimeIndex,
     *,
-    minimum_assets: int = 68,
+    minimum_coverage_fraction: float = 0.90,
 ) -> tuple[np.ndarray, dict[str, np.ndarray], pd.DataFrame]:
     """Equal-weight *diagnostic* index and per-symbol log close, no fill."""
-    if len(symbols) != 75 or len(set(symbols)) != 75 or set(symbols) != set(raw):
-        raise ValueError("The frozen U75 universe must have 75 distinct symbols")
+    if (not symbols or len(symbols) != len(set(symbols))
+            or set(symbols) != set(raw)):
+        raise ValueError("Active study universe must exactly match the available series")
+    if not 0 < minimum_coverage_fraction <= 1:
+        raise ValueError("Coverage fraction must be between zero and one")
+    minimum_assets = max(1, ceil(len(symbols) * minimum_coverage_fraction))
     calendar = _as_utc_index(calendar)
     close = {}
     for symbol in symbols:
@@ -72,6 +77,8 @@ def build_series(
     audit = pd.DataFrame({
         "date": calendar.strftime("%Y-%m-%d"),
         "valid_assets": coverage.to_numpy(dtype=int),
+        "required_assets": minimum_assets,
+        "universe_assets": len(symbols),
         "equal_weight_log_return": market_log_daily,
         "status": np.where(coverage >= minimum_assets, "ok", "insufficient_coverage"),
     })
