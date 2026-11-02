@@ -86,7 +86,7 @@ def test_no_rotation_even_when_policy_would_choose_other_asset():
         assert pos == 0
         return 1, 0.6
     f = frame(
-        highs=[100., 104., 104., 104., 104., 104.],
+        highs=[100., 108., 108., 108., 108., 108.],
         closes=[100., 98., 90., 105., 107., 95.],
         lows=[100., 98., 90., 100., 100., 95.],
     )
