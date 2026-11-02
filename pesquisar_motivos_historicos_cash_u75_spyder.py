@@ -47,8 +47,9 @@ from pesquisar_controle_strategy30_spyder import localizar_zip_original
 from pesquisa.saida_resiliente_motivos_u75 import (
     write_with_parent, check_required_files,
 )
+from pesquisa.andamento_motivos_u75 import record_progress, last_progress
 
-RUNNER_VERSION = "u75-historical-motifs-cash-v1.0.1"
+RUNNER_VERSION = "u75-historical-motifs-cash-v1.0.2"
 OUTPUT = Path(os.environ.get(
     "TCC_MOTIFS_OUTPUT_DIR", str(ROOT / "output" / "motivos_historicos_cash_u75"),
 )).expanduser()
@@ -130,6 +131,10 @@ def _run(out: Path):
     if len(symbols) != 75 or len(folds) != 3 or len(decisions) != 1577:
         raise RuntimeError("Wrong frozen U75 calendar, members or fold protocol")
     _write_csv(snapshot.records, out / "snapshot_identidade.csv")
+    record_progress(out, "snapshot_validado", details={
+        "ativos": len(symbols), "folds": len(folds),
+        "arquivo": "snapshot_identidade.csv",
+    })
     print("[fonte] Control Strategy #30, 75 ativos, 3 folds", flush=True)
     print(f"[saida] {out.resolve()}", flush=True)
 
@@ -145,10 +150,12 @@ def _run(out: Path):
         if not (train[-1] < calibration[0] and calibration[-1] < fold["test_start"]
                 and final_train[-1] < fold["test_start"]):
             raise RuntimeError(f"Temporal violation in fold {fid}")
+        record_progress(out, "calibracao_inicio", details={"fold": fid})
         print(f"[modelo] fold {fid}/3 calibrando", flush=True)
         models = _ajustar_modelos_lightgbm(
             frames, symbols, train, config, phase=f"motifs_fold_{fid}_calibration",
         )
+        record_progress(out, "calibracao_modelos_concluida", details={"fold": fid})
         candidate_scores = [
             (float(m), _crescimento_politica_simples(
                 _politica_utilidade(models, frames, symbols, config, float(m)),
@@ -162,23 +169,29 @@ def _run(out: Path):
         margin = max(float(config.rotation_switch_margin),
                      float(choice["selected_candidate_margin"]))
         del models
+        record_progress(out, "treinamento_final_inicio", details={"fold": fid})
         print(f"[modelo] fold {fid}/3 ajuste final", flush=True)
         trained = _ajustar_modelos_lightgbm(
             frames, symbols, final_train, config, phase=f"motifs_fold_{fid}_final",
         )
+        record_progress(out, "treinamento_final_concluido", details={"fold": fid})
         cache, _ = _precalcular_utilidades_modelo(
             trained, frames, symbols, pd.DatetimeIndex(fold["decision_dates"]), config,
         )
+        record_progress(out, "utilidades_calculadas", details={"fold": fid})
         policies[fid] = _politica_utilidade(
             trained, frames, symbols, config, margin,
             fold_id=fid, calibrated_switch_margin=float(choice["selected_candidate_margin"]),
             utility_cache=cache,
         )
 
+    record_progress(out, "treinamento_tres_folds_concluido")
     check_required_files(out, ("snapshot_identidade.csv",))
     base = _politica_agendada(policies, decision_to_fold)
+    record_progress(out, "reproducao_control_inicio")
     control = _simulate("Control Strategy #30", base, frames, symbols,
                         decisions, config, metadata)
+    record_progress(out, "reproducao_control_concluida")
     parity, detail = compare_control_trajectories(
         reference, control.predictions, contract=contract,
     )
@@ -193,6 +206,7 @@ def _run(out: Path):
         float(contract["ending_capital"]), rel_tol=0, abs_tol=.01
     ):
         raise RuntimeError("Control mismatch; reject all motif comparisons")
+    record_progress(out, "paridade_control_validada")
     print("[control] igualdade de patrimonio e posicoes validada", flush=True)
     _write_csv(control.predictions.reset_index(), out / "control_posicoes.csv")
     baseline_metrics = _risk_metrics(control.predictions, float(config.initial_capital))
@@ -202,12 +216,17 @@ def _run(out: Path):
         snapshot.frames, symbols, calendar,
     )
     _write_csv(audit, out / "indice_u75_cobertura.csv")
+    record_progress(out, "indice_coletivo_construido")
     benchmark = control.predictions["buy_hold_equity"]
 
     # %% 4 - Full policy replay, once per prespecified scientific hypothesis
     runs = {}
     full_audit = []
     for label, setting, include_asset in EXPERIMENTS:
+        record_progress(out, "simulacao_cash_inicio", details={
+            "cenario": label, "janela": setting.window,
+            "horizonte": setting.horizon,
+        })
         print(f"[padroes] iniciando {label}: janela={setting.window} horizonte={setting.horizon}",
               flush=True)
         detector = HistoricalMotifRisk(market_level, asset_levels, calendar, setting)
@@ -254,6 +273,9 @@ def _run(out: Path):
             "equity":result.predictions["strategy_equity"].to_numpy(float),
             "selected_asset":result.predictions["selected_asset"].to_numpy(),
         }))
+        record_progress(out, "simulacao_cash_concluida", details={
+            "cenario": label, "cash_sessoes": runs[label]["cash_sessions"],
+        })
         print(f"[resultado] {label}: cash={runs[label]['cash_sessions']} "
               f"MaxDD={runs[label]['max_drawdown']:.3%} ES95={runs[label]['daily_es95']:.3%}",
               flush=True)
@@ -313,6 +335,7 @@ def _run(out: Path):
         out / "resumo.md",
         lambda destination: destination.write_text(summary, encoding="utf-8"),
     )
+    record_progress(out, "relatorio_financeiro_concluido")
     return payload
 
 
@@ -323,6 +346,10 @@ def main():
     success = False
     result = None
     try:
+        record_progress(output, "execucao_iniciada", details={
+            "versao": RUNNER_VERSION,
+            "diretorio_saida": str(output.resolve()),
+        })
         result = _run(output)
         expected = (
             "snapshot_identidade.csv",
@@ -335,16 +362,26 @@ def main():
             "metricas_pareadas.csv",
             "resultado.json",
             "resumo.md",
+            "andamento.jsonl",
+            "andamento_atual.json",
         )
         for label, _, _ in EXPERIMENTS:
             expected += (f"{label}_decisoes_posicoes.csv",
                          f"{label}_operacoes.csv")
         check_required_files(output, expected)
+        record_progress(output, "evidencias_verificadas")
         success = True
     except Exception:
         details = traceback.format_exc()
+        last_stage = last_progress(output)
         print("[erro] Falha da pesquisa. Traceback:\n" + details, flush=True)
         try:
+            record_progress(output, "falha_da_execucao", status="failed", details={
+                "etapa_anterior": (
+                    last_stage.get("stage") if last_stage else "desconhecida"
+                ),
+                "tipo_erro": details.splitlines()[-1] if details.splitlines() else "desconhecido",
+            })
             write_with_parent(
                 output / "ultimo_erro.txt",
                 lambda destination: destination.write_text(
@@ -370,11 +407,17 @@ def main():
         with ZipFile(destination, "w", ZIP_DEFLATED) as z:
             for f in sorted(output.iterdir()):
                 if f.is_file() and f != destination and f.suffix in (
-                    ".csv", ".md", ".json", ".png", ".txt",
+                    ".csv", ".md", ".json", ".jsonl", ".png", ".txt",
                 ):
                     z.write(f, arcname=f.name)
     try:
         write_with_parent(pack, _package)
+        record_progress(
+            output,
+            "pacote_gerado" if success else "pacote_de_falha_gerado",
+            status="completed" if success else "failed",
+            details={"arquivo_zip": str(pack)},
+        )
         print(f"[pacote] {pack} status={'completed' if success else 'failed'}",
               flush=True)
     except Exception as package_error:
