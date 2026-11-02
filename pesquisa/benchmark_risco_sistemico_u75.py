@@ -95,7 +95,12 @@ def _bocpd_series(standardized, cfg):
         scale = np.sqrt(betas * (kappas + 1) / (alphas * kappas))
         likelihood = np.maximum(student_t.pdf(obs, df, loc=mus, scale=scale), 1e-200)
         growth = posterior * likelihood * (1 - cfg.bocpd_hazard)
-        change = np.sum(posterior * likelihood) * cfg.bocpd_hazard
+        # A true change point draws from the prior predictive, NOT from the
+        # same mixed likelihood as growth (which would force P(change)=hazard).
+        prior_scale = np.sqrt(2. * (1. + 1.) / (2. * 1.))
+        prior_predictive = max(float(student_t.pdf(
+            obs, df=4., loc=0., scale=prior_scale)), 1e-200)
+        change = cfg.bocpd_hazard * prior_predictive * posterior.sum()
         raw = np.r_[change, growth][:cfg.bocpd_max_run_length]
         posterior = raw / max(raw.sum(), 1e-200)
         old_mu, old_k, old_a, old_b = mus, kappas, alphas, betas
@@ -103,10 +108,11 @@ def _bocpd_series(standardized, cfg):
         new_mu = (old_k * old_mu + obs) / new_k
         new_a = old_a + .5
         new_b = old_b + old_k * (obs - old_mu) ** 2 / (2 * new_k)
-        mus = np.r_[0., new_mu][:len(posterior)]
-        kappas = np.r_[1., new_k][:len(posterior)]
-        alphas = np.r_[2., new_a][:len(posterior)]
-        betas = np.r_[2., new_b][:len(posterior)]
+        # Posterior parameters after observing x, including a fresh run.
+        mus = np.r_[obs / 2., new_mu][:len(posterior)]
+        kappas = np.r_[2., new_k][:len(posterior)]
+        alphas = np.r_[2.5, new_a][:len(posterior)]
+        betas = np.r_[2. + obs**2 / 4., new_b][:len(posterior)]
         cp[i] = posterior[0]
         # Change-point probability * current negative level, not only any shift.
         down[i] = cp[i] * max(0., -obs)
