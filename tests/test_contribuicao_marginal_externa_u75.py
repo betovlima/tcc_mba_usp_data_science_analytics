@@ -37,6 +37,20 @@ class TestComparacaoMarginalExterna(unittest.TestCase):
         self.assertEqual(metrics["delta_ending_capital"], 20.0)
         self.assertTrue(bool(daily.loc[2, "mudou_sem_selecionar_candidato"]))
 
+    def test_top1_bruto_nao_exige_compra(self):
+        base = frame(["A", "A", "B"], [100, 110, 130])
+        challenger = frame(["A", "A", "B"], [100, 110, 130])
+        base["raw_best_asset"] = ["A", "B", "B"]
+        challenger["raw_best_asset"] = ["A", "X", "B"]
+        daily, metrics, _ = comparar_trajetorias(base, challenger, "X")
+        self.assertTrue(metrics["top1_diagnostic_available"])
+        self.assertEqual(metrics["external_top1_days"], 1)
+        self.assertEqual(metrics["external_top1_not_held_days"], 1)
+        self.assertEqual(metrics["changed_top1_days"], 1)
+        self.assertEqual(metrics["changed_positions"], 0)
+        self.assertEqual(metrics["delta_ending_capital"], 0)
+        self.assertEqual(daily.loc[1, "top1_challenger"], "X")
+
     def test_calendario_diferente_reprovado(self):
         base = frame(["A", "B", "A"], [100, 105, 106])
         wrong = frame(["A", "X", "A"], [100, 105, 110], shift=1)
