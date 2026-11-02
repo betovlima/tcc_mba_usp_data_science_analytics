@@ -144,3 +144,102 @@ sequencia de decisoes alteradas.
 **Criterio de interpretacao:** patrimonio maior em um replay historico
 e evidência descritiva, mas nao basta para declarar capacidade
 de escolha prospectiva de novos ativos.
+
+## Complemento v1.0.1: fechamento dos 24 candidatos (02/11/2026)
+
+Esta versão adiciona duas salvaguardas:
+
+- O executor verifica arquivos de paridade, Control e decisões individuais
+  antes de declarar que o pacote final está completo. Sua ausência faz a
+  execução falhar com resultado de erro, sem falsificar evidências.
+- O comparador passou a registrar `top1_control`, `top1_challenger`,
+  `external_top1_days` e `external_top1_not_held_days` **quando**
+  `raw_best_asset` está disponível nos dois replays. O Top-1 é o maior
+  **score previsto** no fechamento, e não o melhor retorno efetivo do futuro.
+  A posição efetiva continua sujeita à política de rotação original.
+
+O pacote histórico do lote 0 a 2 em 02/11/2026 apresentou resultados
+de DMO, EBS e EIX, mas **não trouxe todos os arquivos exigidos**:
+faltaram `auditoria_paridade.json`, `auditoria_paridade_diaria.csv`,
+`control_predictions.csv`, `baseline_metricas.json`, detalhes de DMO
+e outros. O JSON registra paridade; a auditoria granular no ZIP não está completa.
+Preservar o ZIP sem o alterar.
+
+### Execução final sem novas escolhas retrospectivas
+
+Atualizar a branch já existente, sem misturar com a `main`:
+
+```bash
+git status --short
+git fetch origin
+git switch research/u75-external-marginal-capital-v1
+git pull --ff-only origin research/u75-external-marginal-capital-v1
+python -m unittest discover -s tests -p 'test_contribuicao_marginal_externa_u75.py' -v
+python -m unittest discover -s tests -p 'test_consolidacao_externa_u75.py' -v
+```
+
+No IPython do Spyder, primeiro os **21 candidatos ainda não processados**
+(indices 3 a 23 da lista alfabética congelada). O executável retreina o
+Control, compara a paridade e usa o motor original, sem downloads:
+
+```python
+import os
+os.environ["U75_EXTERNAL_BATCH_START"] = "3"
+os.environ["U75_EXTERNAL_BATCH_SIZE"] = "21"
+%run pesquisar_contribuicao_marginal_externa_u75_spyder.py
+```
+
+Para obter auditoria completa dos primeiros três candidatos sem sobrescrever
+o pacote antigo, execute um novo lote (se os artefatos originais não puderem
+ser recuperados integralmente):
+
+```python
+os.environ["U75_EXTERNAL_BATCH_START"] = "0"
+os.environ["U75_EXTERNAL_BATCH_SIZE"] = "3"
+%run pesquisar_contribuicao_marginal_externa_u75_spyder.py
+```
+
+Finalmente, ainda no Spyder:
+
+```python
+%run consolidar_contribuicao_externa_u75_spyder.py
+```
+
+A consolidação lê **todos os ZIPs** `output/contribuicao_marginal_externa_u75/
+pacote_contribuicao_marginal_externa_u75_*.zip`, verifica hashes,
+controle, snapshots, resultados repetidos e evidências por candidato.
+Reexecuções duplicadas com valores financeiros divergentes causam falha,
+sem escolher o melhor resultado. Se o candidato foi repetido com resultados
+iguais, a consolidação usa a execução com evidência mais completa.
+
+Produz:
+
+```text
+output/consolidacao_externa_u75/<UTC>/
+  resultado_consolidado.json
+  ranking_capital_exploratorio.csv
+  resumo_final.md
+```
+
+Somente se os 24 candidatos tiverem resultados e auditoria completa, sem
+erros pendentes, o estado será `completed_exploratory`.
+Caso contrário, será `incomplete`, com faltas explícitas. **Mesmo
+`completed_exploratory` não significa que a escolha entre 24 modelos
+tenha sido validada prospectivamente.**
+
+### Encerramento científico da campanha
+
+- O experimento confirma efeitos marginais **históricos** de incluir 1
+  candidato por vez no universo do Control, com comparação pareada do
+  patrimônio e decisões.
+- A proposta anterior de escolher um externo pelo retorno intradiário
+  superior ao líder Top-1 não apresentou benefício OOS robusto no estudo
+  publicado em 01/11/2026. Não usar esse outcome futuro para selecionar ativos.
+- A seleção dos 24 candidatos foi retrospectiva, e o Control original
+  possui dependência de elegibilidade `t+1`. Portanto, descrever os ganhos
+  encontrados como **exploratórios**; não declarar uma descoberta causal
+  automática do mercado amplo.
+- Não ampliar o conjunto de candidatos após examinar os resultados desta
+  campanha, nem promover qualquer candidato ao MCT sem outro protocolo
+  prospectivo independente. Esta é a campanha final acordada de expansão
+  externa para o TCC.
