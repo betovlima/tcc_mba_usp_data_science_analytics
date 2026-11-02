@@ -18,7 +18,7 @@ import json
 import os
 from pathlib import Path
 import traceback
-from zipfile import ZipFile
+from zipfile import ZipFile, ZIP_DEFLATED
 
 import numpy as np
 import pandas as pd
@@ -36,7 +36,6 @@ from pesquisa.referencia_strategy30.modelo_lightgbm import executar_lightgbm
 from pesquisa.referencia_strategy30.rotacao import preparar_painel_rotacao
 from pesquisa.contribuicao_marginal_externa_u75 import comparar_trajetorias
 from pesquisa.persistencia_resultados import salvar_csv, salvar_json, salvar_texto
-from pesquisa.pacote_analise_switching import gerar_zip_resultados
 from pesquisar_controle_strategy30_spyder import localizar_zip_original
 from pesquisar_busca_externa_lider_u75_spyder import (
     load_snapshots, CANDIDATE_SNAPSHOT,
@@ -58,6 +57,46 @@ def _require(condition: bool, message: str) -> None:
 
 def _hash_file(path: Path) -> str:
     return sha256(path.read_bytes()).hexdigest()
+
+
+def _empacotar_resultados(out: Path, status: str) -> Path:
+    """Pacote proprio com manifesto SHA-256, sem copiar RAW nem credenciais."""
+    _require((out / "resultado.json").is_file(), "Resultado JSON ausente")
+    path = out.parent / f"pacote_contribuicao_marginal_externa_u75_{out.name}.zip"
+    _require(not path.exists(), "Pacote de resultados ja existe")
+    files = sorted(
+        p for p in out.rglob("*")
+        if p.is_file() and p.suffix.lower() in {".csv", ".json", ".md", ".txt"}
+    )
+    manifest = {
+        "schema_version": 1,
+        "experiment": "u75-external-marginal-capital",
+        "script_version": SCRIPT_VERSION,
+        "status": status,
+        "run_id": out.name,
+        "raw_data_included": False,
+        "files": [
+            {"name": p.relative_to(out).as_posix(),
+             "size": p.stat().st_size, "sha256": _hash_file(p)}
+            for p in files
+        ],
+    }
+    tmp = path.with_suffix(".zip.tmp")
+    try:
+        with ZipFile(tmp, "w", compression=ZIP_DEFLATED, compresslevel=6) as z:
+            z.writestr("manifesto_pacote.json", json.dumps(manifest, indent=2, ensure_ascii=False))
+            for p in files:
+                z.write(p, arcname=p.relative_to(out).as_posix())
+        with ZipFile(tmp) as z:
+            _require(z.testzip() is None, "Pacote corrompido")
+            for file in manifest["files"]:
+                _require(sha256(z.read(file["name"])).hexdigest() == file["sha256"],
+                         f"Hash divergente: {file['name']}")
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    return path
 
 
 def _metrics(run) -> dict:
@@ -260,9 +299,7 @@ def main() -> dict:
         salvar_json(out / "resultado.json", data, _write_json)
         raise
     finally:
-        zip_path = gerar_zip_resultados(
-            out, versao=SCRIPT_VERSION, status=status,
-        )
+        zip_path = _empacotar_resultados(out, status)
         print(f"[pacote] {zip_path}", flush=True)
 
 
