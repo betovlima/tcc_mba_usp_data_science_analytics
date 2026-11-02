@@ -1,7 +1,7 @@
 # Pesquisa exploratória de realização de lucro (1,5%, 3% e 5%)
 
 ## Referência
-O estudo usa o TCC v1.23.0, com base congelada e checkpoint de US$ 587.165.941,13. Os US$ 76,71 milhões pertencem a uma configuração do MCT e NÃO são a referência deste experimento. O capital inicial é US$ 10 mil.
+O estudo usa o TCC v1.23.0, com base congelada e checkpoint de US$ 587.165.941,13. Os US$ 76,71 milhões pertencem a uma configuração do sistema externo e NÃO são a referência deste experimento. O capital inicial é US$ 10 mil.
 
 As quatro curvas usam os mesmos modelos LightGBM, fold, margem de troca, universo e dados do Control. A única diferença é o encerramento de posições ao alcançar uma das metas de lucro. Os sinais são recalculados com o estado efetivo da carteira depois de cada saída.
 
@@ -33,4 +33,4 @@ Na pasta output/pesquisa_take_profit_alvos:
 ## Testes
 Execute: python -m pytest tests/test_take_profit_alvos.py -q
 
-O script só pode gerar resultados financeiros reais no ambiente onde o histórico congelado completo estiver disponível. Não modifica a main, a engine científica entregue nem o MCT em produção.
+O script só pode gerar resultados financeiros reais no ambiente onde o histórico congelado completo estiver disponível. Não modifica a main, a engine científica entregue nem o sistema externo em produção.
