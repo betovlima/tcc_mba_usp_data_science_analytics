@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from pesquisar_cash_calibracao_spyder import analisar
+from pesquisar_cash_calibracao_spyder import analisar, _ler, PACOTE_PADRAO, SAIDA_PADRAO, RAIZ
 
 
 def _fixture(tmp_path: Path, *, scores=(-0.4, -0.2), leakage=False, corrupt=False):
@@ -72,3 +72,23 @@ def test_reject_wrong_reference_capital(tmp_path):
     file = _fixture(tmp_path, corrupt=True)
     with pytest.raises(ValueError, match='divergiu'):
         analisar(file, tmp_path / 'out')
+
+
+def test_default_paths_follow_project_root_not_spyder_workdir(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    assert PACOTE_PADRAO.is_absolute()
+    assert SAIDA_PADRAO.is_absolute()
+    assert PACOTE_PADRAO == RAIZ / 'output' / 'reproducao_universo' / 'pacote_reproducao_universo.zip'
+    assert SAIDA_PADRAO == RAIZ / 'output' / 'pesquisa_cash_calibracao'
+
+
+def test_missing_zip_explains_which_folder_was_checked(tmp_path):
+    folder = tmp_path / 'output' / 'reproducao_universo'
+    folder.mkdir(parents=True)
+    (folder / 'pacote_reproducao_universo_versao_antiga.zip').touch()
+    with pytest.raises(FileNotFoundError) as err:
+        _ler(folder / 'pacote_reproducao_universo.zip')
+    message = str(err.value)
+    assert str(folder) in message
+    assert 'Pasta existe: True' in message
+    assert 'pacote_reproducao_universo_versao_antiga.zip' in message
