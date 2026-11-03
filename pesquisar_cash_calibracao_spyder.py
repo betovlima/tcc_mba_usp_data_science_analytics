@@ -118,7 +118,7 @@ def analisar(pacote: Path, saida: Path) -> dict:
         'cash_gate_rendimento_juros': 'zero_por_hipotese',
         'diferenca_capital_final_cash_menos_control': inicial - esperado,
         'regra_predefinida': 'score < 0',
-        'limite': 'avaliacao por fold; nao equivale a recalibracao diaria do MCT',
+        'limite': 'avaliacao por fold; nao equivale a recalibracao diaria do sistema operacional',
     }
 
     # %% Persistencia do relatorio, sem mutar os dados originais
