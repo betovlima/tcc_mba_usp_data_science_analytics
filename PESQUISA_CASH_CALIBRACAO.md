@@ -35,4 +35,4 @@ Com a regra `score < 0`, todos os folds ficariam integralmente em CASH. Portanto
 - Isto **não** testa o caso Live de calibração diária. O replay oficial guarda apenas a margem e a pontuação por fold, cada um com centenas de sessões. Aplicar a mesma regra em recalibrações diárias exige reconstruir cada score usando somente dados disponíveis até aquela data, com custos e estado de carteira realistas.
 - Na presença de folds mistos, o script interrompe em vez de multiplicar retornos do Control: ao ficar em CASH, a posição e o tempo de permanência mudam, de modo que um simples overlay da série original seria incorreto.
 - Não ajustar o limiar a posteriori para perseguir o checkpoint. O próximo teste deve usar limiares e métricas pré-definidos com avaliação fora da amostra separada.
-- Não aplicar esta hipótese ao MCT Live sem evidência adicional; o Control deve permanecer congelado.
+- Não aplicar esta hipótese ao ambiente operacional Live sem evidência adicional; o Control deve permanecer congelado.
