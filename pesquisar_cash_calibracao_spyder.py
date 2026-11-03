@@ -20,11 +20,23 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 RAIZ = Path(__file__).resolve().parent
-PACOTE_PADRAO = Path('output/reproducao_universo/pacote_reproducao_universo.zip')
-SAIDA_PADRAO = Path('output/pesquisa_cash_calibracao')
+# Caminhos absolutos: Spyder pode iniciar o kernel em outro diretório.
+PACOTE_PADRAO = RAIZ / 'output' / 'reproducao_universo' / 'pacote_reproducao_universo.zip'
+SAIDA_PADRAO = RAIZ / 'output' / 'pesquisa_cash_calibracao'
 
 
 def _ler(pacote: Path):
+    pacote = Path(pacote).expanduser().resolve()
+    if not pacote.is_file():
+        pasta = pacote.parent
+        existentes = sorted(arquivo.name for arquivo in pasta.glob('*.zip')) if pasta.is_dir() else []
+        raise FileNotFoundError(
+            'Pacote da reproducao oficial nao encontrado.\n'
+            f'Caminho consultado: {pacote}\n'
+            f'Pasta existe: {pasta.is_dir()}\n'
+            f'ZIPs nessa pasta: {existentes or "nenhum"}\n'
+            'Execute o replay oficial que gera o ZIP, ou use --pacote com o caminho completo do arquivo existente.'
+        )
     with zipfile.ZipFile(pacote) as z:
         nomes = set(z.namelist())
         esperados = {'fold_calibration.csv', 'predictions.csv', 'reproducao_universo.json'}
