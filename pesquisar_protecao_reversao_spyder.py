@@ -1672,6 +1672,12 @@ def main():
         # contrafactuais ou acesso ao banco. O F5 continua sendo a unica entrada.
         from reproducao.risco_reversao_ml import estudo_risco_ml
         summary["machine_learning_risk_diagnostic"] = estudo_risco_ml(pred, dest)
+        # Segundo experimento: CASH ou posicao sob o MESMO Control gravado.
+        # Analise sombra nao executavel: nunca concluir ganho real.
+        from reproducao.teste_cash_posicao_ml import estudar_cash_posicao_ml
+        summary["machine_learning_cash_position_shadow"] = estudar_cash_posicao_ml(
+            pred, dest
+        )
 
         # Auditar apenas halts do episodio investigado em julho/2026;
         # nao declarar como validas as demais ordens sem fontes adicionais.
