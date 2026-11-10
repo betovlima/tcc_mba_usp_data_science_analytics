@@ -502,6 +502,59 @@ def execute_capr(quantity, cash, action, price):
     return quantity, cash, {"action": action, "quantity": traded, "price": px, "fee": fee}
 
 
+
+def audit_pilot_liquidity(bars, operations, initial_entries, target):
+    """Audita participacao em volume REAL, sem afirmar capacidade de execucao.
+
+    O limite de 5% do volume de um candle e apenas uma hipotese conservadora
+    para diagnostico. Nao e uma regra de mercado nem um modelo de fill.
+    """
+    records = []
+    orders = [*initial_entries, *operations.to_dict(orient="records")]
+    for operation in orders:
+        day = str(operation["date"])
+        clock = str(operation["time"])
+        shares = float(operation["quantity"])
+        price = float(operation["price"])
+        same_day = bars.loc[bars["date"].astype(str) == day]
+        candle = same_day.loc[same_day["clock"] == clock]
+        candle_volume = float(candle["volume"].sum()) if not candle.empty else None
+        day_volume = float(same_day["volume"].sum()) if not same_day.empty else None
+        frac_candle = (shares / candle_volume
+                       if candle_volume is not None and candle_volume > 0 else None)
+        frac_day = (shares / day_volume
+                    if day_volume is not None and day_volume > 0 else None)
+        if candle_volume is None:
+            status = "missing_intraday_execution_bar"
+        elif candle_volume <= 0:
+            status = "zero_observed_volume"
+        elif shares > 0.05 * candle_volume:
+            status = "exceeds_5pct_candle_volume"
+        else:
+            status = "within_5pct_candle_volume"
+        records.append({
+            "episode": operation["episode"],
+            "policy": operation["policy"],
+            "date": day,
+            "time": clock,
+            "action": operation["action"],
+            "quantity_shares": shares,
+            "price_assumed": price,
+            "notional_usd": shares * price,
+            "observed_5min_volume": candle_volume,
+            "observed_day_volume": day_volume,
+            "ratio_quantity_to_5min_volume": frac_candle,
+            "ratio_quantity_to_daily_volume": frac_day,
+            "hypothetical_5pct_candle_capacity_shares": (
+                0.05 * candle_volume if candle_volume is not None else None
+            ),
+            "status": status,
+        })
+    audited = pd.DataFrame(records)
+    audited.to_csv(target / "reversao_intradiario_liquidez.csv", index=False)
+    return audited
+
+
 def study_capr_intraday(replay, frames, trades, prices, folder):
     """Compara politicas em episodios CAPR, nao em toda a carteira."""
     bars, provenance = load_capr_intraday()
@@ -516,7 +569,7 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
         (trades["profile"] == "control") & (trades["asset"] == "CAPR") &
         (trades["action"] == "BUY")
     ]
-    daily_rows, events, signals, coverage = [], [], [], []
+    daily_rows, events, signals, coverage, initial_entries = [], [], [], [], []
     cases = ("control", "daily", "midday")
     studied = 0
     for episode, segment in enumerate(segments, start=1):
@@ -532,6 +585,12 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
         initial_cash = first_control_equity - initial_qty * float(bar(prices, "CAPR", first)["close"])
         if initial_qty <= 0 or initial_cash < -0.05:
             raise RuntimeError("Quantidade ou caixa inicial CAPR nao conciliado.")
+        initial_entries.append({
+            "episode": episode, "policy": "control_initial_entry",
+            "date": str(first), "time": "09:30", "action": "BUY",
+            "quantity": initial_qty,
+            "price": float(purchase["execution_price"].iloc[-1]),
+        })
         # Uma sessao sem candles suficientes perto de 12h30 nao deve
         # cancelar todas as outras sessoes. Nao presumir sinal ou preco.
         intraday = {}
@@ -627,6 +686,12 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
     operations = pd.DataFrame(events, columns=[
         "episode", "policy", "date", "time", "reason", "action", "quantity", "price", "fee"
     ])
+    liquidity = audit_pilot_liquidity(bars, operations, initial_entries, folder)
+    liquidity_flags = liquidity.loc[
+        liquidity["status"] != "within_5pct_candle_volume"
+    ]
+    print("[CAPR-5Min] ordens fora do limite diagnostico 5% ou sem barra:",
+          len(liquidity_flags), "de", len(liquidity), flush=True)
     signals = pd.DataFrame(signals)
     coverage = pd.DataFrame(coverage).drop_duplicates(["episode", "date"])
     comparison = results.groupby(["episode", "policy"], sort=False).agg(
@@ -688,10 +753,47 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
     fig2.autofmt_xdate()
     fig2.tight_layout()
     fig2.savefig(folder / "reversao_intradiario_capr.png", dpi=145)
+
+    fig3, ax3 = plt.subplots(figsize=(12, 5))
+    audit_plot = liquidity.sort_values(["date", "time"])
+    labels = (
+        audit_plot["date"].astype(str) + " " + audit_plot["time"].astype(str)
+        + " " + audit_plot["action"].astype(str)
+        + " " + audit_plot["policy"].astype(str)
+    )
+    positions = np.arange(len(audit_plot))
+    ax3.bar(positions, audit_plot["quantity_shares"].to_numpy(dtype=float),
+            label="Quantidade simulada")
+    volumes = audit_plot["observed_5min_volume"].fillna(0).to_numpy(dtype=float)
+    ax3.plot(positions, volumes, "o-", label="Volume observado no candle 5Min")
+    ax3.set_yscale("symlog", linthresh=1)
+    ax3.set_xticks(positions)
+    ax3.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+    ax3.set_ylabel("Acoes (escala symlog; barra ausente = 0 apenas no grafico)")
+    ax3.set_title("CAPR: quantidade presumida x volume de cada candle de execucao")
+    ax3.legend()
+    ax3.grid(alpha=.25)
+    fig3.tight_layout()
+    fig3.savefig(folder / "reversao_intradiario_liquidez.png", dpi=145)
     plt.show(block=False)
     return {
-        "status": "completed" if parity <= 1e-4 else "baseline_mismatch",
+        "status": (
+            "baseline_mismatch" if parity > 1e-4
+            else "exploratory_execution_unverified" if not liquidity_flags.empty
+            else "completed"
+        ),
         "scope": "episodios CAPR apenas; NAO e portfolio completo",
+        "liquidity": {
+            "diagnostic_limit_fraction_of_5min_volume": 0.05,
+            "total_audited_orders_including_initial_buy": int(len(liquidity)),
+            "unverified_or_above_diagnostic_limit": int(len(liquidity_flags)),
+            "orders_without_5min_bar": int((
+                liquidity["status"] == "missing_intraday_execution_bar"
+            ).sum()),
+            "highest_ratio_quantity_to_bar_volume": float(
+                liquidity["ratio_quantity_to_5min_volume"].max()
+            ),
+        },
         "control_episode_max_relative_gap": parity,
         "midday_valid_sessions": int((coverage["status"] == "valid").sum()),
         "midday_skipped_sessions": int((coverage["status"] != "valid").sum()),
@@ -713,6 +815,8 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
             "Nao incorpora impacto de mercado, latencia ou restricoes regulatórias de day trading.",
             "Paridade do Control diario e dos episodios CAPR verificadas separadamente.",
             "Sem candles suficientes as 12h30, nenhum sinal ou ordem; sessao auditada.",
+            "Liquidez auditada: valores acima de 5% do candle ou sem barra nao sao fills validados.",
+            "Os ganhos simulados sao apenas hipoteticos; nao foi feita simulacao de execucao parcial.",
         ],
     }
 
