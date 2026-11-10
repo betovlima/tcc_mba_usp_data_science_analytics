@@ -150,7 +150,19 @@ def validar_fonte_77(project_root: Path) -> dict:
             "FONTE_77_INCOMPLETA: OHLCV/eventos não disponíveis para "
             + ", ".join(ausentes)
         )
-    validate_snapshot(path)  # SHA-256 de todos os arquivos congelados
+    expected_files = {
+        f"{folder}/{symbol}.csv"
+        for folder in ("raw_bars", "corporate_actions")
+        for symbol in UNIVERSO_WINNER_77
+    }
+    listed_files = set((manifest.get("file_hashes") or {}).keys())
+    unhashed = sorted(expected_files - listed_files)
+    if unhashed:
+        raise RuntimeError(
+            "FONTE_77_SEM_HASH: arquivos sem identidade SHA-256: "
+            + ", ".join(unhashed)
+        )
+    validate_snapshot(path)  # SHA-256 de TODOS os arquivos congelados
     return {
         "status": "snapshot_77_hashes_confirmados",
         "assets": list(UNIVERSO_WINNER_77),
