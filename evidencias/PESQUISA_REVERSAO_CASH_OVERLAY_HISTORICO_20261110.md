@@ -40,12 +40,22 @@ Na sessão de **30/07/2026**, o retorno diário do controle foi **−36,2253%**,
 5. Priorizar modelos probabilísticos **por ativo e estado da posição** que comparem manter, rotacionar e CASH, com validação temporal e execução factível.
 6. **Não alterar o MCT Live** e não promover regras para `main` com base nestes resultados.
 
-## Reprodução no Spyder
+## Reprodução no Spyder: arquivo e pacote únicos
 
-Abra `pesquisar_reversao_cash_overlay_historico_u75_spyder.py` na raiz do repositório e pressione **F5**. Deixe o ZIP de backtest cujo SHA aparece acima dentro de `dados/`. O script valida o hash para não misturar dados de outras execuções e grava a saída em:
+Abra **`pesquisar_protecao_reversao_spyder.py`** na raiz do repositório e execute com **F5**. Este é o **único script principal** desta pesquisa. A triagem de quatro modelos de CASH foi integrada como função interna desse mesmo arquivo, preservando as análises anteriores de CAPR, risco de reversão e CASH/posição.
 
-`out/reversao_cash_overlay_historico_u75_20261110/pacote_protecao_reversao_overlay_historico_u75.zip`
+A fonte continua sendo o ZIP de produção original com SHA-256 informado acima. O próprio script localiza, valida e reutiliza o arquivo congelado; não é necessário passar argumentos. O teste histórico sobre a carteira gravada usa 77 símbolos configurados e 75 séries elegíveis, **sem** apresentá-los como estudo completo com 77 séries.
 
-O ZIP gerado contém relatório, JSON, CSVs dos folds e de CAPR, e gráficos de patrimônio e drawdown. Dados brutos de conta Live, auditorias privadas e o próprio backtest ZIP **não foram versionados** porque o repositório do TCC é público.
+As saídas ficam em **`out/pacote_protecao_reversao.zip`**, junto dos demais resultados da pesquisa. Arquivos próprios desta rodada têm o prefixo `overlay_cash_`:
 
-**Pesquisa principal preservada:** `pesquisar_protecao_reversao_spyder.py` e `pesquisa_risco_absoluto_cash_posicao.md` seguem sem modificações.
+- `overlay_cash_resultado_pesquisa.json`
+- `overlay_cash_relatorio.md`
+- `overlay_cash_sessoes_teste_fold3.csv`
+- `overlay_cash_calibracao_fold2.csv`
+- `overlay_cash_capr_fold3.csv`
+- `overlay_cash_01_patrimonio_holdout.png`
+- `overlay_cash_02_drawdown_holdout.png`
+
+Não existe mais um segundo script `pesquisar_reversao_cash_overlay_historico_u75_spyder.py` nesta branch. O código foi incorporado ao original. Os demais resultados históricos continuam no ZIP principal.
+
+**Sem mudanças em `main` ou no MCT Live.** Não versionar auditorias da conta Live nem fontes brutas privadas; os arquivos de saída permanecem locais.
