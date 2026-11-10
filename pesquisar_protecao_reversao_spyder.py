@@ -455,9 +455,18 @@ def intraday_midpoint(bars, prices, day):
     """12h30 usa barras ate 12h25. Ordem no OPEN da barra 12h35."""
     session = bars.loc[bars["date"] == day]
     known = session.loc[(session["clock"] >= "09:30") & (session["clock"] <= "12:25")]
-    execution = session.loc[session["clock"] == "12:35"]
-    if len(known) < 30 or "12:25" not in set(known["clock"]) or len(execution) != 1:
-        raise RuntimeError("Faltam barras completas 12h25/12h35 em " + str(day))
+    # Sem negociacoes em algum bloco de 5 minutos, a Alpaca pode omitir
+    # aquela barra. Usar apenas o ultimo candle REAL ja encerrado, desde
+    # que nao tenha mais de 15 minutos de defasagem.
+    execution = session.loc[(session["clock"] >= "12:35") &
+                            (session["clock"] <= "12:50")]
+    if (len(known) < 15 or known.empty or known["clock"].iloc[-1] < "12:10"
+            or execution.empty):
+        raise RuntimeError(
+            "CAPR " + str(day) + ": nao ha dados recentes/executaveis "
+            "ao redor das 12h30. Nenhum preco sera interpolado."
+        )
+    execution = execution.iloc[:1]
     recent = prices["CAPR"].loc[prices["CAPR"].index < day,
                                 ["open", "high", "low", "close", "volume"]].copy()
     if len(recent) < 25:
@@ -468,7 +477,8 @@ def intraday_midpoint(bars, prices, day):
         float(known["volume"].sum()),
     ]
     indicators = prepare_indicators(recent).iloc[-1]
-    return indicators, float(execution["open"].iloc[0])
+    return (indicators, float(execution["open"].iloc[0]),
+            str(execution["clock"].iloc[0]))
 
 
 def execute_capr(quantity, cash, action, price):
@@ -546,11 +556,11 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
                         events.append({"episode": episode, "policy": policy, "date": str(day),
                                        "time": "09:30", "reason": "fechamento anterior", **ev})
                         action_today = True
-                indicator, px = intraday[day]
+                indicator, px, executable_clock = intraday[day]
                 signals.append({
                     "episode": episode, "policy": policy, "date": str(day),
-                    "observed_through": "12:30 NY, barra iniciada as 12:25",
-                    "execution_after": "12:35 NY",
+                    "observed_through": "12:30 NY, ultimo candle completo ate 12:25",
+                    "execution_after": executable_clock + " NY",
                     "ema": bool(indicator["ema_signal"]),
                     "atr": bool(indicator["atr_signal"]),
                     "combined": bool(indicator["combinada_signal"]),
@@ -565,7 +575,7 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
                         quantity, cash, ev = execute_capr(quantity, cash, action, px)
                         blocked = action == "SELL"
                         events.append({"episode": episode, "policy": policy, "date": str(day),
-                                       "time": "12:35", "reason": "sinal intradiario 12:30", **ev})
+                                       "time": executable_clock, "reason": "sinal intradiario 12:30", **ev})
                 equity = float(cash if blocked else cash + quantity * float(
                     bar(prices, "CAPR", day)["close"]))
                 daily_rows.append({
@@ -614,11 +624,13 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
     view = bars.loc[bars["date"].astype(str).isin(selected_days)]
     for day, group in view.groupby("date"):
         ax2.plot(group["local"], group["close"], label=str(day), linewidth=1)
-    for _, op in operations.loc[operations["time"] == "12:35"].iterrows():
+    for _, op in operations.loc[
+        operations["reason"] == "sinal intradiario 12:30"
+    ].iterrows():
         marker = "^" if op["action"] == "BUY" else "v"
-        ax2.scatter(pd.Timestamp(op["date"] + " 12:35"),
+        ax2.scatter(pd.Timestamp(op["date"] + " " + op["time"]),
                     float(op["price"]), marker=marker, s=75, zorder=5)
-    ax2.set(title="CAPR: candles 5Min e execucoes 12h35 (apos confirmar 12h30)",
+    ax2.set(title="CAPR: candles 5Min e execucoes apos a avaliacao das 12h30",
             ylabel="Preco ajustado por splits")
     ax2.legend(ncol=3)
     ax2.grid(alpha=.25)
@@ -632,7 +644,7 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
         "episodes": studied,
         "window": [PILOT_BEGIN, PILOT_END],
         "timing": {"preopen": "fechamento anterior -> 09:30",
-                   "midpoint": "barra 12:25 encerrada -> ordem 12:35",
+                   "midpoint": "ultimo candle completo ate 12:30; primeira barra entre 12:35 e 12:50",
                    "close": "16:00 -> proxima sessao"},
         "max_one_protective_action_per_session": True,
         "cache": provenance,
