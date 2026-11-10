@@ -1504,7 +1504,39 @@ def main():
             "return_in_fold": growth - 1.0,
             "cash_days": int(group["selected_asset"].eq("CASH").sum()),
         })
+    # Comparacao POR DATA com o checkpoint historico, quando informado
+    # no proprio pacote de producao. Nao presume mesma amostra/modelo.
+    original_cutoff = pd.Timestamp("2026-10-06").date()
+    cutoff_rows = pred.loc[pred["date"] == original_cutoff]
+    historical_capital = metrics_prod.get("tcc_reference_checkpoint_capital")
+    cutoff_prod = (
+        float(cutoff_rows["strategy_equity"].iloc[0])
+        if len(cutoff_rows) == 1 else None
+    )
+    reference_comparison = {
+        "reference_date": str(original_cutoff),
+        "production_capital_same_date": cutoff_prod,
+        "former_tcc_checkpoint_capital": (
+            float(historical_capital) if historical_capital is not None else None
+        ),
+        "delta_production_vs_former": (
+            cutoff_prod - float(historical_capital)
+            if cutoff_prod is not None and historical_capital is not None
+            else None
+        ),
+        "caution": (
+            "Nao concluir que o periodo adicional causou a diferenca. "
+            "Duas execucoes podem diferir em dados, configuracao ou treino."
+        ),
+    }
+    print(
+        "[producao] mesmo cutoff 06/10/2026:",
+        "producao=", cutoff_prod,
+        "| checkpoint anterior=", historical_capital,
+        flush=True,
+    )
     summary = {
+        "comparison_with_prior_checkpoint": reference_comparison,
         "research_reference": "production_backtest_20261110",
         "status": "imported_and_validated",
         "job_id": PROD_JOB_ID,
