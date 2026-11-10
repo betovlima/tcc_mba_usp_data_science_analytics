@@ -689,7 +689,7 @@ def main():
     folds = pd.DataFrame([row for d in frames.values() for row in fold_metrics(d)])
     daily = pd.concat(frames.values(), ignore_index=True)
     result = {
-        "schema": "mct_cash_reversal_exploratory_v1",
+        "schema": "tcc_cash_reversal_exploratory_v1",
         "status": "comparavel" if parity_ok else "divergencia_control",
         "fonte": str(source.relative_to(ROOT)),
         "fonte_sha256": sha256(source),
