@@ -1668,6 +1668,10 @@ def main():
         )
         pd.DataFrame(folds).to_csv(dest / "producao_folds.csv", index=False)
         gerar_figuras_producao(pred, trades, decisions, dest)
+        # Diagnostico ML causal sobre a referencia atual; sem CASH, vendas
+        # contrafactuais ou acesso ao banco. O F5 continua sendo a unica entrada.
+        from reproducao.risco_reversao_ml import estudo_risco_ml
+        summary["machine_learning_risk_diagnostic"] = estudo_risco_ml(pred, dest)
 
         # Auditar apenas halts do episodio investigado em julho/2026;
         # nao declarar como validas as demais ordens sem fontes adicionais.
@@ -1692,6 +1696,8 @@ def main():
             "REFERENCIA FIXA: backtest de producao 10/11/2026, "
             "job 20261110T140411-8f086044.\n"
             "Dados originais permanecem intactos no cache local.\n"
+            "Esta entrega inclui diagnostico ML de risco do Control " 
+            "sem executar trades contrafactuais.\n" 
             "Esta entrega nao implementa novas politicas CASH nem "
             "recalcula a Winner com novo historico.\n"
             "O checkpoint anterior de US$ 587 milhoes nao e a base ativa.\n"
