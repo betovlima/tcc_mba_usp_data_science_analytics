@@ -1,0 +1,71 @@
+{
+  "study": "cash_reversal_historical_overlay_2026-11-10",
+  "scope": "historical_triage_not_u77_complete",
+  "source_file": "market_cycle_trader_20261110T140411-8f086044.zip",
+  "sha256": "1cdeda67bafccf424a75b675b5f16084b14c282ec1ba1b9599c6e234312dc0f2",
+  "configured_assets": 77,
+  "eligible_assets_historical": 75,
+  "folds": {
+    "train": 504,
+    "calibration": 504,
+    "test": 576
+  },
+  "baseline": {
+    "initial_usd": 10000,
+    "final_usd": 122119681.68505412,
+    "max_drawdown": -0.41682843146560444,
+    "cash_days": 0,
+    "test_normalized_final": 29.350203499314294,
+    "test_severe_losses": 73
+  },
+  "models": [
+    {
+      "name": "Regressao_logistica",
+      "test_auc": 0.47838993436640426,
+      "cash_days": 7,
+      "severe_losses_avoided": 1,
+      "relative_terminal_lift": 0.04739440727736843,
+      "fold3_max_drawdown": -0.41682843146560444,
+      "capr_20260730_cash": false,
+      "bootstrap_interval_95": [
+        -0.08925069170393984,
+        0.2727
+      ]
+    },
+    {
+      "name": "LightGBM_raso",
+      "test_auc": 0.49688172335847935,
+      "cash_days": 0,
+      "severe_losses_avoided": 0,
+      "relative_terminal_lift": 0,
+      "fold3_max_drawdown": -0.41682843146560444,
+      "capr_20260730_cash": false
+    },
+    {
+      "name": "Regressao_logistica_posicao",
+      "test_auc": 0.549552003050192,
+      "cash_days": 1,
+      "severe_losses_avoided": 0,
+      "relative_terminal_lift": 0.0014626838115783247,
+      "fold3_max_drawdown": -0.41682843146560444,
+      "capr_20260730_cash": false
+    },
+    {
+      "name": "LightGBM_posicao",
+      "test_auc": 0.5213921947765462,
+      "cash_days": 0,
+      "severe_losses_avoided": 0,
+      "relative_terminal_lift": 0,
+      "fold3_max_drawdown": -0.41682843146560444,
+      "capr_20260730_cash": false
+    }
+  ],
+  "caveats": [
+    "Approximate shadow replay, not executable counterfactual",
+    "Original position state reused in position models",
+    "Split adjustment may use future events",
+    "Test fold previously explored in other research",
+    "Not a complete 77-asset backtest",
+    "No MCT Live changes"
+  ]
+}
