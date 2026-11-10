@@ -179,7 +179,7 @@ def cumulative_metrics(returns):
     }
 
 
-def decisions(predicted, dates, aversion):
+def decisions(predicted, dates, aversion, *, minimum_candidates=25):
     """Rebalance at next open; CASH competes with HOLD and ROTATE."""
     by_date = {date: data.set_index("symbol") for date, data in predicted.groupby("date", sort=False)}
     held = None
@@ -187,7 +187,7 @@ def decisions(predicted, dates, aversion):
     returns = []
     for decision_date in dates:
         cross = by_date.get(decision_date)
-        if cross is None or len(cross) < 25:
+        if cross is None or len(cross) < minimum_candidates:
             raise RuntimeError(f"Universo de candidatos sem cobertura: {decision_date}")
         utility = (
             cross["predicted_mean"]
