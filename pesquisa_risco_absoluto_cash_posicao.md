@@ -1,8 +1,17 @@
 # TCC | Risco absoluto da Winner: entrada em CASH e permanência em posição
 
 **Estado:** hipótese e protocolo de pesquisa; nenhuma regra de produção implementada.
-**Control:** backtest de produção congelado em 10/11/2026, 1.584 sessões, 75 ativos elegíveis, 0 sessões em CASH. Preservar integralmente a Winner Control.
+**Universo exigido para a pesquisa atual:** **77 ativos cadastrados**, na ordem fixada em `reproducao/universo_winner_77.py`. **Nenhum ativo pode ser excluído automaticamente.** DOC e CLMT exigem tratamento auditável de mudanças societárias, não redução do universo.
+**Referência histórica, distinta do novo estudo:** o backtest de 10/11/2026 registra 75 ativos elegíveis, 1.584 sessões e zero sessões em CASH. Preservar essa referência como evidência histórica, mas **não compará-la como se tivesse sido executada com os 77 ativos completos**.
 **Objetivo:** testar se uma avaliação probabilística e generalizável dos retornos e dos riscos permite **não comprar** e **não permanecer investido** quando o melhor ativo relativo é uma oportunidade ruim em termos absolutos.
+
+
+## Bloqueio após o erro de reduzir o universo
+
+- A pesquisa com os dados antigos U67 foi **retirada desta branch**, incluindo seu workflow automático. Os resultados da carteira hipotética com 65 ativos estão descartados como evidência da estratégia atual.
+- A pesquisa futura deve chamar `validar_fonte_77()` antes de qualquer ajuste de modelo ou simulação; dados insuficientes são erro, nunca filtro para manter os ativos disponíveis.
+- Preservar no histórico a auditoria da execução de produção com 75 elegíveis é necessário para não falsificar a origem dos resultados de US$ 122,12 milhões. A nova experiência de 77 precisa de novo Control sobre o mesmo universo e o mesmo período.
+- Não assumir que os históricos DOC e CLMT formam séries financeiras contínuas. Anotar/segmentar a mudança societária e verificar o tratamento com o usuário antes do experimento, mantendo os símbolos no universo exigido.
 
 ## Dois estados distintos
 
@@ -17,7 +26,7 @@ Modelo **compartilhado por ativo e sessão** (*pooled*, sem treinar um modelo es
 
 Variáveis candidatas do histórico já discutido, sempre com versão temporal:
 - **Movimento do ativo:** retornos 1, 2, 3, 5, 10, 20, 40, 60 e 120 sessões; volatilidade realizada; ATR; distâncias e inclinações EMA 10/20/50/100; volume e variação de volume; drawdown desde o topo.
-- **Mercado/universo:** retornos e volatilidade SPY; amplitude das 75 séries (parcela em alta/abaixo de EMAs); dispersão dos retornos; correlação média entre ativos; concentração da queda e um regime probabilístico de estresse.
+- **Mercado/universo:** retornos e volatilidade SPY; amplitude das 77 séries (parcela em alta/abaixo de EMAs); dispersão dos retornos; correlação média entre ativos; concentração da queda e um regime probabilístico de estresse.
 - **Estado da carteira:** CASH vs posição comprada; ativo e preço de entrada da posição; ganho/perda desde entrada; MAE/MFE até a decisão; custo de troca; permanência em posição; posição relativa no ranking da Winner.
 - **Liquidez e execução:** volume observado, fração da ordem em relação ao volume negociado, spread onde houver dados, ocorrência de halt e qualidade de preços; não imputar preço executável se o mercado estiver suspenso.
 
@@ -37,7 +46,7 @@ Nenhum cruzamento EMA nem percentual fixo de perda determina a ação. Esses ind
 
 ## Desenho de teste que impede conclusões falsas
 
-1. **Fonte:** exigir OHLCV e eventos corporativos versionados para todos os 75 ativos em todo o período da produção, inclusive até 09/11/2026, com assinaturas verificadas. O ZIP de produção não traz esse OHLCV completo; falhar explicitamente se não houver cobertura. Evitar baixar/reconciliar séries automaticamente durante análise sem congelar a nova fonte.
+1. **Fonte:** exigir OHLCV e eventos corporativos versionados para todos os 77 ativos do universo fixado em todo o período da produção, inclusive até 09/11/2026, com assinaturas verificadas. O ZIP de produção não traz esse OHLCV completo. O repositório contém apenas o snapshot U67 encerrado em 06/10/2026; **não é fonte válida para o estudo de 77 ativos**. Exigir `dados/winner_77/` com 77 OHLCV e eventos corporativos, cutoff 09/11/2026 e hashes conferidos, ou bloquear a execução. Evitar baixar/reconciliar séries automaticamente durante análise sem congelar a nova fonte.
 2. **Causalidade:** features calculadas no fechamento `t`, decisão depois de `t`, primeiro preço potencialmente executável em `t+1` ou na janela intradiária elegível. Labels apenas de preços posteriores à execução hipotética. Usar *purge/embargo* para horizontes sobrepostos e considerar eventos de suspensão, não simular venda às 09h30 de CAPR em 29/07/2026.
 3. **Folds:** preservar os três folds cronológicos definidos; seleção de features, modelos e hiperparâmetros só em desenvolvimento/validação, fold final intocado para avaliar. Se o fold final já tiver sido consultado em pesquisas exploratórias, reconhecer o problema e exigir novo teste prospectivo.
 4. **Três experimentos separados:** (A) apenas capacidade de previsão e calibração de risco; (B) decisão **CASH -> ativo/CASH**; (C) decisão **posição -> manter/rotacionar/CASH**. Depois testar a combinação de B e C no mesmo capital.
