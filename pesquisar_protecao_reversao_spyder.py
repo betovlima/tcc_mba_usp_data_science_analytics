@@ -356,10 +356,21 @@ def make_charts(frames, trade_log, prices, target):
                 (trade_log["asset"] == "CAPR") &
                 (trade_log["action"] == "SELL")
             ]
-            x = pd.to_datetime(e["session"])
-            if len(x):
-                y = bars["close"].reindex(x.date).to_numpy()
-                ax.scatter(x, y, label="Venda " + name, marker=marker, s=60, zorder=5)
+            # Exibir apenas as vendas de protecao para CASH, na janela visivel.
+            # A coordenada Y deve ser o preco executado na abertura seguinte,
+            # e nao o fechamento do mesmo dia.
+            e = e.loc[
+                (e["to_asset"] == "CASH") &
+                (e["reason"].astype(str).str.startswith("REVERSAO_"))
+            ].copy()
+            if not e.empty:
+                sell_dates = pd.to_datetime(e["session"])
+                e = e.loc[sell_dates.dt.date.isin(bars.index)]
+                if not e.empty:
+                    x = pd.to_datetime(e["session"]).to_numpy()
+                    y = pd.to_numeric(e["execution_price"], errors="raise").to_numpy()
+                    ax.scatter(x, y, label="Protecao CASH " + name,
+                               marker=marker, s=70, zorder=5)
         ax.set(title="CAPR: medias e saidas simuladas na abertura seguinte", ylabel="Preco (ajustado por splits)")
         ax.legend()
         ax.grid(alpha=.25)
