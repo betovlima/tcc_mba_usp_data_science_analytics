@@ -48,7 +48,7 @@ Nenhum cruzamento EMA nem percentual fixo de perda determina a ação. Esses ind
 
 O módulo `reproducao/risco_reversao_ml.py` hoje prevê o risco de **retorno realizado da carteira Control no próximo pregão**, baseado nos diagnósticos exportados. É um diagnóstico inicial, **não resolve nenhum dos dois problemas**: não possui resultados contrafactuais para todos os candidatos e tampouco observações da alternativa CASH. Não deve ser usado como política de compra, manutenção ou venda.
 
-**Próxima entrega técnica:** construir base causal ativo×sessão, validar cobertura de OHLCV até o cutoff de produção, gerar previsões condicionais por ativo em folds cronológicos e avaliar separadamente CASH e posição comprada. Somente então testar impacto sobre patrimônio, sem alterar o MCT Live.
+**Próxima entrega técnica:** construir base causal ativo×sessão, validar cobertura de OHLCV até o cutoff de produção, gerar previsões condicionais por ativo em folds cronológicos e avaliar separadamente CASH e posição comprada. Somente então testar impacto sobre patrimônio, sem alterar o sistema operacional de negociacao.
 
 ## Referências metodológicas
 
