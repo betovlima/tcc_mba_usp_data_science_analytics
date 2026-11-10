@@ -1105,7 +1105,7 @@ def audit_capr_halts_20260729(daily_trades, folder):
 
 
 
-def main():
+def main_historico_anterior():
     OUT.mkdir(parents=True, exist_ok=True)
     source, replay, original = load_replay()
     print("[fonte]", source, flush=True)
@@ -1210,6 +1210,391 @@ def main():
               "Nao concluir que houve melhora antes de investigar.", flush=True)
     print("\nZIP fixo:", OUT / ARCHIVE, "\nGraficos:", ", ".join(plots), flush=True)
     return result
+
+
+
+# ---------------------------------------------------------------------------
+# NOVA REFERENCIA OFICIAL: backtest da producao de 10/11/2026.
+#
+# Esta referencia substitui o checkpoint historico COMO FONTE DOS NOVOS
+# ESTUDOS. O historico anterior permanece isolado em
+# main_historico_anterior(), mas nao e executado com F5.
+#
+# IMPORTANTE: o ZIP de producao NAO contem OHLCV por ativo. Portanto,
+# reproduzir resultados com intervencoes CASH exigira historico adicional
+# validado antes de gerar qualquer comparacao financeira contrafactual.
+# ---------------------------------------------------------------------------
+PROD_FILE = "market_cycle_trader_20261110T140411-8f086044.zip"
+PROD_SHA256 = "1cdeda67bafccf424a75b675b5f16084b14c282ec1ba1b9599c6e234312dc0f2"
+PROD_JOB_ID = "20261110T140411-8f086044"
+PROD_CACHE = ROOT / "dados" / ".production_reference" / PROD_FILE
+
+
+def localizar_backtest_producao():
+    """Usa somente o ZIP identificado por nome E SHA-256, sem fallback antigo."""
+    import shutil
+
+    possibilities = [
+        PROD_CACHE,
+        ROOT / PROD_FILE,
+        ROOT / "out" / PROD_FILE,
+        ROOT / "dados" / PROD_FILE,
+        ROOT.parent / PROD_FILE,
+        Path.home() / "Downloads" / PROD_FILE,
+        Path.home() / "Desktop" / PROD_FILE,
+        Path.home() / "Documentos" / PROD_FILE,
+        Path.home() / "Documents" / PROD_FILE,
+    ]
+    found = next((p for p in possibilities if p.is_file()), None)
+    if found is None:
+        raise FileNotFoundError(
+            "Backtest de producao fixado nao localizado: " + PROD_FILE +
+            ". Deixe o ZIP original em Downloads ou na raiz do projeto TCC. "
+            "O script importa e guarda uma copia local automaticamente. "
+            "O replay historico antigo NAO sera usado como fallback."
+        )
+    observed_sha = sha256(found)
+    if observed_sha != PROD_SHA256:
+        raise RuntimeError(
+            "ZIP de producao com hash diferente do registrado. "
+            "Observado=" + observed_sha + "; esperado=" + PROD_SHA256 +
+            ". Nao prosseguir com fonte possivelmente alterada."
+        )
+    if found.resolve() != PROD_CACHE.resolve():
+        PROD_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        if PROD_CACHE.is_file() and sha256(PROD_CACHE) != PROD_SHA256:
+            raise RuntimeError("Cache de producao modificado. Nao sobrescrever silenciosamente.")
+        if not PROD_CACHE.is_file():
+            temp = PROD_CACHE.with_suffix(".tmp")
+            shutil.copyfile(found, temp)
+            if sha256(temp) != PROD_SHA256:
+                temp.unlink(missing_ok=True)
+                raise RuntimeError("Falha de integridade na copia do backtest.")
+            os.replace(temp, PROD_CACHE)
+    print("[producao] fonte congelada:", PROD_CACHE, flush=True)
+    print("[producao] sha256:", PROD_SHA256, flush=True)
+    return PROD_CACHE
+
+
+def ler_backtest_producao(source):
+    """Le e valida manifests, 1.584 decisoes e 700 operacoes da producao."""
+    with zipfile.ZipFile(source) as package:
+        corrupted = package.testzip()
+        if corrupted is not None:
+            raise RuntimeError("Entrada corrompida no ZIP: " + corrupted)
+        names = package.namelist()
+        def locate(suffix):
+            candidates = [n for n in names if n.endswith(suffix)]
+            if len(candidates) != 1:
+                raise RuntimeError("Arquivo ausente/ambiguo no ZIP: " + suffix)
+            return candidates[0]
+        manifest = json.loads(package.read("experiment_manifest.json"))
+        strategy = json.loads(package.read("strategy_manifest.json"))
+        metrics_data = json.loads(package.read(locate("_metrics.json")))
+        predictions = pd.read_csv(io.BytesIO(package.read(locate("_predictions.csv"))))
+        trades = pd.read_csv(io.BytesIO(package.read(locate("_trades.csv"))))
+        decisions = pd.read_csv(io.BytesIO(package.read(locate("_decision_diagnostics.csv"))))
+    if manifest.get("job_id") != PROD_JOB_ID:
+        raise RuntimeError("Job de producao diferente da referencia congelada.")
+    if manifest.get("job_status") != "completed":
+        raise RuntimeError("Backtest nao consta como concluido.")
+    if int(manifest.get("eligible_asset_count") or 0) != 75:
+        raise RuntimeError("Universo elegivel diferente do backtest escolhido.")
+    required = {
+        "timestamp", "decision_date", "selected_asset",
+        "strategy_equity", "buy_hold_equity", "walk_forward_fold",
+    }
+    if required - set(predictions.columns):
+        raise RuntimeError("Colunas de predictions ausentes: " +
+                           ", ".join(sorted(required - set(predictions.columns))))
+    predictions["date"] = predictions["timestamp"].map(local_day)
+    predictions["decision_session"] = predictions["decision_date"].map(local_day)
+    predictions["selected_asset"] = (
+        predictions["selected_asset"].fillna("").astype(str).str.upper().str.strip()
+    )
+    predictions["strategy_equity"] = pd.to_numeric(
+        predictions["strategy_equity"], errors="raise"
+    )
+    predictions["buy_hold_equity"] = pd.to_numeric(
+        predictions["buy_hold_equity"], errors="raise"
+    )
+    predictions = predictions.sort_values("date").reset_index(drop=True)
+    if (len(predictions) != 1584 or predictions["date"].duplicated().any()
+            or (predictions["strategy_equity"] <= 0).any()
+            or not np.isfinite(predictions["strategy_equity"]).all()):
+        raise RuntimeError("Calendario ou patrimonio de producao inconsistente.")
+    if str(predictions["date"].iloc[-1]) != "2026-11-09":
+        raise RuntimeError("Ultima sessao diferente de 09/11/2026.")
+    if not np.isclose(
+        float(predictions["strategy_equity"].iloc[-1]),
+        float(metrics_data["strategy_ending_capital"]),
+        rtol=0.0, atol=0.01,
+    ):
+        raise RuntimeError("Capital final diverge entre predictions e metrics.")
+    if "timestamp" not in trades or "asset" not in trades or "action" not in trades:
+        raise RuntimeError("Operacoes do backtest incompletas.")
+    trades["date"] = trades["timestamp"].map(local_day)
+    if len(trades) != 700:
+        raise RuntimeError("Quantidade de operacoes diverge da fonte congelada.")
+    if "timestamp" not in decisions:
+        raise RuntimeError("Diagnosticos sem data de decisao.")
+    decisions["date"] = decisions["timestamp"].map(local_day)
+    if len(decisions) != len(predictions):
+        raise RuntimeError("Decisoes e sessions em quantidade diferente.")
+    if int(metrics_data.get("cash_days", -1)) != 0:
+        raise RuntimeError("Sessao CASH divergente da execucao selecionada.")
+    return predictions, trades, decisions, metrics_data, manifest, strategy
+
+
+def gerar_figuras_producao(predictions, trades, decisions, target):
+    """Graficos da fonte oficial, sem criar retornos contrafactuais."""
+    from matplotlib import dates as mdates
+
+    output = []
+    dates = pd.to_datetime(predictions["date"].astype(str))
+    curve = predictions["strategy_equity"]
+    eq_drawdown = curve / pd.Series(
+        np.maximum.accumulate(
+            np.r_[float(INITIAL), curve.to_numpy(dtype=float)]
+        )[1:]
+    ) - 1.0
+    fig, ax = plt.subplots(figsize=(13, 5.5))
+    ax.plot(dates, curve, label="Winner Control, producao", linewidth=1.7)
+    ax.plot(dates, predictions["buy_hold_equity"],
+            label="Buy-and-hold de referencia", linewidth=1.2)
+    ax.set(yscale="log", ylabel="US$ (escala logaritmica)",
+           title="Patrimonio da nova referencia: producao ate 09/11/2026")
+    ax.legend()
+    ax.grid(alpha=.25)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    output.append(("producao_patrimonio.png", fig))
+
+    fig, ax = plt.subplots(figsize=(13, 5))
+    ax.plot(dates, eq_drawdown * 100, label="Drawdown da Winner")
+    trough_idx = int(eq_drawdown.idxmin())
+    ax.scatter(dates.iloc[trough_idx], eq_drawdown.iloc[trough_idx] * 100,
+               color="tab:red", s=55, zorder=5)
+    ax.annotate(
+        str(predictions["date"].iloc[trough_idx]),
+        (dates.iloc[trough_idx], eq_drawdown.iloc[trough_idx] * 100),
+        xytext=(10, 10), textcoords="offset points",
+    )
+    ax.set(title="Drawdown do patrimonio na producao",
+           ylabel="Queda maxima relativa ao pico (%)")
+    ax.grid(alpha=.25)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    output.append(("producao_drawdown.png", fig))
+
+    plot_start = pd.Timestamp("2026-07-01")
+    detail = predictions.loc[dates >= plot_start].copy()
+    dts = pd.to_datetime(detail["date"].astype(str))
+    fig, ax = plt.subplots(figsize=(13, 5.5))
+    ax.plot(dts, detail["strategy_equity"], label="Patrimonio", linewidth=1.6)
+    capr = detail["selected_asset"].eq("CAPR").to_numpy()
+    label_used = False
+    for i, inside in enumerate(capr):
+        if inside:
+            left = dts.iloc[i]
+            right = (dts.iloc[i + 1] if i + 1 < len(dts)
+                     else dts.iloc[i] + pd.Timedelta(days=1))
+            ax.axvspan(
+                left, right, alpha=.13, color="tab:orange",
+                label="Posicao CAPR" if not label_used else None,
+            )
+            label_used = True
+    ax.set(title="Nova referencia: patrimonio e exposicao a CAPR",
+           ylabel="Patrimonio (US$)")
+    ax.legend()
+    ax.grid(alpha=.25)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    output.append(("producao_capr_exposicao.png", fig))
+
+    diagnostic = decisions.loc[
+        decisions["date"] >= pd.Timestamp("2026-07-01").date()
+    ].copy()
+    if {"best_score", "current_score", "date"}.issubset(diagnostic.columns):
+        fig, ax = plt.subplots(figsize=(13, 5))
+        dx = pd.to_datetime(diagnostic["date"].astype(str))
+        ax.plot(dx, pd.to_numeric(diagnostic["best_score"], errors="coerce"),
+                label="Maior utilidade estimada", linewidth=1.5)
+        ax.plot(dx, pd.to_numeric(diagnostic["current_score"], errors="coerce"),
+                label="Utilidade da posicao atual", linewidth=1.2)
+        ax.axhline(0, color="gray", linestyle="--", linewidth=.7)
+        ax.set(title="Scores conhecidos nas decisoes diarias",
+               ylabel="Score da Winner (escala original)")
+        ax.legend()
+        ax.grid(alpha=.25)
+        fig.autofmt_xdate()
+        fig.tight_layout()
+        output.append(("producao_utilidades_decisao.png", fig))
+
+    counts = trades.loc[trades["action"] == "BUY", "asset"].value_counts().head(15)
+    fig, ax = plt.subplots(figsize=(11, 6))
+    ax.barh(counts.index[::-1], counts.to_numpy()[::-1])
+    ax.set(title="Ativos com mais entradas na producao",
+           xlabel="Quantidade de compras simuladas")
+    ax.grid(axis="x", alpha=.25)
+    fig.tight_layout()
+    output.append(("producao_frequencia_ativos.png", fig))
+
+    for name, fig in output:
+        fig.savefig(target / name, dpi=150, bbox_inches="tight")
+    plt.show(block=False)
+    return [name for name, _ in output]
+
+
+def main():
+    """No Spyder (F5), a unica referencia ativa e a nova producao."""
+    source = localizar_backtest_producao()
+    pred, trades, decisions, metrics_prod, manifest, strategy = ler_backtest_producao(
+        source
+    )
+    print("[producao] sessoes:", len(pred), "| operacoes:", len(trades),
+          "| capital final: US$ {:,.2f}".format(
+              float(metrics_prod["strategy_ending_capital"])
+          ), flush=True)
+
+    # Verificacoes de paridade com metricas do proprio arquivo de producao.
+    eq = pred["strategy_equity"].to_numpy(dtype=float)
+    peak = np.maximum.accumulate(np.r_[float(INITIAL), eq])[1:]
+    dd_observed = float((eq / peak - 1.0).min())
+    dd_reported = float(metrics_prod["strategy_maximum_drawdown"])
+    dd_error = abs(dd_observed - dd_reported)
+    if dd_error > 1e-10:
+        raise RuntimeError(
+            "Drawdown reproduzido diverge do reportado: " + str(dd_error)
+        )
+    capr_buy = trades.loc[
+        (trades["asset"] == "CAPR") & (trades["action"] == "BUY")
+    ]
+    july29_capr = trades.loc[
+        (trades["asset"] == "CAPR") &
+        (trades["date"].astype(str) == "2026-07-29")
+    ]
+    pred["drawdown"] = eq / peak - 1.0
+    pred["daily_return"] = pred["strategy_equity"].pct_change()
+    pred.loc[0, "daily_return"] = eq[0] / INITIAL - 1
+    pred["episode"] = (
+        pred["selected_asset"] != pred["selected_asset"].shift()
+    ).cumsum()
+    episodes = []
+    for _, group in pred.groupby("episode", sort=False):
+        if group["selected_asset"].iloc[0] != "CAPR":
+            continue
+        episodes.append({
+            "start": str(group["date"].iloc[0]),
+            "end": str(group["date"].iloc[-1]),
+            "sessions": int(len(group)),
+            "equity_first_close": float(group["strategy_equity"].iloc[0]),
+            "equity_last_close": float(group["strategy_equity"].iloc[-1]),
+            "equity_change_between_closes": float(
+                group["strategy_equity"].iloc[-1] /
+                group["strategy_equity"].iloc[0] - 1
+            ),
+        })
+    folds = []
+    for fold, group in pred.groupby("walk_forward_fold", sort=False):
+        growth = float(np.prod(1.0 + group["daily_return"].to_numpy(dtype=float)))
+        folds.append({
+            "fold": str(fold),
+            "sessions": int(len(group)),
+            "return_in_fold": growth - 1.0,
+            "cash_days": int(group["selected_asset"].eq("CASH").sum()),
+        })
+    summary = {
+        "research_reference": "production_backtest_20261110",
+        "status": "imported_and_validated",
+        "job_id": PROD_JOB_ID,
+        "archive_name": PROD_FILE,
+        "archive_sha256": PROD_SHA256,
+        "api_version": manifest.get("api_version"),
+        "job_status": manifest.get("job_status"),
+        "market_data_signature": manifest.get("market_data_signature_sha256"),
+        "strategy_configuration_hash": manifest.get(
+            "strategy_configuration_hash"
+        ),
+        "strategy_manifest_profile": strategy.get("strategy_profile_name"),
+        "initial_capital": INITIAL,
+        "ending_capital": float(metrics_prod["strategy_ending_capital"]),
+        "maximum_drawdown": dd_observed,
+        "reported_maximum_drawdown": dd_reported,
+        "sharpe": float(metrics_prod["strategy_sharpe"]),
+        "rotations": int(metrics_prod["capital_rotations"]),
+        "cash_days": int(metrics_prod["cash_days"]),
+        "assets_eligible": manifest.get("eligible_asset_count"),
+        "sessions": len(pred),
+        "first_session": str(pred["date"].iloc[0]),
+        "last_session": str(pred["date"].iloc[-1]),
+        "capr_entries": len(capr_buy),
+        "capr_trades_on_2026_07_29": int(len(july29_capr)),
+        "source_data_limitations": [
+            "O ZIP exportado nao inclui barras OHLCV de todos os ativos.",
+            "Nao calcular comparacoes financeiras CASH sem harmonizar a fonte "
+            "historica da producao para o periodo ate 09/11/2026.",
+            "As decisoes e operacoes sao do Control original, nao de "
+            "um contrafactual com protecao recalculada.",
+            "Executabilidade exige auditoria separada de halts e liquidez.",
+        ],
+        "folds": folds,
+    }
+    OUT.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="referencia_producao_", dir=OUT) as tmp:
+        dest = Path(tmp)
+        pred.to_csv(dest / "producao_decisoes.csv", index=False)
+        trades.to_csv(dest / "producao_operacoes.csv", index=False)
+        decisions.to_csv(dest / "producao_diagnosticos_decisao.csv", index=False)
+        pd.DataFrame(episodes).to_csv(
+            dest / "producao_episodios_capr.csv", index=False
+        )
+        pd.DataFrame(folds).to_csv(dest / "producao_folds.csv", index=False)
+        gerar_figuras_producao(pred, trades, decisions, dest)
+
+        # Auditar apenas halts do episodio investigado em julho/2026;
+        # nao declarar como validas as demais ordens sem fontes adicionais.
+        daily_audit = trades.loc[
+            trades["asset"].eq("CAPR"),
+            ["date", "action", "asset", "quantity", "execution_price"]
+        ].copy()
+        daily_audit["session"] = daily_audit["date"].astype(str)
+        daily_audit["profile"] = "production_control"
+        try:
+            summary["halt_audit"] = audit_capr_halts_20260729(daily_audit, dest)
+        except Exception as exc:
+            summary["halt_audit"] = {
+                "status": "audit_error", "message": str(exc)[:400]
+            }
+        (dest / "producao_referencia_resumo.json").write_text(
+            json.dumps(summary, indent=2, ensure_ascii=False, default=str,
+                       allow_nan=False),
+            encoding="utf-8",
+        )
+        (dest / "LEIA_ME.txt").write_text(
+            "REFERENCIA FIXA: backtest de producao 10/11/2026, "
+            "job 20261110T140411-8f086044.\n"
+            "Dados originais permanecem intactos no cache local.\n"
+            "Esta entrega nao implementa novas politicas CASH nem "
+            "recalcula a Winner com novo historico.\n"
+            "O checkpoint anterior de US$ 587 milhoes nao e a base ativa.\n"
+            "Confirme integridade e cobertura antes de futuros estudos.\n",
+            encoding="utf-8",
+        )
+        package = dest / ARCHIVE
+        with zipfile.ZipFile(package, mode="w",
+                             compression=zipfile.ZIP_DEFLATED) as z:
+            for f in sorted(dest.iterdir()):
+                if f.is_file() and f != package:
+                    z.write(f, arcname=f.name)
+        for f in sorted(dest.iterdir()):
+            if f.is_file() and f != package:
+                os.replace(f, OUT / f.name)
+        os.replace(package, OUT / ARCHIVE)
+    print("[producao] referencia ativa:", PROD_JOB_ID, flush=True)
+    print("[producao] zip unico:", OUT / ARCHIVE, flush=True)
+    print("[producao] nao foram estimados cenarios CASH novos", flush=True)
+    return summary
 
 
 if __name__ == "__main__":
