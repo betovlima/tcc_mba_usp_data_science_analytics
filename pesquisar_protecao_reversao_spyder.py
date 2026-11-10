@@ -822,6 +822,289 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
 
 
 
+
+# Auditoria historica oficial: CAPR, Nasdaq Trader, 29/07/2026.
+# Esta etapa NAO modifica o capital nem corrige fills retrospectivamente.
+HALT_DAY = "2026-07-29"
+HALT_CACHE = ROOT / "dados" / ".halt_cache" / "nasdaq_20260729_halt_resume.xml"
+
+
+def parse_nasdaq_halt_rss(data):
+    """Interpreta o RSS Nasdaq, ignorando prefixos/namespaces no XML."""
+    import xml.etree.ElementTree as ET
+
+    def short_name(tag):
+        return str(tag).rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower()
+
+    root = ET.fromstring(data)
+    if short_name(root.tag) != "rss":
+        raise ValueError("Fonte retornou documento diferente de RSS.")
+    channel = next((e for e in root if short_name(e.tag) == "channel"), None)
+    if channel is None:
+        raise ValueError("RSS sem canal.")
+    header = {
+        short_name(e.tag): str(e.text or "").strip()
+        for e in channel if short_name(e.tag) in ("title", "description")
+    }
+    label = (header.get("title", "") + " " +
+             header.get("description", "")).lower()
+    if not ("nasdaq" in label and "halt" in label):
+        raise ValueError("O XML nao foi identificado como feed Nasdaq Trade Halts.")
+    rows = []
+    for item in channel:
+        if short_name(item.tag) != "item":
+            continue
+        values = {
+            short_name(child.tag): str(child.text or "").strip()
+            for child in item
+        }
+        symbol = values.get("issuesymbol") or values.get("title") or ""
+        rows.append({
+            "symbol": symbol.strip().upper(),
+            "halt_date": values.get("haltdate", ""),
+            "halt_time": values.get("halttime", ""),
+            "reason": values.get("reasoncode", ""),
+            "resume_date": (
+                values.get("resumptiondate") or values.get("resumedate") or ""
+            ),
+            "resume_quote_time": values.get("resumptionquotetime", ""),
+            "resume_trade_time": values.get("resumptiontradetime", ""),
+            "market": values.get("market", ""),
+            "issue_name": values.get("issuename", ""),
+        })
+    return rows
+
+
+def fetch_capr_halts_official():
+    """Consulta uma vez e mantem XML original em cache; falha nao vira 'sem halt'."""
+    url = (
+        "https://www.nasdaqtrader.com/rss.aspx?feed=tradehalts"
+        "&haltdate=07292026&resumedate=07292026"
+    )
+    source = "cache"
+    if HALT_CACHE.is_file():
+        raw = HALT_CACHE.read_bytes()
+        records = parse_nasdaq_halt_rss(raw)
+    else:
+        import requests
+        answer = requests.get(
+            url,
+            timeout=20,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; TCC-Research/1.0)",
+                "Accept": "application/rss+xml, application/xml, text/xml, */*",
+            },
+        )
+        answer.raise_for_status()
+        raw = answer.content
+        records = parse_nasdaq_halt_rss(raw)
+        HALT_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        temporary = HALT_CACHE.with_suffix(".tmp")
+        temporary.write_bytes(raw)
+        os.replace(temporary, HALT_CACHE)
+        source = "official_nasdaq_http"
+    return records, raw, {
+        "source": source,
+        "url": url,
+        "cached_file": str(HALT_CACHE.relative_to(ROOT)),
+        "xml_sha256": sha256(HALT_CACHE),
+        "rss_record_count": len(records),
+        "query_date": HALT_DAY,
+        "note": (
+            "Consulta por data de inicio OU retomada; nao comprova "
+            "a ausencia de suspensoes iniciadas antes da data pesquisada."
+        ),
+    }
+
+
+def _halt_datetime(local_date, local_clock):
+    """Data/hora do feed em America/New_York, nunca interpretar como UTC."""
+    if not str(local_date).strip() or not str(local_clock).strip():
+        return None
+    try:
+        d = pd.to_datetime(str(local_date).strip(), errors="raise")
+        timestamp = pd.Timestamp(
+            str(d.date()) + " " + str(local_clock).strip()
+        )
+        if timestamp.tzinfo is None:
+            return timestamp.tz_localize(NY)
+        return timestamp.tz_convert(NY)
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def _halt_order_status(execution, rows):
+    """Classifica com cautela; NAO considera fonte vazia prova de negociabilidade."""
+    if rows is None:
+        return "source_unavailable", "Sem feed Nasdaq validado."
+    candidates = []
+    for h in rows:
+        start = _halt_datetime(h["halt_date"], h["halt_time"])
+        finish = _halt_datetime(h["resume_date"], h["resume_trade_time"])
+        if start is None:
+            continue
+        if start <= execution:
+            candidates.append((start, finish, h["reason"]))
+    if not candidates:
+        return (
+            "not_confirmed", "Nenhum intervalo aplicavel localizado; "
+            "isso nao prova que o ativo estava negociavel."
+        )
+    start, finish, reason = max(candidates, key=lambda x: x[0])
+    if finish is None:
+        return (
+            "resume_unverified", "Inicio do halt registrado em " +
+            str(start) + " (" + reason + "), sem retomada efetiva confirmada."
+        )
+    if finish < start:
+        return "invalid_feed_interval", "Retomada anterior ao inicio do halt."
+    if execution < finish:
+        return (
+            "halted_at_order_time", "Halt ativo ate " + str(finish)
+            + " (codigo " + reason + ")."
+        )
+    return (
+        "resumed_before_order", "Retomada informada em " + str(finish) +
+        "; preco, volume e liquidez ainda precisam ser confirmados."
+    )
+
+
+def audit_capr_halts_20260729(daily_trades, folder):
+    """Audita vendas do CAPR no dia 29 e exporta a fonte bruta quando disponivel."""
+    rows = None
+    original_xml = None
+    source_meta = {}
+    try:
+        rows, original_xml, source_meta = fetch_capr_halts_official()
+        (folder / "reversao_halts_nasdaq_20260729.xml").write_bytes(original_xml)
+    except Exception as exc:
+        source_meta = {
+            "source": "unavailable", "query_date": HALT_DAY,
+            "error_type": type(exc).__name__, "error": str(exc)[:600],
+        }
+        print("[halts] Fonte Nasdaq indisponivel:", str(exc)[:250], flush=True)
+
+    only_capr = [x for x in (rows or []) if x["symbol"] == "CAPR"]
+    columns = [
+        "symbol", "halt_date", "halt_time", "reason", "resume_date",
+        "resume_quote_time", "resume_trade_time", "market", "issue_name",
+    ]
+    pd.DataFrame(only_capr, columns=columns).to_csv(
+        folder / "reversao_halts_capr_eventos.csv", index=False
+    )
+
+    orders = []
+    daily = daily_trades.loc[
+        (daily_trades["asset"] == "CAPR") &
+        (daily_trades["session"].astype(str).str[:10] == HALT_DAY)
+    ]
+    for _, row in daily.iterrows():
+        if row["action"] not in ("BUY", "SELL", "FINAL_SELL"):
+            continue
+        orders.append({
+            "origin": "replay_daily",
+            "policy": row["profile"],
+            "date": HALT_DAY,
+            "clock": "09:30" if row["action"] != "FINAL_SELL" else "16:00",
+            "action": row["action"],
+            "quantity": float(row["quantity"]),
+            "assumed_price": float(row["execution_price"]),
+        })
+    pilot_file = folder / "reversao_intradiario_operacoes.csv"
+    if pilot_file.is_file():
+        pilot = pd.read_csv(pilot_file)
+        pilot = pilot.loc[pilot["date"].astype(str) == HALT_DAY]
+        for _, row in pilot.iterrows():
+            orders.append({
+                "origin": "capr_5min_pilot",
+                "policy": row["policy"],
+                "date": HALT_DAY,
+                "clock": str(row["time"]),
+                "action": row["action"],
+                "quantity": float(row["quantity"]),
+                "assumed_price": float(row["price"]),
+            })
+
+    audited = []
+    for order in orders:
+        moment = _halt_datetime(order["date"], order["clock"])
+        status, detail = _halt_order_status(moment, only_capr if rows is not None else None)
+        audited.append({
+            **order, "order_timestamp_ny": str(moment),
+            "halt_status": status, "explanation": detail,
+            "execution_verified": False,
+        })
+    order_columns = [
+        "origin", "policy", "date", "clock", "action", "quantity",
+        "assumed_price", "order_timestamp_ny", "halt_status",
+        "explanation", "execution_verified",
+    ]
+    pd.DataFrame(audited, columns=order_columns).to_csv(
+        folder / "reversao_halts_capr_ordens.csv", index=False
+    )
+
+    if only_capr or audited:
+        fig, ax = plt.subplots(figsize=(12, 3.5))
+        base = pd.Timestamp(HALT_DAY)
+        ax.set_xlim(base + pd.Timedelta(hours=6),
+                    base + pd.Timedelta(hours=16))
+        ax.set_ylim(-.4, 1.2)
+        ax.set_yticks([])
+        ax.axhline(0.35, color="gray", alpha=.4)
+        for item in only_capr:
+            start = _halt_datetime(item["halt_date"], item["halt_time"])
+            resumed = _halt_datetime(item["resume_date"], item["resume_trade_time"])
+            if start is not None:
+                ax.axvline(start.tz_localize(None), color="tab:red",
+                           linestyle="--", label="Inicio do halt")
+            if resumed is not None:
+                ax.axvline(resumed.tz_localize(None), color="tab:green",
+                           linestyle="--", label="Retomada informada")
+        for order in audited:
+            when = _halt_datetime(order["date"], order["clock"])
+            if when is not None:
+                ax.scatter(when.tz_localize(None), 0.35, s=75, marker="x",
+                           color="tab:blue")
+        ax.set_title(
+            "CAPR 29/07/2026: halts oficiais x horarios das ordens simuladas"
+        )
+        ax.set_xlabel("Horario de Nova York (fonte Nasdaq, hora local)")
+        ax.grid(axis="x", alpha=.3)
+        fig.autofmt_xdate()
+        fig.tight_layout()
+        fig.savefig(folder / "reversao_halts_capr_linha_tempo.png", dpi=145)
+        plt.show(block=False)
+
+    report = {
+        "status": (
+            "source_unavailable" if rows is None
+            else "CAPR_records_found" if only_capr
+            else "CAPR_not_found_in_feed_not_proof_of_absence"
+        ),
+        "source": source_meta,
+        "capr_halt_events": len(only_capr),
+        "simulated_orders_audited": len(audited),
+        "orders_reported_halted": sum(
+            r["halt_status"] == "halted_at_order_time" for r in audited
+        ),
+        "orders_resume_unverified": sum(
+            r["halt_status"] == "resume_unverified" for r in audited
+        ),
+        "note": (
+            "Auditoria retrospectiva. Nao altera as ordens ou capital "
+            "simulados; resultados financeiros nao implicam fill executavel."
+        ),
+    }
+    (folder / "reversao_halts_status.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    print("[halts] status:", report["status"],
+          "| ordens:", report["simulated_orders_audited"], flush=True)
+    return report
+
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     source, replay, original = load_replay()
@@ -900,6 +1183,13 @@ def main():
             json.dumps(intraday, ensure_ascii=False, indent=2, default=str),
             encoding="utf-8")
         print("[CAPR-5Min] status:", intraday["status"], flush=True)
+        halt_audit = audit_capr_halts_20260729(log, target)
+        result["nasdaq_halt_audit"] = halt_audit
+        (target / "reversao_resumo.json").write_text(
+            json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False,
+                       default=str),
+            encoding="utf-8",
+        )
         (target / "LEIA_ME.txt").write_text(
             "Estudo de reversao CASH, apenas exploratorio. Control original sem mudancas.\n"
             "Conferir paridade_ok antes de comparar patrimonio.\n"
