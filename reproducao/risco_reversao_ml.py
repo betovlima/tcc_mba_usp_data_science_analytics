@@ -125,7 +125,7 @@ def estudo_risco_ml(predictions, destination: Path):
     y = pd.to_numeric(d["daily_return"], errors="raise").to_numpy(float)
     if not np.isfinite(y).all() or (y <= -1).any():
         raise ValueError("Risco ML: retornos invalidos.")
-    features = d.loc[:, EX_ANTE_FEATURES].apply(
+    features = d.loc[:, list(EX_ANTE_FEATURES)].apply(
         pd.to_numeric, errors="coerce",
     ).replace([np.inf, -np.inf], np.nan)
     x = features.to_numpy(dtype=float)
