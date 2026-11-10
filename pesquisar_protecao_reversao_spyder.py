@@ -1576,7 +1576,48 @@ def main():
         "| checkpoint anterior=", historical_capital,
         flush=True,
     )
+    # Exposicao verdadeira da PRODUCAO durante o halt CAPR:
+    # patrimonio de fechamento, nao prova de preco executavel intradiario.
+    capr_event_window = pred.loc[
+        (pred["date"] >= pd.Timestamp("2026-07-27").date()) &
+        (pred["date"] <= pd.Timestamp("2026-08-05").date()),
+        ["date", "selected_asset", "strategy_equity", "trade_action"],
+    ].copy()
+    event_rows = {
+        str(row["date"]): row for _, row in capr_event_window.iterrows()
+    }
+    def _event_equity(day):
+        row = event_rows.get(day)
+        return float(row["strategy_equity"]) if row is not None else None
+    before_halt = _event_equity("2026-07-28")
+    after_halt = _event_equity("2026-07-30")
+    capr_halt_context = {
+        "source": "production_predictions_and_trades",
+        "halt_date": "2026-07-29",
+        "resumption_trade_date": "2026-07-30",
+        "position_on_halt_date": (
+            str(event_rows["2026-07-29"]["selected_asset"])
+            if "2026-07-29" in event_rows else None
+        ),
+        "equity_2026_07_28": before_halt,
+        "equity_2026_07_29": _event_equity("2026-07-29"),
+        "equity_2026_07_30": after_halt,
+        "equity_change_2026_07_28_to_30": (
+            after_halt / before_halt - 1.0
+            if before_halt is not None and after_halt is not None
+            and before_halt > 0 else None
+        ),
+        "production_capr_sales_during_2026_07_29": int(len(
+            july29_capr.loc[july29_capr["action"] == "SELL"]
+        )),
+        "note": (
+            "Trata-se de patrimonio de FECHAMENTO do Control de producao. "
+            "Nao atribui venda a CAPR enquanto o ativo esteve suspenso "
+            "nem declara executaveis as compras simuladas."
+        ),
+    }
     summary = {
+        "capr_halt_exposure_production": capr_halt_context,
         "comparison_with_prior_checkpoint": reference_comparison,
         "research_reference": "production_backtest_20261110",
         "status": "imported_and_validated",
@@ -1616,6 +1657,9 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="referencia_producao_", dir=OUT) as tmp:
         dest = Path(tmp)
+        capr_event_window.to_csv(
+            dest / "producao_capr_exposicao_durante_halt.csv", index=False
+        )
         pred.to_csv(dest / "producao_decisoes.csv", index=False)
         trades.to_csv(dest / "producao_operacoes.csv", index=False)
         decisions.to_csv(dest / "producao_diagnosticos_decisao.csv", index=False)
