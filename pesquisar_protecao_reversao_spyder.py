@@ -869,7 +869,7 @@ def parse_nasdaq_halt_rss(data):
             ),
             "resume_quote_time": values.get("resumptionquotetime", ""),
             "resume_trade_time": values.get("resumptiontradetime", ""),
-            "market": values.get("market", ""),
+            "market": values.get("mkt") or values.get("market", ""),
             "issue_name": values.get("issuename", ""),
         })
     return rows
@@ -918,19 +918,38 @@ def fetch_capr_halts_official():
 
 
 def _halt_datetime(local_date, local_clock):
-    """Data/hora do feed em America/New_York, nunca interpretar como UTC."""
-    if not str(local_date).strip() or not str(local_clock).strip():
+    """Horario Nasdaq em America/New_York, inclusive campos com padding.
+
+    O RSS oficial de 29/07/2026 publica o HaltTime de CAPR como:
+        '06:55:00                      .000'
+    O parser antigo retornava None, ignorava TODO o halt e classificava as
+    cinco vendas hipoteticas as 09h30 como 'not_confirmed'.
+
+    Campo vazio e permitido somente quando a retomada nao foi informada.
+    Campo NAO vazio e invalido gera erro, nunca 'mercado negociavel'.
+    """
+    import re
+    from datetime import datetime
+
+    day = str(local_date or "").strip()
+    clock = str(local_clock or "").strip()
+    if not day and not clock:
         return None
-    try:
-        d = pd.to_datetime(str(local_date).strip(), errors="raise")
-        timestamp = pd.Timestamp(
-            str(d.date()) + " " + str(local_clock).strip()
-        )
-        if timestamp.tzinfo is None:
-            return timestamp.tz_localize(NY)
-        return timestamp.tz_convert(NY)
-    except (ValueError, TypeError, OverflowError):
-        return None
+    if not day or not clock:
+        raise ValueError("Nasdaq halt: data e hora devem ser informadas juntas.")
+    match = re.fullmatch(
+        r"(\d{1,2}:\d{2}:\d{2})(?:\s*\.\s*(\d{1,9}))?", clock
+    )
+    if match is None:
+        raise ValueError("Nasdaq halt: horario inesperado: " + repr(clock))
+    clean_clock = match.group(1)
+    if match.group(2) is not None:
+        clean_clock += "." + match.group(2)
+    if "/" in day:
+        date = datetime.strptime(day, "%m/%d/%Y").date()
+    else:
+        date = datetime.strptime(day, "%Y-%m-%d").date()
+    return pd.Timestamp(str(date) + " " + clean_clock).tz_localize(NY)
 
 
 def _halt_order_status(execution, rows):
@@ -1046,8 +1065,16 @@ def audit_capr_halts_20260729(daily_trades, folder):
     if only_capr or audited:
         fig, ax = plt.subplots(figsize=(12, 3.5))
         base = pd.Timestamp(HALT_DAY)
-        ax.set_xlim(base + pd.Timedelta(hours=6),
-                    base + pd.Timedelta(hours=16))
+        effective_resumptions = [
+            _halt_datetime(h["resume_date"], h["resume_trade_time"])
+            for h in only_capr
+        ]
+        effective_resumptions = [
+            ts.tz_localize(None) for ts in effective_resumptions if ts is not None
+        ]
+        xmax = max([base + pd.Timedelta(hours=16)]
+                   + [ts + pd.Timedelta(hours=1) for ts in effective_resumptions])
+        ax.set_xlim(base + pd.Timedelta(hours=6), xmax)
         ax.set_ylim(-.4, 1.2)
         ax.set_yticks([])
         ax.axhline(0.35, color="gray", alpha=.4)
@@ -1057,9 +1084,13 @@ def audit_capr_halts_20260729(daily_trades, folder):
             if start is not None:
                 ax.axvline(start.tz_localize(None), color="tab:red",
                            linestyle="--", label="Inicio do halt")
+                if resumed is not None:
+                    ax.axvspan(start.tz_localize(None),
+                               resumed.tz_localize(None), color="tab:red",
+                               alpha=.12, label="Sem negociacoes")
             if resumed is not None:
                 ax.axvline(resumed.tz_localize(None), color="tab:green",
-                           linestyle="--", label="Retomada informada")
+                           linestyle="--", label="Retomada efetiva")
         for order in audited:
             when = _halt_datetime(order["date"], order["clock"])
             if when is not None:
@@ -1075,17 +1106,27 @@ def audit_capr_halts_20260729(daily_trades, folder):
         fig.savefig(folder / "reversao_halts_capr_linha_tempo.png", dpi=145)
         plt.show(block=False)
 
+    halted_count = sum(
+        item["halt_status"] == "halted_at_order_time" for item in audited
+    )
     report = {
         "status": (
             "source_unavailable" if rows is None
+            else "simulated_executions_during_halt" if halted_count
             else "CAPR_records_found" if only_capr
             else "CAPR_not_found_in_feed_not_proof_of_absence"
         ),
         "source": source_meta,
         "capr_halt_events": len(only_capr),
         "simulated_orders_audited": len(audited),
-        "orders_reported_halted": sum(
-            r["halt_status"] == "halted_at_order_time" for r in audited
+        "orders_reported_halted": halted_count,
+        "invalid_historical_fills": halted_count,
+        "baseline_research_conclusion": (
+            "INVALID: as ordens hipoteticas executadas durante halt devem "
+            "ser retiradas da simulacao ANTES de comparar protecao e Control."
+            if halted_count else
+            "Nenhuma ordem deste subconjunto foi confirmada durante halt. "
+            "Isso nao valida execucoes de outras datas."
         ),
         "orders_resume_unverified": sum(
             r["halt_status"] == "resume_unverified" for r in audited
