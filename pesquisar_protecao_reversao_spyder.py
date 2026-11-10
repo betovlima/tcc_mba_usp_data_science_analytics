@@ -516,7 +516,7 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
         (trades["profile"] == "control") & (trades["asset"] == "CAPR") &
         (trades["action"] == "BUY")
     ]
-    daily_rows, events, signals = [], [], []
+    daily_rows, events, signals, coverage = [], [], [], []
     cases = ("control", "daily", "midday")
     studied = 0
     for episode, segment in enumerate(segments, start=1):
@@ -532,8 +532,35 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
         initial_cash = first_control_equity - initial_qty * float(bar(prices, "CAPR", first)["close"])
         if initial_qty <= 0 or initial_cash < -0.05:
             raise RuntimeError("Quantidade ou caixa inicial CAPR nao conciliado.")
-        intraday = {day: intraday_midpoint(bars, prices, day)
-                    for day in segment["date"]}
+        # Uma sessao sem candles suficientes perto de 12h30 nao deve
+        # cancelar todas as outras sessoes. Nao presumir sinal ou preco.
+        intraday = {}
+        for day in segment["date"]:
+            candles = bars.loc[bars["date"] == day]
+            before = candles.loc[candles["clock"] <= "12:25"]
+            after = candles.loc[(candles["clock"] >= "12:35") &
+                                (candles["clock"] <= "12:50")]
+            audit = {
+                "episode": episode, "date": str(day),
+                "bar_count": int(len(candles)),
+                "last_known_before_1230": (
+                    str(before["clock"].iloc[-1]) if not before.empty else None
+                ),
+                "first_executable_after_1230": (
+                    str(after["clock"].iloc[0]) if not after.empty else None
+                ),
+            }
+            try:
+                intraday[day] = intraday_midpoint(bars, prices, day)
+                audit.update({"status": "valid", "reason": None})
+            except RuntimeError as exc:
+                intraday[day] = None
+                audit.update({
+                    "status": "skipped_missing_5min_bars", "reason": str(exc)
+                })
+                print("[CAPR-5Min] pulando avaliacao 12h30", str(day),
+                      "|", str(exc), flush=True)
+            coverage.append(audit)
         studied += 1
         for policy in cases:
             quantity, cash, blocked = initial_qty, initial_cash, False
@@ -556,19 +583,29 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
                         events.append({"episode": episode, "policy": policy, "date": str(day),
                                        "time": "09:30", "reason": "fechamento anterior", **ev})
                         action_today = True
-                indicator, px, executable_clock = intraday[day]
+                snapshot = intraday[day]
+                indicator = snapshot[0] if snapshot is not None else None
+                px = snapshot[1] if snapshot is not None else None
+                executable_clock = snapshot[2] if snapshot is not None else None
                 signals.append({
                     "episode": episode, "policy": policy, "date": str(day),
-                    "observed_through": "12:30 NY, ultimo candle completo ate 12:25",
-                    "execution_after": executable_clock + " NY",
-                    "ema": bool(indicator["ema_signal"]),
-                    "atr": bool(indicator["atr_signal"]),
-                    "combined": bool(indicator["combinada_signal"]),
-                    "recovery": bool(indicator["recover"]),
+                    "status": ("valid" if indicator is not None
+                               else "skipped_missing_5min_bars"),
+                    "observed_through": (
+                        "12:30 NY, ultimo candle completo ate 12:25"
+                        if indicator is not None else None
+                    ),
+                    "execution_after": (
+                        executable_clock + " NY" if executable_clock is not None else None
+                    ),
+                    "ema": bool(indicator["ema_signal"]) if indicator is not None else None,
+                    "atr": bool(indicator["atr_signal"]) if indicator is not None else None,
+                    "combined": bool(indicator["combinada_signal"]) if indicator is not None else None,
+                    "recovery": bool(indicator["recover"]) if indicator is not None else None,
                     "action_at_open": action_today,
                     "in_cash_at_midday": blocked,
                 })
-                if policy == "midday" and not action_today:
+                if policy == "midday" and not action_today and indicator is not None:
                     action = ("BUY" if blocked and bool(indicator["recover"]) else
                               "SELL" if not blocked and bool(indicator["combinada_signal"]) else None)
                     if action:
@@ -591,6 +628,7 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
         "episode", "policy", "date", "time", "reason", "action", "quantity", "price", "fee"
     ])
     signals = pd.DataFrame(signals)
+    coverage = pd.DataFrame(coverage).drop_duplicates(["episode", "date"])
     comparison = results.groupby(["episode", "policy"], sort=False).agg(
         start=("date", "first"), end=("date", "last"),
         first_equity=("equity", "first"), last_equity=("equity", "last"),
@@ -604,8 +642,21 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
         ("reversao_intradiario_operacoes.csv", operations),
         ("reversao_intradiario_sinais.csv", signals),
         ("reversao_intradiario_comparacao.csv", comparison),
+        ("reversao_intradiario_cobertura.csv", coverage),
     ]:
         data.to_csv(folder / filename, index=False)
+    # Inclui no ZIP o historico observado para auditar lacunas e sinais.
+    bars[["local", "date", "clock", "open", "high", "low",
+          "close", "volume"]].to_csv(
+        folder / "reversao_intradiario_barras.csv", index=False,
+        float_format="%.17g",
+    )
+    control_only = results.loc[results["policy"] == "control"]
+    parity = float(np.max(
+        np.abs(control_only["equity"].to_numpy(dtype=float) -
+               control_only["control_equity"].to_numpy(dtype=float)) /
+        np.maximum(control_only["control_equity"].to_numpy(dtype=float), 1.0)
+    ))
     fig, ax = plt.subplots(figsize=(12, 5))
     for (episode, policy), group in results.groupby(["episode", "policy"]):
         ax.plot(pd.to_datetime(group["date"]), group["equity"],
@@ -639,8 +690,14 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
     fig2.savefig(folder / "reversao_intradiario_capr.png", dpi=145)
     plt.show(block=False)
     return {
-        "status": "completed",
+        "status": "completed" if parity <= 1e-4 else "baseline_mismatch",
         "scope": "episodios CAPR apenas; NAO e portfolio completo",
+        "control_episode_max_relative_gap": parity,
+        "midday_valid_sessions": int((coverage["status"] == "valid").sum()),
+        "midday_skipped_sessions": int((coverage["status"] != "valid").sum()),
+        "midday_skipped_dates": coverage.loc[
+            coverage["status"] != "valid", "date"
+        ].astype(str).tolist(),
         "episodes": studied,
         "window": [PILOT_BEGIN, PILOT_END],
         "timing": {"preopen": "fechamento anterior -> 09:30",
@@ -654,7 +711,8 @@ def study_capr_intraday(replay, frames, trades, prices, folder):
             "Janela curta escolhida por episodio de CAPR, nao validacao fora da amostra.",
             "Intradiario SIP RAW normalizado por splits; avaliar dividendos e qualidade.",
             "Nao incorpora impacto de mercado, latencia ou restricoes regulatórias de day trading.",
-            "Paridade do Control diario continua verificada separadamente.",
+            "Paridade do Control diario e dos episodios CAPR verificadas separadamente.",
+            "Sem candles suficientes as 12h30, nenhum sinal ou ordem; sessao auditada.",
         ],
     }
 
