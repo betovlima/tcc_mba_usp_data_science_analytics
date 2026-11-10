@@ -57,7 +57,7 @@ def test_cash_buy_sell_and_hold_decisions_are_distinct():
             "predicted_mean": mu, "predicted_q10": -.005,
             "raw_open_next": 100., "raw_open_after_next": 101.,
         })
-    result, audit = decisions(pd.DataFrame(rows), days, aversion=0.)
+    result, audit = decisions(pd.DataFrame(rows), days, aversion=0., minimum_candidates=1)
     assert audit["action"].tolist() == [
         "CASH_BUY", "SELL_CASH", "CASH_BUY", "HOLD",
     ]
@@ -75,7 +75,7 @@ def test_missing_future_open_fails_not_filled_with_zero():
     }])
     import pytest
     with pytest.raises(RuntimeError, match="NEGOCIACAO_NAO_VERIFICAVEL"):
-        decisions(data, days, aversion=0.)
+        decisions(data, days, aversion=0., minimum_candidates=1)
 
 
 def test_drawdown_is_measured_on_capital_curve():
