@@ -41,6 +41,7 @@ dados/*
 dados/.u67_build/
 
 # Resultados locais
+out/
 output/
 outputs/
 results/
