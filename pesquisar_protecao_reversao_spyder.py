@@ -5,7 +5,7 @@ Abra este arquivo no Spyder e execute com F5. Nenhum argumento.
 Entrada: output/reproducao_universo/predictions.csv ou ZIP oficial.
 Fonte de precos: dados/u67 e dados/.u67_expansion_cache (somente leitura).
 Saidas: out/ e out/pacote_protecao_reversao.zip (sobrescrito).
-Nao modifica a Winner, nao consulta APIs e nao treina modelos.
+Nao modifica a Winner nem treina modelos. Piloto CAPR pode obter historico Alpaca 5Min, com cache.
 """
 from __future__ import annotations
 
@@ -384,6 +384,270 @@ def make_charts(frames, trade_log, prices, target):
     return [name for name, _ in paths]
 
 
+
+# PILOTO INTRADIARIO CAPR | fontes SIP RAW, sem alterar o Control.
+PILOT_BEGIN = "2026-07-27"
+PILOT_END = "2026-08-22"  # exclusivo
+INTRADAY_CSV = ROOT / "dados" / ".intraday_cache" / "CAPR_20260727_20260822_5min_sip_raw.csv"
+
+
+def load_capr_intraday():
+    """Carrega cache congelado; na primeira vez baixa apenas CAPR e esta janela."""
+    from reproducao.dados import load_alpaca_credentials
+    if not INTRADAY_CSV.is_file():
+        from alpaca.data.historical.stock import StockHistoricalDataClient
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+        from alpaca.data.enums import Adjustment, DataFeed
+        creds = load_alpaca_credentials(ROOT)
+        client = StockHistoricalDataClient(
+            api_key=creds.api_key, secret_key=creds.secret_key
+        )
+        req = StockBarsRequest(
+            symbol_or_symbols="CAPR",
+            timeframe=TimeFrame(5, TimeFrameUnit.Minute),
+            start=pd.Timestamp(PILOT_BEGIN, tz=NY).to_pydatetime(),
+            end=pd.Timestamp(PILOT_END, tz=NY).to_pydatetime(),
+            adjustment=Adjustment.RAW,
+            feed=DataFeed.SIP,
+            limit=10000,
+        )
+        print("[CAPR-5Min] baixando historico SIP RAW...", flush=True)
+        frame = client.get_stock_bars(req).df
+        if isinstance(frame.index, pd.MultiIndex):
+            frame = frame.xs("CAPR", level="symbol")
+        frame = frame.reset_index()
+        frame.columns = [str(x).lower() for x in frame.columns]
+        required = ["timestamp", "open", "high", "low", "close", "volume"]
+        if frame.empty or not set(required).issubset(frame.columns):
+            raise RuntimeError("Sem candles intradiarios OHLCV completos da Alpaca.")
+        frame = frame[required].copy()
+        frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+        frame = frame.sort_values("timestamp").drop_duplicates("timestamp")
+        INTRADAY_CSV.parent.mkdir(parents=True, exist_ok=True)
+        temp = INTRADAY_CSV.with_suffix(".tmp")
+        frame.to_csv(temp, index=False, float_format="%.17g")
+        os.replace(temp, INTRADAY_CSV)
+    else:
+        print("[CAPR-5Min] cache existente, sem novo download", flush=True)
+    raw = load_raw_bar_file(INTRADAY_CSV, float_precision="round_trip")
+    actions = ROOT / "dados" / ".u67_expansion_cache" / "full_raw_20261006" / "corporate_actions" / "CAPR.csv"
+    if not actions.is_file():
+        raise FileNotFoundError("Falta corporate_actions/CAPR.csv do snapshot TCC")
+    bars, _ = split_normalize(raw, load_actions_file(actions))
+    local = bars.index.tz_convert(NY)
+    bars["date"] = local.date
+    bars["clock"] = local.strftime("%H:%M")
+    bars["local"] = local.tz_localize(None)
+    bars = bars.loc[(bars["clock"] >= "09:30") & (bars["clock"] < "16:00")].copy()
+    if bars.empty or bars.index.has_duplicates:
+        raise RuntimeError("Barras intradiarias vazias ou com timestamps repetidos")
+    return bars, {
+        "cache": str(INTRADAY_CSV.relative_to(ROOT)),
+        "sha256_raw": sha256(INTRADAY_CSV),
+        "sha256_actions": sha256(actions),
+        "bars": int(len(bars)),
+        "feed": "sip", "timeframe": "5Min", "adjustment": "raw + split_normalize",
+    }
+
+
+def intraday_midpoint(bars, prices, day):
+    """12h30 usa barras ate 12h25. Ordem no OPEN da barra 12h35."""
+    session = bars.loc[bars["date"] == day]
+    known = session.loc[(session["clock"] >= "09:30") & (session["clock"] <= "12:25")]
+    execution = session.loc[session["clock"] == "12:35"]
+    if len(known) < 30 or "12:25" not in set(known["clock"]) or len(execution) != 1:
+        raise RuntimeError("Faltam barras completas 12h25/12h35 em " + str(day))
+    recent = prices["CAPR"].loc[prices["CAPR"].index < day,
+                                ["open", "high", "low", "close", "volume"]].copy()
+    if len(recent) < 25:
+        raise RuntimeError("Historico insuficiente para indicador as 12h30")
+    recent.loc[day, :] = [
+        float(known["open"].iloc[0]), float(known["high"].max()),
+        float(known["low"].min()), float(known["close"].iloc[-1]),
+        float(known["volume"].sum()),
+    ]
+    indicators = prepare_indicators(recent).iloc[-1]
+    return indicators, float(execution["open"].iloc[0])
+
+
+def execute_capr(quantity, cash, action, price):
+    px = float(aplicar_deslizamento(float(price), action, CONFIG))
+    if action == "SELL":
+        fee = float(calcular_taxas_referencia("SELL", quantity, px, CONFIG)["total_fee"])
+        cash += quantity * px - fee
+        traded, quantity = quantity, 0.0
+    else:
+        quantity = cash / px
+        for _ in range(25):
+            fee = float(calcular_taxas_referencia("BUY", quantity, px, CONFIG)["total_fee"])
+            updated = max(0.0, (cash - fee) / px)
+            if abs(updated - quantity) < 1e-10:
+                quantity = updated
+                break
+            quantity = updated
+        fee = float(calcular_taxas_referencia("BUY", quantity, px, CONFIG)["total_fee"])
+        cash -= quantity * px + fee
+        traded = quantity
+    return quantity, cash, {"action": action, "quantity": traded, "price": px, "fee": fee}
+
+
+def study_capr_intraday(replay, frames, trades, prices, folder):
+    """Compara politicas em episodios CAPR, nao em toda a carteira."""
+    bars, provenance = load_capr_intraday()
+    window = replay.loc[
+        (replay["date"] >= pd.Timestamp(PILOT_BEGIN).date()) &
+        (replay["date"] < pd.Timestamp(PILOT_END).date())
+    ].copy()
+    window["_part"] = (window["selected_asset"] != window["selected_asset"].shift()).cumsum()
+    segments = [part for _, part in window.groupby("_part")
+                if part["selected_asset"].iloc[0] == "CAPR" and len(part) >= 2]
+    buys = trades.loc[
+        (trades["profile"] == "control") & (trades["asset"] == "CAPR") &
+        (trades["action"] == "BUY")
+    ]
+    daily_rows, events, signals = [], [], []
+    cases = ("control", "daily", "midday")
+    studied = 0
+    for episode, segment in enumerate(segments, start=1):
+        first = segment["date"].iloc[0]
+        purchase = buys.loc[buys["session"] == str(first)]
+        if purchase.empty:
+            print("[CAPR-5Min] episodio sem compra inicial dentro da janela:", first)
+            continue
+        first_control_equity = float(
+            frames["control"].loc[frames["control"]["session"] == first, "equity"].iloc[0]
+        )
+        initial_qty = float(purchase["quantity"].iloc[-1])
+        initial_cash = first_control_equity - initial_qty * float(bar(prices, "CAPR", first)["close"])
+        if initial_qty <= 0 or initial_cash < -0.05:
+            raise RuntimeError("Quantidade ou caixa inicial CAPR nao conciliado.")
+        intraday = {day: intraday_midpoint(bars, prices, day)
+                    for day in segment["date"]}
+        studied += 1
+        for policy in cases:
+            quantity, cash, blocked = initial_qty, initial_cash, False
+            for idx, r in enumerate(segment.itertuples(index=False)):
+                day = r.date
+                action_today = (idx == 0)  # entrada original da Winner
+                if idx:
+                    previous = segment["date"].iloc[idx - 1]
+                    indicator = bar(prices, "CAPR", previous)
+                    action = None
+                    if blocked and bool(indicator["recover"]):
+                        action = "BUY"
+                    elif not blocked and policy != "control" and bool(indicator["combinada_signal"]):
+                        action = "SELL"
+                    if action:
+                        quantity, cash, ev = execute_capr(
+                            quantity, cash, action, float(bar(prices, "CAPR", day)["open"])
+                        )
+                        blocked = action == "SELL"
+                        events.append({"episode": episode, "policy": policy, "date": str(day),
+                                       "time": "09:30", "reason": "fechamento anterior", **ev})
+                        action_today = True
+                indicator, px = intraday[day]
+                signals.append({
+                    "episode": episode, "policy": policy, "date": str(day),
+                    "observed_through": "12:30 NY, barra iniciada as 12:25",
+                    "execution_after": "12:35 NY",
+                    "ema": bool(indicator["ema_signal"]),
+                    "atr": bool(indicator["atr_signal"]),
+                    "combined": bool(indicator["combinada_signal"]),
+                    "recovery": bool(indicator["recover"]),
+                    "action_at_open": action_today,
+                    "in_cash_at_midday": blocked,
+                })
+                if policy == "midday" and not action_today:
+                    action = ("BUY" if blocked and bool(indicator["recover"]) else
+                              "SELL" if not blocked and bool(indicator["combinada_signal"]) else None)
+                    if action:
+                        quantity, cash, ev = execute_capr(quantity, cash, action, px)
+                        blocked = action == "SELL"
+                        events.append({"episode": episode, "policy": policy, "date": str(day),
+                                       "time": "12:35", "reason": "sinal intradiario 12:30", **ev})
+                equity = float(cash if blocked else cash + quantity * float(
+                    bar(prices, "CAPR", day)["close"]))
+                daily_rows.append({
+                    "episode": episode, "policy": policy, "date": str(day),
+                    "equity": equity, "cash": blocked, "qty": quantity,
+                    "control_equity": float(r.strategy_equity),
+                })
+    if studied == 0:
+        return {"status": "no_eligible_entry", "message":
+                "Nao foi encontrada uma compra CAPR que inicia episodio dentro da janela."}
+    results = pd.DataFrame(daily_rows)
+    operations = pd.DataFrame(events, columns=[
+        "episode", "policy", "date", "time", "reason", "action", "quantity", "price", "fee"
+    ])
+    signals = pd.DataFrame(signals)
+    comparison = results.groupby(["episode", "policy"], sort=False).agg(
+        start=("date", "first"), end=("date", "last"),
+        first_equity=("equity", "first"), last_equity=("equity", "last"),
+        cash_sessions=("cash", "sum"),
+    ).reset_index()
+    comparison["return_from_first_close"] = (
+        comparison["last_equity"] / comparison["first_equity"] - 1
+    )
+    for filename, data in [
+        ("reversao_intradiario_diario.csv", results),
+        ("reversao_intradiario_operacoes.csv", operations),
+        ("reversao_intradiario_sinais.csv", signals),
+        ("reversao_intradiario_comparacao.csv", comparison),
+    ]:
+        data.to_csv(folder / filename, index=False)
+    fig, ax = plt.subplots(figsize=(12, 5))
+    for (episode, policy), group in results.groupby(["episode", "policy"]):
+        ax.plot(pd.to_datetime(group["date"]), group["equity"],
+                label=str(episode) + " " + policy, linewidth=1.5)
+    ax.set(title="CAPR: Control, protecao diaria e protecao as 12h30",
+           ylabel="Patrimonio, episodio CAPR (US$)")
+    ax.legend()
+    ax.grid(alpha=.25)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(folder / "reversao_intradiario_patrimonio.png", dpi=145)
+
+    fig2, ax2 = plt.subplots(figsize=(13, 5))
+    selected_days = {"2026-07-29", "2026-07-30", "2026-08-14",
+                     "2026-08-17", "2026-08-18"}
+    view = bars.loc[bars["date"].astype(str).isin(selected_days)]
+    for day, group in view.groupby("date"):
+        ax2.plot(group["local"], group["close"], label=str(day), linewidth=1)
+    for _, op in operations.loc[operations["time"] == "12:35"].iterrows():
+        marker = "^" if op["action"] == "BUY" else "v"
+        ax2.scatter(pd.Timestamp(op["date"] + " 12:35"),
+                    float(op["price"]), marker=marker, s=75, zorder=5)
+    ax2.set(title="CAPR: candles 5Min e execucoes 12h35 (apos confirmar 12h30)",
+            ylabel="Preco ajustado por splits")
+    ax2.legend(ncol=3)
+    ax2.grid(alpha=.25)
+    fig2.autofmt_xdate()
+    fig2.tight_layout()
+    fig2.savefig(folder / "reversao_intradiario_capr.png", dpi=145)
+    plt.show(block=False)
+    return {
+        "status": "completed",
+        "scope": "episodios CAPR apenas; NAO e portfolio completo",
+        "episodes": studied,
+        "window": [PILOT_BEGIN, PILOT_END],
+        "timing": {"preopen": "fechamento anterior -> 09:30",
+                   "midpoint": "barra 12:25 encerrada -> ordem 12:35",
+                   "close": "16:00 -> proxima sessao"},
+        "max_one_protective_action_per_session": True,
+        "cache": provenance,
+        "comparisons": comparison.to_dict(orient="records"),
+        "limitations": [
+            "Nao recalcula ranking Winner apos CASH.",
+            "Janela curta escolhida por episodio de CAPR, nao validacao fora da amostra.",
+            "Intradiario SIP RAW normalizado por splits; avaliar dividendos e qualidade.",
+            "Nao incorpora impacto de mercado, latencia ou restricoes regulatórias de day trading.",
+            "Paridade do Control diario continua verificada separadamente.",
+        ],
+    }
+
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     source, replay, original = load_replay()
@@ -452,6 +716,16 @@ def main():
             json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8"
         )
         plots = make_charts(frames, log, prices, target)
+        try:
+            intraday = study_capr_intraday(replay, frames, log, prices, target)
+        except Exception as exc:
+            intraday = {"status": "unavailable", "error_type": type(exc).__name__,
+                        "message": str(exc)[:600]}
+            print("[CAPR-5Min] piloto indisponivel:", str(exc)[:300], flush=True)
+        (target / "reversao_intradiario_status.json").write_text(
+            json.dumps(intraday, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8")
+        print("[CAPR-5Min] status:", intraday["status"], flush=True)
         (target / "LEIA_ME.txt").write_text(
             "Estudo de reversao CASH, apenas exploratorio. Control original sem mudancas.\n"
             "Conferir paridade_ok antes de comparar patrimonio.\n"
