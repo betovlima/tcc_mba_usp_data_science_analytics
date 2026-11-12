@@ -46,7 +46,7 @@ import numpy as np
 import pandas as pd
 
 # %% 0. Um arquivo, uma branch; somente este seletor muda entre modos.
-MODO = "vantagem"  # "vantagem", "comparar" ou "verificar"
+MODO = "vantagem_v2"  # "vantagem_v2", "vantagem", "comparar", "verificar"
 PERMANENCIAS = (0, 1, 2, 3)
 PERMANENCIA_CONTROLE = 2
 TOLERANCIA_CENTAVO = 0.01
@@ -1473,7 +1473,7 @@ def _score_test_pairs(b: Base, models) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-def simular(b: Base, models=None):
+def simular(b: Base, models=None, decision_callback=None):
     """Contabilidade equivalente a Control: abre i+1, fecha i+1, final liquida."""
     cash = float(b.config["initial_capital"])
     pos, quantity, holding = -1, 0.0, 0
@@ -1483,7 +1483,15 @@ def simular(b: Base, models=None):
     for i, date in enumerate(b.dates):
         target = int(b.base_actions[i]) if models is None or b.fold[i] == 1 else pos
         ranking = []
-        if models is not None and b.fold[i] >= 2:
+        if decision_callback is not None and b.fold[i] >= 2:
+            if pos < 0:
+                target = int(np.nanargmax(b.scores[i]))
+            else:
+                capital = cash + quantity * b.cl[i, pos]
+                target, ranking = decision_callback(
+                    b, i, pos, holding, capital, quantity,
+                )
+        elif models is not None and b.fold[i] >= 2:
             if pos < 0:
                 target = int(np.nanargmax(b.scores[i]))
             else:
@@ -1754,5 +1762,244 @@ def executar_vantagem() -> None:
     print(f"[ZIP] {archive}")
 
 
+
+
+# %% 8. Pesquisa V2: valor de acao multihorizonte e impacto de liquidez.
+V2_H = (5, 10, 20, 40, 60)
+V2_W = (0.10, 0.15, 0.20, 0.30, 0.25)
+V2_ALPHA = 100.0
+V2_FEATURES = (
+    "utilidade", "variacao_1", "variacao_3", "retorno_passado_5",
+    "volatilidade_20", "log_adv20", "zscore", "percentil_ranking",
+)
+
+
+def _v2_features_labels(b: Base):
+    """Variaveis apenas em t; alvo futuro usado apenas em treinamento/auditoria."""
+    n, m = len(b.dates), len(b.symbols)
+    x = np.full((n, m, len(V2_FEATURES)), np.nan)
+    y = np.full((n, m), np.nan)
+    for i in range(25, n):
+        u = b.scores[i]
+        ok = np.isfinite(u)
+        if not ok.any():
+            continue
+        rank = np.full(m, np.nan)
+        ids = np.flatnonzero(ok)
+        ids = ids[np.argsort(-u[ids], kind="stable")]
+        rank[ids] = (np.arange(len(ids)) + 1) / len(ids)
+        mu, sd = float(np.mean(u[ok])), float(np.std(u[ok]))
+        d1 = u - b.scores[i - 1] if b.fold[i] == b.fold[i - 1] else np.zeros(m)
+        d3 = u - b.scores[i - 3] if b.fold[i] == b.fold[i - 3] else np.zeros(m)
+        x[i] = np.column_stack((
+            u, d1, d3, b.ret5[i], b.vol20[i],
+            np.log1p(np.maximum(b.adv20[i], 0)),
+            (u-mu)/max(sd, 1e-8), rank,
+        ))
+        if i + 60 >= len(b.cl):
+            continue
+        price = b.op[i + 1]
+        outcome = np.zeros(m)
+        for h, w in zip(V2_H, V2_W):
+            ret = np.log(b.cl[i + h] / price)
+            downside = np.maximum(-ret, 0)
+            trough = np.min(b.cl[i + 1:i + h + 1], axis=0)
+            dd = np.maximum(np.log(price / np.maximum(trough, 1e-10)), 0)
+            outcome += w*(ret - 0.20*downside - 0.35*dd)
+        y[i] = outcome
+    return x, y
+
+
+def _v2_train(b: Base):
+    """Modelos aprendem todos os ativos de folds anteriores; purge de 60 sessoes."""
+    x, y = _v2_features_labels(b)
+    q = np.full(y.shape, np.nan)
+    reports = {}
+    for fold in (2, 3):
+        start = int(np.flatnonzero(b.fold == fold)[0])
+        train = np.arange(25, start - 60)
+        train = train[b.fold[train] < fold]
+        X, Y = x[train], y[train]
+        mask = np.isfinite(X).all(axis=2) & np.isfinite(Y)
+        X, Y = X[mask], Y[mask]
+        if len(Y) < 1000:
+            raise RuntimeError("Fold sem amostras suficientes: "+str(fold))
+        lo, hi = np.percentile(Y, [1, 99])
+        model = make_pipeline(StandardScaler(), Ridge(alpha=V2_ALPHA))
+        model.fit(X, np.clip(Y, lo, hi))
+        ids = np.flatnonzero(b.fold == fold)
+        xt = x[ids]
+        good = np.isfinite(xt).all(axis=2)
+        forecast = np.full((len(ids),len(b.symbols)), np.nan)
+        forecast[good] = model.predict(xt[good])
+        q[ids] = forecast
+        actual = y[ids]
+        valid = good & np.isfinite(actual)
+        rho = float(pd.Series(forecast[valid]).corr(
+            pd.Series(actual[valid]), method="spearman",
+        ))
+        reports[fold] = {
+            "fold":fold,"n_treino":int(len(Y)),
+            "data_inicio_teste":str(b.dates[start]),
+            "ultimo_rotulo_treino":str(b.dates[train[-1]+60]),
+            "purge_sessoes":60,"spearman_oos":rho,
+            "coeficientes":model.named_steps["ridge"].coef_.tolist(),
+            "intercepto":float(model.named_steps["ridge"].intercept_),
+            "winsorizacao":[float(lo),float(hi)],
+        }
+        print("[V2] fold",fold,"treino",len(Y),"rho",round(rho,5),flush=True)
+    return q, y, reports
+
+
+def _v2_decider(b: Base, q: np.ndarray, liquidity: float, audit: list):
+    """MANTER equivale a ganho relativo zero; nenhuma restricao por dias."""
+    def decide(_b, i, current, age, capital, quantity):
+        current_q = float(q[i,current])
+        if not np.isfinite(current_q):
+            audit.append({"data":str(b.dates[i]),"motivo":"SEM_SCORE_ATUAL"})
+            return current, []
+        ranked = []
+        for j, symbol in enumerate(b.symbols):
+            if j == current or not np.isfinite(q[i,j]):
+                continue
+            gain = float(q[i,j]-current_q)
+            cost = float(_custo_estimado(b,i,current,j,capital,quantity))
+            impact = 0.0
+            if liquidity:
+                sale, buy = b.adv20[i,current], b.adv20[i,j]
+                if (not np.isfinite(sale) or sale<=0 or
+                        not np.isfinite(buy) or buy<=0):
+                    continue
+                impact = float(liquidity*(
+                    b.vol20[i,current]*math.sqrt(
+                        max(0,quantity*b.cl[i,current])/sale,
+                    ) + b.vol20[i,j]*math.sqrt(capital/buy)
+                ))
+            net = float(gain-cost-impact)
+            if math.isfinite(net):
+                ranked.append({
+                    "candidato":symbol,"vantagem_prevista":gain,
+                    "custo_estimado":cost,"impacto_proxy":impact,
+                    "vantagem_liquida":net,
+                    "utilidade_bruta":float(b.scores[i,j]),
+                    "valor_acao_estimado":float(q[i,j]),
+                })
+        ranked.sort(key=lambda r:r["vantagem_liquida"],reverse=True)
+        best = ranked[0] if ranked else None
+        target = (b.symbols.index(best["candidato"])
+                  if best and best["vantagem_liquida"]>0 else current)
+        audit.append({
+            "data":str(b.dates[i]),"fold":int(b.fold[i]),
+            "posicao_antes":b.symbols[current],
+            "posicao_depois":b.symbols[target],
+            "idade_posicao":int(age),"pontuacao_atual":current_q,
+            "melhor_vantagem_liquida":best["vantagem_liquida"] if best else None,
+            "motivo":"TROCAR" if target!=current else "MANTER",
+            "ranking_top10":json.dumps(ranked[:10],ensure_ascii=False),
+        })
+        return target, ranked
+    return decide
+
+
+def executar_vantagem_v2():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--pacote",type=Path,default=None)
+    args,_ = parser.parse_known_args()
+    source = args.pacote or ROOT/"output"/"pesquisa_permanencia_minima.zip"
+    if not source.is_file():
+        raise FileNotFoundError(
+            f"ZIP historico ausente: {source}. Rode primeiro MODO='comparar'."
+        )
+    b = carregar(source)
+    baseline,_,_,_ = simular(b)
+    error = float(np.max(np.abs(baseline-b.base_equity)))
+    if error > 0.01 or abs(float(baseline[-1])-587165941.1330212)>0.01:
+        raise RuntimeError("Controle original nao reproduzido: "+str(error))
+    q, realized, training = _v2_train(b)
+    import shutil
+    destination = ROOT/"output"/"pesquisa_vantagem_rotacao_v2"
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.mkdir(parents=True)
+    rows = []
+    for i in range(len(b.dates)):
+        if b.fold[i]<2: continue
+        for j,symbol in enumerate(b.symbols):
+            if np.isfinite(q[i,j]):
+                rows.append({
+                    "data":str(b.dates[i]),"fold":int(b.fold[i]),
+                    "ativo":symbol,"utilidade_original":float(b.scores[i,j]),
+                    "valor_previsto":float(q[i,j]),
+                    "valor_realizado":(
+                        float(realized[i,j]) if np.isfinite(realized[i,j]) else None
+                    ),"volatilidade_20":float(b.vol20[i,j]),
+                    "liquidez_media_20_usd":float(b.adv20[i,j]),
+                })
+    pd.DataFrame(rows).to_csv(
+        destination/"previsoes_oos_75_ativos.csv",index=False,
+    )
+    curves = pd.DataFrame({
+        "data_execucao":b.exec_dates,"fold":b.fold,"controle":baseline,
+    })
+    summary = []
+    for impact in (0.0,1.0):
+        audit = []
+        curve,decisions,trades,metrics = simular(
+            b,decision_callback=_v2_decider(b,q,impact,audit),
+        )
+        name = "sem_impacto" if impact==0 else "com_impacto_proxy"
+        curves[name] = curve
+        pd.DataFrame(audit).to_csv(
+            destination/("ranking_"+name+".csv"),index=False,
+        )
+        decisions.to_csv(destination/("decisoes_"+name+".csv"),index=False)
+        trades.to_csv(destination/("operacoes_"+name+".csv"),index=False)
+        risk = _resumo_curva(curve)
+        _write_json(destination/("metricas_"+name+".json"),{
+            "metricas":metrics,"risco":risk,
+            "folds":_performance_by_fold(b,curve),
+            "coeficiente_impacto_proxy":impact,
+        })
+        summary.append({
+            "cenario":name,"capital_final":float(curve[-1]),
+            "rotacoes":int(metrics["rotacoes"]),
+            "sharpe":risk["sharpe"],
+            "drawdown_maximo":risk["drawdown_maximo"],
+        })
+        print("[V2]",name,"capital",float(curve[-1]),flush=True)
+    curves.to_csv(destination/"comparacao_diaria.csv",index=False)
+    pd.DataFrame(summary).to_csv(
+        destination/"comparacao_resultados.csv",index=False,
+    )
+    _write_json(destination/"treinamento_multihorizonte.json",training)
+    _write_json(destination/"manifesto_v2.json",{
+        "status":"completed_research_only",
+        "modelo":"Ridge multihorizonte por ativo, sem restricao temporal",
+        "horizontes":V2_H,"pesos":V2_W,"features":V2_FEATURES,
+        "ridge_alpha":V2_ALPHA,
+        "penalidades_alvo":{"downside":0.20,"drawdown":0.35},
+        "treino":"Fold1 para Fold2; Fold1+Fold2 para Fold3, purge 60",
+        "fold1":"Control inalterado",
+        "criterio":"argmax vantagem liquida com MANTER=0",
+        "paridade_controle_erro_maximo_dolar":error,
+        "fonte_sha256":b.original_sha,
+        "resultados":summary,
+        "limitacoes":[
+            "Alvo de retorno multihorizonte nao equivale ao valor de uma politica sequencial.",
+            "O universo historico pode ter vies de selecao.",
+            "Proxy de impacto nao calibrado com ordens reais.",
+            "Impacto afeta decisao, nao altera preco executado no replay.",
+            "Sem limite de volume ou capacidade de execucao realista.",
+            "Nenhuma mudanca em operacoes Live.",
+        ],
+    })
+    archive = _pacote(destination,source)
+    print("[ZIP]",archive,flush=True)
+
 if __name__ == "__main__":
-    (executar_vantagem if MODO == "vantagem" else main)()
+    if MODO == "vantagem_v2":
+        executar_vantagem_v2()
+    elif MODO == "vantagem":
+        executar_vantagem()
+    else:
+        main()
