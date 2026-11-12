@@ -6,7 +6,8 @@ Este e o arquivo UNICO para todas as rodadas da pesquisa nesta branch:
 Spyder: abra este arquivo e execute com F5.
 Terminal: python pesquisar_permanencia_minima_spyder.py
 
-Modos: MODO = "deterioracao" (padrao; testa risco de permanencia),
+Modos: MODO = "sensibilidade_margens" (padrao; teste de sensibilidade
+na mesma base congelada), "deterioracao" (risco de permanencia),
 "vantagem_v3", "vantagem_v2", "vantagem" (historicos), "verificar" ou
 "comparar" (reproduz quatro permanencias).
 
@@ -56,7 +57,7 @@ import numpy as np
 import pandas as pd
 
 # %% 0. Um arquivo, uma branch; somente este seletor muda entre modos.
-MODO = "deterioracao"  # "deterioracao", "vantagem_v3", "vantagem_v2", "vantagem", "comparar", "verificar"
+MODO = "sensibilidade_margens"  # "sensibilidade_margens", "deterioracao", "vantagem_v3", "vantagem_v2", "vantagem", "comparar", "verificar"
 PERMANENCIAS = (0, 1, 2, 3)
 PERMANENCIA_CONTROLE = 2
 TOLERANCIA_CENTAVO = 0.01
@@ -1484,7 +1485,7 @@ def _score_test_pairs(b: Base, models) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-def simular(b: Base, models=None, decision_callback=None, *, permitir_cash=False):
+def simular(b: Base, models=None, decision_callback=None, *, permitir_cash=False, aplicar_todos_folds=False):
     """Contabilidade equivalente a Control: abre i+1, fecha i+1, final liquida."""
     cash = float(b.config["initial_capital"])
     pos, quantity, holding = -1, 0.0, 0
@@ -1494,7 +1495,7 @@ def simular(b: Base, models=None, decision_callback=None, *, permitir_cash=False
     for i, date in enumerate(b.dates):
         target = int(b.base_actions[i]) if models is None or b.fold[i] == 1 else pos
         ranking = []
-        if decision_callback is not None and b.fold[i] >= 2:
+        if decision_callback is not None and (b.fold[i] >= 2 or aplicar_todos_folds):
             if pos < 0 and not permitir_cash:
                 target = int(np.nanargmax(b.scores[i]))
             else:
@@ -2961,8 +2962,129 @@ def executar_deterioracao() -> None:
     _publicar_pasta_vantagem(dest)
     print(f"[DETERIORACAO] ZIP pronto: {archive}", flush=True)
 
+
+# %% 12. Sensibilidade da margem de rotacao: somente base cientifica congelada.
+# Nenhuma conexao operacional, aquisicao de dados ou retreino de modelos.
+MARGENS_ALTERNATIVAS = {1: 0.01, 2: 0.0, 3: 0.01}
+
+
+def executar_sensibilidade_margens() -> None:
+    """Compara apenas a calibracao por fold, mantendo todo o resto identico."""
+    fonte = ROOT / "output" / "pesquisa_permanencia_minima.zip"
+    if not fonte.is_file():
+        raise FileNotFoundError(
+            f"Pacote cientifico congelado ausente: {fonte}. "
+            "Execute o modo 'comparar' apenas com a base congelada valida."
+        )
+    base = carregar(fonte)
+    original = dict(base.margens)
+    if set(original) != {1, 2, 3}:
+        raise RuntimeError(
+            f"Esperados tres folds na base historica; encontrado: {original}"
+        )
+    control, control_decisions, control_trades, control_metrics = simular(base)
+    parity = float(np.max(np.abs(control - base.base_equity)))
+    if parity > 0.01 or abs(float(control[-1]) - 587165941.1330212) > 0.01:
+        raise RuntimeError(
+            f"Control congelado nao reproduzido; erro maximo US$ {parity:.9f}."
+        )
+
+    def decidir(_base, i, pos, holding, capital, quantity):
+        return _d_control(_base, i, pos, holding), []
+
+    # Prova de equivalencia: reexecutar com a mesma regra e margens originais,
+    # agora recalculando a posicao real em TODOS os folds.
+    refeito, _, _, _ = simular(
+        base, decision_callback=decidir,
+        permitir_cash=True, aplicar_todos_folds=True,
+    )
+    erro_reexecucao = float(np.max(np.abs(refeito - control)))
+    if erro_reexecucao > 0.01:
+        raise RuntimeError(
+            "Motor da sensibilidade nao reproduz o Control da mesma base: "
+            f"US$ {erro_reexecucao:.9f}."
+        )
+    base.margens = dict(MARGENS_ALTERNATIVAS)
+    alternativo, alt_decisions, alt_trades, alt_metrics = simular(
+        base, decision_callback=decidir,
+        permitir_cash=True, aplicar_todos_folds=True,
+    )
+    base.margens = original
+
+    saida = DESTINO_TEMP
+    if saida.exists():
+        shutil.rmtree(saida)
+    saida.mkdir(parents=True)
+    curves = pd.DataFrame({
+        "data_execucao": base.exec_dates,
+        "fold": base.fold,
+        "control": control,
+        "margens_alternativas": alternativo,
+    })
+    curves.to_csv(saida / "comparacao_patrimonio_diario.csv", index=False)
+    control_decisions.to_csv(saida / "decisoes_control.csv", index=False)
+    alt_decisions.to_csv(saida / "decisoes_margens_alternativas.csv", index=False)
+    control_trades.to_csv(saida / "operacoes_control.csv", index=False)
+    alt_trades.to_csv(saida / "operacoes_margens_alternativas.csv", index=False)
+    folds_control = _performance_by_fold(base, control)
+    folds_alternativo = _performance_by_fold(base, alternativo)
+    por_fold = []
+    for c, a in zip(folds_control, folds_alternativo):
+        por_fold.append({
+            "fold": int(c["fold"]),
+            "control": c,
+            "alternativo": a,
+        })
+    _write_json(saida / "comparacao_por_fold.json", por_fold)
+    resultado = []
+    for nome, curve, metrics in (
+        ("control", control, control_metrics),
+        ("margens_alternativas", alternativo, alt_metrics),
+    ):
+        resultado.append({
+            "cenario": nome, **_resumo_curva(curve), **metrics,
+        })
+    pd.DataFrame(resultado).to_csv(
+        saida / "comparacao_resultados.csv", index=False,
+    )
+    _write_json(saida / "manifesto_experimento.json", {
+        "status": "completed_research_only",
+        "modo": "sensibilidade_margens",
+        "arquivo": Path(__file__).name,
+        "fonte_sha256": base.original_sha,
+        "paridade_controle_usd": parity,
+        "paridade_motor_contrafactual_usd": erro_reexecucao,
+        "margens_por_fold_control": original,
+        "margens_por_fold_alternativas": MARGENS_ALTERNATIVAS,
+        "escopo": (
+            "Somente margens de troca variam. Precos, sinais, folds, "
+            "custos, universos, calendario e capital inicial congelados."
+        ),
+        "criterio": "analise de sensibilidade ex post, nao politica aprovada",
+        "resultados": resultado,
+        "limitacoes": [
+            "As margens alternativas foram fixadas apos observacao historica.",
+            "Nao corresponde a treinamento ou calibracao nova.",
+            "Nao demonstra a identidade de bases externas.",
+            "Sem impacto realista de mercado para ordens grandes.",
+            "Nenhuma alteracao na estrategia operacional.",
+        ],
+    })
+    shutil.copyfile(Path(__file__), saida / "codigo_executado.py")
+    archive = _pacote(saida, fonte)
+    _publicar_pasta_vantagem(saida)
+    print(
+        f"[MARGENS] Control US$ {control[-1]:,.2f} | "
+        f"Alternativo US$ {alternativo[-1]:,.2f} | "
+        f"erro de paridade US$ {erro_reexecucao:.9f}",
+        flush=True,
+    )
+    print(f"[ZIP] {archive}", flush=True)
+
 if __name__ == "__main__":
-    if MODO == "deterioracao":
+    if MODO == "sensibilidade_margens":
+        executar_sensibilidade_margens()
+    elif MODO == "deterioracao":
         executar_deterioracao()
     elif MODO == "vantagem_v3":
         executar_vantagem_v3()
