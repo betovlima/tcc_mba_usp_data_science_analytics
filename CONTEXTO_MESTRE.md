@@ -162,3 +162,43 @@ O checkpoint de US$ 587 milhões serve somente à reprodução do snapshot
 histórico associado. É proibido substituir o assert por outro valor sem
 reconstruir todas as entradas, o treinamento, a calibração e o replay.
 Não promover essa política para execução real.
+
+## Auditoria descritiva de permanencia no replay atualizado (12/11/2026)
+
+O arquivo unico de pesquisa `pesquisar_permanencia_minima_spyder.py` possui
+modo `analisar_permanencia` (padrao). Ele localiza na pasta `output/`, na raiz
+ou em `Downloads` um ZIP de backtest com `*_predictions.csv` e
+`*_metrics.json`. Nao importa nem depende de outra aplicacao. A pesquisa
+somente **le** o replay exportado, nao usa dados futuros nas variaveis de
+decisao, nao modifica o motor, nao retreina e nao executa ordens.
+
+Referencia auditada:
+- Fonte SHA-256:
+  `46fe00a978418ab10d742dee855136ac6d5fbb7e726a9ee928f3109c178c06d9`.
+- Periodo: 22/07/2020 a 11/11/2026, **1.586** sessoes.
+- Capital inicial: US$ 10.000; capital final exportado:
+  **US$ 139.871.072,30749363**; 350 rotacoes.
+- **351** episodios de exposicao, **884** decisoes de permanencia
+  (idade da posicao >= 2) e retornos observaveis de 1, 3 e 5 pregoes em
+  884, 583 e 426 casos, respectivamente.
+- Em oito episodios houve drawdown da posicao >= 20% enquanto ela
+  permanecia investida; cinco terminaram com retorno positivo no episodio.
+- Caso de teste: posicao CAPR de 28/07 a 27/08/2026. Drawdown no episodio
+  de **-41,6828%**, mas retorno do capital no episodio completo
+  **+52,3820%**. No fechamento anterior ao tombo inicial, os sinais
+  de drawdown estavam em torno de 9% e a utilidade havia subido.
+- Condicao exploratoria `drawdown >= 10% E score desde a entrada caiu`:
+  20 observacoes, 12 seguidas por perda no dia seguinte; amostras
+  dependentes e **insuficientes** para implantar um gatilho.
+- **Nao confundir** auditoria observacional com contrafactual executavel.
+  Rotacoes censuram o horizonte e a saida para CASH exigiria precos
+  de abertura/fechamento e custos para reconstruir ordens.
+
+O pacote de resultados segue exatamente o nome
+`output/pesquisa_vantagem_rotacao.zip`, sem v1/v2/v3. Ele contem
+`sinais_por_decisao.csv`, `episodios_posicao.csv`,
+`associacoes_sinais_e_retornos_observados.csv`, estudo do periodo critico,
+manifesto e SHA-256. O capital de US$ 587 milhoes permanece apenas como
+checkpoint do snapshot historico congelado, nao como referencia desse replay
+atualizado. Nenhuma hipotese de melhoria foi validada ainda fora da amostra
+apos a escolha dessas condicoes.
