@@ -6,12 +6,14 @@ Este e o arquivo UNICO para todas as rodadas da pesquisa nesta branch:
 Spyder: abra este arquivo e execute com F5.
 Terminal: python pesquisar_permanencia_minima_spyder.py
 
-Modos: MODO = "verificar" (hashes, sem treino) ou "comparar" (padrao).
+Modos: MODO = "vantagem" (padrao; usa o ZIP historico),
+"verificar" (hashes) ou "comparar" (reproduz os quatro cenarios).
 
 A reproduçao utiliza o motor cientifico congelado do TCC (v1.23.0),
 o mesmo conjunto de 77 ativos solicitados (75 efetivos), os mesmos
 modelos, folds, margem calibrada por fold, custos e execucoes exatas.
-O unico parametro alterado e rotation_min_holding_days.
+No modo comparar, somente rotation_min_holding_days varia. No modo vantagem,
+um estimador Ridge aprende a vantagem relativa de troca em folds anteriores.
 
 Nao acessa MongoDB, nao busca novas cotacoes, nao reconstrói ativos
 descontinuados, nao altera a Winner Live nem escreve em dados/u67.
@@ -44,7 +46,7 @@ import numpy as np
 import pandas as pd
 
 # %% 0. Um arquivo, uma branch; somente este seletor muda entre modos.
-MODO = "comparar"  # "verificar" ou "comparar"
+MODO = "vantagem"  # "vantagem", "comparar" ou "verificar"
 PERMANENCIAS = (0, 1, 2, 3)
 PERMANENCIA_CONTROLE = 2
 TOLERANCIA_CENTAVO = 0.01
@@ -435,8 +437,11 @@ def publicar_resultado(pasta: Path) -> None:
 
 # %% 6. Mesmo arquivo/branch para os proximos experimentos. Nao tocar em main.
 def main() -> None:
+    if MODO == "vantagem":
+        executar_pesquisa_vantagem()
+        return
     if MODO not in ("verificar", "comparar"):
-        raise ValueError("MODO precisa ser 'verificar' ou 'comparar'.")
+        raise ValueError("MODO precisa ser 'vantagem', 'verificar' ou 'comparar'.")
     inicio = time.perf_counter()
     pesquisa, contrato, selecionados = verificar_fontes()
     if MODO == "verificar":
@@ -649,3 +654,485 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# %% 7. Nova pesquisa: vantagem relativa aprendida, sem bloqueio fixo de holding.
+# Reusa as previsoes OOS da pesquisa anterior e o motor financeiro oficial.
+# Fold 1 e controle; fold 2 treina no 1; fold 3 treina nos 1+2 (com purge).
+
+
+def executar_pesquisa_vantagem() -> None:
+    """Compara uma metapolitica causal contra o Control original, sem modificar o motor."""
+    from io import BytesIO
+    from zipfile import ZipFile, ZIP_DEFLATED
+
+    from sklearn.linear_model import Ridge
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.pipeline import make_pipeline
+
+    from engine.configuracao import StandaloneBacktestConfig
+    from engine.rotacao import _simular_exato
+    from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
+
+    horizonte, alpha = 3, 20.0
+    saida = ROOT / "output" / "pesquisa_vantagem_rotacao"
+    pacote = ROOT / "output" / "pesquisa_permanencia_minima.zip"
+    destino = ROOT / "output" / "pesquisa_vantagem_rotacao.zip"
+
+    if not pacote.is_file():
+        raise FileNotFoundError(
+            f"Pacote historico ausente: {pacote}. Execute primeiro MODO='comparar'."
+        )
+    conteudo_original = pacote.read_bytes()
+    prefixo = "pesquisa_permanencia_minima/"
+    with ZipFile(BytesIO(conteudo_original)) as zipado:
+        if zipado.testzip() is not None:
+            raise RuntimeError("O ZIP historico esta corrompido.")
+
+        def ler_csv(nome: str) -> pd.DataFrame:
+            return pd.read_csv(BytesIO(zipado.read(prefixo + nome)), low_memory=False)
+
+        manifesto = json.loads(zipado.read(prefixo + "manifesto_experimento.json"))
+        if manifesto.get("status") != "completed" or manifesto.get("folds") != 3:
+            raise ValueError("A pesquisa anterior nao concluiu os tres folds.")
+        parametros = json.loads(zipado.read(
+            prefixo + "parametros_motor_e_ambiente.json"
+        ))["configuracao_efetiva"]
+        if parametros["rotation_min_holding_days"] != 2:
+            raise ValueError("O controle anterior precisa ter permanencia de 2 pregoes.")
+
+        decisoes = ler_csv("decisoes_2_pregoes.csv")
+        diario = ler_csv("patrimonio_diario_2_pregoes.csv")
+        pontuacoes = ler_csv("utilidades_oos_todos_ativos.csv")
+        datas = pd.DatetimeIndex(pd.to_datetime(decisoes["data"], utc=True))
+        execucoes = pd.DatetimeIndex(pd.to_datetime(diario["timestamp"], utc=True))
+        if len(datas) != len(execucoes) or len(datas) < 1000:
+            raise ValueError("Quantidade de datas incorreta no pacote historico.")
+        if not datas[1:].equals(execucoes[:-1]) or not datas.is_unique:
+            raise ValueError("As execucoes devem ocorrer na proxima sessao de mercado.")
+
+        calendario = datas.append(pd.DatetimeIndex([execucoes[-1]]))
+        fold = decisoes["decision_fold_id"].astype(int).to_numpy()
+        if sorted(set(fold)) != [1, 2, 3]:
+            raise ValueError("Folds diferentes do contrato original.")
+        if not np.array_equal(fold, diario["walk_forward_fold"].astype(int)):
+            raise ValueError("Folds do controle e do patrimonio divergentes.")
+
+        ativos = sorted(set(pontuacoes["ativo"].astype(str)).difference({"CASH"}))
+        if len(ativos) != 75:
+            raise ValueError("O universo precisa conter 75 ativos efetivos.")
+        nomes = {ativo: indice for indice, ativo in enumerate(ativos)}
+        # Caso um timestamp apareca em varios caches, usa apenas o fold dono da decisao.
+        pertence_fold = dict(zip(datas, fold))
+        pontuacoes["data_ts"] = pd.to_datetime(pontuacoes["data_decisao"], utc=True)
+        pontuacoes = pontuacoes.loc[
+            pontuacoes["fold_id"].astype(int)
+            == pontuacoes["data_ts"].map(pertence_fold)
+        ]
+        if pontuacoes.duplicated(["data_ts", "ativo"]).any():
+            raise ValueError("Utilidades duplicadas numa mesma data/ativo.")
+        matriz_utilidade = pontuacoes.loc[
+            pontuacoes["ativo"] != "CASH"
+        ].pivot(index="data_ts", columns="ativo", values="utilidade").reindex(
+            index=datas, columns=ativos,
+        ).to_numpy(dtype=float)
+        if not np.isfinite(matriz_utilidade).any(axis=1).all():
+            raise ValueError("Algum pregao nao tem utilidades validas.")
+
+        quadros = {}
+        for ativo in ativos:
+            frame = ler_csv(f"cotacoes_ohlcv/{ativo}.csv")
+            frame.index = pd.DatetimeIndex(pd.to_datetime(frame["timestamp"], utc=True))
+            if frame.index.has_duplicates:
+                raise ValueError(f"Historico com duplicidades: {ativo}.")
+            quadros[ativo] = frame[[
+                "open", "high", "low", "close", "volume"
+            ]].apply(pd.to_numeric, errors="coerce").sort_index()
+
+        if any(
+            quadros[ativo].reindex(calendario)[["open", "close"]].isna().any().any()
+            for ativo in ativos
+        ):
+            raise ValueError("Faltam aberturas/fechamentos nas datas de execucao.")
+
+    # Features calculadas somente a partir de informacoes ate o fechamento corrente.
+    close = pd.DataFrame({a: quadros[a]["close"] for a in ativos}).reindex(calendario)
+    opening = pd.DataFrame({a: quadros[a]["open"] for a in ativos}).reindex(calendario)
+    historico_close = pd.DataFrame({a: quadros[a]["close"] for a in ativos})
+    historico_volume = pd.DataFrame({a: quadros[a]["volume"] for a in ativos})
+    retorno5 = historico_close.pct_change(
+        5, fill_method=None
+    ).reindex(datas).to_numpy(dtype=float)
+    volatilidade20 = np.log(
+        historico_close / historico_close.shift(1)
+    ).rolling(20, min_periods=20).std().reindex(datas).to_numpy(dtype=float)
+    liquidez20 = (historico_close * historico_volume).rolling(
+        20, min_periods=20
+    ).mean().reindex(datas).to_numpy(dtype=float)
+    ohlc_open = opening.to_numpy(dtype=float)
+    ohlc_close = close.to_numpy(dtype=float)
+    n = len(datas)
+    atual_control = np.array([
+        nomes.get(a, -1) for a in decisoes["current_asset"]
+    ], dtype=int)
+    alvo_control = np.array([
+        nomes.get(a, -1) for a in decisoes["final_action_asset"]
+    ], dtype=int)
+    holding_control = decisoes["holding_days_at_decision"].astype(int).to_numpy()
+    resultados_base = diario["strategy_equity"].astype(float).to_numpy()
+
+    atributos = (
+        "vantagem_utilidade", "mudanca_relativa_1", "mudanca_relativa_3",
+        "retorno_relativo_5", "volatilidade_relativa_20",
+        "liquidez_log_relativa_20", "log_idade_posicao", "utilidade_candidato",
+    )
+
+    def features(i: int, current: int, candidatos: np.ndarray,
+                 idade: int) -> np.ndarray:
+        j = np.asarray(candidatos, dtype=int)
+        u = matriz_utilidade
+        base = u[i, j] - u[i, current]
+
+        def tendencia(k: int) -> np.ndarray:
+            # Mudancas de pontuacoes em fronteiras de folds nao sao comparaveis.
+            if i < k or fold[i] != fold[i - k]:
+                return np.zeros(len(j))
+            return (u[i, j] - u[i - k, j]) - (
+                u[i, current] - u[i - k, current]
+            )
+
+        return np.column_stack((
+            base,
+            tendencia(1),
+            tendencia(3),
+            retorno5[i, j] - retorno5[i, current],
+            volatilidade20[i, j] - volatilidade20[i, current],
+            np.log((np.maximum(0, liquidez20[i, j]) + 1) /
+                   (max(0, liquidez20[i, current]) + 1)),
+            np.full(len(j), math.log1p(idade)),
+            u[i, j],
+        ))
+
+    def linha_rotulos(i: int, current: int,
+                      candidatos: np.ndarray) -> np.ndarray:
+        j = np.asarray(candidatos, dtype=int)
+        # Decisao no fechamento de i, entrada na abertura i+1.
+        # Label futuro: vantagem no fechamento de i+3, nao uma feature.
+        return np.log(
+            ohlc_close[i + horizonte, j] / ohlc_open[i + 1, j]
+        ) - math.log(
+            ohlc_close[i + horizonte, current] / ohlc_open[i + 1, current]
+        )
+
+    linhas_treino = {1: [], 2: []}
+    for i in range(n - horizonte):
+        fold_id = int(fold[i])
+        current = int(atual_control[i])
+        if fold_id not in linhas_treino or current < 0:
+            continue
+        js = np.flatnonzero(np.isfinite(matriz_utilidade[i]))
+        js = js[js != current]
+        if not len(js):
+            continue
+        x = features(i, current, js, int(holding_control[i]))
+        y = linha_rotulos(i, current, js)
+        ok = np.isfinite(x).all(axis=1) & np.isfinite(y)
+        if np.any(ok):
+            linhas_treino[fold_id].append((i, x[ok], y[ok]))
+
+    modelos, auditoria_treino = {}, {}
+    for destino_fold in (2, 3):
+        inicio_teste = int(np.flatnonzero(fold == destino_fold)[0])
+        treino = [
+            amostra for treino_fold in (1, 2) if treino_fold < destino_fold
+            for amostra in linhas_treino[treino_fold]
+            if amostra[0] + horizonte < inicio_teste
+        ]
+        if not treino:
+            raise RuntimeError(
+                f"Treinamento sem amostras anteriores ao fold {destino_fold}."
+            )
+        X = np.vstack([item[1] for item in treino])
+        y = np.concatenate([item[2] for item in treino])
+        if len(y) < 300:
+            raise RuntimeError(f"Treinamento insuficiente no fold {destino_fold}.")
+        lim_inferior, lim_superior = np.percentile(y, [1, 99])
+        modelo = make_pipeline(StandardScaler(), Ridge(alpha=alpha))
+        modelo.fit(X, np.clip(y, lim_inferior, lim_superior))
+        modelos[destino_fold] = modelo
+        auditoria_treino[destino_fold] = {
+            "n_amostras": int(len(y)),
+            "fold_teste_inicia": str(datas[inicio_teste]),
+            "ultimo_rotulo_termina_antes": str(datas[inicio_teste]),
+            "caracteristicas": list(atributos),
+            "coeficientes_padronizados":
+                modelo.named_steps["ridge"].coef_.tolist(),
+            "intercepto": float(modelo.named_steps["ridge"].intercept_),
+            "percentis_winsorizacao":
+                [float(lim_inferior), float(lim_superior)],
+        }
+    print(
+        f"[VANTAGEM] treinamento: fold2={auditoria_treino[2]['n_amostras']} "
+        f"fold3={auditoria_treino[3]['n_amostras']}", flush=True,
+    )
+
+    # Motor financeiro do proprio TCC. A paridade do Control e obrigatoria.
+    campos = StandaloneBacktestConfig.__dataclass_fields__
+    config = StandaloneBacktestConfig(**{
+        chave: valor for chave, valor in parametros.items() if chave in campos
+    }).copiar_modelo(update={"assets": tuple(ativos)})
+    calendario_exec = datas.append(pd.DatetimeIndex([execucoes[-1]]))
+    metadados = {
+        pd.Timestamp(data): {"fold_id": int(fold[i])}
+        for i, data in enumerate(datas)
+    }
+    scores_originais = pd.to_numeric(
+        decisoes["final_action_score"], errors="coerce"
+    ).to_numpy(dtype=float)
+    indice_data = {
+        pd.Timestamp(data): i for i, data in enumerate(datas)
+    }
+
+    def politica_controle(data, posicao, holding):
+        i = indice_data[pd.Timestamp(data)]
+        idx = int(alvo_control[i])
+        return (idx + 1 if idx >= 0 else 0), float(scores_originais[i])
+
+    def simular(politica, diagnostics, titulo):
+        return _simular_exato(
+            "tcc_research_switch_advantage", politica, quadros, ativos,
+            calendario_exec, config, calcular_taxas_referencia,
+            aplicar_deslizamento, decision_metadata=metadados,
+            policy_decision_diagnostics=diagnostics, model_label=titulo,
+            method_line="- Pesquisa offline; sem holding minimo nos folds 2 e 3.",
+        )
+
+    baseline = simular(
+        politica_controle, {}, "Control 2 pregoes - replay auditorio",
+    )
+    erro = np.abs(
+        baseline.predictions["strategy_equity"].to_numpy() - resultados_base
+    )
+    if (
+        float(np.max(erro)) > 0.01 or
+        abs(float(baseline.metrics["strategy_ending_capital"])
+            - float(manifesto["capital_controle_verificado"])) > 0.01
+    ):
+        raise RuntimeError(
+            "Replay do Control nao reproduziu os dados historicos: "
+            f"erro maximo US$ {float(np.max(erro)):.6f}. "
+            "Nenhum contrafactual pode ser aceito."
+        )
+    print("[CONTROLE] reproducao validada ate o centavo", flush=True)
+
+    saidas_decisao = []
+    rankings_completos = []
+    diagnosticos_vantagem = {}
+
+    def custo_rotacao(indice: int, posicao: int, candidato: int) -> float:
+        # Aproximacao proporcional ex ante. O motor contabiliza taxas reais.
+        # Usa apenas o fechamento conhecido no dia da decisao.
+        pv = float(ohlc_close[indice, posicao])
+        pc = float(ohlc_close[indice, candidato])
+        deslizamento = max(0.0, float(config.slippage_bps)) / 10000
+        return (
+            2 * float(config.commission_rate)
+            + float(config.sec_fee_rate)
+            + float(config.taf_fee_per_share) / pv
+            + float(config.cat_fee_per_share) / pv
+            + float(config.cat_fee_per_share) / pc
+            + 2 * deslizamento
+        )
+
+    def politica_vantagem(data, posicao, holding):
+        i = indice_data[pd.Timestamp(data)]
+        f = int(fold[i])
+        if f == 1:
+            return politica_controle(data, posicao, holding)
+        if posicao <= 0:
+            # Entrada em ativo a partir do caixa, ainda sem modelo de cash.
+            u = matriz_utilidade[i]
+            melhor = int(np.nanargmax(u))
+            return melhor + 1, float(u[melhor])
+        atual = posicao - 1
+        candidatos = np.flatnonzero(np.isfinite(matriz_utilidade[i]))
+        candidatos = candidatos[candidatos != atual]
+        if not len(candidatos):
+            return posicao, float(matriz_utilidade[i, atual])
+        x = features(i, atual, candidatos, int(holding))
+        validos = np.isfinite(x).all(axis=1)
+        if not np.any(validos):
+            return posicao, float(matriz_utilidade[i, atual])
+        candidatos = candidatos[validos]
+        valor_predito = modelos[f].predict(x[validos])
+        custos = np.array([
+            custo_rotacao(i, atual, int(j)) for j in candidatos
+        ], dtype=float)
+        liquidas = valor_predito - custos
+        ordem = np.argsort(-liquidas)
+        escolhido = int(ordem[0])
+        escolhido_ativo = int(candidatos[escolhido])
+        alvo = escolhido_ativo + 1 if liquidas[escolhido] > 0 else posicao
+
+        # Ranking operacional tem score de vantagem relativa, nao utilidade bruta.
+        for rank, k in enumerate(ordem, start=1):
+            rankings_completos.append({
+                "data_decisao": str(data),
+                "fold": f,
+                "rank_decisao": rank,
+                "atual": ativos[atual],
+                "candidato": ativos[int(candidatos[k])],
+                "utilidade_bruta":
+                    float(matriz_utilidade[i, int(candidatos[k])]),
+                "vantagem_prevista": float(valor_predito[k]),
+                "custo_estimado": float(custos[k]),
+                "vantagem_liquida": float(liquidas[k]),
+                "escolhido": int(alvo == int(candidatos[k]) + 1),
+            })
+        rankings_completos.append({
+            "data_decisao": str(data), "fold": f, "rank_decisao": 0,
+            "atual": ativos[atual], "candidato": ativos[atual],
+            "utilidade_bruta": float(matriz_utilidade[i, atual]),
+            "vantagem_prevista": 0.0,
+            "custo_estimado": 0.0,
+            "vantagem_liquida": 0.0,
+            "escolhido": int(alvo == posicao),
+        })
+        ranking = [
+            {"ativo": ativos[int(candidatos[k])],
+             "vantagem_prevista": float(valor_predito[k]),
+             "custo_estimado": float(custos[k]),
+             "vantagem_liquida": float(liquidas[k])}
+            for k in ordem[:10]
+        ]
+        diagnosticos_vantagem[pd.Timestamp(data)] = {
+            "decision_fold_id": f,
+            "current_asset": ativos[atual],
+            "holding_days_at_decision": holding,
+            "raw_best_asset":
+                ativos[int(np.nanargmax(matriz_utilidade[i]))],
+            "best_asset": ativos[escolhido_ativo],
+            "final_action_asset": ativos[alvo - 1],
+            "decision_reason":
+                "LEARNED_SWITCH" if alvo != posicao else "LEARNED_HOLD",
+            "predicted_switch_advantage": float(valor_predito[escolhido]),
+            "estimated_switch_cost": float(custos[escolhido]),
+            "decision_advantage_net": float(liquidas[escolhido]),
+            "best_candidates_json": json.dumps(ranking, ensure_ascii=False),
+            "min_hold_guard_applied": False,
+        }
+        saidas_decisao.append({
+            "data": str(data), "fold": f,
+            "posicao_atual": ativos[atual],
+            "alvo": ativos[alvo - 1],
+            "vantagem_liquida": float(liquidas[escolhido]),
+            "ranking": json.dumps(ranking, ensure_ascii=False),
+        })
+        return alvo, float(matriz_utilidade[i, alvo - 1])
+
+    novo = simular(
+        politica_vantagem, diagnosticos_vantagem,
+        "Vantagem estimada - sem holding minimo",
+    )
+    resultado_fold = []
+    for f in (1, 2, 3):
+        ids = np.flatnonzero(fold == f)
+        inicial = (
+            float(config.initial_capital) if ids[0] == 0 else
+            float(novo.predictions["strategy_equity"].iloc[ids[0] - 1])
+        )
+        final = float(novo.predictions["strategy_equity"].iloc[ids[-1]])
+        inicio_control = (
+            float(config.initial_capital) if ids[0] == 0 else
+            float(resultados_base[ids[0] - 1])
+        )
+        resultado_fold.append({
+            "fold": f, "novo_fator": final / inicial,
+            "control_fator": float(resultados_base[ids[-1]]) / inicio_control,
+            "novo_final": final,
+            "control_final": float(resultados_base[ids[-1]]),
+        })
+
+    # Nenhuma saida de um teste incompleto pode ser apresentada como concluida.
+    destino.unlink(missing_ok=True)
+    if saida.exists():
+        shutil.rmtree(saida)
+    saida.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(saidas_decisao).to_csv(
+        saida / "decisoes_vantagem.csv", index=False,
+    )
+    pd.DataFrame(rankings_completos).to_csv(
+        saida / "ranking_vantagem_por_ativo.csv", index=False,
+    )
+    pd.DataFrame(resultado_fold).to_csv(
+        saida / "comparacao_por_fold.csv", index=False,
+    )
+    novo.predictions.to_csv(
+        saida / "patrimonio_diario_vantagem.csv", index=True,
+    )
+    novo.trades.to_csv(
+        saida / "operacoes_vantagem.csv", index=False,
+    )
+    pd.DataFrame({
+        "data": execucoes, "control": resultados_base,
+        "vantagem": novo.predictions["strategy_equity"].to_numpy(),
+        "fold": fold,
+    }).to_csv(saida / "comparacao_diaria.csv", index=False)
+    _salvar_json(saida / "treinamento_meta_modelo.json", auditoria_treino)
+    _salvar_json(saida / "resumo_experimento.json", {
+        "status": "completed", "tipo": "comparacao_temporal_de_politicas",
+        "capital_control": float(resultados_base[-1]),
+        "capital_vantagem":
+            float(novo.metrics["strategy_ending_capital"]),
+        "rotacoes_control": int(baseline.metrics["capital_rotations"]),
+        "rotacoes_vantagem": int(novo.metrics["capital_rotations"]),
+        "erro_maximo_reproducao_control": float(np.max(erro)),
+        "hiperparametros": {
+            "horizonte": horizonte, "ridge_alpha": alpha,
+            "features": atributos, "min_holding": 0,
+        },
+        "arquivo_origem_sha256":
+            hashlib.sha256(conteudo_original).hexdigest(),
+        "avaliacao":
+            "fold 1 usa Control; folds 2 e 3 usam politica aprendida",
+        "metodo": "Ridge pairwise treinado em folds anteriores",
+        "limitacoes": [
+            "Treino com posicoes Control: divergencia de distribuicao possivel",
+            "Universo previamente selecionado no mesmo periodo historico",
+            "Nao modela impacto de mercado nem limite de participacao no volume",
+            "Custo de decisao proporcional e aproximado; motor apura taxas reais",
+            "Fold 1 mantido como Control exclusivamente para treinamento",
+        ],
+    })
+    hashes = {
+        arquivo.name: _hash_arquivo(arquivo)
+        for arquivo in sorted(saida.iterdir()) if arquivo.is_file()
+    }
+    _salvar_json(saida / "arquivos_sha256.json", hashes)
+
+    tmp = destino.with_suffix(".zip.tmp")
+    tmp.unlink(missing_ok=True)
+    with ZipFile(
+        tmp, "w", compression=ZIP_DEFLATED, compresslevel=6,
+        allowZip64=True,
+    ) as zip_final:
+        for arquivo in sorted(saida.rglob("*")):
+            if arquivo.is_file():
+                zip_final.write(
+                    arquivo, "pesquisa_vantagem_rotacao/" + arquivo.name,
+                )
+        zip_final.write(pacote, "dados_origem/" + pacote.name)
+    with ZipFile(tmp) as zip_final:
+        if zip_final.testzip() is not None:
+            raise RuntimeError("ZIP do experimento falhou na verificacao de CRC.")
+        for nome, esperado in hashes.items():
+            dado = zip_final.read("pesquisa_vantagem_rotacao/" + nome)
+            if hashlib.sha256(dado).hexdigest() != esperado:
+                raise RuntimeError(f"SHA diferente para {nome}")
+    tmp.replace(destino)
+    print(
+        f"[VANTAGEM] Control US$ {resultados_base[-1]:,.2f} | "
+        f"aprendido US$ {novo.metrics['strategy_ending_capital']:,.2f}",
+        flush=True,
+    )
+    print(f"[ZIP] {destino}", flush=True)
