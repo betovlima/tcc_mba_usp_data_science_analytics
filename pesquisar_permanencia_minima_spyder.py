@@ -2487,10 +2487,25 @@ def executar_vantagem_v3() -> None:
                             float(labels[i,j]) if np.isfinite(labels[i,j]) else None
                         ),
                     })
-    score_kalman = np.full_like(b.scores,np.nan)
-    for fold in (2,3):
-        mask = b.fold == fold
-        score_kalman[mask] = filters[fold][mask]
+    # O ultimo registro em b.scores pertence a data final de EXECUCAO.
+    # Nao existe decisao nem fold correspondente a essa linha.
+    # Selecionar por indices das 1560 decisoes, nunca aplicar uma mascara
+    # de 1560 elementos diretamente na matriz com 1561 linhas.
+    score_kalman = np.full_like(b.scores, np.nan)
+    if len(b.fold) != len(b.dates) or len(b.scores) != len(b.dates) + 1:
+        raise RuntimeError(
+            "Calendario do replay inconsistente: esperadas N decisoes "
+            "e N+1 linhas de precos/utilidades."
+        )
+    for fold in (2, 3):
+        indices = np.flatnonzero(b.fold == fold)
+        filtrado = filters[fold]
+        if filtrado.shape != b.scores.shape:
+            raise RuntimeError(
+                f"Fold {fold}: utilidades filtradas {filtrado.shape} "
+                f"divergem do original {b.scores.shape}."
+            )
+        score_kalman[indices, :] = filtrado[indices, :]
     dest = ROOT/"output"/"pesquisa_vantagem_rotacao_v3"
     import shutil
     if dest.exists():
