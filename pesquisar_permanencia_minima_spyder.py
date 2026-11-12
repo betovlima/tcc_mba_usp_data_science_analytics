@@ -652,9 +652,6 @@ def main() -> None:
     print(f"\n[FINALIZADO] ZIP pronto: {ARQUIVO_ZIP}", flush=True)
 
 
-if __name__ == "__main__":
-    main()
-
 
 # %% 7. Nova pesquisa: vantagem relativa aprendida, sem bloqueio fixo de holding.
 # Reusa as previsoes OOS da pesquisa anterior e o motor financeiro oficial.
@@ -1136,3 +1133,6 @@ def executar_pesquisa_vantagem() -> None:
         flush=True,
     )
     print(f"[ZIP] {destino}", flush=True)
+
+if __name__ == "__main__":
+    main()
