@@ -1020,3 +1020,53 @@ def test_analise_permanencia_censura_horizonte_quando_ha_rotacao() -> None:
     assert output.loc[3, "retorno_observado_1d"] == 115 / 110 - 1
     assert np.isnan(output.loc[4, "retorno_observado_1d"])
     assert output.loc[6, "retorno_observado_1d"] == 135 / 130 - 1
+
+
+def test_alertas_cauda_ficam_agrupados_por_episodio() -> None:
+    """Duas ocorrencias no mesmo episodio nao equivalem a dois eventos."""
+    import importlib
+    import numpy as np
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    historical = pd.DataFrame({
+        "posicao_mantida": [True, True, True, True, False],
+        "retorno_observado_1d": [-0.12, +0.02, -0.03, -0.06, None],
+        "episodio_id": [1, 1, 2, 3, 3],
+        "selected_asset": ["AAA", "AAA", "BBB", "CCC", "CCC"],
+        "walk_forward_fold": [1, 1, 2, 3, 3],
+        "data_decisao": ["2026-01-02", "2026-01-05", "2026-01-06",
+                         "2026-01-07", "2026-01-08"],
+        "position_drawdown_from_peak": [-0.20, -0.15, -0.30, -0.05, -0.20],
+        "score_change_from_entry": [-0.01, -0.02, +0.03, -0.03, -0.03],
+        "consecutive_days_current_not_top1": [0, 0, 1, 2, 3],
+        "universe_breadth_5": [0.5, 0.5, 0.2, 0.1, 0.1],
+        "position_return_since_entry": [0.01, 0.02, -0.11, -0.01, -0.05],
+    })
+    episodes = pd.DataFrame({
+        "episodio_id": [1, 2, 3],
+        "retorno_capital": [0.2, -0.1, 0.05],
+        "drawdown_maximo": [-0.2, -0.3, -0.06],
+    })
+    by_fold, first_alerts = script._a_auditar_cobertura_de_perdas(
+        historical, episodes,
+    )
+    f = by_fold.loc[
+        by_fold["fold"].eq("todos")
+        & by_fold["sinal"].eq("drawdown_10_score_caiu")
+        & by_fold["limite_perda_diaria"].eq(-0.10)
+    ].iloc[0]
+    assert f["observacoes_validas"] == 4
+    assert f["quedas_observadas"] == 1
+    assert f["alertas_emitidos"] == 2
+    assert f["quedas_antecipadas_por_alerta"] == 1
+    assert f["episodios_distintos_com_alerta"] == 1
+    assert f["cobertura_quedas"] == 1.0
+    detail = first_alerts.loc[
+        first_alerts["sinal"].eq("drawdown_10_score_caiu")
+    ]
+    assert len(detail) == 1
+    assert detail.iloc[0]["primeira_data_decisao"] == "2026-01-02"
+    assert np.isclose(
+        detail.iloc[0]["retorno_observado_1d_primeiro_alerta"], -0.12,
+    )
+    assert detail.iloc[0]["resultado_episodio_futuro_nao_e_feature"]
