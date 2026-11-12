@@ -2240,7 +2240,8 @@ def _v3_action_policy(
             })
             return -1, []
         if method == "kalman":
-            estimates = filt[i]
+            # Score ausente hoje nao pode ser recuperado de dias anteriores.
+            estimates = np.where(np.isfinite(b.scores[i]), filt[i], np.nan)
             best = int(np.nanargmax(estimates))
             gap = float(estimates[best] - estimates[current])
             required = max(
@@ -2310,6 +2311,7 @@ def _v3_action_policy(
             target = best
         log.append({
             "data":str(b.dates[i]),"fold":fold,"metodo":method,
+            "indice_decisao":int(i),
             "posicao_atual":b.symbols[current],
             "posicao_escolhida":b.symbols[target] if target >= 0 else "CASH",
             "idade_posicao":int(age),
@@ -2340,6 +2342,89 @@ def _v3_liquidez_ordens(trades: pd.DataFrame) -> dict:
         "acima_100pct_volume":int(((ratio > 1.0)&valid).sum()),
         "volume_igual_zero":int(((volume <= 0)&valid).sum()),
     }
+
+
+def _v3_avaliar_vantagens(
+    b: Base, labels: np.ndarray, logs: list[dict], cenario: str,
+) -> tuple[pd.DataFrame, list[dict]]:
+    """Avalia previsoes contra contrafactuais observados, APOS cada replay.
+
+    Valores realizados nunca entram na decisao ou no treinamento do fold.
+    Retorno futuro representa manter estaticamente cada ativo em 5-60 sessoes,
+    e nao ganho realizavel com trocas subsequentes.
+    """
+    observations = []
+    for row in logs:
+        idx = row.get("indice_decisao")
+        if idx is None:
+            continue
+        i = int(idx)
+        current_name = row["posicao_atual"]
+        current = b.symbols.index(current_name)
+        if not np.isfinite(labels[i, current]):
+            continue
+        for candidate in json.loads(row.get("ranking_top12") or "[]"):
+            symbol = candidate["candidato"]
+            j = b.symbols.index(symbol)
+            if not np.isfinite(labels[i, j]):
+                continue
+            predicted = candidate.get(
+                "vantagem_prevista", candidate.get("vantagem_filtrada")
+            )
+            if predicted is None or not math.isfinite(float(predicted)):
+                continue
+            actual = float(labels[i, j]-labels[i, current])
+            observations.append({
+                "cenario":cenario,"data_decisao":str(b.dates[i]),
+                "fold":int(b.fold[i]),"atual":current_name,
+                "candidato":symbol,
+                "idade_posicao":int(row.get("idade_posicao") or 0),
+                "vantagem_prevista_bruta":float(predicted),
+                "vantagem_realizada_estatica":actual,
+                "custo_previsto":float(candidate.get(
+                    "taxas_previstas",0.0
+                )),
+                "impacto_proxy_previsto":float(candidate.get(
+                    "impacto_proxy",0.0
+                )),
+            })
+    frame = pd.DataFrame(observations)
+    metrics = []
+    if frame.empty:
+        return frame, metrics
+    for fold, group in frame.groupby("fold"):
+        daily = []
+        for _, day in group.groupby("data_decisao"):
+            if len(day) >= 4:
+                rho = day["vantagem_prevista_bruta"].corr(
+                    day["vantagem_realizada_estatica"],
+                    method="spearman",
+                )
+                if pd.notna(rho):
+                    daily.append(float(rho))
+        positive = group["vantagem_prevista_bruta"] > 0
+        precision = (
+            float((group.loc[positive,
+                "vantagem_realizada_estatica"] > 0).mean())
+            if positive.any() else None
+        )
+        metrics.append({
+            "cenario":cenario,"fold":int(fold),"pares":int(len(group)),
+            "sessoes_distintas":int(group["data_decisao"].nunique()),
+            "correlacao_spearman_pares":float(
+                group["vantagem_prevista_bruta"].corr(
+                    group["vantagem_realizada_estatica"],
+                    method="spearman",
+                )
+            ),
+            "media_spearman_por_dia":(
+                float(np.mean(daily)) if daily else None
+            ),
+            "dias_com_4_ou_mais_pares":int(len(daily)),
+            "precisao_quando_predicao_positiva":precision,
+            "proporcao_predicoes_positivas":float(positive.mean()),
+        })
+    return frame, metrics
 
 
 def executar_vantagem_v3() -> None:
@@ -2413,6 +2498,7 @@ def executar_vantagem_v3() -> None:
     })
     base_decisions.to_csv(dest/"decisoes_controle.csv",index=False)
     base_trades.to_csv(dest/"operacoes_controle.csv",index=False)
+    pair_metrics = []
     summary = [{
         "cenario":"control_2_pregoes",
         **_resumo_curva(baseline),**base_metrics,
@@ -2446,6 +2532,13 @@ def executar_vantagem_v3() -> None:
         )
         curves[name]=curve
         pd.DataFrame(track).to_csv(dest/f"ranking_{name}.csv",index=False)
+        comparisons, diagnostic = _v3_avaliar_vantagens(
+            b, labels, track, name,
+        )
+        comparisons.to_csv(
+            dest/f"vantagem_prevista_realizada_{name}.csv",index=False,
+        )
+        pair_metrics.extend(diagnostic)
         decisions.to_csv(dest/f"decisoes_{name}.csv",index=False)
         trades.to_csv(dest/f"operacoes_{name}.csv",index=False)
         risk = _resumo_curva(curve)
@@ -2460,6 +2553,9 @@ def executar_vantagem_v3() -> None:
         print(f"[V3] {name}: USD {curve[-1]:,.2f}; "
               f"rotacoes {metrics['rotacoes']}",flush=True)
     curves.to_csv(dest/"comparacao_patrimonio_diario.csv",index=False)
+    pd.DataFrame(pair_metrics).to_csv(
+        dest/"qualidade_previsoes_por_fold.csv",index=False,
+    )
     pd.DataFrame(summary).to_csv(
         dest/"comparacao_resultados.csv",index=False,
     )
@@ -2479,6 +2575,8 @@ def executar_vantagem_v3() -> None:
         "sem_regra_tempo_minimo":True,
         "validacao_temporal":"Fold1->Fold2, Folds1+2->Fold3; purge de 60",
         "resultados":summary,
+        "qualidade_previsao_por_fold":pair_metrics,
+        "alvo_realizado":"retorno logaritmico multihorizonte 5-60 com penalidade downside/drawdown para posicoes estaticas",
         "alertas":[
             "Rotulos de 5-60 pregoes pressupoe permanencia estatica; nao valor Q sequencial.",
             "Estados sinteticos da carteira podem ter distribuicao distinta da politica.",
