@@ -1156,8 +1156,6 @@ na decisao. O efeito do impacto de mercado continua NAO MODELADO.
 Saida: output/pesquisa_vantagem_rotacao.zip (inclui ZIP-fonte completo).
 Este modo compartilha ESTE MESMO arquivo e branch com a pesquisa de permanencia.
 """
-from __future__ import annotations
-
 import argparse
 import hashlib
 import io
