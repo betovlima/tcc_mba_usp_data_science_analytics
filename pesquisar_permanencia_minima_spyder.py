@@ -3117,7 +3117,9 @@ def _a_localizar_replay() -> Path:
     return max(encontrados, key=lambda p: (p.stat().st_mtime, p.name))
 
 
-def _a_calcular(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def _a_calcular(
+    df: pd.DataFrame, initial_capital: float = 10000.0,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Sinais de fechamento e resultados posteriores com censura por rotacao."""
     required = (
         "timestamp", "decision_date", "current_asset", "selected_asset",
@@ -3165,7 +3167,7 @@ def _a_calcular(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFr
         df[f"retorno_observado_{horizon}d"] = future
 
     episodes = []
-    capital_start = 10000.0
+    capital_start = float(initial_capital)
     for episode_id, group in df.groupby("episodio_id", sort=True):
         asset = str(group["selected_asset"].iloc[0])
         if asset == "CASH":
@@ -3301,7 +3303,9 @@ def executar_analise_permanencia() -> None:
         )
         raw = pd.read_csv(BytesIO(z.read(predictions)), low_memory=False)
         metrics = json.loads(z.read(metric_name))
-    df, episodes, associations = _a_calcular(raw)
+    df, episodes, associations = _a_calcular(
+        raw, initial_capital=float(metrics.get("initial_capital") or 10000.0),
+    )
     if len(df) < 100:
         raise RuntimeError("Historico de decisoes insuficiente.")
     dest = DESTINO_TEMP
