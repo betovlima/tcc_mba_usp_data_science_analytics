@@ -6,8 +6,9 @@ Este e o arquivo UNICO para todas as rodadas da pesquisa nesta branch:
 Spyder: abra este arquivo e execute com F5.
 Terminal: python pesquisar_permanencia_minima_spyder.py
 
-Modos: MODO = "vantagem" (padrao; usa o ZIP historico),
-"verificar" (hashes) ou "comparar" (reproduz os quatro cenarios).
+Modos: MODO = "vantagem_v3" (padrao; usa o ZIP historico),
+"vantagem_v2" e "vantagem" (versoes anteriores), "verificar" ou
+"comparar" (reproduz quatro permanencias).
 
 A reproduçao utiliza o motor cientifico congelado do TCC (v1.23.0),
 o mesmo conjunto de 77 ativos solicitados (75 efetivos), os mesmos
@@ -46,7 +47,7 @@ import numpy as np
 import pandas as pd
 
 # %% 0. Um arquivo, uma branch; somente este seletor muda entre modos.
-MODO = "vantagem_v2"  # "vantagem_v2", "vantagem", "comparar", "verificar"
+MODO = "vantagem_v3"  # "vantagem_v3", "vantagem_v2", "vantagem", "comparar", "verificar"
 PERMANENCIAS = (0, 1, 2, 3)
 PERMANENCIA_CONTROLE = 2
 TOLERANCIA_CENTAVO = 0.01
@@ -1996,8 +1997,506 @@ def executar_vantagem_v2():
     archive = _pacote(destination,source)
     print("[ZIP]",archive,flush=True)
 
+
+
+# %% 9. V3: vantagem CONDICIONAL + estabilidade estatistica das utilidades.
+#
+# Nenhum treino usa as observacoes do fold avaliado. Os rotulos do fold
+# anterior precisam estar conhecidos ANTES da primeira data do fold de teste.
+# A vantagem financeira alvo e uma aproximacao com posicao estatica por H
+# sessoes. Nao representa uma Q-function de politica sequencial otimizada.
+V3_H = (5, 10, 20, 40, 60)
+V3_W = (0.10, 0.15, 0.20, 0.30, 0.25)
+V3_Q_R_GRID = (0.005, 0.02, 0.10, 0.5, 2.0)
+V3_TOP = 12
+V3_RIDGE_ALPHA = 50.0
+V3_STATE_RANKS = (0, 1, 2, 4, 9, 19)
+V3_FEATURES = (
+    "gap_utilidade_bruta", "gap_utilidade_filtrada",
+    "gap_variacao_score_1", "gap_variacao_score_3",
+    "gap_retorno_passado_5", "gap_volatilidade_20",
+    "log_razao_liquidez_20", "log_dias_na_posicao",
+    "retorno_desde_entrada", "drawdown_desde_entrada",
+    "rank_percentil_atual", "rank_percentil_candidato",
+    "utilidade_bruta_atual", "utilidade_bruta_candidato",
+    "diferenca_volatilidade_absoluta",
+)
+
+
+def _v3_kalman(b: Base, ratio: float) -> tuple[np.ndarray, np.ndarray]:
+    """Filtro local-level causal 1D por ativo; estado reinicia em cada fold.
+
+    R=1 e Q=ratio sao escalas relativas; este filtro nao gera probabilidade
+    de ganho ou intervalo de confianca calibrado.
+    """
+    if not math.isfinite(ratio) or ratio <= 0:
+        raise ValueError("A razao Q/R do Kalman deve ser positiva.")
+    out = np.full_like(b.scores, np.nan, dtype=float)
+    uncert = np.full_like(b.scores, np.nan, dtype=float)
+    previous_fold = None
+    state = np.full(len(b.symbols), np.nan)
+    variance = np.ones(len(b.symbols))
+    for i in range(len(b.dates)):
+        if b.fold[i] != previous_fold:
+            state[:] = np.nan
+            variance[:] = 1.0
+            previous_fold = b.fold[i]
+        observed = b.scores[i]
+        good = np.isfinite(observed)
+        initial = good & ~np.isfinite(state)
+        state[initial] = observed[initial]
+        variance[initial] = 1.0
+        known = good & ~initial
+        variance = variance + float(ratio)
+        if known.any():
+            gain = variance[known] / (variance[known] + 1.0)
+            state[known] += gain * (observed[known] - state[known])
+            variance[known] *= (1.0 - gain)
+        out[i] = state
+        uncert[i] = variance
+    return out, uncert
+
+
+def _v3_ic_diario(estimativa: np.ndarray, realizada: np.ndarray,
+                  indices: np.ndarray) -> tuple[float | None, int]:
+    """Media dos Spearman cross-sectionais: uma sessao, uma observacao."""
+    ics = []
+    for i in indices:
+        mask = np.isfinite(estimativa[i]) & np.isfinite(realizada[i])
+        if int(mask.sum()) < 15:
+            continue
+        x, y = estimativa[i, mask], realizada[i, mask]
+        if np.std(x) <= 1e-10 or np.std(y) <= 1e-10:
+            continue
+        rho = float(pd.Series(x).corr(pd.Series(y), method="spearman"))
+        if math.isfinite(rho):
+            ics.append(rho)
+    return (float(np.mean(ics)) if ics else None), len(ics)
+
+
+def _v3_selecionar_filtro(b: Base, labels: np.ndarray,
+                         fold: int) -> tuple[float, list[dict]]:
+    """Escolha de Q/R apenas com dados anteriores, purgados em 60 sessoes."""
+    first = int(np.flatnonzero(b.fold == fold)[0])
+    eligible = np.flatnonzero(
+        (b.fold < fold) & (np.arange(len(b.dates)) + 60 < first)
+    )
+    if len(eligible) < 100:
+        raise RuntimeError("Sem dados maduros para calibrar o filtro.")
+    rows = []
+    for ratio in V3_Q_R_GRID:
+        filtered, _ = _v3_kalman(b, ratio)
+        ic, count = _v3_ic_diario(filtered, labels, eligible)
+        rows.append({
+            "fold_teste": fold, "q_sobre_r": ratio,
+            "ic_spearman_medio_treino": ic, "sessoes_treino_ic": count,
+        })
+    valid = [r for r in rows if r["ic_spearman_medio_treino"] is not None]
+    if not valid:
+        raise RuntimeError("Nao foi possivel calibrar o filtro em treino.")
+    best = max(valid, key=lambda r: (
+        r["ic_spearman_medio_treino"], -r["q_sobre_r"],
+    ))
+    return float(best["q_sobre_r"]), rows
+
+
+def _v3_state_features(b: Base, filt: np.ndarray, i: int,
+                       current: int, candidate: int, age: int) -> np.ndarray:
+    """Estatisticas causais no fechamento, referentes a posicao especifica."""
+    if i < 22 or age < 1 or current < 0 or candidate == current:
+        return np.full(len(V3_FEATURES), np.nan)
+    u = b.scores
+    previous1 = (u[i] - u[i - 1]
+                 if b.fold[i] == b.fold[i-1] else np.zeros(len(b.symbols)))
+    previous3 = (u[i] - u[i - 3]
+                 if b.fold[i] == b.fold[i-3] else np.zeros(len(b.symbols)))
+    start = max(0, i - age + 1)
+    entry = float(b.op[start, current])
+    current_close = float(b.cl[i, current])
+    if entry <= 0 or current_close <= 0:
+        return np.full(len(V3_FEATURES), np.nan)
+    pnl = math.log(current_close / entry)
+    trough = float(np.min(b.cl[start:i + 1, current]))
+    dd = math.log(max(trough, 1e-10) / entry)
+    ranked = np.argsort(-u[i], kind="stable")
+    ranks = np.empty(len(b.symbols), dtype=float)
+    ranks[ranked] = (np.arange(len(ranked)) + 1) / len(ranked)
+    vol_cur = b.vol20[i, current]
+    vol_cand = b.vol20[i, candidate]
+    return np.asarray((
+        u[i, candidate] - u[i, current],
+        filt[i, candidate] - filt[i, current],
+        previous1[candidate] - previous1[current],
+        previous3[candidate] - previous3[current],
+        b.ret5[i, candidate] - b.ret5[i, current],
+        vol_cand - vol_cur,
+        math.log((max(b.adv20[i, candidate], 0) + 1) /
+                 (max(b.adv20[i, current], 0) + 1)),
+        math.log1p(age),
+        pnl, dd, ranks[current], ranks[candidate],
+        u[i, current], u[i, candidate],
+        abs(vol_cand) - abs(vol_cur),
+    ), dtype=float)
+
+
+def _v3_pairs_treino(b: Base, filt: np.ndarray, labels: np.ndarray,
+                     fold: int) -> tuple[np.ndarray, np.ndarray, list[dict]]:
+    """Estados sinteticos apenas do passado, diversos ativos e idades.
+
+    Sao contrafactuais de posicao sem dependencias de modelo-base:
+    top ranks 1,2,3,5,10,20 e posicao Control quando existente.
+    Entradas historicas usam datas e precos passados, jamais futuros.
+    A idade e o PnL entram como features, nao como bloqueio de operacao.
+    """
+    first = int(np.flatnonzero(b.fold == fold)[0])
+    eligible = np.flatnonzero(
+        (b.fold < fold) & (np.arange(len(b.dates)) + 60 < first)
+    )
+    x, y, provenance = [], [], []
+    for i in eligible:
+        if i < 25:
+            continue
+        utilities = b.scores[i]
+        top = [
+            int(j) for j in np.argsort(-utilities, kind="stable")
+            if np.isfinite(utilities[j])
+        ]
+        current_indices = [
+            top[k] for k in V3_STATE_RANKS if k < len(top)
+        ]
+        held = int(b.base_current[i])
+        if held >= 0 and held not in current_indices:
+            current_indices.append(held)
+        for current in current_indices:
+            ages = [1, (2, 3, 5, 10, 20)[i % 5]]
+            if held == current and int(b.base_holding[i]) > 0:
+                ages.append(int(b.base_holding[i]))
+            for age in sorted(set(ages)):
+                for cand in top[:V3_TOP]:
+                    if current == cand:
+                        continue
+                    outcome = labels[i, cand] - labels[i, current]
+                    if not np.isfinite(outcome):
+                        continue
+                    row = _v3_state_features(
+                        b, filt, int(i), current, cand, int(age),
+                    )
+                    if not np.isfinite(row).all():
+                        continue
+                    x.append(row)
+                    y.append(float(outcome))
+                    provenance.append({
+                        "data":str(b.dates[i]), "fold_origem":int(b.fold[i]),
+                        "atual":b.symbols[current], "candidato":b.symbols[cand],
+                        "idade":int(age), "vantagem_realizada":float(outcome),
+                    })
+    if not x:
+        raise RuntimeError("Nenhum par causal disponivel para treino.")
+    return np.stack(x), np.asarray(y, dtype=float), provenance
+
+
+def _v3_fit_conditional(b: Base, filt: np.ndarray, labels: np.ndarray,
+                        fold: int, name: str):
+    x, y, provenance = _v3_pairs_treino(b, filt, labels, fold)
+    if len(y) < 500:
+        raise RuntimeError(f"Treinamento de vantagem insuficiente fold={fold}.")
+    low, high = np.percentile(y, [1, 99])
+    model = make_pipeline(StandardScaler(), Ridge(alpha=V3_RIDGE_ALPHA))
+    model.fit(x, np.clip(y, low, high))
+    return model, {
+        "modelo":name,"fold_teste":fold,"n_pares_treino":len(y),
+        "features":V3_FEATURES, "alpha":V3_RIDGE_ALPHA,
+        "winsorizacao":[float(low),float(high)],
+        "coeficientes":model.named_steps["ridge"].coef_.tolist(),
+        "intercepto":float(model.named_steps["ridge"].intercept_),
+        "primeiro_estado":provenance[0],
+        "ultimo_estado":provenance[-1],
+        "proporcao_estados_control":sum(
+            r["atual"] == b.symbols[int(b.base_current[
+                b.dates.get_loc(pd.Timestamp(r["data"]))
+            ])]
+            for r in provenance
+            if int(b.base_current[
+                b.dates.get_loc(pd.Timestamp(r["data"]))
+            ]) >= 0
+        ) / len(provenance),
+    }
+
+
+def _v3_action_policy(
+    b: Base, q: np.ndarray, filt: np.ndarray, model_by_fold: dict,
+    method: str, liquidity_factor: float, log: list[dict],
+):
+    """Decisao baseada na posicao EFETIVA, independentemente da sua idade."""
+    def decide(_b, i, current, age, capital, quantity):
+        fold = int(b.fold[i])
+        floor = float(b.config["rotation_cash_threshold"])
+        raw_best = float(np.nanmax(b.scores[i]))
+        if raw_best <= floor:
+            log.append({
+                "data":str(b.dates[i]),"fold":fold,
+                "posicao_atual":b.symbols[current],
+                "posicao_escolhida":"CASH","motivo":"CASH_THRESHOLD",
+            })
+            return -1, []
+        if method == "kalman":
+            estimates = filt[i]
+            best = int(np.nanargmax(estimates))
+            gap = float(estimates[best] - estimates[current])
+            required = max(
+                float(b.config["rotation_switch_margin"]),
+                float(b.margens[fold]),
+            )
+            target = best if gap > required else current
+            ranked = [{
+                "candidato":b.symbols[best],
+                "vantagem_filtrada":gap,"margem_base":required,
+                "vantagem_liquida":gap-required,
+            }]
+        else:
+            candidates = [
+                int(j) for j in np.argsort(-(
+                    filt[i] if method.startswith("hibrida") else b.scores[i]
+                ),kind="stable")[:V3_TOP]
+                if j != current
+            ]
+            rows, kept = [], []
+            for j in candidates:
+                features = _v3_state_features(
+                    b, filt, i, current, j, age,
+                )
+                if not np.isfinite(features).all():
+                    continue
+                rows.append(features)
+                kept.append(j)
+            ranked = []
+            if rows:
+                forecasts = model_by_fold[fold].predict(np.stack(rows))
+                for j, pred in zip(kept, forecasts):
+                    cost = _custo_estimado(
+                        b, i, current, j, capital, quantity,
+                    )
+                    impact = 0.0
+                    if liquidity_factor:
+                        sell_adv, buy_adv = (
+                            b.adv20[i,current], b.adv20[i,j]
+                        )
+                        if not(np.isfinite(sell_adv) and sell_adv > 0 and
+                               np.isfinite(buy_adv) and buy_adv > 0):
+                            continue
+                        impact = float(liquidity_factor*(
+                            b.vol20[i,current]*math.sqrt(
+                                max(0,quantity*b.cl[i,current]) / sell_adv,
+                            ) + b.vol20[i,j]*math.sqrt(
+                                capital / buy_adv,
+                            )
+                        ))
+                    net = float(pred - cost - impact)
+                    if math.isfinite(net):
+                        ranked.append({
+                            "candidato":b.symbols[j],
+                            "vantagem_prevista":float(pred),
+                            "taxas_previstas":float(cost),
+                            "impacto_proxy":float(impact),
+                            "vantagem_liquida":net,
+                            "utilidade_original":float(b.scores[i,j]),
+                            "utilidade_filtrada":float(filt[i,j]),
+                        })
+            ranked.sort(key=lambda r:r["vantagem_liquida"],reverse=True)
+            best = (
+                b.symbols.index(ranked[0]["candidato"])
+                if ranked and ranked[0]["vantagem_liquida"] > 0 else current
+            )
+            target = best
+        log.append({
+            "data":str(b.dates[i]),"fold":fold,"metodo":method,
+            "posicao_atual":b.symbols[current],
+            "posicao_escolhida":b.symbols[target] if target >= 0 else "CASH",
+            "idade_posicao":int(age),
+            "retorno_desde_entrada":float(
+                b.cl[i,current] / b.op[max(0,i-age+1),current] - 1
+            ),
+            "utilidade_original_atual":float(b.scores[i,current]),
+            "utilidade_filtrada_atual":float(filt[i,current]),
+            "motivo":"ROTACIONAR" if target != current else "MANTER",
+            "ranking_top12":json.dumps(ranked[:V3_TOP],ensure_ascii=False),
+            "vantagem_maxima_liquida":(
+                ranked[0]["vantagem_liquida"] if ranked else None
+            ),
+        })
+        return target, ranked
+    return decide
+
+
+def _v3_liquidez_ordens(trades: pd.DataFrame) -> dict:
+    if trades.empty or "participacao_volume" not in trades:
+        return {"ordens":0}
+    ratio = pd.to_numeric(trades["participacao_volume"],errors="coerce")
+    valid = trades["acao"].isin(["BUY","SELL"])
+    volume = pd.to_numeric(trades["volume_dia"],errors="coerce")
+    return {
+        "ordens":int(valid.sum()),
+        "acima_10pct_volume":int(((ratio > 0.10)&valid).sum()),
+        "acima_100pct_volume":int(((ratio > 1.0)&valid).sum()),
+        "volume_igual_zero":int(((volume <= 0)&valid).sum()),
+    }
+
+
+def executar_vantagem_v3() -> None:
+    """V3 no TCC. Salva um unico ZIP com auditoria dos quatro cenarios."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--pacote",type=Path,default=None)
+    args,_ = parser.parse_known_args()
+    source = args.pacote or ROOT/"output"/"pesquisa_permanencia_minima.zip"
+    if not source.is_file():
+        raise FileNotFoundError(
+            f"ZIP historico ausente: {source}. "
+            "Execute MODO='comparar' ou informe --pacote."
+        )
+    b = carregar(source)
+    baseline, base_decisions, base_trades, base_metrics = simular(b)
+    parity = float(np.max(np.abs(baseline-b.base_equity)))
+    if parity > 0.01 or abs(float(baseline[-1])-587165941.1330212)>0.01:
+        raise RuntimeError(
+            f"Controle nao reproduzido; maior diferenca USD {parity:.9f}."
+        )
+    # Alvos futuros usados APENAS em treino e avaliacao retrospectiva.
+    _, labels = _v2_features_labels(b)
+    configurations, training, filters = {}, {}, {}
+    prediction_rows = []
+    for fold in (2,3):
+        ratio, grid = _v3_selecionar_filtro(b, labels, fold)
+        filt, uncertainty = _v3_kalman(b, ratio)
+        configurations[fold] = {"q_over_r":ratio,"calibracao":grid}
+        filters[fold] = filt
+        print(f"[V3] Fold {fold} Q/R escolhido {ratio}",flush=True)
+        for mode in ("condicional", "hibrida"):
+            use = b.scores if mode == "condicional" else filt
+            model, audit = _v3_fit_conditional(b,use,labels,fold,mode)
+            training[(mode,fold)] = model
+            configurations[fold][mode] = audit
+        ids = np.flatnonzero(b.fold == fold)
+        daily_ic, sessions = _v3_ic_diario(filt,labels,ids)
+        configurations[fold]["ic_kalman_oos_medio"] = daily_ic
+        configurations[fold]["sessoes_ic_oos"] = sessions
+        for i in ids:
+            for j, symbol in enumerate(b.symbols):
+                if np.isfinite(b.scores[i,j]):
+                    prediction_rows.append({
+                        "data":str(b.dates[i]),"fold":fold,
+                        "ativo":symbol,"utilidade_bruta":float(b.scores[i,j]),
+                        "utilidade_kalman":(
+                            float(filt[i,j]) if np.isfinite(filt[i,j]) else None
+                        ),
+                        "variancia_filtro":(
+                            float(uncertainty[i,j]) if np.isfinite(
+                                uncertainty[i,j]) else None
+                        ),
+                        "valor_realizado_estatico_5_60":(
+                            float(labels[i,j]) if np.isfinite(labels[i,j]) else None
+                        ),
+                    })
+    score_kalman = np.full_like(b.scores,np.nan)
+    for fold in (2,3):
+        mask = b.fold == fold
+        score_kalman[mask] = filters[fold][mask]
+    dest = ROOT/"output"/"pesquisa_vantagem_rotacao_v3"
+    import shutil
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    pd.DataFrame(prediction_rows).to_csv(
+        dest/"utilidades_brutas_filtradas_75_ativos.csv",index=False,
+    )
+    curves = pd.DataFrame({
+        "data_execucao":b.exec_dates,"fold":b.fold,"control_2_pregoes":baseline,
+    })
+    base_decisions.to_csv(dest/"decisoes_controle.csv",index=False)
+    base_trades.to_csv(dest/"operacoes_controle.csv",index=False)
+    summary = [{
+        "cenario":"control_2_pregoes",
+        **_resumo_curva(baseline),**base_metrics,
+        **_v3_liquidez_ordens(base_trades),
+    }]
+    scenarios = (
+        ("kalman","kalman",0.0),
+        ("vantagem_condicional","condicional",0.0),
+        ("hibrida","hibrida",0.0),
+        ("hibrida_liquidez","hibrida",1.0),
+    )
+    for name,mode,impact in scenarios:
+        track = []
+        def callback(_b,i,current,age,capital,quantity,
+                     _mode=mode,_impact=impact,_track=track):
+            fold=int(b.fold[i])
+            selected_filter = (
+                b.scores if _mode=="condicional"
+                else filters[fold]
+            )
+            model = (
+                {} if _mode=="kalman"
+                else {fold:training[(_mode,fold)]}
+            )
+            return _v3_action_policy(
+                b,score_kalman,selected_filter,
+                model,_mode,_impact,_track,
+            )(_b,i,current,age,capital,quantity)
+        curve,decisions,trades,metrics = simular(
+            b,decision_callback=callback,
+        )
+        curves[name]=curve
+        pd.DataFrame(track).to_csv(dest/f"ranking_{name}.csv",index=False)
+        decisions.to_csv(dest/f"decisoes_{name}.csv",index=False)
+        trades.to_csv(dest/f"operacoes_{name}.csv",index=False)
+        risk = _resumo_curva(curve)
+        folds = _performance_by_fold(b,curve)
+        liquidez = _v3_liquidez_ordens(trades)
+        _write_json(dest/f"metricas_{name}.json",{
+            "risco":risk,"metricas":metrics,
+            "folds":folds,"liquidez":liquidez,
+        })
+        result = {"cenario":name,**risk,**metrics,**liquidez}
+        summary.append(result)
+        print(f"[V3] {name}: USD {curve[-1]:,.2f}; "
+              f"rotacoes {metrics['rotacoes']}",flush=True)
+    curves.to_csv(dest/"comparacao_patrimonio_diario.csv",index=False)
+    pd.DataFrame(summary).to_csv(
+        dest/"comparacao_resultados.csv",index=False,
+    )
+    _write_json(dest/"calibracao_filtros_e_modelos.json",configurations)
+    _write_json(dest/"manifesto_experimento_v3.json",{
+        "status":"completed_research_only",
+        "branch":"research/permanencia-minima-contrafactual-v1",
+        "arquivo":"pesquisar_permanencia_minima_spyder.py",
+        "fonte_sha256":b.original_sha,
+        "paridade_control_diferenca_max_usd":parity,
+        "universo":75,"folds":3,"horizontes":V3_H,
+        "pesos_horizontes":V3_W,"caracteristicas":V3_FEATURES,
+        "fold1":"Control, sem treinamento anterior para metamodelo",
+        "selecao_kalman":"Q/R por IC medio no passado com purge de 60",
+        "modelos":"Ridge de vantagem relativa condicionada a posicao atual",
+        "estado":"idade, PnL, drawdown, utilidades, volatilidade, liquidez",
+        "sem_regra_tempo_minimo":True,
+        "validacao_temporal":"Fold1->Fold2, Folds1+2->Fold3; purge de 60",
+        "resultados":summary,
+        "alertas":[
+            "Rotulos de 5-60 pregoes pressupoe permanencia estatica; nao valor Q sequencial.",
+            "Estados sinteticos da carteira podem ter distribuicao distinta da politica.",
+            "Estimativas fora da amostra em folds 2 e 3; fold 1 e Control.",
+            "O universo historico pode conter vies de selecao.",
+            "Sem limite real de participacao no volume negociado.",
+            "Impacto de liquidez e apenas proxy na decisao, nao no preco executado.",
+            "Nao foram feitas ordens e a Winner Live permanece inalterada.",
+        ],
+    })
+    shutil.copyfile(Path(__file__),dest/"codigo_executado.py")
+    archive=_pacote(dest,source)
+    print(f"[V3] ZIP pronto: {archive}",flush=True)
+
 if __name__ == "__main__":
-    if MODO == "vantagem_v2":
+    if MODO == "vantagem_v3":
+        executar_vantagem_v3()
+    elif MODO == "vantagem_v2":
         executar_vantagem_v2()
     elif MODO == "vantagem":
         executar_vantagem()
