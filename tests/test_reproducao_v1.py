@@ -913,7 +913,7 @@ def test_sensibilidade_margens_recalcula_fold_1_somente_quando_pedido() -> None:
     import numpy as np
 
     script = importlib.import_module("pesquisar_permanencia_minima_spyder")
-    assert script.MODO == "sensibilidade_margens"
+    assert script.MODO == "analisar_permanencia"
     assert script.MARGENS_ALTERNATIVAS == {1: 0.01, 2: 0.0, 3: 0.01}
     b = SimpleNamespace(
         dates=pd.date_range("2026-01-02", periods=3, freq="B"),
@@ -949,9 +949,74 @@ def test_sensibilidade_margens_nao_altera_pesquisa_de_deterioracao() -> None:
     script = (ROOT / "pesquisar_permanencia_minima_spyder.py").read_text(
         encoding="utf-8",
     )
-    assert 'MODO = "sensibilidade_margens"' in script
+    assert 'MODO = "analisar_permanencia"' in script
     assert 'elif MODO == "deterioracao"' in script
     assert 'permitir_cash=True, aplicar_todos_folds=True' in script
     assert "OOS" not in script.split("# %% 12. Sensibilidade")[1].split(
         'if __name__ == "__main__":'
     )[0]
+
+
+def test_analise_permanencia_usa_indicadores_anteriores_ao_retorno() -> None:
+    """A primeira observacao apos a decisao usa patrimonio anterior como base."""
+    import importlib
+    import numpy as np
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    dates = pd.date_range("2026-01-01", periods=9, freq="B", tz="UTC")
+    df = pd.DataFrame({
+        "timestamp": dates.astype(str),
+        "decision_date": (dates - pd.Timedelta(days=1)).astype(str),
+        "current_asset": ["CASH"] + ["AAA"] * 8,
+        "selected_asset": ["AAA"] * 9,
+        "strategy_equity": [100, 90, 95, 102, 80, 82, 110, 120, 130],
+        "walk_forward_fold": [1] * 9,
+        "holding_days_at_decision": list(range(9)),
+        "position_drawdown_from_peak": [0, 0, -.12, -.2, -.25, -.1, 0, 0, 0],
+        "position_return_since_entry": [0] * 9,
+        "score_change_from_entry": [0, 0, -.2, -.2, .1, .2, 0, 0, 0],
+        "current_score": [0.1] * 9,
+        "raw_best_score": [0.1] * 9,
+        "decision_reason": ["HOLD_CURRENT_BEST"] * 9,
+        "universe_breadth_5": [0.5] * 9,
+        "consecutive_days_current_not_top1": [0] * 9,
+    })
+    output, episodes, stats = script._a_calcular(df)
+    assert len(episodes) == 1
+    assert output.loc[2, "retorno_observado_1d"] == 95 / 90 - 1
+    assert output.loc[2, "retorno_observado_3d"] == 80 / 90 - 1
+    assert output.loc[0, "posicao_mantida"] == False
+    assert output["retorno_observado_5d"].notna().sum() > 0
+    assert set(stats["horizonte"]) == {1, 3, 5}
+    assert np.isfinite(episodes["retorno_capital"].iloc[0])
+
+
+def test_analise_permanencia_censura_horizonte_quando_ha_rotacao() -> None:
+    import importlib
+    import numpy as np
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    dates = pd.date_range("2026-01-01", periods=7, freq="B", tz="UTC")
+    df = pd.DataFrame({
+        "timestamp": dates.astype(str),
+        "decision_date": (dates - pd.Timedelta(days=1)).astype(str),
+        "current_asset": ["CASH", "AAA", "AAA", "AAA", "AAA", "BBB", "BBB"],
+        "selected_asset": ["AAA", "AAA", "AAA", "AAA", "BBB", "BBB", "BBB"],
+        "strategy_equity": [100, 105, 110, 115, 120, 130, 135],
+        "walk_forward_fold": [1] * 7,
+        "holding_days_at_decision": [0, 1, 2, 3, 4, 1, 2],
+        "position_drawdown_from_peak": [0] * 7,
+        "position_return_since_entry": [0] * 7,
+        "score_change_from_entry": [0] * 7,
+        "current_score": [0.1] * 7,
+        "raw_best_score": [0.1] * 7,
+        "decision_reason": ["HOLD_CURRENT_BEST"] * 7,
+        "universe_breadth_5": [0.5] * 7,
+        "consecutive_days_current_not_top1": [0] * 7,
+    })
+    output, episodes, _ = script._a_calcular(df)
+    assert len(episodes) == 2
+    assert np.isnan(output.loc[3, "retorno_observado_3d"])
+    assert output.loc[3, "retorno_observado_1d"] == 115 / 110 - 1
+    assert np.isnan(output.loc[4, "retorno_observado_1d"])
+    assert output.loc[6, "retorno_observado_1d"] == 135 / 130 - 1
