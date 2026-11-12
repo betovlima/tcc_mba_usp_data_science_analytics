@@ -13,8 +13,14 @@ Modos: MODO = "vantagem_v3" (padrao; usa o ZIP historico),
 A reproduçao utiliza o motor cientifico congelado do TCC (v1.23.0),
 o mesmo conjunto de 77 ativos solicitados (75 efetivos), os mesmos
 modelos, folds, margem calibrada por fold, custos e execucoes exatas.
-No modo comparar, somente rotation_min_holding_days varia. No modo vantagem,
-um estimador Ridge aprende a vantagem relativa de troca em folds anteriores.
+No modo comparar, somente rotation_min_holding_days varia.
+No modo vantagem_v3, uma regressao pareada estima a vantagem de troca
+considerando idade, retorno e risco da posicao efetiva. Um filtro causal
+de Kalman compara o efeito de suavizar a pontuacao de cada ativo.
+A calibracao e o treino usam apenas folds anteriores, com purge de 60 dias.
+O primeiro fold preserva o Control; nao e usado para validar a V3.
+O novo ZIP fica em output/pesquisa_vantagem_rotacao_v3.zip.
+Os modos antigos de pesquisa permanecem disponiveis para reproducao.
 
 Nao acessa MongoDB, nao busca novas cotacoes, nao reconstrói ativos
 descontinuados, nao altera a Winner Live nem escreve em dados/u67.
