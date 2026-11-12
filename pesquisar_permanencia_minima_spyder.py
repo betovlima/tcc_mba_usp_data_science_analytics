@@ -3254,6 +3254,107 @@ def _a_calcular(
     return df, episodes, pd.DataFrame(statistics)
 
 
+
+def _a_auditar_cobertura_de_perdas(
+    diario: pd.DataFrame, episodios: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Avalia alertas em perdas observadas; NAO simula qualquer venda.
+
+    'Cobertura' mede quanto do risco *ja ocorrido* um sinal teria marcado
+    no fechamento anterior. Dias do mesmo episodio nao sao independentes.
+    """
+    held = diario.loc[
+        diario["posicao_mantida"]
+        & diario["retorno_observado_1d"].notna()
+    ].copy()
+    signals = {
+        "drawdown_10": held["position_drawdown_from_peak"].le(-0.10),
+        "drawdown_20": held["position_drawdown_from_peak"].le(-0.20),
+        "drawdown_10_score_caiu": (
+            held["position_drawdown_from_peak"].le(-0.10)
+            & held["score_change_from_entry"].le(0)
+        ),
+        "drawdown_10_score_subiu": (
+            held["position_drawdown_from_peak"].le(-0.10)
+            & held["score_change_from_entry"].gt(0)
+        ),
+        "fora_topo_2": held["consecutive_days_current_not_top1"].ge(2),
+        "mercado_fraco": held["universe_breadth_5"].lt(0.30),
+        "queda_utilidade_010": held["score_change_from_entry"].le(-0.10),
+        "pnl_negativo_10": held["position_return_since_entry"].le(-0.10),
+    }
+    detail = []
+    summary = []
+    for name, flagged in signals.items():
+        flagged = flagged.fillna(False)
+        first_by_episode = (
+            held.loc[flagged]
+            .sort_values("data_decisao")
+            .groupby("episodio_id", sort=True).first()
+        )
+        for episode_id, first in first_by_episode.iterrows():
+            episode = episodios.loc[
+                episodios["episodio_id"].eq(episode_id)
+            ]
+            if len(episode) != 1:
+                raise ValueError(
+                    f"Episodio {episode_id} ausente ou repetido na auditoria."
+                )
+            e = episode.iloc[0]
+            detail.append({
+                "sinal": name, "episodio_id": int(episode_id),
+                "ativo": str(first["selected_asset"]),
+                "fold": int(first["walk_forward_fold"]),
+                "primeira_data_decisao": str(first["data_decisao"]),
+                "retorno_observado_1d_primeiro_alerta": float(
+                    first["retorno_observado_1d"]
+                ),
+                "retorno_episodio_completo": float(e["retorno_capital"]),
+                "drawdown_episodio_completo": float(e["drawdown_maximo"]),
+                "resultado_episodio_futuro_nao_e_feature": True,
+            })
+        for fold in ("todos", 1, 2, 3):
+            population = pd.Series(True, index=held.index)
+            if fold != "todos":
+                population &= held["walk_forward_fold"].eq(fold)
+            for loss in (0.05, 0.10):
+                target = held["retorno_observado_1d"].le(-loss)
+                fired = population & flagged
+                events = population & target
+                detected = fired & events
+                total_events = int(events.sum())
+                total_fired = int(fired.sum())
+                n_detected = int(detected.sum())
+                summary.append({
+                    "fold": fold, "sinal": name,
+                    "limite_perda_diaria": -loss,
+                    "observacoes_validas": int(population.sum()),
+                    "quedas_observadas": total_events,
+                    "alertas_emitidos": total_fired,
+                    "quedas_antecipadas_por_alerta": n_detected,
+                    "quedas_nao_sinalizadas": total_events - n_detected,
+                    "alertas_sem_queda_do_limite": total_fired - n_detected,
+                    "precisao_alerta": (
+                        n_detected / total_fired if total_fired else None
+                    ),
+                    "cobertura_quedas": (
+                        n_detected / total_events if total_events else None
+                    ),
+                    "taxa_base_quedas": (
+                        total_events / int(population.sum())
+                        if population.any() else None
+                    ),
+                    "episodios_distintos_com_alerta": int(
+                        held.loc[fired, "episodio_id"].nunique()
+                    ),
+                    "episodios_distintos_com_queda_antecipada": int(
+                        held.loc[detected, "episodio_id"].nunique()
+                    ),
+                    "hipotese_nao_validada_fora_amostra": True,
+                })
+    return pd.DataFrame(summary), pd.DataFrame(detail)
+
+
 def _a_publicar_sem_fonte(working: Path) -> Path:
     """Nome unico, CRC e SHA antes da publicacao. O ZIP fonte nao e copiado."""
     archive = DESTINO.with_suffix(".zip")
@@ -3317,6 +3418,9 @@ def executar_analise_permanencia() -> None:
     associations.to_csv(
         dest / "associacoes_sinais_e_retornos_observados.csv", index=False,
     )
+    cobertura, alertas_episodio = _a_auditar_cobertura_de_perdas(df, episodes)
+    cobertura.to_csv(dest / "cobertura_de_perdas_por_fold.csv", index=False)
+    alertas_episodio.to_csv(dest / "primeiros_alertas_por_episodio.csv", index=False)
     case = df.loc[
         df["data_execucao"].between("2026-07-20", "2026-08-21")
     ]
@@ -3337,11 +3441,15 @@ def executar_analise_permanencia() -> None:
         "observacoes_1d": int(df["retorno_observado_1d"].notna().sum()),
         "observacoes_3d": int(df["retorno_observado_3d"].notna().sum()),
         "observacoes_5d": int(df["retorno_observado_5d"].notna().sum()),
+        "indicadores_cauda": ["queda_diaria_5pct", "queda_diaria_10pct"],
+        "auditado_por_episodio": True,
         "limitacoes": [
             "Features correspondem ao fechamento da data de decisao.",
             "Patrimonio corresponde ao fechamento posterior a ordem.",
             "Retornos somente em periodos sem rotacao; censura seletiva.",
             "Dias vizinhos e horizontes nao sao amostras independentes.",
+            "Cobertura de perdas tem censura por rotacao e depende das decisoes Control.",
+            "Resultados finais dos episodios aparecem apenas como auditoria futura.",
             "Nao e backtest contrafactual de venda, rotacao ou caixa.",
             "Nao treina modelos nem utiliza dados futuros nas features.",
             "Nenhuma conta real ou ordem externa e acessada.",
