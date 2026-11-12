@@ -6,8 +6,8 @@ Este e o arquivo UNICO para todas as rodadas da pesquisa nesta branch:
 Spyder: abra este arquivo e execute com F5.
 Terminal: python pesquisar_permanencia_minima_spyder.py
 
-Modos: MODO = "vantagem_v3" (padrao; usa o ZIP historico),
-"vantagem_v2" e "vantagem" (versoes anteriores), "verificar" ou
+Modos: MODO = "deterioracao" (padrao; testa risco de permanencia),
+"vantagem_v3", "vantagem_v2", "vantagem" (historicos), "verificar" ou
 "comparar" (reproduz quatro permanencias).
 
 A reproduçao utiliza o motor cientifico congelado do TCC (v1.23.0),
@@ -21,6 +21,8 @@ A calibracao e o treino usam apenas folds anteriores, com purge de 60 dias.
 O primeiro fold preserva o Control; nao e usado para validar a V3.
 O relatorio e sempre output/pesquisa_vantagem_rotacao.zip, substituido
 somente apos a verificacao integral; nenhum sufixo vN e criado.
+O modo deterioracao compara Control, saida para CASH e veto de entrada por
+probabilidade de queda em 20 sessoes, treinado apenas em folds anteriores.
 Os modos antigos de pesquisa permanecem disponiveis para reproducao.
 
 Nao acessa MongoDB, nao busca novas cotacoes, nao reconstrói ativos
@@ -54,7 +56,7 @@ import numpy as np
 import pandas as pd
 
 # %% 0. Um arquivo, uma branch; somente este seletor muda entre modos.
-MODO = "vantagem_v3"  # "vantagem_v3", "vantagem_v2", "vantagem", "comparar", "verificar"
+MODO = "deterioracao"  # "deterioracao", "vantagem_v3", "vantagem_v2", "vantagem", "comparar", "verificar"
 PERMANENCIAS = (0, 1, 2, 3)
 PERMANENCIA_CONTROLE = 2
 TOLERANCIA_CENTAVO = 0.01
@@ -1482,7 +1484,7 @@ def _score_test_pairs(b: Base, models) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-def simular(b: Base, models=None, decision_callback=None):
+def simular(b: Base, models=None, decision_callback=None, *, permitir_cash=False):
     """Contabilidade equivalente a Control: abre i+1, fecha i+1, final liquida."""
     cash = float(b.config["initial_capital"])
     pos, quantity, holding = -1, 0.0, 0
@@ -1493,10 +1495,10 @@ def simular(b: Base, models=None, decision_callback=None):
         target = int(b.base_actions[i]) if models is None or b.fold[i] == 1 else pos
         ranking = []
         if decision_callback is not None and b.fold[i] >= 2:
-            if pos < 0:
+            if pos < 0 and not permitir_cash:
                 target = int(np.nanargmax(b.scores[i]))
             else:
-                capital = cash + quantity * b.cl[i, pos]
+                capital = cash + (quantity * b.cl[i, pos] if pos >= 0 else 0.0)
                 target, ranking = decision_callback(
                     b, i, pos, holding, capital, quantity,
                 )
@@ -2626,8 +2628,343 @@ def executar_vantagem_v3() -> None:
     _publicar_pasta_vantagem(dest)
     print(f"[V3] ZIP pronto: {archive}",flush=True)
 
+
+# %% 10. Pesquisa da deterioracao de posicao e protecao para CASH.
+# Nenhum codigo da Winner Live ou motor oficial e modificado.
+D_HORIZONTE = 20
+D_QUEDA_ALVO = -0.15
+D_PURGE = 60
+D_ATRIBUTOS = (
+    "utilidade", "variacao_utilidade_1", "variacao_utilidade_3",
+    "zscore_utilidade", "rank_percentil", "distancia_topo",
+    "retorno_5", "retorno_20", "volatilidade_20",
+    "drawdown_20", "liquidez_log_20", "fracao_ativos_negativos_5",
+    "fracao_utilidades_positivas",
+)
+
+
+def _d_features_labels(b: Base) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Variaveis causais no fechamento i. Rotulos futuros so para treino/auditoria."""
+    n, m = len(b.dates), len(b.symbols)
+    x = np.full((n, m, len(D_ATRIBUTOS)), np.nan)
+    y = np.full((n, m), np.nan)
+    pior_retorno = np.full((n, m), np.nan)
+    for i in range(25, n):
+        u = b.scores[i]
+        valid = np.isfinite(u)
+        if not valid.any():
+            continue
+        ids = np.flatnonzero(valid)
+        order = ids[np.argsort(-u[ids], kind="stable")]
+        rank = np.full(m, np.nan)
+        rank[order] = (np.arange(len(order)) + 1) / len(order)
+        mean, stdev = float(np.mean(u[ids])), float(np.std(u[ids]))
+        d1 = u - b.scores[i - 1] if b.fold[i] == b.fold[i - 1] else np.zeros(m)
+        d3 = u - b.scores[i - 3] if b.fold[i] == b.fold[i - 3] else np.zeros(m)
+        peak = np.max(b.cl[i - 19:i + 1], axis=0)
+        ret5 = b.ret5[i]
+        breadth = float(np.mean(ret5[np.isfinite(ret5)] < 0))
+        x[i] = np.column_stack((
+            u, d1, d3, (u - mean) / max(stdev, 1e-8), rank,
+            np.max(u[ids]) - u, b.ret5[i], b.cl[i] / b.cl[i - 20] - 1,
+            b.vol20[i], b.cl[i] / peak - 1,
+            np.log1p(np.maximum(b.adv20[i], 0)),
+            np.full(m, breadth), np.full(m, float(np.mean(u[ids] > 0))),
+        ))
+        # Decisao ao fechamento i, ordem na proxima abertura; minimos nos
+        # fechamentos de 1 a 20 sessoes seguintes. Nunca entram nas features.
+        if i + D_HORIZONTE >= len(b.cl):
+            continue
+        downside = np.min(b.cl[i + 1:i + D_HORIZONTE + 1], axis=0)
+        worst = downside / b.op[i + 1] - 1
+        pior_retorno[i] = worst
+        y[i] = (worst <= D_QUEDA_ALVO).astype(float)
+    return x, y, pior_retorno
+
+
+def _d_control(b: Base, i: int, pos: int, holding: int) -> int:
+    """Recalcula a regra Control usando posicao e permanencia efetivas."""
+    u = b.scores[i]
+    if not np.isfinite(u).any():
+        return -1
+    best = int(np.nanargmax(u))
+    best_score = float(u[best])
+    current_score = float(u[pos]) if pos >= 0 else 0.0
+    minimum = float(b.config["rotation_cash_threshold"])
+    if (pos >= 0 and np.isfinite(current_score)
+            and holding < int(b.config["rotation_min_holding_days"])):
+        return pos
+    if best_score <= minimum:
+        return -1
+    if pos < 0:
+        threshold = minimum + float(b.config["rotation_min_expected_edge"])
+        return best if best_score >= threshold else -1
+    if best == pos:
+        return pos
+    required = max(
+        float(b.config["rotation_switch_margin"]),
+        float(b.margens[int(b.fold[i])]),
+    )
+    return best if best_score >= current_score + required else pos
+
+
+def _d_modelos(b: Base, x: np.ndarray, y: np.ndarray):
+    """Classificador por fold: so folds anteriores com purge de 60 sessoes."""
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.metrics import roc_auc_score, average_precision_score, brier_score_loss
+
+    predicted = np.full(y.shape, np.nan)
+    audit = {}
+    for fold in (2, 3):
+        first = int(np.flatnonzero(b.fold == fold)[0])
+        indices = np.flatnonzero(
+            (b.fold < fold) & (np.arange(len(b.dates)) + D_PURGE < first)
+        )
+        train_x, train_y = x[indices], y[indices]
+        mask = np.isfinite(train_x).all(axis=2) & np.isfinite(train_y)
+        train_x, train_y = train_x[mask], train_y[mask].astype(int)
+        if len(train_y) < 1000 or len(np.unique(train_y)) < 2:
+            raise RuntimeError(f"Treino de risco insuficiente no fold {fold}.")
+        model = make_pipeline(
+            StandardScaler(), LogisticRegression(C=0.3, max_iter=300),
+        )
+        model.fit(train_x, train_y)
+        idx_test = np.flatnonzero(b.fold == fold)
+        test_x = x[idx_test]
+        good = np.isfinite(test_x).all(axis=2)
+        fold_predictions = np.full((len(idx_test), len(b.symbols)), np.nan)
+        fold_predictions[good] = model.predict_proba(test_x[good])[:, 1]
+        predicted[idx_test] = fold_predictions
+        actual = y[idx_test]
+        valid = good & np.isfinite(actual)
+        target, pred = actual[valid], fold_predictions[valid]
+        audit[fold] = {
+            "fold": fold,
+            "inicio_teste": str(b.dates[first]),
+            "fim_maximo_rotulo_treino": str(b.dates[indices[-1] + D_HORIZONTE]),
+            "ultimo_indice_treino": int(indices[-1]),
+            "purge": D_PURGE,
+            "quantidade_treino": int(len(train_y)),
+            "evento_treino": float(np.mean(train_y)),
+            "quantidade_teste": int(len(target)),
+            "evento_teste": float(np.mean(target)),
+            "auc_oos": (
+                float(roc_auc_score(target, pred))
+                if len(np.unique(target)) == 2 else None
+            ),
+            "precisao_media_oos": float(average_precision_score(target, pred)),
+            "brier_oos": float(brier_score_loss(target, pred)),
+            "predicao_media_oos": float(np.mean(pred)),
+            "fracao_risco_alto_060": float(np.mean(pred >= 0.60)),
+            "fracao_risco_alto_075": float(np.mean(pred >= 0.75)),
+            "coeficientes": model.named_steps["logisticregression"].coef_[0].tolist(),
+        }
+        print(
+            f"[DETERIORACAO] Fold {fold}: AUC={audit[fold]['auc_oos']:.3f} "
+            f"risco={audit[fold]['evento_teste']:.2%}", flush=True,
+        )
+    return predicted, audit
+
+
+def _d_politica(
+    b: Base, risks: np.ndarray, *, exit_at: float,
+    reentry_at: float, veto_rotacao: bool, audit: list[dict],
+):
+    """Control escolhe ativos, estimador indica risco e pode bloquear CASH/entrada."""
+    def decide(_b, i, pos, holding, capital, quantity):
+        original = _d_control(b, i, pos, holding)
+        target = original
+        raw_current = float(risks[i, pos]) if pos >= 0 else None
+        raw_proposed = float(risks[i, original]) if original >= 0 else None
+        risk_current = (
+            raw_current
+            if raw_current is not None and np.isfinite(raw_current) else None
+        )
+        risk_proposed = (
+            raw_proposed
+            if raw_proposed is not None and np.isfinite(raw_proposed) else None
+        )
+        reason = "CONTROL"
+        if (original >= 0 and (pos < 0 or veto_rotacao)
+                and (risk_proposed is None or risk_proposed > reentry_at)
+                and original != pos):
+            target = pos
+            reason = "VETO_ENTRADA_RISCO"
+        if pos >= 0 and risk_current is not None and risk_current >= exit_at:
+            if holding >= int(b.config["rotation_min_holding_days"]):
+                if target == pos:
+                    target = -1
+                    reason = "DETERIORACAO_SAIR_CASH"
+                elif target >= 0:
+                    reason = "DETERIORACAO_ROTACIONAR_CONTROL"
+                else:
+                    reason = "DETERIORACAO_SAIR_CASH"
+        elif pos < 0 and target >= 0 and risk_proposed is not None:
+            reason = "REENTRADA_SEGURA"
+        if target < 0 and pos < 0 and original >= 0:
+            reason = "PERMANECER_CASH_RISCO"
+        audit.append({
+            "data_decisao": str(b.dates[i]), "fold": int(b.fold[i]),
+            "atual": b.symbols[pos] if pos >= 0 else "CASH",
+            "original_control": (
+                b.symbols[original] if original >= 0 else "CASH"
+            ),
+            "decisao": b.symbols[target] if target >= 0 else "CASH",
+            "holding": int(holding), "risco_atual": risk_current,
+            "risco_proposto": risk_proposed, "limiar_saida": exit_at,
+            "limiar_entrada": reentry_at, "motivo": reason,
+            "score_atual": float(b.scores[i, pos]) if pos >= 0 else None,
+            "score_candidato": (
+                float(b.scores[i, original]) if original >= 0 else None
+            ),
+        })
+        return target, []
+    return decide
+
+
+def executar_deterioracao() -> None:
+    """Pesquisa em dados congelados, com um so ZIP e sem ordens reais."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--pacote", type=Path, default=None)
+    args, _ = parser.parse_known_args()
+    source = args.pacote or ROOT / "output" / "pesquisa_permanencia_minima.zip"
+    if not source.is_file():
+        raise FileNotFoundError(f"Pacote historico de permanencia ausente: {source}")
+    b = carregar(source)
+    base, base_decisions, base_trades, base_metrics = simular(b)
+    parity = float(np.max(np.abs(base - b.base_equity)))
+    if parity > 0.01 or abs(float(base[-1]) - 587165941.1330212) > 0.01:
+        raise RuntimeError(f"Control nao reproduzido. Erro USD {parity:.9f}")
+    mismatches = []
+    for i in range(len(b.dates)):
+        proposed = _d_control(
+            b, i, int(b.base_current[i]), int(b.base_holding[i]),
+        )
+        if proposed != int(b.base_actions[i]):
+            mismatches.append(int(i))
+    if mismatches:
+        raise RuntimeError(
+            f"Regra Control divergente em {len(mismatches)} decisoes: "
+            f"{mismatches[:8]}"
+        )
+    features, labels, realized = _d_features_labels(b)
+    risks, training = _d_modelos(b, features, labels)
+    dest = DESTINO_TEMP
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    curves = pd.DataFrame({
+        "data_execucao": b.exec_dates, "fold": b.fold, "control": base,
+    })
+    base_decisions.to_csv(dest / "decisoes_control.csv", index=False)
+    base_trades.to_csv(dest / "operacoes_control.csv", index=False)
+    scenario_results = [{"cenario": "control", **_resumo_curva(base), **base_metrics}]
+    for name, exit_at, reentry_at, veto_rotacao in (
+        ("permanencia_conservadora", 0.75, 0.45, False),
+        ("permanencia_moderada", 0.60, 0.40, False),
+        ("permanencia_e_veto_entrada", 0.75, 0.45, True),
+    ):
+        log = []
+        callback = _d_politica(
+            b, risks, exit_at=exit_at, reentry_at=reentry_at,
+            veto_rotacao=veto_rotacao, audit=log,
+        )
+        curve, decisions, trades, metrics = simular(
+            b, decision_callback=callback, permitir_cash=True,
+        )
+        pd.DataFrame(log).to_csv(dest / f"auditoria_{name}.csv", index=False)
+        decisions.to_csv(dest / f"decisoes_{name}.csv", index=False)
+        trades.to_csv(dest / f"operacoes_{name}.csv", index=False)
+        folds = _performance_by_fold(b, curve)
+        risk = _resumo_curva(curve)
+        counts = pd.DataFrame(log)["motivo"].value_counts().to_dict()
+        _write_json(dest / f"metricas_{name}.json", {
+            "metricas": metrics, "risco": risk, "folds": folds,
+            "contagem_decisoes": counts,
+        })
+        scenario_results.append({"cenario": name, **risk, **metrics, **counts})
+        curves[name] = curve
+        print(
+            f"[DETERIORACAO] {name}: USD {curve[-1]:,.2f}; "
+            f"MDD {risk['drawdown_maximo']:.2%}; eventos {counts}", flush=True,
+        )
+    curves.to_csv(dest / "comparacao_patrimonio_diario.csv", index=False)
+    pd.DataFrame(scenario_results).to_csv(
+        dest / "comparacao_resultados.csv", index=False,
+    )
+    pd.DataFrame(list(training.values())).to_csv(
+        dest / "qualidade_previsoes_por_fold.csv", index=False,
+    )
+    rows = []
+    for i in range(len(b.dates)):
+        if int(b.fold[i]) < 2:
+            continue
+        for j, symbol in enumerate(b.symbols):
+            if np.isfinite(risks[i, j]):
+                rows.append({
+                    "data": str(b.dates[i]), "fold": int(b.fold[i]),
+                    "ativo": symbol,
+                    "probabilidade_queda_20d": float(risks[i, j]),
+                    "queda_realizada_20d": (
+                        float(realized[i, j]) if np.isfinite(realized[i, j])
+                        else None
+                    ),
+                    "evento_realizado_15pct": (
+                        float(labels[i, j]) if np.isfinite(labels[i, j])
+                        else None
+                    ),
+                })
+    pd.DataFrame(rows).to_csv(
+        dest / "previsoes_risco_oos.csv", index=False,
+    )
+    _write_json(dest / "manifesto_experimento.json", {
+        "status": "completed_research_only",
+        "modo": "deterioracao",
+        "arquivo": "pesquisar_permanencia_minima_spyder.py",
+        "branch": "research/permanencia-minima-contrafactual-v1",
+        "paridade_control_max_usd": parity,
+        "paridade_control_acoes_divergentes": len(mismatches),
+        "fonte_sha256": b.original_sha,
+        "folds": 3, "universo": len(b.symbols),
+        "alvo": (
+            f"queda de {abs(D_QUEDA_ALVO):.0%} em algum fechamento dentre "
+            f"{D_HORIZONTE} sessoes apos a abertura seguinte"
+        ),
+        "modelo": "LogisticRegression de risco de queda, regularizacao C=0.3",
+        "features": D_ATRIBUTOS, "purge": D_PURGE,
+        "validacao": training, "cenarios": scenario_results,
+        "thresholds_predefinidos": {
+            "permanencia_conservadora": {
+                "saida": 0.75, "entrada": 0.45, "veto_rotacao": False,
+            },
+            "permanencia_moderada": {
+                "saida": 0.60, "entrada": 0.40, "veto_rotacao": False,
+            },
+            "permanencia_e_veto_entrada": {
+                "saida": 0.75, "entrada": 0.45, "veto_rotacao": True,
+            },
+        },
+        "ressalvas": [
+            "Fold 1 Control; politica de risco apenas nos folds 2 e 3.",
+            "Precos de abertura/fechamento, custos e slippage referencia.",
+            "O risco previsto nao e retorno esperado nem garantia de protecao.",
+            "A execucao contrafactual pressupoe ausencia de impacto da ordem.",
+            "Nao ha limite realista de capacidade para ordens acima do volume.",
+            "Folds 2/3 ja inspecionados na pesquisa anterior: exploratorio.",
+            "Nenhuma alteracao da Winner Live ou de producao.",
+        ],
+    })
+    shutil.copyfile(Path(__file__), dest / "codigo_executado.py")
+    archive = _pacote(dest, source)
+    _publicar_pasta_vantagem(dest)
+    print(f"[DETERIORACAO] ZIP pronto: {archive}", flush=True)
+
 if __name__ == "__main__":
-    if MODO == "vantagem_v3":
+    if MODO == "deterioracao":
+        executar_deterioracao()
+    elif MODO == "vantagem_v3":
         executar_vantagem_v3()
     elif MODO == "vantagem_v2":
         executar_vantagem_v2()
