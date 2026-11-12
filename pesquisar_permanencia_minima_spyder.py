@@ -91,7 +91,7 @@ def verificar_fontes() -> tuple[Any, dict[str, Any], tuple[str, ...]]:
                 raise FileNotFoundError(
                     f"Arquivo historico do TCC ausente: {arquivo}\n"
                     "Restaure o cache original da pesquisa v1.4.1. "
-                    "Nao faremos novo download nem usaremos dados do MCT."
+                    "Nao faremos novo download nem usaremos dados do outros sistemas."
                 )
             if _hash_arquivo(arquivo) != esperados[campo]:
                 raise RuntimeError(
