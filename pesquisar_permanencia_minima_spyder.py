@@ -3355,6 +3355,125 @@ def _a_auditar_cobertura_de_perdas(
     return pd.DataFrame(summary), pd.DataFrame(detail)
 
 
+
+# Sinais conhecidos no fechamento da decisao. A resposta de treino e o
+# rendimento que a carteira REALMENTE teve ao continuar com a mesma posicao.
+A_FEATURES_CAUSAS = (
+    "holding_days_at_decision",
+    "score_change_from_entry",
+    "position_drawdown_from_peak",
+    "position_return_since_entry",
+    "best_vs_second_gap",
+    "spy_return_5",
+    "universe_breadth_5",
+)
+
+
+def _a_experimento_risco_cauda_oos(
+    diario: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Classificacao de perda >=5% no dia seguinte, so treino anterior.
+
+    O threshold e fixado no TREINO, nao no fold de teste. Os folds usados
+    ja foram vistos em analises anteriores; isto e exploratorio, nao
+    certificacao prospectiva nem modelo liberado para uso financeiro.
+    """
+    from sklearn.impute import SimpleImputer
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import average_precision_score, roc_auc_score
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    held = diario.loc[
+        diario["posicao_mantida"]
+        & diario["retorno_observado_1d"].notna()
+    ].copy()
+    held["evento_perda_5pct_dia_seguinte"] = (
+        held["retorno_observado_1d"].le(-0.05)
+    ).astype(int)
+    held["probabilidade_modelo_nao_calibrada"] = np.nan
+    held["alerta_limiar_treino"] = False
+    metrics = []
+    for fold in (2, 3):
+        test = held.loc[held["walk_forward_fold"].eq(fold)]
+        if test.empty:
+            raise RuntimeError(f"Sem amostra de teste do fold {fold}")
+        start = pd.to_datetime(test["data_decisao"], utc=True).min()
+        train = held.loc[
+            held["walk_forward_fold"].lt(fold)
+            & pd.to_datetime(held["data_execucao"], utc=True).lt(
+                start - pd.Timedelta(days=30)
+            )
+        ]
+        y = train["evento_perda_5pct_dia_seguinte"].to_numpy(int)
+        observed = test["evento_perda_5pct_dia_seguinte"].to_numpy(int)
+        if len(y) < 100 or y.sum() < 8 or observed.sum() < 2:
+            raise RuntimeError(
+                f"Fold {fold} sem eventos suficientes para diagnostico de cauda."
+            )
+        tr = train.loc[:, list(A_FEATURES_CAUSAS)].apply(
+            pd.to_numeric, errors="coerce"
+        ).replace([np.inf, -np.inf], np.nan)
+        te = test.loc[:, list(A_FEATURES_CAUSAS)].apply(
+            pd.to_numeric, errors="coerce"
+        ).replace([np.inf, -np.inf], np.nan)
+        model = make_pipeline(
+            SimpleImputer(strategy="median"),
+            StandardScaler(),
+            LogisticRegression(
+                C=0.2, class_weight="balanced",
+                max_iter=2000, random_state=42,
+            ),
+        )
+        model.fit(tr, y)
+        scores_train = model.predict_proba(tr)[:, 1]
+        threshold = float(np.quantile(scores_train, 0.90))
+        scores_test = model.predict_proba(te)[:, 1]
+        alerts = scores_test >= threshold
+        held.loc[test.index, "probabilidade_modelo_nao_calibrada"] = scores_test
+        held.loc[test.index, "alerta_limiar_treino"] = alerts
+        detected = int((alerts & (observed == 1)).sum())
+        n_alert = int(alerts.sum())
+        n_events = int(observed.sum())
+        metrics.append({
+            "fold_teste": fold,
+            "primeira_decisao_teste": str(start.date()),
+            "ultima_execucao_treino": str(
+                pd.to_datetime(train["data_execucao"], utc=True).max().date()
+            ),
+            "embargo_dias_calendario": 30,
+            "observacoes_treino": int(len(train)),
+            "perdas_5pct_treino": int(y.sum()),
+            "observacoes_teste": int(len(test)),
+            "perdas_5pct_teste": n_events,
+            "taxa_base_teste": n_events / len(test),
+            "auc_roc_oos": float(roc_auc_score(observed, scores_test)),
+            "precisao_media_oos": float(
+                average_precision_score(observed, scores_test)
+            ),
+            "limiar_alerta_percentil_90_treino": threshold,
+            "alertas": n_alert, "perdas_antecipadas": detected,
+            "perdas_nao_sinalizadas": n_events - detected,
+            "precisao_alertas": (
+                detected / n_alert if n_alert else None
+            ),
+            "cobertura_quedas": detected / n_events,
+            "observacao": (
+                "Amostra de Control censurada por rotacoes; "
+                "treino por folds anteriores, mas features e escolhas "
+                "experimentais ja foram examinadas neste periodo."
+            ),
+        })
+    return held.loc[held["walk_forward_fold"].ge(2), [
+        "data_decisao", "data_execucao", "walk_forward_fold",
+        "episodio_id", "selected_asset",
+        "evento_perda_5pct_dia_seguinte",
+        "probabilidade_modelo_nao_calibrada",
+        "alerta_limiar_treino",
+        *A_FEATURES_CAUSAS,
+    ]].copy(), pd.DataFrame(metrics)
+
+
 def _a_publicar_sem_fonte(working: Path) -> Path:
     """Nome unico, CRC e SHA antes da publicacao. O ZIP fonte nao e copiado."""
     archive = DESTINO.with_suffix(".zip")
@@ -3421,6 +3540,9 @@ def executar_analise_permanencia() -> None:
     cobertura, alertas_episodio = _a_auditar_cobertura_de_perdas(df, episodes)
     cobertura.to_csv(dest / "cobertura_de_perdas_por_fold.csv", index=False)
     alertas_episodio.to_csv(dest / "primeiros_alertas_por_episodio.csv", index=False)
+    previstos, metrica_oos = _a_experimento_risco_cauda_oos(df)
+    previstos.to_csv(dest / "risco_cauda_previsoes_oos.csv", index=False)
+    metrica_oos.to_csv(dest / "risco_cauda_qualidade_por_fold.csv", index=False)
     case = df.loc[
         df["data_execucao"].between("2026-07-20", "2026-08-21")
     ]
@@ -3443,6 +3565,18 @@ def executar_analise_permanencia() -> None:
         "observacoes_5d": int(df["retorno_observado_5d"].notna().sum()),
         "indicadores_cauda": ["queda_diaria_5pct", "queda_diaria_10pct"],
         "auditado_por_episodio": True,
+        "experimento_risco_cauda": {
+            "treinamento": "folds anteriores com embargo de 30 dias",
+            "features": A_FEATURES_CAUSAS,
+            "alvo": "queda de ao menos 5pct no proximo fechamento",
+            "limiar": "percentil 90 das pontuacoes de treino",
+            "limites": (
+                "apenas dias mantidos pelo Control; dados futuros apenas "
+                "nos rotulos; class_weight balanced sem calibracao de probabilidade; "
+                "teste ja examinado, nao confirma generalizacao independente"
+            ),
+            "metricas": metrica_oos.to_dict(orient="records"),
+        },
         "limitacoes": [
             "Features correspondem ao fechamento da data de decisao.",
             "Patrimonio corresponde ao fechamento posterior a ordem.",
