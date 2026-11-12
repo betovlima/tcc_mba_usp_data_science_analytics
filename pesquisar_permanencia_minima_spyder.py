@@ -1134,5 +1134,627 @@ def executar_pesquisa_vantagem() -> None:
     )
     print(f"[ZIP] {destino}", flush=True)
 
+# %% 7. MODO "vantagem": pesquisa pareada cronologica independente.
+# O ZIP usado como entrada e aquele produzido pelo MODO "comparar" do TCC.
+# Nunca importar a engine de producao nem alterar a politica original.
+"""Pesquisa isolada de vantagem de rotacao para Winner (NUNCA opera Live).
+
+Execucao:
+    poetry run python scripts/pesquisar_permanencia_minima.py
+    poetry run python scripts/pesquisar_permanencia_minima.py --pacote caminho/arquivo.zip
+
+Fonte: ZIP gerado pelo TCC pesquisar_permanencia_minima_spyder.py.
+As previsoes do modelo-base ja sao fora da amostra; o segundo estimador Ridge usa
+somente folds ANTERIORES e purge de H sessoes. Fold 1: Control original;
+folds 2 e 3: politica de vantagem aprendida. Sem permanencia minima,
+sem otimizar parametros nos folds de teste, sem alteracoes de producao.
+
+Rotacao = argmax de vantagem esperada liquida contra MANTER (valor 0).
+Nao se usa a utilidade original como previsao percentual de retorno.
+O custo estimado e calculado a partir das taxas e dos precos conhecidos
+na decisao. O efeito do impacto de mercado continua NAO MODELADO.
+Saida: output/pesquisa_vantagem_rotacao.zip (inclui ZIP-fonte completo).
+Este modo compartilha ESTE MESMO arquivo e branch com a pesquisa de permanencia.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import io
+import json
+import math
+import platform
+import sys
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
+
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import Ridge
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+
+ROOT = Path(__file__).resolve().parent
+DESTINO = ROOT / "output" / "pesquisa_vantagem_rotacao"
+H = 3
+TOP_K = 6
+RIDGE_ALPHA = 20.0
+FEATURES = (
+    "gap_utilidade", "diferenca_tendencia_1", "diferenca_tendencia_3",
+    "diferenca_retorno_5", "diferenca_volatilidade_20",
+    "log_razão_liquidez_20", "log_tempo_posicao", "utilidade_candidato",
+)
+NOME_ZIP = "pesquisa_permanencia_minima.zip"
+
+
+def _hash_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _json_safe(value):
+    if isinstance(value, np.generic):
+        return _json_safe(value.item())
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (pd.Timestamp, datetime, Path)):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+def _write_json(path: Path, value) -> None:
+    path.write_text(
+        json.dumps(_json_safe(value), ensure_ascii=False, indent=2, allow_nan=False)
+        + "\n", encoding="utf-8",
+    )
+
+
+@dataclass
+class Base:
+    dates: pd.DatetimeIndex
+    exec_dates: pd.DatetimeIndex
+    fold: np.ndarray
+    symbols: list[str]
+    scores: np.ndarray
+    op: np.ndarray
+    cl: np.ndarray
+    volume: np.ndarray
+    vol20: np.ndarray
+    ret5: np.ndarray
+    adv20: np.ndarray
+    base_actions: np.ndarray
+    base_current: np.ndarray
+    base_holding: np.ndarray
+    base_equity: np.ndarray
+    config: dict
+    original: bytes
+    original_sha: str
+    margens: dict[int, float]
+
+
+def _read(z: ZipFile, member: str) -> pd.DataFrame:
+    return pd.read_csv(
+        io.BytesIO(z.read("pesquisa_permanencia_minima/" + member)),
+        low_memory=False,
+    )
+
+
+def carregar(pacote: Path) -> Base:
+    origem = pacote.read_bytes()
+    with ZipFile(io.BytesIO(origem)) as z:
+        if z.testzip() is not None:
+            raise ValueError("ZIP de origem corrompido.")
+        manifest = json.loads(z.read(
+            "pesquisa_permanencia_minima/manifesto_experimento.json"
+        ))
+        if manifest.get("status") != "completed" or manifest.get("folds") != 3:
+            raise ValueError("ZIP nao e um experimento completo de tres folds.")
+        params = json.loads(z.read(
+            "pesquisa_permanencia_minima/parametros_motor_e_ambiente.json"
+        ))["configuracao_efetiva"]
+        if int(params["rotation_min_holding_days"]) != 2:
+            raise ValueError("O Control precisa ter permanencia de dois pregoes.")
+        decisions = _read(z, "decisoes_2_pregoes.csv")
+        daily = _read(z, "patrimonio_diario_2_pregoes.csv")
+        util = _read(z, "utilidades_oos_todos_ativos.csv")
+        margin = _read(z, "margens_controle_por_fold.csv")
+        dates = pd.DatetimeIndex(pd.to_datetime(decisions["data"], utc=True))
+        exec_dates = pd.DatetimeIndex(pd.to_datetime(daily["timestamp"], utc=True))
+        if len(dates) != len(exec_dates) or len(dates) < 1000:
+            raise ValueError("Calendario de decisoes/investimento nao corresponde.")
+        if not (dates.is_monotonic_increasing and dates.is_unique):
+            raise ValueError("Calendario de decisoes invalido.")
+        if not (exec_dates[:-1].equals(dates[1:]) and exec_dates[-1] > dates[-1]):
+            raise ValueError("Execucao precisa ocorrer no pregao seguinte.")
+        timeline = dates.append(pd.DatetimeIndex([exec_dates[-1]]))
+        fold = decisions["decision_fold_id"].astype(int).to_numpy()
+        if sorted(set(fold)) != [1, 2, 3]:
+            raise ValueError("Folds inesperados.")
+        if not np.array_equal(fold, daily["walk_forward_fold"].astype(int)):
+            raise ValueError("Folds nao correspondem entre os arquivos.")
+        utility_symbols = sorted(set(util["ativo"].astype(str)).difference({"CASH"}))
+        if len(utility_symbols) != 75:
+            raise ValueError(f"Esperados 75 ativos, encontrados {len(utility_symbols)}.")
+        lookup = {symbol: i for i, symbol in enumerate(utility_symbols)}
+        # A primeira data do fold seguinte tambem aparece no cache do fold anterior.
+        # Selecionar SOMENTE a previsao do fold ao qual a decisao pertence.
+        expected_fold = dict(zip(dates, fold))
+        expected_fold[exec_dates[-1]] = 3
+        util["ts"] = pd.to_datetime(util["data_decisao"], utc=True)
+        util = util.loc[
+            util["fold_id"].astype(int)
+            == util["ts"].map(expected_fold)
+        ]
+        if util.duplicated(["ts", "ativo"]).any():
+            raise ValueError("Scores duplicados na mesma decisao/fold.")
+        scores = util.loc[util["ativo"] != "CASH"].pivot(
+            index="ts", columns="ativo", values="utilidade",
+        ).reindex(index=timeline, columns=utility_symbols).to_numpy(dtype=float)
+        n, m = len(timeline), len(utility_symbols)
+        op = np.empty((n, m), dtype=float)
+        cl = np.empty((n, m), dtype=float)
+        volume = np.empty((n, m), dtype=float)
+        for j, symbol in enumerate(utility_symbols):
+            frame = _read(z, f"cotacoes_ohlcv/{symbol}.csv")
+            frame.index = pd.to_datetime(frame["timestamp"], utc=True)
+            if frame.index.has_duplicates:
+                raise ValueError(f"Preco duplicado para {symbol}.")
+            aligned = frame.reindex(timeline)
+            for target, column in ((op, "open"), (cl, "close"), (volume, "volume")):
+                target[:, j] = aligned[column].to_numpy(dtype=float)
+        if not (np.isfinite(op).all() and np.isfinite(cl).all()
+                and (op > 0).all() and (cl > 0).all()):
+            raise ValueError("OHLCV incompleto; nao preencher precos artificialmente.")
+        if not np.isfinite(scores[:-1]).any(axis=1).all():
+            raise ValueError("Faltam utilidades para algumas decisoes.")
+        action = np.array([
+            lookup.get(str(a), -1) for a in decisions["final_action_asset"]
+        ], dtype=int)
+        current = np.array([
+            lookup.get(str(a), -1) for a in decisions["current_asset"]
+        ], dtype=int)
+        holds = decisions["holding_days_at_decision"].astype(int).to_numpy()
+        margins = margin[margin["selected"].astype(str).str.lower() == "true"]
+        mapped = {
+            int(r.fold_id): float(r.candidate_margin)
+            for r in margins.itertuples()
+        }
+        if len(mapped) != 3:
+            raise ValueError("Margens calibradas nao conferem.")
+        logreturns = np.full_like(cl, np.nan)
+        logreturns[1:] = np.log(cl[1:] / cl[:-1])
+        vol20 = pd.DataFrame(logreturns).rolling(20, min_periods=20).std().to_numpy()
+        ret5 = pd.DataFrame(cl).pct_change(5).to_numpy()
+        adv20 = pd.DataFrame(cl * volume).rolling(
+            20, min_periods=20,
+        ).mean().to_numpy()
+        return Base(
+            dates, exec_dates, fold, utility_symbols, scores, op, cl, volume,
+            vol20, ret5, adv20, action, current, holds,
+            daily["strategy_equity"].to_numpy(dtype=float),
+            params, origem, _hash_bytes(origem), mapped,
+        )
+
+
+def _features(b: Base, i: int, current: int, candidate: int,
+              holding: int) -> np.ndarray:
+    u = b.scores
+    return np.array((
+        u[i, candidate] - u[i, current],
+        (u[i, candidate] - u[i - 1, candidate])
+        - (u[i, current] - u[i - 1, current]),
+        (u[i, candidate] - u[i - 3, candidate])
+        - (u[i, current] - u[i - 3, current]),
+        b.ret5[i, candidate] - b.ret5[i, current],
+        b.vol20[i, candidate] - b.vol20[i, current],
+        math.log((b.adv20[i, candidate] + 1) / (b.adv20[i, current] + 1)),
+        math.log1p(holding),
+        u[i, candidate],
+    ), dtype=float)
+
+
+def _train_data(b: Base, fold: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    rows, outcomes, indices = [], [], []
+    for i in range(25, len(b.dates) - H):
+        if b.fold[i] != fold or b.base_current[i] < 0:
+            continue
+        cur = int(b.base_current[i])
+        for candidate in np.argsort(-b.scores[i])[:TOP_K]:
+            if candidate == cur or not np.isfinite(b.scores[i, candidate]):
+                continue
+            features = _features(b, i, cur, int(candidate),
+                                 int(b.base_holding[i]))
+            if not np.isfinite(features).all():
+                continue
+            # Decisao no fechamento i; compra na abertura i+1.
+            # Retorno comparado ate o fechamento i+H; nenhum futuro nas features.
+            label = math.log(b.cl[i + H, candidate] / b.op[i + 1, candidate])
+            label -= math.log(b.cl[i + H, cur] / b.op[i + 1, cur])
+            if math.isfinite(label):
+                rows.append(features)
+                outcomes.append(label)
+                indices.append(i)
+    return np.asarray(rows), np.asarray(outcomes), np.asarray(indices, dtype=int)
+
+
+def treinar(b: Base):
+    datasets = {fold: _train_data(b, fold) for fold in (1, 2)}
+    models, audit = {}, {}
+    for target in (2, 3):
+        start = int(np.flatnonzero(b.fold == target)[0])
+        # Purge: outcome precisa estar INTEIRAMENTE conhecido no inicio
+        # do fold de teste. Nunca reusar rotulos com data futura.
+        parts = [
+            (x[dateidx + H < start], y[dateidx + H < start])
+            for fold, (x, y, dateidx) in datasets.items() if fold < target
+        ]
+        X = np.vstack([item[0] for item in parts])
+        y = np.concatenate([item[1] for item in parts])
+        if len(y) < 300:
+            raise ValueError(f"Treinamento insuficiente para fold {target}.")
+        bottom, top = np.percentile(y, [1, 99])
+        model = make_pipeline(StandardScaler(), Ridge(alpha=RIDGE_ALPHA))
+        model.fit(X, np.clip(y, bottom, top))
+        models[target] = model
+        ridge = model.named_steps["ridge"]
+        scaler = model.named_steps["standardscaler"]
+        audit[target] = {
+            "linhas_treino": len(y), "inicio_fold_teste": str(b.dates[start]),
+            "fim_maximo_rotulo_treino": str(b.dates[start - 1]),
+            "variaveis": list(FEATURES),
+            "coeficientes_padronizados": ridge.coef_.tolist(),
+            "intercepto": float(ridge.intercept_),
+            "media_features": scaler.mean_.tolist(),
+            "escala_features": scaler.scale_.tolist(),
+            "winsorizacao_treino": [float(bottom), float(top)],
+        }
+    return models, audit
+
+
+def _taxa(b: Base, lado: str, q: float, preco: float) -> float:
+    if q <= 0 or preco <= 0:
+        return 0.0
+    conf = b.config
+    arred = lambda value: (
+        math.ceil((value - 1e-12) * 100) / 100 if value > 0 else 0.0
+    )
+    cat = arred(q * float(conf["cat_fee_per_share"]))
+    comissao = arred(q * preco * float(conf["commission_rate"]))
+    if lado == "BUY":
+        return cat + comissao
+    sec = arred(q * preco * float(conf["sec_fee_rate"]))
+    taf = arred(min(q * float(conf["taf_fee_per_share"]), float(conf["taf_fee_cap"])))
+    return cat + comissao + sec + taf
+
+
+def _preco(b: Base, preco: float, lado: str) -> float:
+    slippage = float(b.config["slippage_bps"]) / 10000
+    return preco * (1 + slippage if lado == "BUY" else 1 - slippage)
+
+
+def _custo_estimado(b: Base, i: int, cur: int, j: int,
+                    capital: float, q: float) -> float:
+    # Cotacoes no fechamento i sao conhecidas; a abertura i+1 NAO e.
+    if capital <= 0:
+        return float("inf")
+    sell = _preco(b, b.cl[i, cur], "SELL")
+    buy = _preco(b, b.cl[i, j], "BUY")
+    sell_fee = _taxa(b, "SELL", q, sell)
+    buy_fee = _taxa(b, "BUY", capital / buy, buy)
+    spread = max(0.0, float(b.config["slippage_bps"])) / 10000
+    return (sell_fee + buy_fee) / capital + 2 * spread
+
+
+def _score_test_pairs(b: Base, models) -> pd.DataFrame:
+    records = []
+    for target, model in models.items():
+        for i in np.flatnonzero(b.fold == target):
+            cur = int(b.base_current[i])
+            if i < 25 or cur < 0 or i + H >= len(b.op):
+                continue
+            for j in np.argsort(-b.scores[i])[:TOP_K]:
+                if j == cur:
+                    continue
+                x = _features(b, i, cur, int(j), int(b.base_holding[i]))
+                if not np.isfinite(x).all():
+                    continue
+                observed = math.log(b.cl[i + H, j] / b.op[i + 1, j])
+                observed -= math.log(b.cl[i + H, cur] / b.op[i + 1, cur])
+                records.append({
+                    "data": b.dates[i], "fold": target,
+                    "atual": b.symbols[cur], "candidato": b.symbols[int(j)],
+                    "vantagem_prevista": float(model.predict(x.reshape(1, -1))[0]),
+                    "vantagem_realizada_3_pregoes_sem_trocas": observed,
+                })
+    return pd.DataFrame(records)
+
+
+def simular(b: Base, models=None):
+    """Contabilidade equivalente a Control: abre i+1, fecha i+1, final liquida."""
+    cash = float(b.config["initial_capital"])
+    pos, quantity, holding = -1, 0.0, 0
+    equity, decisions, trades = [], [], []
+    total_fees = 0.0
+    rotations = 0
+    for i, date in enumerate(b.dates):
+        target = int(b.base_actions[i]) if models is None or b.fold[i] == 1 else pos
+        ranking = []
+        if models is not None and b.fold[i] >= 2:
+            if pos < 0:
+                target = int(np.nanargmax(b.scores[i]))
+            else:
+                capital = cash + quantity * b.cl[i, pos]
+                model = models[int(b.fold[i])]
+                for cand in np.argsort(-b.scores[i])[:TOP_K]:
+                    if cand == pos or not np.isfinite(b.scores[i, cand]):
+                        continue
+                    features = _features(b, i, pos, int(cand), holding)
+                    if not np.isfinite(features).all():
+                        continue
+                    predicted = float(model.predict(features.reshape(1, -1))[0])
+                    cost = _custo_estimado(
+                        b, i, pos, int(cand), capital, quantity,
+                    )
+                    ranking.append({
+                        "candidato": b.symbols[int(cand)],
+                        "vantagem_prevista": predicted,
+                        "custo_estimado": cost,
+                        "vantagem_liquida": predicted - cost,
+                    })
+                ranking.sort(key=lambda x: x["vantagem_liquida"], reverse=True)
+                # Manter tem vantagem incremental zero; nenhuma regra por tempo.
+                if ranking and ranking[0]["vantagem_liquida"] > 0:
+                    target = b.symbols.index(ranking[0]["candidato"])
+        old = pos
+        actions = []
+        if target != pos:
+            if pos >= 0:
+                price = _preco(b, b.op[i + 1, pos], "SELL")
+                charge = _taxa(b, "SELL", quantity, price)
+                value = quantity * price
+                cash += value - charge
+                total_fees += charge
+                trades.append({
+                    "data": b.exec_dates[i],
+                    "data_decisao": date, "fold": int(b.fold[i]), "acao": "SELL",
+                    "ativo": b.symbols[pos], "quantidade": quantity,
+                    "preco": price, "valor": value, "taxas": charge,
+                    "volume_dia": b.volume[i + 1, pos],
+                    "participacao_volume": (
+                        quantity / b.volume[i + 1, pos]
+                        if b.volume[i + 1, pos] > 0 else None
+                    ),
+                })
+                actions.append("SELL")
+            pos = target
+            quantity = 0.0
+            holding = 0
+            if pos >= 0:
+                price = _preco(b, b.op[i + 1, pos], "BUY")
+                quantity = cash / price
+                for _ in range(25):
+                    fee = _taxa(b, "BUY", quantity, price)
+                    updated = max(0.0, (cash - fee) / price)
+                    if abs(updated - quantity) < 1e-10:
+                        quantity = updated
+                        break
+                    quantity = updated
+                fee = _taxa(b, "BUY", quantity, price)
+                value = quantity * price
+                cash -= value + fee
+                total_fees += fee
+                trades.append({
+                    "data": b.exec_dates[i],
+                    "data_decisao": date, "fold": int(b.fold[i]), "acao": "BUY",
+                    "ativo": b.symbols[pos], "quantidade": quantity,
+                    "preco": price, "valor": value, "taxas": fee,
+                    "volume_dia": b.volume[i + 1, pos],
+                    "participacao_volume": (
+                        quantity / b.volume[i + 1, pos]
+                        if b.volume[i + 1, pos] > 0 else None
+                    ),
+                })
+                actions.append("BUY")
+                holding = 1
+            if old >= 0 and target >= 0:
+                rotations += 1
+        elif pos >= 0:
+            holding += 1
+        amount = cash + (
+            quantity * b.cl[i + 1, pos] if pos >= 0 else 0.0
+        )
+        equity.append(float(amount))
+        decisions.append({
+            "data_decisao": date, "fold": int(b.fold[i]),
+            "posicao_antes": b.symbols[old] if old >= 0 else "CASH",
+            "posicao_depois": b.symbols[pos] if pos >= 0 else "CASH",
+            "holding_apos": holding,
+            "acao": "+".join(actions) or "HOLD",
+            "pontuacao_mais_alta_bruta": b.symbols[int(np.nanargmax(b.scores[i]))],
+            "vantagem_melhor_candidato_liquida": (
+                ranking[0]["vantagem_liquida"] if ranking else None
+            ),
+            "candidatos_avaliados": json.dumps(ranking, ensure_ascii=False),
+            "patrimonio": float(amount),
+        })
+    if pos >= 0:
+        price = _preco(b, b.cl[len(b.dates), pos], "SELL")
+        fee = _taxa(b, "SELL", quantity, price)
+        cash += quantity * price - fee
+        total_fees += fee
+        equity[-1] = cash
+        decisions[-1]["patrimonio"] = cash
+        trades.append({
+            "data": b.exec_dates[-1], "data_decisao": b.dates[-1],
+            "fold": int(b.fold[-1]), "acao": "FINAL_SELL",
+            "ativo": b.symbols[pos], "quantidade": quantity, "preco": price,
+            "valor": quantity * price, "taxas": fee,
+            "volume_dia": b.volume[-1, pos],
+            "participacao_volume": (
+                quantity / b.volume[-1, pos] if b.volume[-1, pos] > 0 else None
+            ),
+        })
+    return np.asarray(equity), pd.DataFrame(decisions), pd.DataFrame(trades), {
+        "capital_final": float(equity[-1]),
+        "rotacoes": int(rotations),
+        "total_taxas": total_fees,
+    }
+
+
+def _performance_by_fold(b: Base, curve: np.ndarray) -> list[dict]:
+    result = []
+    for f in (1, 2, 3):
+        positions = np.flatnonzero(b.fold == f)
+        start = float(curve[positions[0] - 1]) if positions[0] else 10000.0
+        end = float(curve[positions[-1]])
+        daily = pd.Series(curve[positions]).pct_change().dropna()
+        result.append({
+            "fold": f, "inicio": str(b.dates[positions[0]]),
+            "fim": str(b.dates[positions[-1]]),
+            "fator_capital": end / start,
+            "capital_inicio": start, "capital_final": end,
+            "sharpe": (
+                float(np.sqrt(252) * daily.mean() / daily.std())
+                if daily.std() > 0 else None
+            ),
+        })
+    return result
+
+
+def _resumo_curva(curve: np.ndarray) -> dict:
+    changes = pd.Series(curve).pct_change().dropna()
+    maximum = np.maximum.accumulate(curve)
+    return {
+        "capital_final": float(curve[-1]),
+        "drawdown_maximo": float(np.min(curve / maximum - 1)),
+        "sharpe": (
+            float(np.sqrt(252) * changes.mean() / changes.std())
+            if changes.std() > 0 else None
+        ),
+    }
+
+
+def _pacote(destino: Path, fonte: Path) -> Path:
+    archive = destino.parent / (destino.name + ".zip")
+    temp = archive.with_suffix(".zip.tmp")
+    checksums = {
+        file.relative_to(destino).as_posix(): _hash_bytes(file.read_bytes())
+        for file in sorted(destino.rglob("*")) if file.is_file()
+    }
+    _write_json(destino / "arquivos_sha256.json", checksums)
+    with ZipFile(temp, "w", ZIP_DEFLATED, compresslevel=6, allowZip64=True) as z:
+        for file in sorted(destino.rglob("*")):
+            if file.is_file():
+                z.write(file, arcname=f"{destino.name}/{file.relative_to(destino)}")
+        z.write(fonte, arcname="dados_origem/pesquisa_permanencia_minima.zip")
+    with ZipFile(temp) as z:
+        if z.testzip() is not None:
+            raise RuntimeError("ZIP falhou verificacao de CRC.")
+        for file, expected in checksums.items():
+            if _hash_bytes(z.read(f"{destino.name}/{file}")) != expected:
+                raise RuntimeError(f"SHA incorreto: {file}")
+    temp.replace(archive)
+    return archive
+
+
+def executar_vantagem() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--pacote", type=Path, default=None)
+    args, _ = parser.parse_known_args()
+    pacote = args.pacote
+    if pacote is None:
+        options = [
+            ROOT / "output" / NOME_ZIP,
+            ROOT / "dados" / "experimentos" / "permanencia_minima" / "entradas" / NOME_ZIP,
+            Path.home() / "Downloads" / NOME_ZIP,
+            Path("/mnt/data") / NOME_ZIP,
+        ]
+        pacote = next((x for x in options if x.is_file()), None)
+    if pacote is None or not pacote.is_file():
+        raise FileNotFoundError(
+            f"ZIP de origem nao encontrado: {NOME_ZIP}. "
+            "Use --pacote caminho/do/ZIP."
+        )
+    b = carregar(pacote)
+    print(f"[DADOS] {len(b.dates)} decisoes | 75 ativos | 3 folds")
+    baseline, base_decisions, base_trades, base_stats = simular(b)
+    error = float(np.max(np.abs(baseline - b.base_equity)))
+    if error > 0.01 or abs(baseline[-1] - 587165941.1330212) > 0.01:
+        raise RuntimeError(
+            f"Control nao reproduzido: divergencia maxima US$ {error:.6f}. "
+            "Nao comparar contrafactuais."
+        )
+    print(f"[PARIDADE] Control US$ {baseline[-1]:,.2f}; erro max {error:.8f}")
+    models, training_audit = treinar(b)
+    advantage_pairs = _score_test_pairs(b, models)
+    learned, learned_decisions, learned_trades, learned_stats = simular(b, models)
+    # Nunca empacotar artefatos de execucoes anteriores.
+    import shutil
+    if DESTINO.exists():
+        shutil.rmtree(DESTINO)
+    DESTINO.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({
+        "data_execucao": b.exec_dates,
+        "fold": b.fold, "controle": baseline, "vantagem": learned,
+    }).to_csv(DESTINO / "comparacao_patrimonio_diario.csv", index=False)
+    base_decisions.to_csv(DESTINO / "decisoes_control.csv", index=False)
+    learned_decisions.to_csv(DESTINO / "decisoes_vantagem.csv", index=False)
+    base_trades.to_csv(DESTINO / "operacoes_control.csv", index=False)
+    learned_trades.to_csv(DESTINO / "operacoes_vantagem.csv", index=False)
+    advantage_pairs.to_csv(DESTINO / "vantagens_previstas_vs_realizadas.csv", index=False)
+    _write_json(DESTINO / "modelos_treinados.json", training_audit)
+    pairs_stats = {}
+    for fold, frame in advantage_pairs.groupby("fold"):
+        pairs_stats[int(fold)] = {
+            "amostras": len(frame),
+            "correlacao_spearman": float(frame["vantagem_prevista"].corr(
+                frame["vantagem_realizada_3_pregoes_sem_trocas"], method="spearman",
+            )),
+            "positivos_previstos_pct": float(
+                100 * (frame["vantagem_prevista"] > 0).mean()
+            ),
+        }
+    _write_json(DESTINO / "relatorio.json", {
+        "status": "completed_research_only",
+        "criado_utc": datetime.now(timezone.utc),
+        "modelo": "Ridge pairwise vantagem relativa de 3 pregoes",
+        "hiperparametros": {
+            "H": H, "top_k": TOP_K, "alpha": RIDGE_ALPHA,
+            "winsorizar_treino_percentis": [1, 99],
+            "treinamento_temporal": "Fold1->Fold2; Fold1+Fold2->Fold3",
+            "fold1": "Control original, sem meta-modelo",
+            "idade_posicao": "feature continua, nenhum minimo fixo",
+            "rotacao": "predicao diferencial liquida > 0",
+        },
+        "paridade_control_max_erro_dolar": error,
+        "origem_sha256": b.original_sha,
+        "contabilizacao": "replay no fechamento/abertura com fees conforme Control",
+        "controle": {**base_stats, **_resumo_curva(baseline)},
+        "vantagem": {**learned_stats, **_resumo_curva(learned)},
+        "folds_controle": _performance_by_fold(b, baseline),
+        "folds_vantagem": _performance_by_fold(b, learned),
+        "pares_oos": pairs_stats,
+        "limitacoes": [
+            "O universo foi selecionado a partir do historico; overfitting de selecao permanece.",
+            "Sem impacto de mercado nem limite de participacao no volume; ganhos financeiros podem ser inexequiveis.",
+            "Treino de pares condicionado a posicoes do Control, diferente da distribuicao da nova politica.",
+            "O primeiro fold e identico ao Control e serve somente para treinar.",
+            "A hipotese de retorno mantido por H pregoes ignora futuras novas rotacoes.",
+            "Nenhuma autorizacao para uso na Winner Live.",
+        ],
+        "ambiente": {"python": sys.version.split()[0], "plataforma": platform.platform()},
+    })
+    archive = _pacote(DESTINO, pacote)
+    print(f"[RESULTADO] Control=US$ {baseline[-1]:,.2f}; "
+          f"vantagem=US$ {learned[-1]:,.2f}")
+    print(f"[ZIP] {archive}")
+
+
 if __name__ == "__main__":
-    main()
+    (executar_vantagem if MODO == "vantagem" else main)()
