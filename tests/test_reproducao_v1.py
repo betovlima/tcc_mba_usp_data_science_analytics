@@ -757,3 +757,68 @@ def test_official_runner_silences_only_pandas4_warning() -> None:
     assert 'warnings.filterwarnings(' in source
     assert '"ignore"' in source
     assert 'warnings.filterwarnings("ignore")' not in source
+
+
+def test_rotation_advantage_reuses_one_verified_report_zip(tmp_path) -> None:
+    """Tests the actual ZIP publisher without running a costly TCC backtest."""
+    import hashlib
+    import json
+    import math
+    import shutil
+    from datetime import datetime
+    from zipfile import ZIP_DEFLATED, ZipFile
+
+    import numpy as np
+    import pytest
+
+    script = ROOT / "pesquisar_permanencia_minima_spyder.py"
+    source = script.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    selected = {
+        "_hash_bytes", "_json_safe", "_write_json",
+        "_pacote", "_publicar_pasta_vantagem",
+    }
+    definitions = [
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in selected
+    ]
+    assert {node.name for node in definitions} == selected
+    env = {
+        "hashlib": hashlib, "json": json, "math": math,
+        "shutil": shutil, "datetime": datetime,
+        "np": np, "pd": pd, "Path": Path,
+        "ZipFile": ZipFile, "ZIP_DEFLATED": ZIP_DEFLATED,
+        "DESTINO": tmp_path / "pesquisa_vantagem_rotacao",
+    }
+    exec(compile(ast.Module(body=definitions, type_ignores=[]), str(script), "exec"), env)
+    stage = tmp_path / ".pesquisa_vantagem_rotacao_em_execucao"
+    source_package = tmp_path / "pesquisa_permanencia_minima.zip"
+    source_package.write_bytes(b"frozen-input")
+
+    for content in ("primeiro", "segundo"):
+        stage.mkdir()
+        (stage / "comparacao_resultados.csv").write_text(content, encoding="utf-8")
+        archive = env["_pacote"](stage, source_package)
+        env["_publicar_pasta_vantagem"](stage)
+        assert archive == tmp_path / "pesquisa_vantagem_rotacao.zip"
+        assert archive.is_file()
+        assert (tmp_path / "pesquisa_vantagem_rotacao" / "comparacao_resultados.csv").read_text(encoding="utf-8") == content
+        with ZipFile(archive) as zipped:
+            assert zipped.testzip() is None
+            assert zipped.read("pesquisa_vantagem_rotacao/comparacao_resultados.csv") == content.encode("utf-8")
+            checksums = json.loads(zipped.read("pesquisa_vantagem_rotacao/arquivos_sha256.json"))
+            assert checksums["comparacao_resultados.csv"] == hashlib.sha256(content.encode("utf-8")).hexdigest()
+            assert zipped.read("dados_origem/pesquisa_permanencia_minima.zip") == b"frozen-input"
+    assert not list(tmp_path.glob("pesquisa_vantagem_rotacao_v*.zip"))
+
+    # A failed new package must leave the last complete ZIP in place.
+    previous = archive.read_bytes()
+    stage.mkdir()
+    (stage / "comparacao_resultados.csv").write_text("incompleto", encoding="utf-8")
+    source_package.unlink()
+    with pytest.raises(FileNotFoundError):
+        env["_pacote"](stage, source_package)
+    assert archive.read_bytes() == previous
+    assert (tmp_path / "pesquisa_vantagem_rotacao" / "comparacao_resultados.csv").read_text(encoding="utf-8") == "segundo"
+    assert "pesquisa_vantagem_rotacao_v2" not in source
+    assert "pesquisa_vantagem_rotacao_v3" not in source
