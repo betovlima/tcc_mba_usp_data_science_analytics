@@ -19,7 +19,8 @@ considerando idade, retorno e risco da posicao efetiva. Um filtro causal
 de Kalman compara o efeito de suavizar a pontuacao de cada ativo.
 A calibracao e o treino usam apenas folds anteriores, com purge de 60 dias.
 O primeiro fold preserva o Control; nao e usado para validar a V3.
-O novo ZIP fica em output/pesquisa_vantagem_rotacao_v3.zip.
+O relatorio e sempre output/pesquisa_vantagem_rotacao.zip, substituido
+somente apos a verificacao integral; nenhum sufixo vN e criado.
 Os modos antigos de pesquisa permanecem disponiveis para reproducao.
 
 Nao acessa MongoDB, nao busca novas cotacoes, nao reconstrói ativos
@@ -679,7 +680,7 @@ def executar_pesquisa_vantagem() -> None:
     from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 
     horizonte, alpha = 3, 20.0
-    saida = ROOT / "output" / "pesquisa_vantagem_rotacao"
+    saida = DESTINO_TEMP
     pacote = ROOT / "output" / "pesquisa_permanencia_minima.zip"
     destino = ROOT / "output" / "pesquisa_vantagem_rotacao.zip"
 
@@ -1058,7 +1059,6 @@ def executar_pesquisa_vantagem() -> None:
         })
 
     # Nenhuma saida de um teste incompleto pode ser apresentada como concluida.
-    destino.unlink(missing_ok=True)
     if saida.exists():
         shutil.rmtree(saida)
     saida.mkdir(parents=True, exist_ok=True)
@@ -1134,6 +1134,7 @@ def executar_pesquisa_vantagem() -> None:
             if hashlib.sha256(dado).hexdigest() != esperado:
                 raise RuntimeError(f"SHA diferente para {nome}")
     tmp.replace(destino)
+    _publicar_pasta_vantagem(saida)
     print(
         f"[VANTAGEM] Control US$ {resultados_base[-1]:,.2f} | "
         f"aprendido US$ {novo.metrics['strategy_ending_capital']:,.2f}",
@@ -1184,6 +1185,7 @@ from sklearn.preprocessing import StandardScaler
 
 ROOT = Path(__file__).resolve().parent
 DESTINO = ROOT / "output" / "pesquisa_vantagem_rotacao"
+DESTINO_TEMP = ROOT / "output" / ".pesquisa_vantagem_rotacao_em_execucao"
 H = 3
 TOP_K = 6
 RIDGE_ALPHA = 20.0
@@ -1654,7 +1656,8 @@ def _resumo_curva(curve: np.ndarray) -> dict:
 
 
 def _pacote(destino: Path, fonte: Path) -> Path:
-    archive = destino.parent / (destino.name + ".zip")
+    """Empacota o relatorio em nome fixo, usando staging para impedir ZIP parcial."""
+    archive = DESTINO.with_suffix(".zip")
     temp = archive.with_suffix(".zip.tmp")
     checksums = {
         file.relative_to(destino).as_posix(): _hash_bytes(file.read_bytes())
@@ -1664,16 +1667,23 @@ def _pacote(destino: Path, fonte: Path) -> Path:
     with ZipFile(temp, "w", ZIP_DEFLATED, compresslevel=6, allowZip64=True) as z:
         for file in sorted(destino.rglob("*")):
             if file.is_file():
-                z.write(file, arcname=f"{destino.name}/{file.relative_to(destino)}")
+                z.write(file, arcname=f"{DESTINO.name}/{file.relative_to(destino)}")
         z.write(fonte, arcname="dados_origem/pesquisa_permanencia_minima.zip")
     with ZipFile(temp) as z:
         if z.testzip() is not None:
             raise RuntimeError("ZIP falhou verificacao de CRC.")
         for file, expected in checksums.items():
-            if _hash_bytes(z.read(f"{destino.name}/{file}")) != expected:
+            if _hash_bytes(z.read(f"{DESTINO.name}/{file}")) != expected:
                 raise RuntimeError(f"SHA incorreto: {file}")
     temp.replace(archive)
     return archive
+
+
+def _publicar_pasta_vantagem(temporaria: Path) -> None:
+    """Substitui apenas a pasta de relatorios depois do ZIP verificado."""
+    if DESTINO.exists():
+        shutil.rmtree(DESTINO)
+    temporaria.replace(DESTINO)
 
 
 def executar_vantagem() -> None:
@@ -1924,7 +1934,7 @@ def executar_vantagem_v2():
         raise RuntimeError("Controle original nao reproduzido: "+str(error))
     q, realized, training = _v2_train(b)
     import shutil
-    destination = ROOT/"output"/"pesquisa_vantagem_rotacao_v2"
+    destination = DESTINO_TEMP
     if destination.exists():
         shutil.rmtree(destination)
     destination.mkdir(parents=True)
@@ -1979,7 +1989,8 @@ def executar_vantagem_v2():
         destination/"comparacao_resultados.csv",index=False,
     )
     _write_json(destination/"treinamento_multihorizonte.json",training)
-    _write_json(destination/"manifesto_v2.json",{
+    _write_json(destination/"manifesto_experimento.json",{
+        "modo": MODO,
         "status":"completed_research_only",
         "modelo":"Ridge multihorizonte por ativo, sem restricao temporal",
         "horizontes":V2_H,"pesos":V2_W,"features":V2_FEATURES,
@@ -2001,6 +2012,7 @@ def executar_vantagem_v2():
         ],
     })
     archive = _pacote(destination,source)
+    _publicar_pasta_vantagem(destination)
     print("[ZIP]",archive,flush=True)
 
 
@@ -2506,7 +2518,7 @@ def executar_vantagem_v3() -> None:
                 f"divergem do original {b.scores.shape}."
             )
         score_kalman[indices, :] = filtrado[indices, :]
-    dest = ROOT/"output"/"pesquisa_vantagem_rotacao_v3"
+    dest = DESTINO_TEMP
     import shutil
     if dest.exists():
         shutil.rmtree(dest)
@@ -2581,7 +2593,8 @@ def executar_vantagem_v3() -> None:
         dest/"comparacao_resultados.csv",index=False,
     )
     _write_json(dest/"calibracao_filtros_e_modelos.json",configurations)
-    _write_json(dest/"manifesto_experimento_v3.json",{
+    _write_json(dest/"manifesto_experimento.json",{
+        "modo": MODO,
         "status":"completed_research_only",
         "branch":"research/permanencia-minima-contrafactual-v1",
         "arquivo":"pesquisar_permanencia_minima_spyder.py",
@@ -2610,6 +2623,7 @@ def executar_vantagem_v3() -> None:
     })
     shutil.copyfile(Path(__file__),dest/"codigo_executado.py")
     archive=_pacote(dest,source)
+    _publicar_pasta_vantagem(dest)
     print(f"[V3] ZIP pronto: {archive}",flush=True)
 
 if __name__ == "__main__":
