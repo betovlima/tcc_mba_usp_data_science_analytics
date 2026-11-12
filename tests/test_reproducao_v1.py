@@ -1070,3 +1070,46 @@ def test_alertas_cauda_ficam_agrupados_por_episodio() -> None:
         detail.iloc[0]["retorno_observado_1d_primeiro_alerta"], -0.12,
     )
     assert detail.iloc[0]["resultado_episodio_futuro_nao_e_feature"]
+
+
+def test_modelo_cauda_preserva_treino_anterior_e_limiar_de_treino() -> None:
+    import importlib
+    import numpy as np
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    n = 600
+    dates = pd.date_range("2020-01-01", periods=n, freq="B", tz="UTC")
+    rng = np.random.default_rng(101)
+    signals = rng.normal(0, 1, size=n)
+    losses = ((np.arange(n) % 11) == 0)
+    daily = pd.DataFrame({
+        "posicao_mantida": np.ones(n, dtype=bool),
+        "retorno_observado_1d": np.where(losses, -0.08, 0.01),
+        "walk_forward_fold": np.repeat([1, 2, 3], 200),
+        "data_decisao": dates.astype(str),
+        "data_execucao": (dates + pd.Timedelta(days=1)).astype(str),
+        "episodio_id": np.arange(n),
+        "selected_asset": ["AAA"] * n,
+        "holding_days_at_decision": np.full(n, 2),
+        "score_change_from_entry": signals,
+        "position_drawdown_from_peak": -np.abs(signals * 0.01),
+        "position_return_since_entry": signals * 0.02,
+        "best_vs_second_gap": np.abs(signals * 0.005),
+        "spy_return_5": signals * 0.01,
+        "universe_breadth_5": np.clip(0.5 + signals * 0.1, 0, 1),
+    })
+    predictions, metrics = script._a_experimento_risco_cauda_oos(daily)
+    assert len(metrics) == 2
+    assert metrics["fold_teste"].tolist() == [2, 3]
+    assert len(predictions) == 400
+    assert predictions["probabilidade_modelo_nao_calibrada"].between(0, 1).all()
+    assert metrics["observacoes_treino"].gt(100).all()
+    assert metrics["perdas_5pct_treino"].ge(8).all()
+    assert metrics["perdas_5pct_teste"].ge(2).all()
+    assert metrics["limiar_alerta_percentil_90_treino"].between(0, 1).all()
+    assert metrics["cobertura_quedas"].between(0, 1).all()
+    for _, row in metrics.iterrows():
+        assert pd.Timestamp(row["ultima_execucao_treino"]) < (
+            pd.Timestamp(row["primeira_decisao_teste"])
+            - pd.Timedelta(days=30)
+        )
