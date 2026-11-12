@@ -204,9 +204,11 @@ def calibrar_controle(pesquisa: Any, contexto: dict,
 # %% 4. Contrafactual: so a permanencia muda, usando EXACTAMENTE os mesmos scores.
 def simular_contrafactual(pesquisa: Any, contexto: dict,
                           minimo: int, margens: dict[int, float]):
-    config = contexto["config"].copiar_modelo(
-        update={"rotation_min_holding_days": minimo},
-    )
+    # O contrato completo de 75 ativos precisa ser identico ao do executor
+    # oficial; nao apenas a lista passada para a funcao de politica.
+    config = pesquisa.construir_configuracao_controle(
+        contexto["config"], assets=contexto["simbolos"],
+    ).copiar_modelo(update={"rotation_min_holding_days": minimo})
     simbolos = contexto["simbolos"]
     frames = {**contexto["frames_base"], **contexto["quadros"]}
     politicas = {}
