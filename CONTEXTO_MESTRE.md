@@ -134,26 +134,26 @@ A tag de referência da versão é **`v1.23.0`**, criada somente após sucesso d
 
 ## Atualização de pesquisa: sensibilidade de margens (12/11/2026)
 
-A branch \`research/permanencia-minima-contrafactual-v1\` preserva um único arquivo
-de pesquisa, \`pesquisar_permanencia_minima_spyder.py\`, executado com F5 no
-Spyder. O modo \`sensibilidade_margens\` compara o Control congelado com um
+A branch `research/permanencia-minima-contrafactual-v1` preserva um único arquivo
+de pesquisa, `pesquisar_permanencia_minima_spyder.py`, executado com F5 no
+Spyder. O modo `sensibilidade_margens` compara o Control congelado com um
 cenário contrafactual no **mesmo snapshot científico**, sem retreinamento,
 download, acesso a contas ou alteração do motor oficial.
 
-- Fonte: \`output/pesquisa_permanencia_minima.zip\`, 75 ativos efetivos, 3
+- Fonte: `output/pesquisa_permanencia_minima.zip`, 75 ativos efetivos, 3
   folds e 1.560 sessões; primeiro é reproduzido o Control histórico.
-- Margens calibradas originais por fold: \`{1: 0.0, 2: 0.01, 3: 0.0}\`.
-  As margens efetivas são \`0.0005 / 0.01 / 0.0005\`.
+- Margens calibradas originais por fold: `{1: 0.0, 2: 0.01, 3: 0.0}`.
+  As margens efetivas são `0.0005 / 0.01 / 0.0005`.
 - Cenário de sensibilidade: candidatos por fold
-  \`{1: 0.01, 2: 0.0, 3: 0.01}\`, margens efetivas
-  \`0.01 / 0.0005 / 0.01\`.
+  `{1: 0.01, 2: 0.0, 3: 0.01}`, margens efetivas
+  `0.01 / 0.0005 / 0.01`.
 - Com a mesma base e as mesmas previsões, a reprodução original resultou
   em **US$ 587.165.941,13**, 354 rotações. O cenário contrafactual resultou
   em **US$ 58.862.373,39**, 334 rotações.
 - A reconstrução da política com margens originais reproduziu exatamente a
   trajetória Control (erro máximo de US$ 0,00).
 - O relatório continua usando apenas
-  \`output/pesquisa_vantagem_rotacao.zip\` (substituível com verificação CRC
+  `output/pesquisa_vantagem_rotacao.zip` (substituível com verificação CRC
   e SHA-256), sem sufixos de versão.
 
 **Limite:** este é um teste de sensibilidade *ex post*, não uma nova calibração,
