@@ -6,8 +6,8 @@ Este e o arquivo UNICO para todas as rodadas da pesquisa nesta branch:
 Spyder: abra este arquivo e execute com F5.
 Terminal: python pesquisar_permanencia_minima_spyder.py
 
-Modos: MODO = "sensibilidade_margens" (padrao; teste de sensibilidade
-na mesma base congelada), "deterioracao" (risco de permanencia),
+Modos: MODO = "analisar_permanencia" (padrao; diagnostico de decisoes
+historicas exportadas), "sensibilidade_margens", "deterioracao",
 "vantagem_v3", "vantagem_v2", "vantagem" (historicos), "verificar" ou
 "comparar" (reproduz quatro permanencias).
 
@@ -57,7 +57,7 @@ import numpy as np
 import pandas as pd
 
 # %% 0. Um arquivo, uma branch; somente este seletor muda entre modos.
-MODO = "sensibilidade_margens"  # "sensibilidade_margens", "deterioracao", "vantagem_v3", "vantagem_v2", "vantagem", "comparar", "verificar"
+MODO = "analisar_permanencia"  # "analisar_permanencia", "sensibilidade_margens", "deterioracao", "vantagem_v3", "vantagem_v2", "vantagem", "comparar", "verificar"
 PERMANENCIAS = (0, 1, 2, 3)
 PERMANENCIA_CONTROLE = 2
 TOLERANCIA_CENTAVO = 0.01
@@ -3081,8 +3081,288 @@ def executar_sensibilidade_margens() -> None:
     )
     print(f"[ZIP] {archive}", flush=True)
 
+
+# %% 13. Auditoria observacional de permanencia em uma exportacao de replay.
+# Utiliza SOMENTE o ZIP fornecido e seus campos de decisao. Nao refaz treino,
+# nao usa contas externas, nao presume OHLCV ou execucoes contrafactuais.
+
+
+def _a_localizar_replay() -> Path:
+    """Descobre o replay completo nas pastas habituais, sem parametros externos."""
+    dirs = [ROOT / "output", ROOT, Path.home() / "Downloads"]
+    encontrados = []
+    for folder in dirs:
+        if not folder.is_dir():
+            continue
+        for path in folder.glob("*.zip"):
+            if not path.is_file() or path.name.startswith("pesquisa_"):
+                continue
+            try:
+                with ZipFile(path) as z:
+                    names = z.namelist()
+                    valid = (
+                        sum(n.endswith("_predictions.csv") for n in names) == 1
+                        and sum(n.endswith("_metrics.json") for n in names) == 1
+                        and "experiment_manifest.json" in names
+                    )
+                if valid:
+                    encontrados.append(path)
+            except (OSError, ValueError, BadZipFile):
+                continue
+    if not encontrados:
+        raise FileNotFoundError(
+            "Nao foi encontrado um ZIP de replay com predictions e metrics. "
+            "Coloque o ZIP exportado na pasta output/ ou Downloads."
+        )
+    return max(encontrados, key=lambda p: (p.stat().st_mtime, p.name))
+
+
+def _a_calcular(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Sinais de fechamento e resultados posteriores com censura por rotacao."""
+    required = (
+        "timestamp", "decision_date", "current_asset", "selected_asset",
+        "strategy_equity", "walk_forward_fold", "holding_days_at_decision",
+        "position_drawdown_from_peak", "position_return_since_entry",
+        "score_change_from_entry", "current_score", "raw_best_score",
+        "decision_reason", "universe_breadth_5",
+        "consecutive_days_current_not_top1",
+    )
+    absent = sorted(set(required) - set(df.columns))
+    if absent:
+        raise ValueError("Exportacao sem os campos necessarios: " + str(absent))
+    df = df.copy().reset_index(drop=True)
+    df["data_execucao"] = pd.to_datetime(
+        df["timestamp"], utc=True, errors="raise",
+    ).dt.strftime("%Y-%m-%d")
+    df["data_decisao"] = pd.to_datetime(
+        df["decision_date"], utc=True, errors="raise",
+    ).dt.strftime("%Y-%m-%d")
+    if df["data_execucao"].duplicated().any():
+        raise ValueError("Replay com datas de execucao duplicadas.")
+    df["episodio_id"] = df["selected_asset"].ne(
+        df["selected_asset"].shift(),
+    ).cumsum()
+    df["patrimonio_anterior"] = df["strategy_equity"].shift()
+    held = (
+        df["selected_asset"].eq(df["current_asset"])
+        & df["current_asset"].ne("CASH")
+        & df["holding_days_at_decision"].ge(2)
+    )
+    df["posicao_mantida"] = held
+    n = len(df)
+    for horizon in (1, 3, 5):
+        future = np.full(n, np.nan)
+        for i in range(1, n - horizon + 1):
+            if not held.iloc[i]:
+                continue
+            asset = df["current_asset"].iloc[i]
+            if not df["selected_asset"].iloc[i - 1:i + horizon].eq(asset).all():
+                continue
+            before = float(df["strategy_equity"].iloc[i - 1])
+            after = float(df["strategy_equity"].iloc[i + horizon - 1])
+            if before > 0:
+                future[i] = after / before - 1
+        df[f"retorno_observado_{horizon}d"] = future
+
+    episodes = []
+    capital_start = 10000.0
+    for episode_id, group in df.groupby("episodio_id", sort=True):
+        asset = str(group["selected_asset"].iloc[0])
+        if asset == "CASH":
+            continue
+        start, end = int(group.index[0]), int(group.index[-1])
+        before = (
+            float(df["strategy_equity"].iloc[start - 1])
+            if start else capital_start
+        )
+        after = float(df["strategy_equity"].iloc[end])
+        equity = np.r_[before, group["strategy_equity"].to_numpy(float)]
+        peaks = np.maximum.accumulate(equity)
+        row = {
+            "episodio_id": int(episode_id), "ativo": asset,
+            "fold": int(group["walk_forward_fold"].iloc[0]),
+            "data_inicio": str(group["data_execucao"].iloc[0]),
+            "data_fim": str(group["data_execucao"].iloc[-1]),
+            "prego_es": int(len(group)),
+            "capital_inicio": before, "capital_final": after,
+            "retorno_capital": after / before - 1,
+            "drawdown_maximo": float((equity / peaks - 1).min()),
+        }
+        for limit in (10, 15, 20, 30):
+            hits = group.loc[
+                group["posicao_mantida"]
+                & group["position_drawdown_from_peak"].le(-limit / 100),
+            ]
+            row[f"primeiro_alerta_dd_{limit}"] = (
+                str(hits["data_decisao"].iloc[0]) if len(hits) else None
+            )
+        episodes.append(row)
+    episodes = pd.DataFrame(episodes)
+    flags = {
+        "drawdown_10": df["position_drawdown_from_peak"].le(-0.10),
+        "drawdown_20": df["position_drawdown_from_peak"].le(-0.20),
+        "drawdown_30": df["position_drawdown_from_peak"].le(-0.30),
+        "pnl_negativo_10": df["position_return_since_entry"].le(-0.10),
+        "queda_utilidade_010": df["score_change_from_entry"].le(-0.10),
+        "drawdown_10_score_subiu": (
+            df["position_drawdown_from_peak"].le(-0.10)
+            & df["score_change_from_entry"].gt(0)
+        ),
+        "drawdown_10_score_caiu": (
+            df["position_drawdown_from_peak"].le(-0.10)
+            & df["score_change_from_entry"].le(0)
+        ),
+        "fora_topo_2": df["consecutive_days_current_not_top1"].ge(2),
+        "mercado_fraco": df["universe_breadth_5"].lt(0.30),
+    }
+    statistics = []
+    for horizon in (1, 3, 5):
+        outcomes = df[f"retorno_observado_{horizon}d"]
+        for fold in ("todos", 1, 2, 3):
+            eligible = held & outcomes.notna()
+            if fold != "todos":
+                eligible &= df["walk_forward_fold"].eq(fold)
+            for name, flag in flags.items():
+                cases = outcomes.loc[eligible & flag]
+                others = outcomes.loc[eligible & ~flag]
+                statistics.append({
+                    "fold": fold, "horizonte": horizon, "sinal": name,
+                    "observacoes": int(eligible.sum()),
+                    "com_sinal": int(len(cases)),
+                    "sem_sinal": int(len(others)),
+                    "retorno_medio_sinal": (
+                        float(cases.mean()) if len(cases) else None
+                    ),
+                    "retorno_mediano_sinal": (
+                        float(cases.median()) if len(cases) else None
+                    ),
+                    "fracao_negativa_sinal": (
+                        float(cases.lt(0).mean()) if len(cases) else None
+                    ),
+                    "fracao_perda_10_sinal": (
+                        float(cases.le(-0.10).mean()) if len(cases) else None
+                    ),
+                    "retorno_medio_sem_sinal": (
+                        float(others.mean()) if len(others) else None
+                    ),
+                    "fracao_negativa_sem_sinal": (
+                        float(others.lt(0).mean()) if len(others) else None
+                    ),
+                })
+    return df, episodes, pd.DataFrame(statistics)
+
+
+def _a_publicar_sem_fonte(working: Path) -> Path:
+    """Nome unico, CRC e SHA antes da publicacao. O ZIP fonte nao e copiado."""
+    archive = DESTINO.with_suffix(".zip")
+    tmp = archive.with_suffix(".zip.tmp")
+    checksums = {
+        f.relative_to(working).as_posix(): _hash_arquivo(f)
+        for f in sorted(working.rglob("*")) if f.is_file()
+    }
+    _write_json(working / "arquivos_sha256.json", checksums)
+    tmp.unlink(missing_ok=True)
+    try:
+        with ZipFile(tmp, "w", ZIP_DEFLATED, compresslevel=6) as z:
+            for file in sorted(working.rglob("*")):
+                if file.is_file():
+                    z.write(
+                        file, f"{DESTINO.name}/{file.relative_to(working)}",
+                    )
+        with ZipFile(tmp) as z:
+            if z.testzip() is not None:
+                raise RuntimeError("ZIP de auditoria corrompido.")
+            for name, expected in checksums.items():
+                if hashlib.sha256(
+                    z.read(f"{DESTINO.name}/{name}")
+                ).hexdigest() != expected:
+                    raise RuntimeError(f"SHA divergente em {name}")
+        tmp.replace(archive)
+        _publicar_pasta_vantagem(working)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+    return archive
+
+
+def executar_analise_permanencia() -> None:
+    """Analisa decisoes registradas; nao simula venda ou troca inexistente."""
+    from io import BytesIO
+
+    source = _a_localizar_replay()
+    with ZipFile(source) as z:
+        if z.testzip() is not None:
+            raise RuntimeError("ZIP de origem corrompido.")
+        predictions = next(
+            n for n in z.namelist() if n.endswith("_predictions.csv")
+        )
+        metric_name = next(
+            n for n in z.namelist() if n.endswith("_metrics.json")
+        )
+        raw = pd.read_csv(BytesIO(z.read(predictions)), low_memory=False)
+        metrics = json.loads(z.read(metric_name))
+    df, episodes, associations = _a_calcular(raw)
+    if len(df) < 100:
+        raise RuntimeError("Historico de decisoes insuficiente.")
+    dest = DESTINO_TEMP
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    df.to_csv(dest / "sinais_por_decisao.csv", index=False)
+    episodes.to_csv(dest / "episodios_posicao.csv", index=False)
+    associations.to_csv(
+        dest / "associacoes_sinais_e_retornos_observados.csv", index=False,
+    )
+    case = df.loc[
+        df["data_execucao"].between("2026-07-20", "2026-08-21")
+    ]
+    if not case.empty:
+        case.to_csv(
+            dest / "caso_capr_julho_agosto_2026.csv", index=False,
+        )
+    _write_json(dest / "manifesto_experimento.json", {
+        "status": "completed_descriptive_audit",
+        "modo": "analisar_permanencia",
+        "arquivo": Path(__file__).name,
+        "fonte_sha256": _hash_arquivo(source),
+        "capital_final_replay": metrics.get("strategy_ending_capital"),
+        "api_version": metrics.get("api_version"),
+        "sessoes": len(df),
+        "episodios": len(episodes),
+        "observacoes_posicao_mantida": int(df["posicao_mantida"].sum()),
+        "observacoes_1d": int(df["retorno_observado_1d"].notna().sum()),
+        "observacoes_3d": int(df["retorno_observado_3d"].notna().sum()),
+        "observacoes_5d": int(df["retorno_observado_5d"].notna().sum()),
+        "limitacoes": [
+            "Features correspondem ao fechamento da data de decisao.",
+            "Patrimonio corresponde ao fechamento posterior a ordem.",
+            "Retornos somente em periodos sem rotacao; censura seletiva.",
+            "Dias vizinhos e horizontes nao sao amostras independentes.",
+            "Nao e backtest contrafactual de venda, rotacao ou caixa.",
+            "Nao treina modelos nem utiliza dados futuros nas features.",
+            "Nenhuma conta real ou ordem externa e acessada.",
+        ],
+    })
+    (dest / "LEIA_ME.txt").write_text(
+        "Diagnostico observacional de permanencia em replay historico. "
+        "Nao e simulacao executavel de sair para CASH.\n"
+        "Sinais no fechamento de decisao; patrimonio no fechamento seguinte.\n"
+        "Para cada horizonte futuro, observacoes sao censuradas em rotacoes.\n",
+        encoding="utf-8",
+    )
+    shutil.copyfile(Path(__file__), dest / "codigo_executado.py")
+    archive = _a_publicar_sem_fonte(dest)
+    print(
+        f"[PERMANENCIA] {len(df)} sessoes, {len(episodes)} episodios; "
+        f"Control exportado US$ {metrics.get('strategy_ending_capital'):,.2f}.",
+        flush=True,
+    )
+    print("[ZIP]", archive, flush=True)
+
 if __name__ == "__main__":
-    if MODO == "sensibilidade_margens":
+    if MODO == "analisar_permanencia":
+        executar_analise_permanencia()
+    elif MODO == "sensibilidade_margens":
         executar_sensibilidade_margens()
     elif MODO == "deterioracao":
         executar_deterioracao()
