@@ -906,3 +906,52 @@ def test_deterioracao_features_nao_usam_preco_futuro() -> None:
     np.testing.assert_array_equal(before_x[40], after_x[40])
     assert before_y[40, 0] != after_y[40, 0]
     assert script.D_PURGE >= script.D_HORIZONTE
+
+
+def test_sensibilidade_margens_recalcula_fold_1_somente_quando_pedido() -> None:
+    import importlib
+    import numpy as np
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    assert script.MODO == "sensibilidade_margens"
+    assert script.MARGENS_ALTERNATIVAS == {1: 0.01, 2: 0.0, 3: 0.01}
+    b = SimpleNamespace(
+        dates=pd.date_range("2026-01-02", periods=3, freq="B"),
+        exec_dates=pd.date_range("2026-01-05", periods=3, freq="B"),
+        fold=np.array([1, 1, 1]),
+        symbols=["AAA"],
+        scores=np.array([[0.01], [0.02], [0.03], [0.04]]),
+        base_actions=np.array([-1, -1, -1]),
+        op=np.full((4, 1), 10.0), cl=np.full((4, 1), 10.0),
+        volume=np.full((4, 1), 100.0),
+        config={"initial_capital": 10000.0},
+    )
+    calls = []
+
+    def keep_cash(_, i, current, holding, capital, quantity):
+        calls.append(int(i))
+        return -1, []
+
+    original, _, _, _ = script.simular(
+        b, decision_callback=keep_cash, permitir_cash=True,
+    )
+    assert calls == []
+    alternativa, _, _, _ = script.simular(
+        b, decision_callback=keep_cash,
+        permitir_cash=True, aplicar_todos_folds=True,
+    )
+    assert calls == [0, 1, 2]
+    np.testing.assert_array_equal(original, alternativa)
+    np.testing.assert_array_equal(original, np.full(3, 10000.0))
+
+
+def test_sensibilidade_margens_nao_altera_pesquisa_de_deterioracao() -> None:
+    script = (ROOT / "pesquisar_permanencia_minima_spyder.py").read_text(
+        encoding="utf-8",
+    )
+    assert 'MODO = "sensibilidade_margens"' in script
+    assert 'elif MODO == "deterioracao"' in script
+    assert 'permitir_cash=True, aplicar_todos_folds=True' in script
+    assert "OOS" not in script.split("# %% 12. Sensibilidade")[1].split(
+        'if __name__ == "__main__":'
+    )[0]
