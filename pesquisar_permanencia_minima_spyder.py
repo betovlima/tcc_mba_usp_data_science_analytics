@@ -17,17 +17,30 @@ Nao acessa MongoDB, nao busca novas cotacoes, nao reconstrói ativos
 descontinuados, nao altera a Winner Live nem escreve em dados/u67.
 Os 10 candidatos requerem o cache historico local e seus SHA-256
 conferidos contra evidencias/manifest_universo_congelado.json.
-Resultados: output/pesquisa_permanencia_minima/
+Resultados completos: output/pesquisa_permanencia_minima/
+Pacote unico para analise: output/pesquisa_permanencia_minima.zip
+O ZIP inclui os quatro backtests, ranking integral, curvas, ordens, metricas
+por fold, cotacoes OHLCV congeladas, parametros, hashes e integridade verificada.
+So cria ZIP concluido se os 4 cenarios e a paridade do controle passarem.
 """
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import math
+import platform
+import shutil
+import sys
 import time
+from dataclasses import asdict
+from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
+from zipfile import ZIP_DEFLATED, ZipFile
 
+import numpy as np
 import pandas as pd
 
 # %% 0. Um arquivo, uma branch; somente este seletor muda entre modos.
@@ -37,6 +50,8 @@ PERMANENCIA_CONTROLE = 2
 TOLERANCIA_CENTAVO = 0.01
 ROOT = Path(__file__).resolve().parent
 SAIDA = ROOT / "output" / "pesquisa_permanencia_minima"
+SAIDA_TEMP = ROOT / "output" / ".pesquisa_permanencia_minima_em_execucao"
+ARQUIVO_ZIP = ROOT / "output" / "pesquisa_permanencia_minima.zip"
 MANIFESTO_CONGELADO = ROOT / "evidencias" / "manifest_universo_congelado.json"
 
 
@@ -48,11 +63,37 @@ def _hash_arquivo(arquivo: Path) -> str:
     return digest.hexdigest()
 
 
+def _json_seguro(valor: Any) -> Any:
+    """Converte valores numpy/pandas e NaN em JSON portavel e valido."""
+    if isinstance(valor, np.generic):
+        return _json_seguro(valor.item())
+    if isinstance(valor, float):
+        return valor if math.isfinite(valor) else None
+    if isinstance(valor, (str, bool, int)) or valor is None:
+        return valor
+    if isinstance(valor, (pd.Timestamp, datetime, Path)):
+        return str(valor)
+    if isinstance(valor, np.ndarray):
+        return [_json_seguro(item) for item in valor.tolist()]
+    if isinstance(valor, dict):
+        return {str(chave): _json_seguro(dado) for chave, dado in valor.items()}
+    if isinstance(valor, (list, tuple, set)):
+        return [_json_seguro(item) for item in valor]
+    return str(valor)
+
+
 def _salvar_json(caminho: Path, dados: Any) -> None:
     caminho.write_text(
-        json.dumps(dados, indent=2, ensure_ascii=False, default=str, allow_nan=False)
-        + "\n", encoding="utf-8",
+        json.dumps(_json_seguro(dados), indent=2, ensure_ascii=False,
+                   allow_nan=False) + "\n", encoding="utf-8",
     )
+
+
+def _versao_pacote(nome: str) -> str | None:
+    try:
+        return version(nome)
+    except PackageNotFoundError:
+        return None
 
 
 # %% 1. Verificar snapshot e universo exatos antes de qualquer treinamento.
@@ -263,7 +304,136 @@ def _linha_resumo(minimo: int, metricas: dict, referencia: float) -> dict:
     }
 
 
-# %% 5. Mesmo arquivo/branch para os proximos experimentos. Nao tocar em main.
+
+# %% 5. Evidencias completas para analise, sem depender de arquivos externos.
+def exportar_utilidades_oos(pesquisa: Any, contexto: dict, pasta: Path) -> None:
+    """Cada score OOS original por ativo, dia e fold. Sem novo treino."""
+    simbolos = contexto["simbolos"]
+    caminho = pasta / "utilidades_oos_todos_ativos.csv"
+    quantidade = 0
+    with caminho.open("w", newline="", encoding="utf-8") as handle:
+        escritor = csv.writer(handle)
+        escritor.writerow(("data_decisao", "fold_id", "ativo", "utilidade",
+                           "posicao_ranking", "disponivel"))
+        for estado in contexto["estados"]:
+            extras = {
+                ativo: contexto["caches"][ativo][estado.fold_id].decision_cache
+                for ativo in contexto["quadros"]
+            }
+            cache = pesquisa._merge_utility_caches(
+                estado.decision_cache, contexto["simbolos_base"],
+                extras, simbolos,
+            )
+            for data, vetor in sorted(cache.items()):
+                if len(vetor) != len(simbolos) + 1:
+                    raise RuntimeError("Vetor de utilidade fora do universo congelado.")
+                validos = [
+                    i for i in range(1, len(vetor))
+                    if np.isfinite(float(vetor[i]))
+                ]
+                validos.sort(key=lambda i: (-float(vetor[i]), simbolos[i - 1]))
+                ranking = {i: indice for indice, i in enumerate(validos, 1)}
+                for indice, ativo in enumerate(simbolos, 1):
+                    score = float(vetor[indice])
+                    disponivel = math.isfinite(score)
+                    escritor.writerow((
+                        str(data), estado.fold_id, ativo,
+                        score if disponivel else "",
+                        ranking.get(indice, ""), int(disponivel),
+                    ))
+                    quantidade += 1
+                caixa = float(vetor[0])
+                escritor.writerow((
+                    str(data), estado.fold_id, "CASH",
+                    caixa if math.isfinite(caixa) else "",
+                    0, int(math.isfinite(caixa)),
+                ))
+                quantidade += 1
+    print(f"[EVIDENCIAS] utilidades OOS completas: {quantidade} registros", flush=True)
+
+
+def exportar_cotacoes(contexto: dict, pasta: Path) -> None:
+    """OHLCV normalizado de todos os 75 ativos, inclusive treino/calibracao."""
+    destino = pasta / "cotacoes_ohlcv"
+    destino.mkdir(parents=True, exist_ok=True)
+    conjuntos = {**contexto["frames_base"], **contexto["quadros"]}
+    if set(conjuntos) != set(contexto["simbolos"]) or len(conjuntos) != 75:
+        raise RuntimeError("Faltam series de mercado para o pacote de analise.")
+    for ativo in contexto["simbolos"]:
+        frame = conjuntos[ativo]
+        colunas = ("open", "high", "low", "close", "volume")
+        if not all(coluna in frame.columns for coluna in colunas):
+            raise RuntimeError(f"Cotacoes incompletas de {ativo}")
+        frame.loc[:, list(colunas)].to_csv(
+            destino / f"{ativo}.csv", index=True, float_format="%.17g",
+        )
+    print(f"[EVIDENCIAS] 75 series OHLCV no pacote", flush=True)
+
+
+def empacotar_e_verificar(pasta: Path, destino: Path) -> tuple[int, str]:
+    """ZIP atomico, lista SHA-256 por arquivo e verificacao integral de leitura."""
+    arquivos = sorted(
+        (item for item in pasta.rglob("*") if item.is_file()
+         and item.name != "arquivos_sha256.json"),
+        key=lambda item: item.relative_to(pasta).as_posix(),
+    )
+    if not arquivos:
+        raise RuntimeError("Pacote vazio. Nenhum ZIP sera publicado.")
+    checksums = {
+        item.relative_to(pasta).as_posix(): {
+            "sha256": _hash_arquivo(item), "bytes": item.stat().st_size,
+        }
+        for item in arquivos
+    }
+    _salvar_json(pasta / "arquivos_sha256.json", {
+        "algoritmo": "SHA-256",
+        "arquivos": checksums,
+    })
+    arquivos.append(pasta / "arquivos_sha256.json")
+    temporario = destino.with_suffix(".zip.tmp")
+    if temporario.exists():
+        temporario.unlink()
+    try:
+        with ZipFile(temporario, "w", compression=ZIP_DEFLATED,
+                     compresslevel=6, allowZip64=True) as zipado:
+            for arquivo in arquivos:
+                zipado.write(
+                    arquivo,
+                    arcname=f"pesquisa_permanencia_minima/"
+                            f"{arquivo.relative_to(pasta).as_posix()}",
+                )
+        with ZipFile(temporario, "r") as zipado:
+            if zipado.testzip() is not None:
+                raise RuntimeError("Arquivo ZIP corrompido (CRC).")
+            presentes = set(zipado.namelist())
+            esperados = {
+                f"pesquisa_permanencia_minima/{item.relative_to(pasta).as_posix()}"
+                for item in arquivos
+            }
+            if presentes != esperados:
+                raise RuntimeError("Arquivo ZIP com conteudo divergente.")
+            for nome, registro in checksums.items():
+                conteudo = zipado.read(f"pesquisa_permanencia_minima/{nome}")
+                if hashlib.sha256(conteudo).hexdigest() != registro["sha256"]:
+                    raise RuntimeError(f"Falha na integridade SHA-256: {nome}")
+        return len(arquivos), _hash_arquivo(temporario)
+    except Exception:
+        temporario.unlink(missing_ok=True)
+        raise
+
+
+def publicar_resultado(pasta: Path) -> None:
+    """So publica output e ZIP depois de validar completamente o pacote."""
+    quantidade, digest = empacotar_e_verificar(pasta, ARQUIVO_ZIP)
+    if SAIDA.exists():
+        shutil.rmtree(SAIDA)
+    pasta.replace(SAIDA)
+    ARQUIVO_ZIP.with_suffix(".zip.tmp").replace(ARQUIVO_ZIP)
+    print(f"[ZIP] {ARQUIVO_ZIP} | arquivos={quantidade} "
+          f"sha256={digest}", flush=True)
+
+
+# %% 6. Mesmo arquivo/branch para os proximos experimentos. Nao tocar em main.
 def main() -> None:
     if MODO not in ("verificar", "comparar"):
         raise ValueError("MODO precisa ser 'verificar' ou 'comparar'.")
@@ -273,19 +443,76 @@ def main() -> None:
         print("[OK] Cache historico conferido. Nenhum modelo foi treinado.")
         return
 
+    # Nova execucao em pasta temporaria: um erro nao transforma arquivos
+    # parciais em pacote de resultados concluido.
+    SAIDA.parent.mkdir(parents=True, exist_ok=True)
+    if SAIDA_TEMP.exists():
+        shutil.rmtree(SAIDA_TEMP)
+    SAIDA_TEMP.mkdir(parents=True)
+    ARQUIVO_ZIP.unlink(missing_ok=True)
+    ARQUIVO_ZIP.with_suffix(".zip.tmp").unlink(missing_ok=True)
+
     contexto = preparar_contexto(pesquisa, contrato, selecionados)
     controle, metricas_base, calibracoes, margens = calibrar_controle(
         pesquisa, contexto, selecionados, contrato,
     )
-    # Tudo fica fora da pasta dos dados originais. Mesmo com erro/aborto,
-    # a integridade do snapshot e os dados congelados permanecem intactos.
-    SAIDA.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(calibracoes).to_csv(
-        SAIDA / "margens_controle_por_fold.csv", index=False,
+        SAIDA_TEMP / "margens_controle_por_fold.csv", index=False,
     )
+    contexto["continuidade"].to_csv(
+        SAIDA_TEMP / "auditoria_continuidade_candidatos.csv", index=False,
+    )
+    # Fonte de precos, vetor de pontuacoes e parametros para analise
+    # independente. Nunca incluir .env, credenciais ou dados de contas Live.
+    exportar_cotacoes(contexto, SAIDA_TEMP)
+    exportar_utilidades_oos(pesquisa, contexto, SAIDA_TEMP)
+    shutil.copyfile(
+        MANIFESTO_CONGELADO,
+        SAIDA_TEMP / "manifesto_universo_congelado_origem.json",
+    )
+    shutil.copyfile(
+        ROOT / "dados" / "u67" / "manifest.json",
+        SAIDA_TEMP / "manifesto_snapshot_u67_origem.json",
+    )
+    shutil.copyfile(
+        Path(__file__), SAIDA_TEMP / "codigo_experimento_executado.py",
+    )
+    _salvar_json(SAIDA_TEMP / "parametros_motor_e_ambiente.json", {
+        "configuracao_efetiva": asdict(contexto["config"]),
+        "parametros_experimentais": {
+            "variavel": "rotation_min_holding_days",
+            "cenarios": list(PERMANENCIAS),
+            "controle": PERMANENCIA_CONTROLE,
+            "margem_congelada_por_fold": margens,
+            "todos_os_folds_reusam_os_mesmos_modelos": True,
+            "recalibra_modelos_por_cenario": False,
+            "apenas_replay_altera_posicao_e_capital": True,
+        },
+        "ambiente": {
+            "python": sys.version.split()[0],
+            "plataforma": platform.platform(),
+            "numpy": np.__version__,
+            "pandas": pd.__version__,
+            "lightgbm": _versao_pacote("lightgbm"),
+            "scikit_learn": _versao_pacote("scikit-learn"),
+        },
+        "fontes": {
+            "script_sha256": _hash_arquivo(Path(__file__)),
+            "motor_rotacao_sha256": _hash_arquivo(ROOT / "engine" / "rotacao.py"),
+            "motor_modelo_sha256": _hash_arquivo(
+                ROOT / "engine" / "modelo_lightgbm.py"),
+            "expansao_sha256": _hash_arquivo(
+                ROOT / "pesquisar_expansao_u67_spyder.py"),
+            "snapshot_sha256": contrato["snapshot_sha256"],
+            "hashes_candidatos": contrato["candidate_file_hashes"],
+        },
+    })
+
     referencia = float(metricas_base["ending_capital"])
     linhas = []
     auditoria = {}
+    series = []
+    por_fold = []
     for minimo in (2, 0, 1, 3):
         print(f"[REPLAY] minimo={minimo} pregoes", flush=True)
         result, metrics, diagnostics = simular_contrafactual(
@@ -299,28 +526,76 @@ def main() -> None:
                     "Nao comparar cenarios."
                 )
         linhas.append(_linha_resumo(minimo, metrics, referencia))
-        # O caminho financeiro INTEIRO e recalculado para cada politica.
+        # Caminho financeiro INTEIRO recalculado para cada politica.
         result.predictions.to_csv(
-            SAIDA / f"patrimonio_diario_{minimo}_pregoes.csv",
+            SAIDA_TEMP / f"patrimonio_diario_{minimo}_pregoes.csv",
             index=True, float_format="%.17g",
         )
         result.trades.to_csv(
-            SAIDA / f"operacoes_{minimo}_pregoes.csv",
+            SAIDA_TEMP / f"operacoes_{minimo}_pregoes.csv",
             index=False, float_format="%.17g",
         )
-        pd.DataFrame([
+        diagnosticos = pd.DataFrame([
             {"data": str(data), **row}
             for data, row in sorted(diagnostics.items())
-        ]).to_csv(SAIDA / f"decisoes_{minimo}_pregoes.csv", index=False)
+        ])
+        diagnosticos.to_csv(
+            SAIDA_TEMP / f"decisoes_{minimo}_pregoes.csv", index=False,
+        )
+        if not {"selected_asset", "strategy_equity"}.issubset(
+                result.predictions.columns):
+            raise RuntimeError("Curva ou ativo ausente do replay.")
+        serie = result.predictions[["strategy_equity", "selected_asset"]].rename(
+            columns={
+                "strategy_equity": f"patrimonio_{minimo}_pregoes",
+                "selected_asset": f"ativo_{minimo}_pregoes",
+            }
+        )
+        if serie.index.has_duplicates:
+            raise RuntimeError("Datas duplicadas no replay diario.")
+        series.append(serie)
+        _salvar_json(
+            SAIDA_TEMP / f"metricas_completas_{minimo}_pregoes.json", {
+                "minimo_pregoes": minimo,
+                "metricas_resumidas": metrics,
+                "metricas_motor": result.metrics,
+                "resumo_motor": result.summary,
+                "motivos_decisao": (
+                    diagnosticos["decision_reason"].value_counts(dropna=False).to_dict()
+                    if "decision_reason" in diagnosticos else {}
+                ),
+            },
+        )
+        for fold in metrics.get("folds", []):
+            por_fold.append({"minimo_pregoes": minimo, **fold})
         auditoria[str(minimo)] = {
             "folds": metrics.get("folds"),
             "patrimonio": float(metrics["ending_capital"]),
             "rotacoes": metrics.get("capital_rotations"),
+            "dias_em_caixa": metrics.get("cash_days"),
+            "arquivos_decisoes": f"decisoes_{minimo}_pregoes.csv",
+            "arquivos_operacoes": f"operacoes_{minimo}_pregoes.csv",
+            "arquivos_curva": f"patrimonio_diario_{minimo}_pregoes.csv",
         }
 
     resumo = pd.DataFrame(linhas).sort_values("minimo_pregoes")
-    resumo.to_csv(SAIDA / "comparacao_permanencia_0_1_2_3.csv", index=False)
-    _salvar_json(SAIDA / "manifesto_experimento.json", {
+    resumo.to_csv(
+        SAIDA_TEMP / "comparacao_permanencia_0_1_2_3.csv", index=False,
+    )
+    pd.DataFrame(por_fold).to_csv(
+        SAIDA_TEMP / "metricas_por_fold.csv", index=False,
+    )
+    comparacao_diaria = pd.concat(series, axis=1, join="inner")
+    if len(comparacao_diaria) < 1000 or comparacao_diaria.isna().any().any():
+        raise RuntimeError("Comparacao diaria com datas faltantes ou desalinhadas.")
+    comparacao_diaria.index.name = "data"
+    comparacao_diaria.to_csv(
+        SAIDA_TEMP / "comparacao_diaria_ativos_e_patrimonio.csv",
+        index=True, float_format="%.17g",
+    )
+    _salvar_json(SAIDA_TEMP / "manifesto_experimento.json", {
+        "status": "completed",
+        "concluido_em_utc": datetime.now(timezone.utc).isoformat(),
         "projeto": "tcc_mba_usp_data_science_analytics",
         "branch": "research/permanencia-minima-contrafactual-v1",
         "arquivo": Path(__file__).name,
@@ -341,8 +616,35 @@ def main() -> None:
             "a comparacao nao valida, isoladamente, generalizacao futura."
         ),
     })
+    (SAIDA_TEMP / "LEIA_ME_ANALISE.txt").write_text(
+        "TCC - Pesquisa contrafactual de permanencia minima\n\n"
+        "Arquivo unico: pesquisa_permanencia_minima.zip\n"
+        "Cenarios: 0, 1, 2 e 3 pregoes. Baseline: 2 pregoes.\n"
+        "Sem novos downloads; mesmos modelos e margens por fold.\n\n"
+        "Para analisar:\n"
+        "* comparacao_permanencia_0_1_2_3.csv: resultados gerais.\n"
+        "* metricas_por_fold.csv: desempenho individual em cada fold.\n"
+        "* comparacao_diaria_ativos_e_patrimonio.csv: carteira e riqueza diaria.\n"
+        "* utilidades_oos_todos_ativos.csv: utilidade de TODOS os ativos por dia.\n"
+        "* decisoes_N_pregoes.csv: motivo, margem e bloqueios da politica.\n"
+        "* operacoes_N_pregoes.csv: compras, vendas e taxas.\n"
+        "* patrimonio_diario_N_pregoes.csv: replay financeiro integral.\n"
+        "* metricas_completas_N_pregoes.json: metricas do motor e resumo.\n"
+        "* cotacoes_ohlcv/: series historicas usadas nos quatro replays.\n"
+        "* margens_controle_por_fold.csv: calibracao original.\n"
+        "* auditoria_continuidade_candidatos.csv: elegibilidade do universo.\n"
+        "* parametros_motor_e_ambiente.json: parametros, versoes e hashes.\n"
+        "* manifestos de origem, codigo executado e manifesto do experimento.\n"
+        "* arquivos_sha256.json: verificacao SHA-256 de todos os arquivos.\n\n"
+        "NAO ha credenciais, tokens, .env, conta pessoal ou acesso a corretora.\n"
+        "Analise retrospectiva: nao prova generalizacao futura.\n",
+        encoding="utf-8",
+    )
+
+    # So publicar depois de criar e verificar todos os arquivos.
+    publicar_resultado(SAIDA_TEMP)
     print("\n" + resumo.to_string(index=False), flush=True)
-    print(f"\n[FINALIZADO] Resultados em {SAIDA}", flush=True)
+    print(f"\n[FINALIZADO] ZIP pronto: {ARQUIVO_ZIP}", flush=True)
 
 
 if __name__ == "__main__":
