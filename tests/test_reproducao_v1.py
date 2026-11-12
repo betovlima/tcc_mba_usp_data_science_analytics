@@ -822,3 +822,87 @@ def test_rotation_advantage_reuses_one_verified_report_zip(tmp_path) -> None:
     assert (tmp_path / "pesquisa_vantagem_rotacao" / "comparacao_resultados.csv").read_text(encoding="utf-8") == "segundo"
     assert "pesquisa_vantagem_rotacao_v2" not in source
     assert "pesquisa_vantagem_rotacao_v3" not in source
+
+
+def test_deterioracao_replay_respeita_cash() -> None:
+    """O modo antigo de replay nao pode forcar recompra quando a protecao quer CASH."""
+    import importlib
+    import numpy as np
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    b = SimpleNamespace(
+        dates=pd.date_range("2026-01-02", periods=3, freq="B"),
+        exec_dates=pd.date_range("2026-01-05", periods=3, freq="B"),
+        fold=np.array([1, 2, 2]),
+        symbols=["AAA"],
+        scores=np.array([[0.01], [0.02], [0.03], [0.04]]),
+        base_actions=np.array([-1, -1, -1]),
+        op=np.array([[10.0], [10.0], [10.0], [10.0]]),
+        cl=np.array([[10.0], [10.0], [10.0], [10.0]]),
+        volume=np.full((4, 1), 100.0),
+        config={"initial_capital": 10000.0},
+    )
+    positions = []
+    def keep_cash(_, i, current, holding, capital, quantity):
+        positions.append((i, current, capital))
+        return -1, []
+    curve, decisions, trades, metrics = script.simular(
+        b, decision_callback=keep_cash, permitir_cash=True,
+    )
+    assert positions == [(1, -1, 10000.0), (2, -1, 10000.0)]
+    assert np.allclose(curve, 10000.0)
+    assert (decisions["posicao_depois"] == "CASH").all()
+    assert trades.empty
+    assert metrics["rotacoes"] == 0
+
+
+def test_deterioracao_control_usa_posicao_real() -> None:
+    import importlib
+    import numpy as np
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    b = SimpleNamespace(
+        fold=np.array([2, 2]),
+        scores=np.array([[0.020, 0.080], [0.010, 0.0001]]),
+        margens={2: 0.005},
+        config={
+            "rotation_cash_threshold": 0.0,
+            "rotation_min_expected_edge": 0.001,
+            "rotation_switch_margin": 0.0005,
+            "rotation_min_holding_days": 2,
+        },
+    )
+    # Minimo de permanencia so impede troca antes de 2 sessoes.
+    assert script._d_control(b, 0, 0, 1) == 0
+    assert script._d_control(b, 0, 0, 2) == 1
+    assert script._d_control(b, 0, -1, 0) == 1
+    assert script._d_control(b, 1, -1, 0) == 0
+
+
+def test_deterioracao_features_nao_usam_preco_futuro() -> None:
+    import importlib
+    import numpy as np
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    n, m = 80, 2
+    close = np.column_stack((
+        np.linspace(10, 20, n + 1), np.linspace(20, 10, n + 1),
+    ))
+    b = SimpleNamespace(
+        dates=pd.date_range("2026-01-01", periods=n, freq="B"),
+        fold=np.array([1] * 40 + [2] * 40),
+        symbols=["AAA", "BBB"],
+        scores=np.column_stack((
+            np.full(n + 1, 0.02), np.full(n + 1, 0.01),
+        )),
+        op=close.copy(), cl=close.copy(),
+        ret5=np.column_stack((np.full(n + 1, 0.01), np.full(n + 1, -0.01))),
+        vol20=np.full((n + 1, m), 0.01),
+        adv20=np.full((n + 1, m), 100_000.0),
+    )
+    before_x, before_y, _ = script._d_features_labels(b)
+    b.cl[55:, 0] *= 0.5
+    after_x, after_y, _ = script._d_features_labels(b)
+    np.testing.assert_array_equal(before_x[40], after_x[40])
+    assert before_y[40, 0] != after_y[40, 0]
+    assert script.D_PURGE >= script.D_HORIZONTE
