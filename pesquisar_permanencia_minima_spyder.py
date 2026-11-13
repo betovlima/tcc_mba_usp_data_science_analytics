@@ -4399,9 +4399,8 @@ def executar_vantagem_economica() -> None:
             "\nVANTAGEM ECONOMICA: CSVs vantagem_economica_*.\n"
             "CASH diario = overlay close-to-close com custo hipotetico.\n"
             "HOLD/ROTATE/CASH em rotacoes = comparacao por intervalo, "
-            "NAO carteira contrafactual executavel.\n
+            "NAO carteira contrafactual executavel.\n"
             "Diagnosticos de generalizacao, previsao por ano, ativo e rotacao.\n"
-
         )
     shutil.copyfile(Path(__file__), dest/"codigo_executado.py")
     (dest/"arquivos_sha256.json").unlink(missing_ok=True)
