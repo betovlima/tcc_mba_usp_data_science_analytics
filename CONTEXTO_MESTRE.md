@@ -401,3 +401,71 @@ Mesmo `output/pesquisa_vantagem_rotacao.zip` com relatorios anteriores
 e quatro arquivos `vantagem_economica_*.csv`, manifesto,
 codigo, hashes CRC e SHA-256. Branch de pesquisa existente, sem
 deploy e sem integracao na principal.
+
+## 12/11/2026: auditoria de generalizacao economica do replay 015245
+
+O arquivo recebido `pesquisa_vantagem_rotacao(20261113-015245).zip`,
+SHA-256 `96df3f85b4e4759779ea66541fe6775c7cf3259e459579488c72481df5ad761e`,
+foi validado (CRC e 24 hashes internos); possui 25 arquivos totais,
+incluindo o manifesto e codigo original. Refere-se a 1.586 pregoes,
+Control de **US$ 139.871.072,31** e API 10.8.149. O checkpoint antigo
+de outro snapshot nao e meta nem benchmark atual.
+
+O modelo economico Ridge(alpha=80) de retorno log diario, com 12
+variaveis conhecidas no fechamento, foi retreinado para auditoria
+com exatamente os mesmos intervalos e embargo de 30 dias. As previsoes
+reproduziram o ZIP com erro maximo ~1.1e-16. Os indicadores:
+
+| Metrica | Fold 2 | Fold 3 |
+| --- | ---: | ---: |
+| Observacoes de treino | 482 | 986 |
+| Avaliacao temporal | 504 | 578 |
+| R2 no treino | 0,03230 | 0,01196 |
+| R2 na avaliacao contra media do treino | -0,07031 | +0,00225 |
+| Correlacao da previsao com o retorno real | -0,03571 | +0,06705 |
+| Retorno log medio previsto/dia | -0,0005943 | +0,0036109 |
+| Retorno log medio realizado/dia | +0,0087214 | +0,0060813 |
+| Dias em CASH idealizado | 249 (49,40%) | 6 (1,04%) |
+
+O modelo quase nao explica o retorno diario mesmo no ajuste, e
+na avaliacao do fold 2 perde para o preditor constante da media
+disponivel no treino. Isso e compativel com capacidade limitada ou
+pouco sinal nas variaveis; nao demonstra isoladamente underfitting
+nem overfitting de parametros. A busca repetida sobre estes mesmos
+folds agrava sobreajuste de pesquisa nas regras escolhidas.
+
+No fold 2, dos 249 dias em CASH, 139 foram de alta original. O
+somatorio log-retorno do ativo durante os dias em CASH foi
+**+2,249725**, sendo +4,477487 de altas perdidas e
+-2,227762 de perdas evitadas. A posicao VNCE concentra +0,849070
+deste total, cerca de 37,74%; por exemplo, as decisoes de CASH
+antes de 26/12 e 27/12/2023 perderam retornos diarios log
+de +0,320695 e +0,396654, respectivamente.
+No fold 3 os 6 dias de CASH ocorreram em CAPR, com +0,105597
+de retorno log original perdido.
+
+Entre os 266 intervalos pareados de rotacao, as alternativas
+sugeridas (HOLD/CASH) tiveram vantagem log media NEGATIVA frente
+ao ROTATE original: -0,012079 no fold 2 e -0,002578 no fold 3.
+O pior caso foi a sugestao HOLD (AMD) em lugar de ROTATE (VNCE)
+em 26/12/2023, vantagem log -0,643219, aproximadamente 37,77%
+da soma das desvantagens locais do fold 2. Os pares nao podem
+ser concatenados em patrimonio alternativo por dependerem de
+trajetorias futuras nao reconstruidas.
+
+A branch atualizou o **mesmo**
+`pesquisar_permanencia_minima_spyder.py`, modo
+`vantagem_economica`, com quatro CSVs adicionais:
+`vantagem_economica_generalizacao_diaria.csv`,
+`vantagem_economica_cash_por_ano.csv`,
+`vantagem_economica_cash_por_ativo.csv` e
+`vantagem_economica_influencia_rotacoes.csv`.
+Os dados sao somente auditoria diagnostica, sem alterar modelo,
+limiar ou politica. Output permanece com o mesmo nome
+`output/pesquisa_vantagem_rotacao.zip`, sem nova branch ou deploy.
+
+**Proxima investigacao cientifica:** nao otimizar novo limiar nos
+folds 2/3 ja examinados. Primeiro obter historico completo,
+com calendario e custos suficientes para uma politica alternativa
+executavel. Confirmar generalizacao em nova janela ainda nao
+usada para selecionar hipoteses antes de considerar producao.
