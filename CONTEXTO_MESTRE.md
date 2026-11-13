@@ -469,3 +469,58 @@ folds 2/3 ja examinados. Primeiro obter historico completo,
 com calendario e custos suficientes para uma politica alternativa
 executavel. Confirmar generalizacao em nova janela ainda nao
 usada para selecionar hipoteses antes de considerar producao.
+
+## 12/11/2026: estudo direto da trava de dois pregoes
+
+O objetivo cientifico volta a ser tornar a trava da permanencia minima
+de dois pregoes mais responsiva ao estado da propria posicao, sem
+substituir a rede de utilidade da estrategia principal nem acrescentar
+um previsor externo de retorno.
+
+A exportacao do replay atualizado de 12/11/2026, com capital de
+**US$ 139.871.072,31**, contem 1.586 sessoes e **351** decisoes em
+que a protecao do primeiro pregao atuou, inclusive quando o ativo
+continuava no topo. Em **149** delas o topo estimado era outro ativo;
+**134** tinham gap de utilidade superior a margem efetiva.
+A regra exploratoria predefinida para uma excecao no primeiro pregao,
+com gap >= max(0,045, 3*margem) e queda do score desde a entrada
+<=-0,04, apontaria **38** casos potenciais na trajetoria atual
+(incluindo folds 1=8, 2=16, 3=14). Isto e **diagnostico**, nao
+simulacao de ordens ou ganho de capital, pois a exportacao nao contem
+todos os precos para recalcular as posicoes alternativas.
+
+Para testar a logica sem inventar trajetorias, as mesmas regras
+foram simuladas com ordens na abertura seguinte, taxas e slippage
+sobre a base cientifica CONGELADA que possui OHLCV dos 75 ativos.
+Esse backtest antigo e metodologicamente util, mas **NAO** e o
+Control financeiro atualizado de producao; fold1 preserva o Control
+e somente folds 2 e 3 sao alterados.
+
+Cenarios avaliados no replay de historico congelado:
+- Control com 2 pregoes: US$ 587.165.941,13; 354 rotacoes.
+- Excecao de troca apos o primeiro pregao com queda de score + gap
+  muito forte: US$ **280.599.893,14**; 373 rotacoes e 41 excecoes.
+- Exigir persistencia de vantagem em dois fechamentos consecutivos
+  para a troca de gap pequeno, com liberacao imediata se gap forte:
+  US$ **100.124.258,54**, 285 rotacoes e 110 esperas de confirmacao.
+- Confirmacao mais excecao de primeiro pregao: US$ **56.445.854,13**,
+  292 rotacoes e 142 intervencoes registradas.
+- Um terceiro pregao SOMENTE se a utilidade de posicao subiu
+  +0,03 e o gap concorrente e pequeno: US$ **606.778.867,73**,
+  com apenas **uma** intervencao, logo nao generalizavel.
+
+As regras simples de alteracao da trava pioraram muito o capital
+na base historica na maioria dos casos. A melhora isolada de um dia
+extra nao autoriza trocar a politica porque ocorreu apenas uma vez.
+Os limiares foram predefinidos sem reajuste nesta rodada; contudo,
+todos os folds antigos ja foram explorados por muitas hipoteses,
+portanto o estudo e EXPLORATORIO, nao confirmacao independente.
+
+O arquivo unico `pesquisar_permanencia_minima_spyder.py` tem novo
+modo-padrao `permanencia_inteligente` que exporta no MESMO ZIP
+`output/pesquisa_vantagem_rotacao.zip`: controle de dois pregoes,
+quatro variantes, resultados por fold, ordens e decisoes completas
+da base congelada, intervencoes e auditoria sem ordens do replay
+atualizado quando este esta disponivel localmente. A base congelada
+nao e rebaixada nem falsamente declarada como capital atual.
+Nenhum arquivo/branch adicional, deploy ou alteracao em Live.
