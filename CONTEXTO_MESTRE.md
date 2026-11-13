@@ -732,3 +732,45 @@ fold 1 imutavel e paridade do Control antigo.
 **Situacao:** implementacao cientifica realizada nesta branch;
 nao integrada a main, nao aprovada para uso com dinheiro real,
 sem alteracao no Live.
+
+## 13/11/2026: bootstrap automatico da pesquisa economica sem prazo
+
+Erro real ao executar `python pesquisar_permanencia_minima_spyder.py`
+na branch de pesquisa: `FileNotFoundError` em
+`executar_decisao_economica_sem_prazo` porque nao existia um
+`pesquisa_permanencia_minima.zip` acessivel no computador local.
+
+**Causa:** a branch versiona o codigo e a fonte de dados U67,
+mas **nao** contem o ZIP binario congelado de 75 ativos nem todos
+os CSV adicionais de dez candidatos. Assim, `git pull` sozinho
+nao instala a base usada para reproduzir trajetorias alternativas.
+O codigo nao deve confundir falha de dados com falha de matematica.
+
+**Correcao:** o modo padrao `decisao_economica_sem_prazo`
+agora passa por `_ve_recuperar_ou_reconstruir_base`:
+1. Reaproveita uma fonte integral previamente encontrada, extraida
+   de ZIPs anteriores ou recomposta de pasta `output` intacta.
+2. Inclui pasta `tcc_lab`, pasta de saida anterior e diretórios
+   OneDrive conhecidos na busca, sem parametrizacao de caminhos.
+3. Se nao ha base, `verificar_fontes` confere os 10 candidatos e o
+   snapshot congelado, com hashes esperados. Quando tudo existe,
+   chama o executor original `main()` no modo `comparar` para
+   reconstruir a fonte integral de 75 ativos SEM download e
+   restaura o `MODO` mesmo se houver falha. Valida o novo ZIP
+   antes de treinar o modelo auxiliar.
+4. Caso tanto a base quanto os arquivos brutos originais tenham
+   desaparecido, retorna erro explicito de dados insuficientes
+   e orienta apenas instalar a copia validada da base original.
+   Nao inventa o resultado de uma simulacao sem dados.
+5. Testes automatizados incluem fonte reutilizada, cache valido,
+   falha no cache, excecao do executor e restauracao do seletor.
+
+**Fonte distribuida com a pesquisa:** ZIP historico completo de
+75 ativos com SHA-256
+`9e51da49b77ecf07fa651c3e228dc16c6d51ef44a51b7aca657923f6f37eeb60`,
+disponivel como arquivo de conversa. Ele pode ficar na pasta de
+Downloads, sem caminhos como parametros, ou ser extraido de um
+pacote contendo `output/pesquisa_permanencia_minima.zip`.
+Nao confundir com o Control atualizado de US$ 139.871.072,31.
+
+Nenhum modelo Live, conta, deploy ou branch principal foi alterado.
