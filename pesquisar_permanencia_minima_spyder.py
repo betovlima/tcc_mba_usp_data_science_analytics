@@ -3477,7 +3477,7 @@ def _a_experimento_risco_cauda_oos(
 
 def _a_impacto_alertas_exposicao(
     diario: pd.DataFrame, previsoes: pd.DataFrame,
-    capital_inicial: float,
+    capital_inicial: float, *, primeiro_por_episodio: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Ablacao economica CLOSE-TO-CLOSE, sem simular execucao/ordens.
 
@@ -3508,8 +3508,15 @@ def _a_impacto_alertas_exposicao(
     capital = pd.to_numeric(ordered["strategy_equity"], errors="raise")
     if not np.isfinite(capital).all() or (capital <= 0).any():
         raise ValueError("Capital invalido na curva.")
-    is_alert = previsoes["alerta_limiar_treino"].astype(bool)
+    is_alert = previsoes["alerta_limiar_treino"].eq(True)
     fired = previsoes.loc[is_alert].copy()
+    if primeiro_por_episodio:
+        # Criterio cronologico: reage so ao PRIMEIRO alerta da posicao,
+        # sem consultar o retorno de dias futuros.
+        fired = (
+            fired.sort_values(["data_execucao", "data_decisao"])
+            .drop_duplicates(subset=["episodio_id"], keep="first")
+        )
     if not fired["data_execucao"].isin(ordered["data_execucao"]).all():
         raise ValueError("Data alertada nao existe na curva do Control.")
     matched = ordered[["data_execucao", "data_decisao"]].merge(
@@ -3676,6 +3683,33 @@ def executar_analise_permanencia() -> None:
     impacto_curva.to_csv(dest / "impacto_alertas_curva_shadow.csv", index=False)
     impacto_alertas.to_csv(dest / "impacto_alertas_por_decisao.csv", index=False)
     impacto_resumo.to_csv(dest / "impacto_alertas_resumo_por_fold.csv", index=False)
+    primeiro_curva, primeiro_alertas, primeiro_resumo = (
+        _a_impacto_alertas_exposicao(
+            df, previstos,
+            capital_inicial=float(metrics.get("initial_capital") or 10000.0),
+            primeiro_por_episodio=True,
+        )
+    )
+    primeiro_curva.to_csv(
+        dest / "impacto_primeiro_alerta_curva_shadow.csv", index=False,
+    )
+    primeiro_alertas.to_csv(
+        dest / "impacto_primeiro_alerta_por_episodio.csv", index=False,
+    )
+    primeiro_resumo.to_csv(
+        dest / "impacto_primeiro_alerta_resumo_por_fold.csv", index=False,
+    )
+    concentracao = (
+        impacto_alertas.groupby(["episodio_id", "selected_asset"], as_index=False)
+        .agg(
+            alertas=("retorno_control", "size"),
+            alertas_antes_de_alta=("retorno_control", lambda v: int((v > 0).sum())),
+            alertas_antes_de_queda=("retorno_control", lambda v: int((v < 0).sum())),
+            soma_log_retorno_dos_alertas=("contribuicao_log_alerta", "sum"),
+        )
+        .sort_values("soma_log_retorno_dos_alertas", ascending=False)
+    )
+    concentracao.to_csv(dest / "concentracao_alertas_por_episodio.csv", index=False)
     case = df.loc[
         df["data_execucao"].between("2026-07-20", "2026-08-21")
     ]
@@ -3702,6 +3736,15 @@ def executar_analise_permanencia() -> None:
             "modo": "substituir por 0% o retorno close-to-close dos dias alertados",
             "nao_e_backtest_executavel": True,
             "resultados": impacto_resumo.to_dict(orient="records"),
+            "primeiro_alerta_por_episodio": {
+                "regra": (
+                    "Neutralizar apenas o dia seguinte ao primeiro alerta "
+                    "cronologico por posicao historica; dias seguintes "
+                    "seguem os retornos do Control original."
+                ),
+                "nao_e_backtest_executavel": True,
+                "resultados": primeiro_resumo.to_dict(orient="records"),
+            },
         },
         "experimento_risco_cauda": {
             "treinamento": "folds anteriores com embargo de 30 dias",
@@ -3724,6 +3767,7 @@ def executar_analise_permanencia() -> None:
             "Resultados finais dos episodios aparecem apenas como auditoria futura.",
             "Nao e backtest contrafactual de venda, rotacao ou caixa.",
             "O impacto close-to-close nao tem reentradas, novas ordens ou slippage.",
+            "O primeiro alerta por episodio e hipotese idealizada: nao testa recompra real.",
             "Nao treina modelos nem utiliza dados futuros nas features.",
             "Nenhuma conta real ou ordem externa e acessada.",
         ],
@@ -3733,7 +3777,9 @@ def executar_analise_permanencia() -> None:
         "Nao e simulacao executavel de sair para CASH.\n"
         "Sinais no fechamento de decisao; patrimonio no fechamento seguinte.\n"
         "Para cada horizonte futuro, observacoes sao censuradas em rotacoes.\n"
-        "Os arquivos impacto_alertas_* sao ablacao de exposicao, nao ordens.\n",
+        "Os arquivos impacto_alertas_* sao ablacao de exposicao, nao ordens.\n"
+        "impacto_primeiro_alerta_* neutraliza so 1 dia por episodio historico.\n"
+        "concentracao_alertas_por_episodio.csv explica a dependencia dos alertas.\n",
         encoding="utf-8",
     )
     shutil.copyfile(Path(__file__), dest / "codigo_executado.py")
