@@ -524,3 +524,42 @@ da base congelada, intervencoes e auditoria sem ordens do replay
 atualizado quando este esta disponivel localmente. A base congelada
 nao e rebaixada nem falsamente declarada como capital atual.
 Nenhum arquivo/branch adicional, deploy ou alteracao em Live.
+
+## Correcao do F5: recuperacao automatica da base historica
+
+Problema relatado na execucao local do Spyder:
+`FileNotFoundError: ... pesquisa_permanencia_minima.zip`, no
+`_pi_localizar_base`. O modo `permanencia_inteligente` precisava do
+pacote com 75 cotacoes, utilidades e serie de patrimonio congelados,
+mas o localizador anterior procurava apenas tres caminhos fixos.
+Assim, falhava mesmo quando a fonte estava embutida em um ZIP de
+pesquisa anterior.
+
+**Resolvido na mesma branch e no mesmo arquivo:**
+1. Procura automaticamente os ZIPs `pesquisa_permanencia_minima*.zip`
+   em `output`, raiz do projeto, pasta pai e Downloads/Documentos/Desktop.
+2. Se a pasta `output/pesquisa_permanencia_minima` existir com os 75
+   CSVs, os arquivos obrigatorios e o registro de SHA-256 intacto,
+   recompacota a base sem refazer treinamento ou alterar cotacoes.
+3. Caso contrario, procura em `pesquisa_vantagem_rotacao*.zip` de
+   execucoes anteriores pelo membro
+   `dados_origem/pesquisa_permanencia_minima.zip`, valida CRC,
+   arquivos obrigatorios, 75 series e manifesto concluido (3 folds),
+   e salva automaticamente a copia recuperada com o nome canonico
+   `output/pesquisa_permanencia_minima.zip`.
+4. Quando nao existe fonte completa, mas ha um ZIP de backtest
+   atualizado, executa apenas a auditoria observacional da trava,
+   publica `output/pesquisa_vantagem_rotacao.zip` e grava
+   `simulacao_contrafactual_executada=false` no manifesto; NAO
+   inventa resultado de capital com novas rotacoes.
+5. Se nenhum desses dados estiver disponivel, informa precisamente
+   que nao ha dados suficientes, sem sobrescrever a pesquisa anterior.
+
+Teste automatizado de ZIP aninhado, checksum invalidado, diretorio
+completo, fallback do replay e modos preexistentes. **Nenhuma**
+alteracao no modelo Winner, na operacao Live ou na branch principal.
+
+Nota metodologica: a base congelada antiga nao e igual ao snapshot
+atualizado. Ela permite testar logicamente o efeito de ordens
+alternativas, mas seus capitais historicos nao substituem o Control
+atualizado de US$ 139.871.072,31.
