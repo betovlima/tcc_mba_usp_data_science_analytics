@@ -3474,6 +3474,133 @@ def _a_experimento_risco_cauda_oos(
     ]].copy(), pd.DataFrame(metrics)
 
 
+
+def _a_impacto_alertas_exposicao(
+    diario: pd.DataFrame, previsoes: pd.DataFrame,
+    capital_inicial: float,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Ablacao economica CLOSE-TO-CLOSE, sem simular execucao/ordens.
+
+    Hipotese restrita: substituir por retorno zero cada sessao de execucao
+    alertada; nas outras, manter o retorno historico do Control. Ignora
+    abertura, reentrada, custos adicionais, dependencia da politica e
+    impacto de mercado. NAO e backtest de operacao em CASH.
+    """
+    if capital_inicial <= 0:
+        raise ValueError("Capital inicial deve ser positivo.")
+    required_daily = {
+        "data_decisao", "data_execucao", "strategy_equity",
+        "walk_forward_fold",
+    }
+    required_pred = {
+        "data_decisao", "data_execucao", "alerta_limiar_treino",
+        "episodio_id", "selected_asset",
+    }
+    if not required_daily.issubset(diario):
+        raise ValueError("Curva nao tem datas ou patrimonio completos.")
+    if not required_pred.issubset(previsoes):
+        raise ValueError("Previsoes sem identificacao unica de alertas.")
+    ordered = diario.sort_values("data_execucao").copy().reset_index(drop=True)
+    if ordered["data_execucao"].duplicated().any():
+        raise ValueError("Curva com datas de execucao duplicadas.")
+    if previsoes["data_execucao"].duplicated().any():
+        raise ValueError("Previsoes com datas de execucao duplicadas.")
+    capital = pd.to_numeric(ordered["strategy_equity"], errors="raise")
+    if not np.isfinite(capital).all() or (capital <= 0).any():
+        raise ValueError("Capital invalido na curva.")
+    is_alert = previsoes["alerta_limiar_treino"].astype(bool)
+    fired = previsoes.loc[is_alert].copy()
+    if not fired["data_execucao"].isin(ordered["data_execucao"]).all():
+        raise ValueError("Data alertada nao existe na curva do Control.")
+    matched = ordered[["data_execucao", "data_decisao"]].merge(
+        fired[["data_execucao", "data_decisao"]],
+        on=["data_execucao", "data_decisao"],
+        validate="one_to_one",
+        how="inner",
+    )
+    if len(matched) != len(fired):
+        raise ValueError("Alerta possui data de decisao incongruente.")
+    ordered["alerta_gerado_no_fechamento_anterior"] = (
+        ordered["data_execucao"].isin(fired["data_execucao"])
+    )
+    prior = capital.shift(1).fillna(float(capital_inicial))
+    daily_gross = capital / prior
+    ordered["retorno_control"] = daily_gross - 1.0
+    ordered["retorno_exposicao_shadow"] = np.where(
+        ordered["alerta_gerado_no_fechamento_anterior"],
+        0.0, daily_gross - 1.0,
+    )
+    ordered["capital_control_recalculado"] = (
+        float(capital_inicial) * daily_gross.cumprod()
+    )
+    ordered["capital_exposicao_shadow"] = (
+        float(capital_inicial)
+        * (1.0 + ordered["retorno_exposicao_shadow"]).cumprod()
+    )
+    dif = float(np.max(np.abs(
+        ordered["capital_control_recalculado"].to_numpy() -
+        capital.to_numpy()
+    )))
+    if dif > 0.01:
+        raise ValueError(f"Curva original nao reproduzida: USD {dif:.9f}")
+    ordered["contribuicao_log_alerta"] = np.where(
+        ordered["alerta_gerado_no_fechamento_anterior"],
+        np.log(daily_gross), 0.0,
+    )
+    alert_rows = ordered.loc[
+        ordered["alerta_gerado_no_fechamento_anterior"],
+        [
+            "data_decisao", "data_execucao", "walk_forward_fold",
+            "retorno_control", "contribuicao_log_alerta",
+            "capital_control_recalculado", "capital_exposicao_shadow",
+        ],
+    ].merge(
+        fired[[
+            "data_decisao", "data_execucao", "selected_asset",
+            "episodio_id", "probabilidade_modelo_nao_calibrada",
+        ]],
+        on=["data_decisao", "data_execucao"],
+        how="inner", validate="one_to_one",
+    )
+    stats = []
+    for fold, block in [("todos", ordered)] + [
+        (int(fold), sub)
+        for fold, sub in ordered.groupby("walk_forward_fold", sort=True)
+    ]:
+        alerts = block.loc[block["alerta_gerado_no_fechamento_anterior"]]
+        logsum = float(alerts["contribuicao_log_alerta"].sum())
+        ratio = float(np.exp(-logsum))
+        ctrl = block["capital_control_recalculado"].to_numpy(float)
+        shadow = block["capital_exposicao_shadow"].to_numpy(float)
+        stats.append({
+            "fold": fold, "sessoes": int(len(block)),
+            "sessoes_com_alerta": int(len(alerts)),
+            "sessoes_positivas_alertadas": int(
+                alerts["retorno_control"].gt(0).sum()
+            ),
+            "sessoes_negativas_alertadas": int(
+                alerts["retorno_control"].lt(0).sum()
+            ),
+            "log_retorno_original_dos_alertas": logsum,
+            "fator_capital_shadow_vs_control_no_fold": ratio,
+            "capital_control_fim_periodo": float(ctrl[-1]),
+            "capital_shadow_fim_periodo": float(shadow[-1]),
+            "drawdown_control_na_curva_completa": float(
+                (ctrl / np.maximum.accumulate(ctrl) - 1.0).min()
+            ),
+            "drawdown_shadow_na_curva_completa": float(
+                (shadow / np.maximum.accumulate(shadow) - 1.0).min()
+            ),
+            "limite": (
+                "Ablacao de exposicao diaria; NAO contabiliza operacoes "
+                "alternativas, entradas em abertura ou custos adicionais."
+            ),
+        })
+    if len(alert_rows) != len(fired):
+        raise ValueError("Nem todos os alertas apareceram no impacto.")
+    return ordered, alert_rows, pd.DataFrame(stats)
+
+
 def _a_publicar_sem_fonte(working: Path) -> Path:
     """Nome unico, CRC e SHA antes da publicacao. O ZIP fonte nao e copiado."""
     archive = DESTINO.with_suffix(".zip")
@@ -3543,6 +3670,12 @@ def executar_analise_permanencia() -> None:
     previstos, metrica_oos = _a_experimento_risco_cauda_oos(df)
     previstos.to_csv(dest / "risco_cauda_previsoes_oos.csv", index=False)
     metrica_oos.to_csv(dest / "risco_cauda_qualidade_por_fold.csv", index=False)
+    impacto_curva, impacto_alertas, impacto_resumo = _a_impacto_alertas_exposicao(
+        df, previstos, capital_inicial=float(metrics.get("initial_capital") or 10000.0),
+    )
+    impacto_curva.to_csv(dest / "impacto_alertas_curva_shadow.csv", index=False)
+    impacto_alertas.to_csv(dest / "impacto_alertas_por_decisao.csv", index=False)
+    impacto_resumo.to_csv(dest / "impacto_alertas_resumo_por_fold.csv", index=False)
     case = df.loc[
         df["data_execucao"].between("2026-07-20", "2026-08-21")
     ]
@@ -3565,6 +3698,11 @@ def executar_analise_permanencia() -> None:
         "observacoes_5d": int(df["retorno_observado_5d"].notna().sum()),
         "indicadores_cauda": ["queda_diaria_5pct", "queda_diaria_10pct"],
         "auditado_por_episodio": True,
+        "impacto_exposicao_teorico": {
+            "modo": "substituir por 0% o retorno close-to-close dos dias alertados",
+            "nao_e_backtest_executavel": True,
+            "resultados": impacto_resumo.to_dict(orient="records"),
+        },
         "experimento_risco_cauda": {
             "treinamento": "folds anteriores com embargo de 30 dias",
             "features": A_FEATURES_CAUSAS,
@@ -3585,6 +3723,7 @@ def executar_analise_permanencia() -> None:
             "Cobertura de perdas tem censura por rotacao e depende das decisoes Control.",
             "Resultados finais dos episodios aparecem apenas como auditoria futura.",
             "Nao e backtest contrafactual de venda, rotacao ou caixa.",
+            "O impacto close-to-close nao tem reentradas, novas ordens ou slippage.",
             "Nao treina modelos nem utiliza dados futuros nas features.",
             "Nenhuma conta real ou ordem externa e acessada.",
         ],
@@ -3593,7 +3732,8 @@ def executar_analise_permanencia() -> None:
         "Diagnostico observacional de permanencia em replay historico. "
         "Nao e simulacao executavel de sair para CASH.\n"
         "Sinais no fechamento de decisao; patrimonio no fechamento seguinte.\n"
-        "Para cada horizonte futuro, observacoes sao censuradas em rotacoes.\n",
+        "Para cada horizonte futuro, observacoes sao censuradas em rotacoes.\n"
+        "Os arquivos impacto_alertas_* sao ablacao de exposicao, nao ordens.\n",
         encoding="utf-8",
     )
     shutil.copyfile(Path(__file__), dest / "codigo_executado.py")
