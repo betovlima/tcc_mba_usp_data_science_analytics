@@ -6,8 +6,9 @@ Este e o arquivo UNICO para todas as rodadas da pesquisa nesta branch:
 Spyder: abra este arquivo e execute com F5.
 Terminal: python pesquisar_permanencia_minima_spyder.py
 
-Modos: MODO = "vantagem_economica" (padrao; comparacao causal exploratoria),
-"analisar_permanencia" (diagnostico historico), "sensibilidade_margens", "deterioracao",
+Modos: MODO = "permanencia_inteligente" (padrao; estudo da trava de dois pregoes),
+"vantagem_economica" (comparacao economica), "analisar_permanencia",
+"sensibilidade_margens", "deterioracao",
 "vantagem_v3", "vantagem_v2", "vantagem" (historicos), "verificar" ou
 "comparar" (reproduz quatro permanencias).
 
@@ -57,7 +58,7 @@ import numpy as np
 import pandas as pd
 
 # %% 0. Um arquivo, uma branch; somente este seletor muda entre modos.
-MODO = "permanencia_inteligente"  # "analisar_permanencia", "sensibilidade_margens", "deterioracao", "vantagem_v3", "vantagem_v2", "vantagem", "comparar", "verificar"
+MODO = "permanencia_inteligente"  # "vantagem_economica", "analisar_permanencia", "sensibilidade_margens", "deterioracao", "vantagem_v3", "vantagem_v2", "vantagem", "comparar", "verificar"
 PERMANENCIAS = (0, 1, 2, 3)
 PERMANENCIA_CONTROLE = 2
 TOLERANCIA_CENTAVO = 0.01
