@@ -58,7 +58,7 @@ import numpy as np
 import pandas as pd
 
 # %% 0. Um arquivo, uma branch; somente este seletor muda entre modos.
-MODO = "permanencia_inteligente"  # "vantagem_economica", "analisar_permanencia", "sensibilidade_margens", "deterioracao", "vantagem_v3", "vantagem_v2", "vantagem", "comparar", "verificar"
+MODO = "decisao_economica_sem_prazo"  # "vantagem_economica", "analisar_permanencia", "sensibilidade_margens", "deterioracao", "vantagem_v3", "vantagem_v2", "vantagem", "comparar", "verificar"
 PERMANENCIAS = (0, 1, 2, 3)
 PERMANENCIA_CONTROLE = 2
 TOLERANCIA_CENTAVO = 0.01
@@ -5058,8 +5058,383 @@ def executar_permanencia_inteligente() -> None:
         )
 
 
+
+# %% 16. Decisao economica SEM tempo minimo: HOLD, ROTATE e CASH.
+# Os 52 indicadores do LightGBM nao sao alterados. A calibracao usa
+# somente os scores derivados deles, score relativo, vol20 e return5.
+VE_ALPHA_RIDGE = 1000.0
+VE_EMBARGO_SESSOES = 30
+VE_TARGET_LONGO = "5_60"
+
+
+def _ve_dados_modelo(b: Base) -> tuple[np.ndarray, np.ndarray]:
+    scores = b.scores[:-1]
+    medio = np.nanmean(scores, axis=1)
+    x = np.stack(
+        [scores, scores - medio[:, None], b.vol20[:-1], b.ret5[:-1]],
+        axis=-1,
+    )
+    return x, np.isfinite(x).all(axis=-1)
+
+
+def _ve_rotulos(b: Base, tipo: str) -> np.ndarray:
+    """Rotulos futuros de proxima abertura, NUNCA usados como entrada."""
+    n = len(b.dates)
+    if tipo == "1d":
+        return np.log(b.cl[1:n + 1] / b.op[1:n + 1])
+    if tipo != VE_TARGET_LONGO:
+        raise ValueError(f"Horizonte desconhecido: {tipo}")
+    horizons = np.asarray(b.config["rotation_target_horizons"], dtype=int)
+    weights = np.asarray(b.config["rotation_target_horizon_weights"], float)
+    weights /= weights.sum()
+    result = np.zeros_like(b.scores[:-1], dtype=float)
+    for h, weight in zip(horizons, weights):
+        entry = b.op[1:n - h + 2, :]
+        ending = b.cl[h:n + 1, :]
+        windows = np.lib.stride_tricks.sliding_window_view(
+            b.cl[1:n + 1, :], int(h), axis=0,
+        )
+        gross = np.log(ending / entry)
+        downside = np.maximum(0.0, 1.0 - windows.min(axis=-1) / entry)
+        path = np.concatenate((entry[:, :, None], windows), axis=-1)
+        peaks = np.maximum.accumulate(path, axis=-1)
+        maxdd = np.max(1.0 - path / peaks, axis=-1)
+        daily_equivalent = (
+            gross
+            - float(b.config["rotation_downside_penalty"]) * downside
+            - float(b.config["rotation_drawdown_penalty"]) * maxdd
+        ) / h
+        result[:len(entry)] += weight * daily_equivalent
+    result[n - int(max(horizons)) + 1:] = np.nan
+    return result
+
+
+def _ve_calibrar(b: Base, rotulos: np.ndarray) -> tuple[np.ndarray, pd.DataFrame]:
+    """Treina no passado com rotulos maturados e embargo adicional."""
+    from sklearn.linear_model import Ridge
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    x, x_ok = _ve_dados_modelo(b)
+    n, m = rotulos.shape
+    if n != len(b.dates) or m != len(b.symbols):
+        raise ValueError("Rotulos e universo de ativos divergentes")
+    predictions = np.full((n, m), np.nan)
+    max_lookahead = max(int(h) for h in b.config["rotation_target_horizons"])
+    audit = []
+    for fold in (2, 3):
+        start = int(np.flatnonzero(b.fold == fold)[0])
+        mature = (
+            (b.fold < fold)
+            & (np.arange(n) + max_lookahead + VE_EMBARGO_SESSOES < start)
+        )
+        train_mask = mature[:, None] & x_ok & np.isfinite(rotulos)
+        if train_mask.sum() < 1000:
+            raise ValueError(f"Faltam exemplos anteriores ao fold {fold}")
+        y_train = rotulos[train_mask]
+        lo, hi = np.percentile(y_train, [1, 99])
+        model = make_pipeline(StandardScaler(), Ridge(alpha=VE_ALPHA_RIDGE))
+        model.fit(x[train_mask], np.clip(y_train, lo, hi))
+        test_mask = (b.fold == fold)[:, None] & x_ok
+        predictions[test_mask] = model.predict(x[test_mask])
+        eval_mask = test_mask & np.isfinite(rotulos)
+        observed, forecast = rotulos[eval_mask], predictions[eval_mask]
+        baseline = float(y_train.mean())
+        baseline_mse = float(np.mean((observed - baseline) ** 2))
+        mse = float(np.mean((observed - forecast) ** 2))
+        valid_train_dates = np.flatnonzero(mature)
+        if valid_train_dates[-1] + max_lookahead + VE_EMBARGO_SESSOES >= start:
+            raise RuntimeError("Violacao do embargo temporal")
+        audit.append({
+            "fold": fold, "exemplos_treino": int(train_mask.sum()),
+            "observacoes_avaliacao": int(eval_mask.sum()),
+            "inicio_teste": str(b.dates[start]),
+            "ultima_decisao_treino": str(b.dates[valid_train_dates[-1]]),
+            "ultimo_rotulo_treino": str(
+                b.dates[valid_train_dates[-1] + max_lookahead]
+            ),
+            "embargo_sessoes": VE_EMBARGO_SESSOES,
+            "maior_horizonte_rotulo": max_lookahead,
+            "media_treino_observada": baseline,
+            "media_teste_prevista": float(forecast.mean()),
+            "media_teste_observada": float(observed.mean()),
+            "r2_teste_vs_media_treino": (
+                float(1 - mse / baseline_mse) if baseline_mse > 0 else None
+            ),
+            "coeficientes": model.named_steps["ridge"].coef_.tolist(),
+            "intercepto": float(model.named_steps["ridge"].intercept_),
+            "clipping_treino": [float(lo), float(hi)],
+        })
+    return predictions, pd.DataFrame(audit)
+
+
+def _ve_decidir(
+    b: Base, i: int, pos: int, capital: float, quantity: float,
+    expected: np.ndarray, *, margem: float = 0.0,
+) -> tuple[int, dict, list[dict]]:
+    """Valoriza alternativas; nao recebe nem testa dias de permanencia."""
+    if not np.isfinite(expected).any():
+        raise ValueError("Nenhuma vantagem economica para decidir")
+    if capital <= 0:
+        raise ValueError("Capital invalido")
+
+    def label(j: int) -> str:
+        return b.symbols[j] if j >= 0 else "CASH"
+
+    current = (
+        float(expected[pos])
+        if pos >= 0 and np.isfinite(expected[pos]) else 0.0
+    )
+    options = [{
+        "pos": pos, "acao": "HOLD" if pos >= 0 else "CASH",
+        "valor": current if pos >= 0 else 0.0, "custo": 0.0,
+    }]
+    if pos >= 0:
+        price = _preco(b, b.cl[i, pos], "SELL")
+        exit_fee = _taxa(b, "SELL", quantity, price) / capital
+        exit_fee += max(0.0, float(b.config["slippage_bps"])) / 10000
+        options.append({
+            "pos": -1, "acao": "CASH", "valor": -exit_fee,
+            "custo": exit_fee,
+        })
+    for cand in np.flatnonzero(np.isfinite(expected)):
+        if cand == pos:
+            continue
+        if pos >= 0:
+            cost = _custo_estimado(b, i, pos, int(cand), capital, quantity)
+        else:
+            price = _preco(b, b.cl[i, cand], "BUY")
+            qty = capital / price
+            cost = _taxa(b, "BUY", qty, price) / capital
+            cost += max(0.0, float(b.config["slippage_bps"])) / 10000
+        discounted = (
+            float(expected[cand]) - cost
+            - (margem if pos >= 0 else 0.0)
+        )
+        options.append({
+            "pos": int(cand), "acao": "ROTATE" if pos >= 0 else "ENTER",
+            "valor": discounted, "custo": float(cost),
+        })
+    ranked = sorted(options, key=lambda x: (
+        -x["valor"], x["pos"] != pos, x["pos"],
+    ))
+    winner, hold = ranked[0], options[0]
+    cash = next(x for x in options if x["pos"] == -1)
+    best_other = next((
+        x for x in ranked if x["pos"] >= 0 and x["pos"] != pos
+    ), None)
+    diagnostic = {
+        "posicao_atual": label(pos),
+        "proxima_posicao": label(winner["pos"]),
+        "acao": winner["acao"], "valor_hold": hold["valor"],
+        "valor_cash": cash["valor"],
+        "melhor_candidato": (
+            label(best_other["pos"]) if best_other else None
+        ),
+        "valor_melhor_candidato_liquido": (
+            best_other["valor"] if best_other else None
+        ),
+        "custo_estimado_acao": winner["custo"],
+        "vantagem_acao_vs_hold": winner["valor"] - hold["valor"],
+        "margem_do_comparador": margem,
+        "regra_tempo_minimo": False,
+    }
+    ranking = [{
+        "candidato": label(x["pos"]), "acao": x["acao"],
+        "vantagem_liquida": x["valor"] - hold["valor"],
+        "custo_estimado": x["custo"],
+    } for x in ranked[:3]]
+    return int(winner["pos"]), diagnostic, ranking
+
+
+def _ve_rodar_politica(b: Base, tipo: str, expected: np.ndarray):
+    rows = []
+
+    def callback(base, i, pos, holding, capital, quantity):
+        margin = (
+            max(float(base.config["rotation_switch_margin"]),
+                float(base.margens[int(base.fold[i])]))
+            if tipo == "utilidade_bruta_sem_minimo" else 0.0
+        )
+        target, info, ranking = _ve_decidir(
+            base, i, pos, capital, quantity, expected[i], margem=margin,
+        )
+        info.update({
+            "data_decisao": str(base.dates[i]),
+            "fold": int(base.fold[i]),
+            "holding_somente_auditoria": int(holding),
+            "politica": tipo,
+            "capital_antes_da_decisao": float(capital),
+        })
+        rows.append(info)
+        return target, ranking
+
+    curve, decisions, trades, metrics = simular(
+        b, decision_callback=callback, permitir_cash=True,
+    )
+    return curve, decisions, trades, metrics, pd.DataFrame(rows)
+
+
+def executar_decisao_economica_sem_prazo() -> None:
+    """Experimento reprodutivel, sem proibir rotacao em qualquer pregao."""
+    source = _pi_localizar_base()
+    if source is None:
+        raise FileNotFoundError(
+            "Os dados completos da pesquisa nao foram encontrados; "
+            "nao e possivel simular novas trajetorias sem as 75 cotacoes. "
+            "O programa procura automaticamente a fonte na saida de "
+            "pesquisas anteriores e em Downloads. Nenhuma curva parcial "
+            "sera publicada como resultado executavel."
+        )
+    b = carregar(source)
+    control, control_decisions, control_trades, control_stats = simular(b)
+    parity = float(np.max(np.abs(control - b.base_equity)))
+    if parity > TOLERANCIA_CENTAVO:
+        raise RuntimeError(f"Paridade com Control congelado falhou: {parity}")
+    sources = {"utilidade_bruta_sem_minimo": b.scores[:-1]}
+    audits = {}
+    for horizonte in ("1d", VE_TARGET_LONGO):
+        forecast, audit = _ve_calibrar(b, _ve_rotulos(b, horizonte))
+        name = "vantagem_economica_" + horizonte
+        sources[name], audits[name] = forecast, audit
+    dest = DESTINO_TEMP
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    curves = pd.DataFrame({
+        "data_execucao": b.exec_dates, "fold": b.fold,
+        "control_congelado_dois_pregoes": control,
+    })
+    summaries = [{
+        "politica": "control_congelado_dois_pregoes",
+        "capital_final": float(control[-1]),
+        "rotacoes": int(control_stats["rotacoes"]),
+        "taxas": float(control_stats["total_taxas"]),
+        **_resumo_curva(control),
+    }]
+    folds = [{
+        "politica": "control_congelado_dois_pregoes", **row
+    } for row in _performance_by_fold(b, control)]
+    control_decisions.to_csv(dest / "decisoes_control.csv", index=False)
+    control_trades.to_csv(dest / "operacoes_control.csv", index=False)
+    for kind, forecast in sources.items():
+        curve, decisions, trades, metrics, diagnostics = _ve_rodar_politica(
+            b, kind, forecast,
+        )
+        if not np.array_equal(curve[b.fold == 1], control[b.fold == 1]):
+            raise RuntimeError(f"Fold 1 nao preservado em {kind}")
+        curves[kind] = curve
+        summaries.append({
+            "politica": kind,
+            "capital_final": float(curve[-1]),
+            "diferenca_control_congelado_pct": (
+                100 * (curve[-1] / control[-1] - 1)
+            ),
+            "rotacoes": int(metrics["rotacoes"]),
+            "taxas": float(metrics["total_taxas"]),
+            "decisoes_cash": int(diagnostics["acao"].eq("CASH").sum()),
+            "rotacoes_com_um_pregao_de_posicao": int((
+                diagnostics["acao"].eq("ROTATE")
+                & diagnostics["holding_somente_auditoria"].eq(1)
+            ).sum()),
+            **_resumo_curva(curve),
+        })
+        folds += [{
+            "politica": kind, **item
+        } for item in _performance_by_fold(b, curve)]
+        decisions.to_csv(dest / f"decisoes_{kind}.csv", index=False)
+        trades.to_csv(dest / f"operacoes_{kind}.csv", index=False)
+        diagnostics.to_csv(
+            dest / f"vantagem_diaria_{kind}.csv", index=False,
+        )
+    for kind, audit in audits.items():
+        audit.to_csv(
+            dest / f"validacao_temporal_{kind}.csv", index=False,
+        )
+    curves.to_csv(dest / "comparacao_patrimonio_diario.csv", index=False)
+    pd.DataFrame(summaries).to_csv(
+        dest / "comparacao_politicas.csv", index=False,
+    )
+    pd.DataFrame(folds).to_csv(
+        dest / "comparacao_por_fold.csv", index=False,
+    )
+    current = None
+    try:
+        replay = _a_localizar_replay()
+    except FileNotFoundError:
+        replay = None
+    if replay is not None:
+        observations, current = _pi_diagnostico_replay_atual(replay)
+        observations.to_csv(
+            dest / "trava_no_replay_atual_somente_diagnostico.csv",
+            index=False,
+        )
+    manifest = {
+        "modo": "decisao_economica_sem_prazo",
+        "status": "completed_exploratory_research_only",
+        "idade_minima_de_posicao": None,
+        "comparacao_a_cada_fechamento": ["HOLD", "ROTATE", "CASH"],
+        "entrada_ou_saida_antecipada_permitida": True,
+        "fold_1": "Control preservado sem alteracoes",
+        "folds_avaliados": [2, 3],
+        "capital_control_snapshot_congelado": float(control[-1]),
+        "paridade_control_congelado_usd": parity,
+        "fonte_congelada_sha256": _hash_arquivo(source),
+        "replay_atual_apenas_diagnostico": current,
+        "calibracao": {
+            "alpha_ridge": VE_ALPHA_RIDGE,
+            "embargo_adicional_sessoes": VE_EMBARGO_SESSOES,
+            "horizontes_longos": list(b.config["rotation_target_horizons"]),
+            "variaveis_de_entrada": [
+                "utilidade_LightGBM", "utilidade_relativa_universo",
+                "vol_20", "return_5",
+            ],
+            "observacao": (
+                "O modelo longo estima retorno/riscos por pregao "
+                "equivalente com drawdown baseado em fechamento. "
+                "Nao sao probabilidades calibradas."
+            ),
+        },
+        "cenarios": summaries,
+        "limitacoes": [
+            "Esta simulacao usa base historica congelada de 75 ativos, "
+            "nao a curva atualizada de US$ 139.871.072,31.",
+            "Replay atualizado so oferece trajetoria original; "
+            "nao permite capital alternativo para esta politica.",
+            "Folds ja vistos em estudos anteriores, sem teste "
+            "prospectivo independente.",
+            "Rotulos futuros so entram no treino com purge de 60 "
+            "sessoes mais embargo de 30.",
+            "Custos estimados no fechamento, execucao no replay "
+            "na abertura seguinte com taxas e slippage originais.",
+            "Nenhuma alteracao em operacao real ou no LightGBM original.",
+        ],
+    }
+    _write_json(dest / "manifesto_experimento.json", manifest)
+    (dest / "LEIA_ME.txt").write_text(
+        "Decisao economica por fechamento SEM permanencia minima.\n"
+        "Em cada fechamento compara HOLD, ROTATE e CASH.\n"
+        "Control historico e replay atual sao bases distintas.\n"
+        "Folds 2 e 3 avaliados; fold 1 permanece Control.\n"
+        "Nao utilizar este modelo exploratorio em operacoes Live.\n",
+        encoding="utf-8",
+    )
+    shutil.copyfile(Path(__file__), dest / "codigo_executado.py")
+    archive = _pacote(dest, source)
+    _publicar_pasta_vantagem(dest)
+    print("[SEM PRAZO] Paridade do Control congelado:", parity, flush=True)
+    for item in summaries:
+        print(
+            "[SEM PRAZO]", item["politica"],
+            "capital", item["capital_final"],
+            "rotacoes", item["rotacoes"], flush=True,
+        )
+    print("[ZIP]", archive, flush=True)
+
 if __name__ == "__main__":
-    if MODO == "permanencia_inteligente":
+    if MODO == "decisao_economica_sem_prazo":
+        executar_decisao_economica_sem_prazo()
+    elif MODO == "permanencia_inteligente":
         executar_permanencia_inteligente()
     elif MODO == "vantagem_economica":
         executar_vantagem_economica()
