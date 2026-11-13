@@ -4569,6 +4569,77 @@ def _pi_pastas_de_busca() -> list[Path]:
     return list(dict.fromkeys(p for p in dirs if p.is_dir()))
 
 
+def _pi_recuperar_da_pasta_completa(target: Path) -> Path | None:
+    """Reempacota o resultado concluido, SEM recalcular preco ou treinar.
+
+    O proprio executor original ja salva os CSVs em
+    output/pesquisa_permanencia_minima e seus hashes. Caso so o ZIP
+    tenha sido apagado, esse diretorio e fonte suficiente e verificavel.
+    """
+    required = (
+        "manifesto_experimento.json", "decisoes_2_pregoes.csv",
+        "patrimonio_diario_2_pregoes.csv",
+        "utilidades_oos_todos_ativos.csv", "margens_controle_por_fold.csv",
+        "arquivos_sha256.json",
+    )
+    for parent in _pi_pastas_de_busca():
+        folder = parent / "pesquisa_permanencia_minima"
+        if not folder.is_dir() or not all(
+            (folder / name).is_file() for name in required
+        ):
+            continue
+        bars = sorted((folder / "cotacoes_ohlcv").glob("*.csv"))
+        if len(bars) != 75:
+            continue
+        try:
+            metadata = json.loads(
+                (folder / "manifesto_experimento.json").read_text(encoding="utf-8")
+            )
+            if metadata.get("status") != "completed" or metadata.get("folds") != 3:
+                continue
+            recorded = json.loads(
+                (folder / "arquivos_sha256.json").read_text(encoding="utf-8")
+            )["arquivos"]
+            if not recorded or len(recorded) < 80:
+                continue
+            if any(
+                not (folder / name).is_file()
+                or (folder / name).stat().st_size != record["bytes"]
+                or _hash_arquivo(folder / name) != record["sha256"]
+                for name, record in recorded.items()
+            ):
+                continue
+            # Nao incluir arquivos extras de pesquisas posteriores no baseline.
+            members = [folder / name for name in sorted(recorded)]
+            members.append(folder / "arquivos_sha256.json")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            stage = target.with_name(".pesquisa_permanencia_minima_recuperacao.tmp")
+            try:
+                with ZipFile(stage, "w", ZIP_DEFLATED, compresslevel=6) as archive:
+                    for member in members:
+                        archive.write(
+                            member,
+                            arcname="pesquisa_permanencia_minima/"
+                                    + member.relative_to(folder).as_posix(),
+                        )
+                if not _pi_validar_zip_base(stage):
+                    continue
+                with ZipFile(stage) as archive:
+                    if archive.testzip() is not None:
+                        continue
+                stage.replace(target)
+                print(
+                    "[DADOS] Base completa recuperada da pasta de saida",
+                    folder, "| sha256", _hash_arquivo(target), flush=True,
+                )
+                return target
+            finally:
+                stage.unlink(missing_ok=True)
+        except (OSError, ValueError, KeyError, TypeError, BadZipFile):
+            continue
+    return None
+
+
 def _pi_localizar_base() -> Path | None:
     """Recupera a fonte ORIGINAL de ZIPs anteriores sem novos downloads.
 
@@ -4586,6 +4657,10 @@ def _pi_localizar_base() -> Path | None:
         if _pi_validar_zip_base(candidate):
             print(f"[DADOS] Base congelada localizada: {candidate}", flush=True)
             return candidate
+
+    from_folder = _pi_recuperar_da_pasta_completa(target)
+    if from_folder is not None:
+        return from_folder
 
     containers = []
     for folder in _pi_pastas_de_busca():
