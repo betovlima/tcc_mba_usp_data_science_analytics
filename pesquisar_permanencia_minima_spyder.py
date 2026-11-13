@@ -4190,6 +4190,141 @@ def _eco_rotacoes_pareadas(
     return buys.loc[:, cols], pd.DataFrame(summary)
 
 
+
+def _eco_diagnostico_previsao_diaria(
+    cash: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Refaz ajuste exato para medir treino, previsao temporal e deriva.
+
+    Reajuste somente para auditoria: a politica CASH nao e alterada,
+    e as previsoes reproduzidas devem coincidir com as ja exportadas.
+    """
+    dated = cash.copy().reset_index(drop=True)
+    executions = pd.to_datetime(dated["timestamp"], utc=True)
+    decisions = pd.to_datetime(dated["decision_date"], utc=True)
+    stats, annual = [], []
+    for fold in (2, 3):
+        test_mask = dated["walk_forward_fold"].eq(fold)
+        if not test_mask.any():
+            raise ValueError(f"Fold sem decisoes: {fold}")
+        start = decisions.loc[test_mask].min()
+        train_mask = (
+            dated["walk_forward_fold"].lt(fold)
+            & executions.lt(start - pd.Timedelta(days=ECO_EMBARGO_DIAS))
+        )
+        train = dated.loc[train_mask]
+        test = dated.loc[test_mask].copy()
+        if len(train) < 100 or len(test) < 100:
+            raise ValueError("Amostras insuficientes para diagnostico.")
+        model = _eco_modelo()
+        y_train = train["log_retorno_control_observado"].to_numpy(float)
+        y_test = test["log_retorno_control_observado"].to_numpy(float)
+        model.fit(_eco_x(train), y_train)
+        estimate_train = model.predict(_eco_x(train))
+        estimate_test = model.predict(_eco_x(test))
+        known = test["log_retorno_esperado_control"].to_numpy(float)
+        parity = float(np.max(np.abs(estimate_test - known)))
+        if parity > 1e-10:
+            raise ValueError(
+                f"Previsao da auditoria diverge da avaliacao: {parity}"
+            )
+        constant = float(np.mean(y_train))
+        train_mse = float(np.mean((y_train - estimate_train) ** 2))
+        train_base_mse = float(np.mean((y_train - constant) ** 2))
+        test_mse = float(np.mean((y_test - estimate_test) ** 2))
+        test_base_mse = float(np.mean((y_test - constant) ** 2))
+        if train_base_mse <= 0 or test_base_mse <= 0:
+            raise ValueError("Variancia do retorno insuficiente.")
+        correlation = float(np.corrcoef(y_test, estimate_test)[0, 1])
+        marked = test["acao_shadow"].eq("CASH")
+        errors = test.loc[marked, "log_retorno_control_observado"]
+        stats.append({
+            "fold": fold,
+            "data_inicio_avaliacao": str(start.date()),
+            "treino_observacoes": int(len(train)),
+            "avaliacao_observacoes": int(len(test)),
+            "media_retorno_log_treino": constant,
+            "media_retorno_log_previsto_avaliacao": float(
+                np.mean(estimate_test)
+            ),
+            "media_retorno_log_real_avaliacao": float(np.mean(y_test)),
+            "vies_medio_previsao_menos_real": float(
+                np.mean(estimate_test - y_test)
+            ),
+            "r2_treino": 1.0 - train_mse / train_base_mse,
+            "r2_avaliacao_vs_media_do_treino": (
+                1.0 - test_mse / test_base_mse
+            ),
+            "correlacao_previsao_observado_avaliacao": correlation,
+            "erro_quadratico_medio_previsao": test_mse,
+            "erro_quadratico_medio_media_do_treino": test_base_mse,
+            "fracao_previsoes_negativas": float(
+                np.mean(estimate_test < 0)
+            ),
+            "frac_recomendacoes_cash": float(marked.mean()),
+            "dias_cash": int(marked.sum()),
+            "dias_cash_que_eram_positivos": int(errors.gt(0).sum()),
+            "soma_log_retorno_perdido_em_cash": float(errors.sum()),
+            "soma_log_altas_nao_capturadas": float(
+                errors.loc[errors.gt(0)].sum()
+            ),
+            "soma_log_perdas_evitadas": float(
+                -errors.loc[errors.lt(0)].sum()
+            ),
+            "paridade_maxima_das_previsoes": parity,
+            "analise": (
+                "Avalia o retorno da carteira Control sob as decisoes "
+                "originais; nao e trajetoria de caixa negociavel."
+            ),
+        })
+        test["ano"] = pd.to_datetime(
+            test["timestamp"], utc=True
+        ).dt.year
+        for year, block in test.groupby("ano", sort=True):
+            hits = block.loc[block["acao_shadow"].eq("CASH")]
+            annual.append({
+                "fold": fold, "ano": int(year),
+                "pregoes": int(len(block)),
+                "dias_cash": int(len(hits)),
+                "fracao_cash": float(len(hits) / len(block)),
+                "retorno_log_medio_observado": float(
+                    block["log_retorno_control_observado"].mean()
+                ),
+                "retorno_log_medio_previsto": float(
+                    block["log_retorno_esperado_control"].mean()
+                ),
+                "soma_log_retorno_original_dias_cash": float(
+                    hits["log_retorno_control_observado"].sum()
+                ),
+            })
+    fired = dated.loc[
+        dated["acao_shadow"].eq("CASH")
+        & dated["walk_forward_fold"].isin((2, 3))
+    ].copy()
+    if fired.empty:
+        raise ValueError("Nenhum caso CASH para investigar.")
+    fired["log_altas_perdidas"] = fired[
+        "log_retorno_control_observado"
+    ].clip(lower=0)
+    fired["log_quedas_protegidas"] = -fired[
+        "log_retorno_control_observado"
+    ].clip(upper=0)
+    concentration = fired.groupby(
+        ["walk_forward_fold", "selected_asset"], as_index=False,
+    ).agg(
+        dias_cash=("timestamp", "size"),
+        dias_de_alta_perdidos=("log_retorno_control_observado",
+                              lambda v: int(v.gt(0).sum())),
+        soma_log_retorno_original=("log_retorno_control_observado", "sum"),
+        soma_log_altas_perdidas=("log_altas_perdidas", "sum"),
+        soma_log_quedas_protegidas=("log_quedas_protegidas", "sum"),
+    ).sort_values(
+        ["walk_forward_fold", "soma_log_retorno_original"],
+        ascending=[True, False],
+    )
+    return pd.DataFrame(stats), pd.DataFrame(annual), concentration
+
+
 def executar_vantagem_economica() -> None:
     """Uma unica saida: auditoria existente e comparacao economica."""
     from io import BytesIO
@@ -4216,6 +4351,25 @@ def executar_vantagem_economica() -> None:
     cash_folds.to_csv(dest/"vantagem_economica_cash_por_fold.csv", index=False)
     rotation.to_csv(dest/"vantagem_economica_rotacoes_pareadas.csv", index=False)
     rot_folds.to_csv(dest/"vantagem_economica_rotacoes_por_fold.csv", index=False)
+    diagnostico, diagnostico_ano, impacto_ativos = (
+        _eco_diagnostico_previsao_diaria(cash)
+    )
+    diagnostico.to_csv(
+        dest/"vantagem_economica_generalizacao_diaria.csv", index=False,
+    )
+    diagnostico_ano.to_csv(
+        dest/"vantagem_economica_cash_por_ano.csv", index=False,
+    )
+    impacto_ativos.to_csv(
+        dest/"vantagem_economica_cash_por_ativo.csv", index=False,
+    )
+    errors_rotate = rotation.loc[
+        rotation["walk_forward_fold"].isin((2, 3))
+        & rotation["acao_sugerida"].ne("ROTATE")
+    ].copy().sort_values("log_vantagem_acao_sugerida_vs_rotate")
+    errors_rotate.to_csv(
+        dest/"vantagem_economica_influencia_rotacoes.csv", index=False,
+    )
     manifest_file = dest/"manifesto_experimento.json"
     manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
     manifest["estudo_vantagem_economica"] = {
@@ -4226,6 +4380,8 @@ def executar_vantagem_economica() -> None:
         ),
         "custo_cash_teorico": ECO_CUSTO_CASH,
         "cash_por_fold": cash_folds.to_dict(orient="records"),
+        "generalizacao_da_previsao_diaria": diagnostico.to_dict(orient="records"),
+        "medidas_de_deriva_por_ano": diagnostico_ano.to_dict(orient="records"),
         "rotacoes_por_fold": rot_folds.to_dict(orient="records"),
         "decisoes_contrafactuais_executaveis": False,
         "limitacoes": [
@@ -4240,10 +4396,12 @@ def executar_vantagem_economica() -> None:
     _write_json(manifest_file, manifest)
     with (dest/"LEIA_ME.txt").open("a", encoding="utf-8") as stream:
         stream.write(
-            "\nVANTAGEM ECONOMICA: 4 CSVs vantagem_economica_*.\n"
+            "\nVANTAGEM ECONOMICA: CSVs vantagem_economica_*.\n"
             "CASH diario = overlay close-to-close com custo hipotetico.\n"
             "HOLD/ROTATE/CASH em rotacoes = comparacao por intervalo, "
-            "NAO carteira contrafactual executavel.\n"
+            "NAO carteira contrafactual executavel.\n
+            "Diagnosticos de generalizacao, previsao por ano, ativo e rotacao.\n"
+
         )
     shutil.copyfile(Path(__file__), dest/"codigo_executado.py")
     (dest/"arquivos_sha256.json").unlink(missing_ok=True)
