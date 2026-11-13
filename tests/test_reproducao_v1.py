@@ -1519,6 +1519,14 @@ def test_permanencia_inteligente_decide_pelo_estado_e_nao_pelo_futuro() -> None:
         b, 3, pos=0, holding=1, politica="confirmacao",
     )
     assert confirmed == 0
+    # O fold 1 e exclusivamente Control: a excecao nao pode ser aplicada.
+    b.fold[:] = 1
+    b.margens[1] = 0.01
+    early_fold1, reason_fold1, _ = module._pi_decisao(
+        b, 3, pos=0, holding=1, politica="saida_antecipada",
+    )
+    assert early_fold1 == 0
+    assert reason_fold1 == "CONTROL"
 
 
 def test_permanencia_inteligente_confirma_gap_antes_de_rotacionar() -> None:
