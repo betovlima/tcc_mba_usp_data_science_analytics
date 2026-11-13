@@ -6,8 +6,8 @@ Este e o arquivo UNICO para todas as rodadas da pesquisa nesta branch:
 Spyder: abra este arquivo e execute com F5.
 Terminal: python pesquisar_permanencia_minima_spyder.py
 
-Modos: MODO = "analisar_permanencia" (padrao; diagnostico de decisoes
-historicas exportadas), "sensibilidade_margens", "deterioracao",
+Modos: MODO = "vantagem_economica" (padrao; comparacao causal exploratoria),
+"analisar_permanencia" (diagnostico historico), "sensibilidade_margens", "deterioracao",
 "vantagem_v3", "vantagem_v2", "vantagem" (historicos), "verificar" ou
 "comparar" (reproduz quatro permanencias).
 
@@ -4016,6 +4016,9 @@ def _eco_cash_diario(
     d["log_retorno_shadow"] = shadow_logs
     d["capital_control_reproduzido"] = initial * np.exp(np.cumsum(logs))
     d["capital_shadow_cash"] = initial * np.exp(np.cumsum(shadow_logs))
+    d["capital_shadow_cash_sem_custo"] = initial * np.exp(np.cumsum(
+        np.where(d["acao_shadow"].eq("CASH"), 0.0, logs)
+    ))
     parity = np.max(np.abs(
         d["capital_control_reproduzido"].to_numpy(float) - equity
     ))
@@ -4218,6 +4221,9 @@ def executar_vantagem_economica() -> None:
     manifest["estudo_vantagem_economica"] = {
         "capital_control": baseline,
         "capital_cash_shadow": float(cash["capital_shadow_cash"].iloc[-1]),
+        "capital_cash_shadow_sem_custo": float(
+            cash["capital_shadow_cash_sem_custo"].iloc[-1]
+        ),
         "custo_cash_teorico": ECO_CUSTO_CASH,
         "cash_por_fold": cash_folds.to_dict(orient="records"),
         "rotacoes_por_fold": rot_folds.to_dict(orient="records"),
