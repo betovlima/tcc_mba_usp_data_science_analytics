@@ -1113,3 +1113,74 @@ def test_modelo_cauda_preserva_treino_anterior_e_limiar_de_treino() -> None:
             pd.Timestamp(row["primeira_decisao_teste"])
             - pd.Timedelta(days=30)
         )
+
+
+def test_impacto_alertas_exposicao_so_altera_dias_sinalizados() -> None:
+    """O capital de origem deve reproduzir exatamente o exportado."""
+    import importlib
+    import numpy as np
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    diario = pd.DataFrame({
+        "data_decisao": [
+            "2026-01-02", "2026-01-05", "2026-01-06", "2026-01-07",
+        ],
+        "data_execucao": [
+            "2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08",
+        ],
+        "strategy_equity": [1100.0, 990.0, 1188.0, 1306.8],
+        "walk_forward_fold": [1, 2, 2, 3],
+    })
+    previsoes = pd.DataFrame({
+        "data_decisao": ["2026-01-05", "2026-01-06"],
+        "data_execucao": ["2026-01-06", "2026-01-07"],
+        "alerta_limiar_treino": [True, True],
+        "episodio_id": [11, 11],
+        "selected_asset": ["AAA", "AAA"],
+        "probabilidade_modelo_nao_calibrada": [0.8, 0.9],
+    })
+    curva, alertas, resumo = script._a_impacto_alertas_exposicao(
+        diario, previsoes, capital_inicial=1000.0,
+    )
+    np.testing.assert_allclose(
+        curva["capital_control_recalculado"],
+        diario["strategy_equity"], atol=1e-8,
+    )
+    assert len(alertas) == 2
+    assert set(alertas["data_execucao"]) == {"2026-01-06", "2026-01-07"}
+    np.testing.assert_allclose(
+        curva["retorno_exposicao_shadow"],
+        [.10, .0, .0, .10], atol=1e-9,
+    )
+    assert np.isclose(curva["capital_exposicao_shadow"].iloc[-1], 1210)
+    total = resumo.loc[resumo["fold"].eq("todos")].iloc[0]
+    assert total["sessoes_com_alerta"] == 2
+    assert total["sessoes_positivas_alertadas"] == 1
+    assert total["sessoes_negativas_alertadas"] == 1
+    assert np.isclose(total["capital_control_fim_periodo"], 1306.8)
+    assert np.isclose(total["capital_shadow_fim_periodo"], 1210.0)
+
+
+def test_impacto_alertas_recusa_data_de_decisao_incorreta() -> None:
+    import importlib
+    import pytest
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    diario = pd.DataFrame({
+        "data_decisao": ["2026-01-01", "2026-01-02"],
+        "data_execucao": ["2026-01-02", "2026-01-05"],
+        "strategy_equity": [1050.0, 1060.0],
+        "walk_forward_fold": [1, 2],
+    })
+    previsoes = pd.DataFrame({
+        "data_decisao": ["2026-01-03"],
+        "data_execucao": ["2026-01-05"],
+        "alerta_limiar_treino": [True],
+        "episodio_id": [1],
+        "selected_asset": ["CAPR"],
+        "probabilidade_modelo_nao_calibrada": [0.8],
+    })
+    with pytest.raises(ValueError, match="incongruente"):
+        script._a_impacto_alertas_exposicao(
+            diario, previsoes, capital_inicial=1000.0,
+        )
