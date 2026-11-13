@@ -913,7 +913,7 @@ def test_sensibilidade_margens_recalcula_fold_1_somente_quando_pedido() -> None:
     import numpy as np
 
     script = importlib.import_module("pesquisar_permanencia_minima_spyder")
-    assert script.MODO == "vantagem_economica"
+    assert script.MODO == "permanencia_inteligente"
     assert script.MARGENS_ALTERNATIVAS == {1: 0.01, 2: 0.0, 3: 0.01}
     b = SimpleNamespace(
         dates=pd.date_range("2026-01-02", periods=3, freq="B"),
@@ -949,7 +949,7 @@ def test_sensibilidade_margens_nao_altera_pesquisa_de_deterioracao() -> None:
     script = (ROOT / "pesquisar_permanencia_minima_spyder.py").read_text(
         encoding="utf-8",
     )
-    assert 'MODO = "vantagem_economica"' in script
+    assert 'MODO = "permanencia_inteligente"' in script
     assert 'elif MODO == "deterioracao"' in script
     assert 'permitir_cash=True, aplicar_todos_folds=True' in script
     assert "OOS" not in script.split("# %% 12. Sensibilidade")[1].split(
@@ -1480,3 +1480,118 @@ def test_economia_diagnostico_detecta_previsoes_alteradas() -> None:
                "log_retorno_esperado_control"] = -100
     with pytest.raises(ValueError, match="diverge"):
         module._eco_diagnostico_previsao_diaria(report)
+
+
+def test_permanencia_inteligente_decide_pelo_estado_e_nao_pelo_futuro() -> None:
+    import importlib
+    import types
+    import numpy as np
+
+    module = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    u = np.array([
+        [.6, .4], [.6, .4], [.6, .4],
+        [.5, .66], [.5, .53], [.55, .57],
+    ], dtype=float)
+    b = types.SimpleNamespace(
+        dates=pd.date_range("2025-01-01", periods=6, tz="UTC"),
+        fold=np.array([2] * 6),
+        symbols=["AAA", "BBB"], scores=u.copy(),
+        config={"rotation_switch_margin": 0.01,
+                "rotation_cash_threshold": 0.01,
+                "rotation_min_expected_edge": 0.0,
+                "rotation_min_holding_days": 2},
+        margens={2: 0.01, 3: 0.01},
+    )
+    # Um dia de holding: Control bloqueia, excecao valida libera rotacao.
+    early, reason, _ = module._pi_decisao(
+        b, 3, pos=0, holding=1, politica="saida_antecipada",
+    )
+    assert early == 1
+    assert reason == "SAIDA_ANTE_DOS_DOIS_PREGOES"
+    # Perturbar fortemente qualquer dado FUTURO nao altera a decisao em i=3.
+    b.scores[4:, :] = [[1.0, 0.0], [0.0, 1.0]]
+    early_again, reason_again, _ = module._pi_decisao(
+        b, 3, pos=0, holding=1, politica="saida_antecipada",
+    )
+    assert (early, reason) == (early_again, reason_again)
+    # Sem excecao, continua cumprindo a permanencia de 2 pregoes.
+    confirmed, _, _ = module._pi_decisao(
+        b, 3, pos=0, holding=1, politica="confirmacao",
+    )
+    assert confirmed == 0
+
+
+def test_permanencia_inteligente_confirma_gap_antes_de_rotacionar() -> None:
+    import importlib
+    import types
+    import numpy as np
+
+    module = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    u = np.array([
+        [.6, .4], [.55, .44], [.49, .48], [.5, .49], [.51, .53],
+        [.6, .4],
+    ], dtype=float)
+    b = types.SimpleNamespace(
+        dates=pd.date_range("2025-01-01", periods=6, tz="UTC"),
+        fold=np.array([2] * 6),
+        symbols=["AAA", "BBB"], scores=u,
+        config={"rotation_switch_margin": 0.01,
+                "rotation_cash_threshold": 0.01,
+                "rotation_min_expected_edge": 0.0,
+                "rotation_min_holding_days": 2},
+        margens={2: 0.01, 3: 0.01},
+    )
+    # A vantagem apareceu so hoje: espera, mesmo com dois dias completos.
+    decision, reason, _ = module._pi_decisao(
+        b, 4, pos=0, holding=2, politica="confirmacao",
+    )
+    assert decision == 0
+    assert reason == "ESPERAR_CONFIRMACAO_DA_VANTAGEM"
+    # Se o ganho do concorrente for amplo, troca imediatamente aos dois dias.
+    b.scores[4, 1] = 0.65
+    decision, reason, _ = module._pi_decisao(
+        b, 4, pos=0, holding=2, politica="confirmacao",
+    )
+    assert decision == 1
+    assert reason == "CONTROL"
+    # Nao extrapolar score de fold anterior para confirmar sinal atual.
+    b.scores[4, 1] = 0.53
+    b.fold[2] = 1
+    decision, reason, _ = module._pi_decisao(
+        b, 4, pos=0, holding=2, politica="confirmacao",
+    )
+    assert decision == 1
+    assert reason == "CONTROL"
+
+
+def test_permanencia_inteligente_paridade_diagnostico_replay(tmp_path) -> None:
+    import importlib
+    from zipfile import ZipFile
+
+    module = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    columns = {
+        "decision_date": ["2025-01-01", "2025-01-02"],
+        "walk_forward_fold": [1, 2],
+        "holding_days_at_decision": [1, 1],
+        "min_hold_guard_applied": [True, True],
+        "raw_best_asset": ["BBB", "AAA"],
+        "current_asset": ["AAA", "AAA"],
+        "raw_best_score": [0.75, 0.7],
+        "best_vs_current_gap": [0.20, 0.00],
+        "effective_switch_margin": [0.01, 0.01],
+        "score_change_from_entry": [-0.1, 0.1],
+        "rotation_cash_threshold": [0.0, 0.0],
+        "strategy_equity": [10000.0, 10500.0],
+        "decision_is_rotation": [False, False],
+    }
+    replay = tmp_path / "replay.zip"
+    with ZipFile(replay, "w") as z:
+        z.writestr("strategy_predictions.csv", pd.DataFrame(columns).to_csv(
+            index=False,
+        ))
+    decisions, summary = module._pi_diagnostico_replay_atual(replay)
+    assert len(decisions) == 2
+    assert summary["travas_primeiro_pregao"] == 2
+    assert summary["travas_com_outro_ativo_no_topo"] == 1
+    assert summary["possiveis_excecoes_primeiro_pregao"] == 1
+    assert summary["referencia_capital_final_observado"] == 10500.0
