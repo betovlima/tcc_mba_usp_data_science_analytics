@@ -1571,6 +1571,7 @@ def test_permanencia_inteligente_paridade_diagnostico_replay(tmp_path) -> None:
     module = importlib.import_module("pesquisar_permanencia_minima_spyder")
     columns = {
         "decision_date": ["2025-01-01", "2025-01-02"],
+        "timestamp": ["2025-01-02", "2025-01-03"],
         "walk_forward_fold": [1, 2],
         "holding_days_at_decision": [1, 1],
         "min_hold_guard_applied": [True, True],
@@ -1753,3 +1754,84 @@ def test_pi_recupera_pasta_completa_com_sha_verificado(
     (bars / "T00.csv").write_text("adulterado\n", encoding="utf-8")
     assert script._pi_localizar_base() is None
     assert not recovered.exists()
+
+
+def test_pi_retorno_da_trava_e_observado_so_depois_da_decisao(tmp_path) -> None:
+    import importlib
+    from zipfile import ZipFile
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    data = pd.DataFrame({
+        "timestamp": [
+            "2025-01-02", "2025-01-03", "2025-01-06",
+            "2025-01-07", "2025-01-08",
+        ],
+        "decision_date": [
+            "2025-01-01", "2025-01-02", "2025-01-03",
+            "2025-01-06", "2025-01-07",
+        ],
+        "walk_forward_fold": [1, 1, 2, 2, 3],
+        "holding_days_at_decision": [0, 1, 1, 1, 1],
+        "min_hold_guard_applied": [False, True, True, True, True],
+        "current_asset": ["AAA", "AAA", "BBB", "CCC", "DDD"],
+        "raw_best_asset": ["AAA", "BBB", "DDD", "CCC", "EEE"],
+        "raw_best_score": [0.3, 0.5, 0.7, 0.5, 0.7],
+        "best_vs_current_gap": [0, .08, .1, 0, .1],
+        "effective_switch_margin": [.01] * 5,
+        "score_change_from_entry": [0, -.05, -.1, .01, -.1],
+        "rotation_cash_threshold": [0] * 5,
+        "strategy_equity": [100.0, 110.0, 104.5, 125.4, 118.0],
+        "decision_is_rotation": [False] * 5,
+    })
+    original = tmp_path / "replay.zip"
+    with ZipFile(original, "w") as z:
+        z.writestr("strategy_predictions.csv", data.to_csv(index=False))
+    checks, summary = script._pi_diagnostico_replay_atual(original)
+    assert summary["sessoes"] == 5
+    assert summary["travas_primeiro_pregao"] == 4
+    assert summary["possiveis_excecoes_primeiro_pregao"] == 3
+    assert "retorno_control_no_pregao" in checks
+    result = checks["retorno_control_no_pregao"].round(8).tolist()
+    assert result == [
+        0.1, -0.05, 0.2, round(118/125.4-1, 8),
+    ]
+    stat = pd.DataFrame(summary["retornos_observados_da_trava"])
+    flagged = stat.loc[
+        stat["fold"].eq("todos") & stat["grupo"].eq("excecao_proposta")
+    ].iloc[0]
+    assert flagged["observacoes"] == 3
+    assert flagged["pregoes_com_perda_5pct"] == 1
+    assert flagged["pregoes_positivos"] == 1
+    assert flagged["pregoes_negativos"] == 2
+    assert round(flagged["media_retorno_control"], 4) == round(
+        (.1 - .05 + (118/125.4-1)) / 3, 4,
+    )
+
+
+def test_pi_rejeita_replay_fora_de_ordem_antes_de_retornos(tmp_path) -> None:
+    import importlib
+    from zipfile import ZipFile
+    import pytest
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    df = pd.DataFrame({
+        "timestamp": ["2025-01-03", "2025-01-02"],
+        "strategy_equity": [100., 101.],
+        "decision_date": ["2025-01-02", "2025-01-01"],
+        "walk_forward_fold": [1, 2],
+        "holding_days_at_decision": [1, 1],
+        "min_hold_guard_applied": [True, True],
+        "current_asset": ["AAA", "BBB"],
+        "raw_best_asset": ["AAA", "BBB"],
+        "raw_best_score": [.3, .4],
+        "best_vs_current_gap": [0, 0],
+        "effective_switch_margin": [.01, .01],
+        "score_change_from_entry": [0, 0],
+        "rotation_cash_threshold": [0, 0],
+        "decision_is_rotation": [False, False],
+    })
+    file = tmp_path / "replay.zip"
+    with ZipFile(file, "w") as z:
+        z.writestr("strategy_predictions.csv", df.to_csv(index=False))
+    with pytest.raises(ValueError, match="ordenado e unico"):
+        script._pi_diagnostico_replay_atual(file)
