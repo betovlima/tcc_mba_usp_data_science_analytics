@@ -662,3 +662,73 @@ atualizado nao contem as 75 series completas e as utilidades
 contrafactuais; nao da para atribuir os valores da tabela a uma
 rotacao diferente no Control de 2026. E exploracao em folds ja vistos,
 nao confirmacao prospectiva. Nenhuma alteracao em producao.
+
+## 13/11/2026: decisao economica diaria SEM minimo de permanencia
+
+**Diretriz:** o usuario rejeitou forcar 1, 2 ou N sessoes.
+A posicao pode ser trocada na primeira reavaliacao ou mantida por
+qualquer duracao. Os 52 indicadores do LightGBM existente nao mudam.
+Tempo de posse e apenas informado no diagnostico, sem condicao no decisor.
+
+A branch passou a ter, no mesmo
+`pesquisar_permanencia_minima_spyder.py`, o modo padrao
+`MODO = "decisao_economica_sem_prazo"`.
+Tres abordagens sao comparadas com a curva historica congelada:
+
+1. `utilidade_bruta_sem_minimo`: compara a utilidade existente
+   com a margem calibrada e custos estimados, mas SEM trava de dias.
+2. `vantagem_economica_1d`: calibrador Ridge regularizado
+   de retorno da proxima abertura ao fechamento, com os scores
+   da Winner e informacoes ja existentes: score relativo ao
+   universo, volatilidade de 20 dias e retorno de 5 dias.
+3. `vantagem_economica_5_60`: mesmo calibrador para retorno
+   e penalidades de risco realizados nos horizontes originais
+   5/10/20/40/60, normalizados por pregao, com drawdown
+   baseado em **fechamentos** (nao exatamente o rotulo original).
+
+Em cada fechamento a politica escolhe o maior valor economico
+estimado de HOLD, ROTATE para qualquer ativo disponivel, ou CASH,
+descontando custos e margem aplicavel. Nenhuma funcao de decisao
+recebe ou consulta holding_days; so registra esse dado na auditoria.
+Ordens sao simuladas pela abertura seguinte, com contabilidade
+do proprio Control congelado. O fold 1 preserva integralmente
+as decisoes originais; folds 2 e 3 usam calibracoes treinadas
+exclusivamente em folds precedentes, com 60 sessoes para
+maturacao do alvo mais 30 sessoes de embargo; sem alterar os
+modelos LightGBM originais.
+
+**Resultado exploratorio no snapshot completo congelado**
+(historico antigo, nao o backtest atualizado):
+
+| Politica | Capital final | Rotacoes |
+| --- | ---: | ---: |
+| Control congelado, minimo 2 | US$ 587.165.941,13 | 354 |
+| Sem minimo, utilidade + margem + custos | US$ 106.528.956,05 | 420 |
+| Sem minimo, valor de proximo pregao | US$ 547,70 | 608 |
+| Sem minimo, valor de 5/10/20/40/60 | US$ 68.075,62 | 91 |
+
+Todos os calibradores alternativos tiveram resultados **piores**
+que o Control congelado. Sao casos de rejeicao da hipotese,
+e NAO candidatos a entrada em producao. Os calibradores foram
+predefinidos e nao ajustados para superar os folds ja vistos.
+
+**Referencia financeira atual e separada:** o replay de
+12/11/2026 da Winner termina em **US$ 139.871.072,31**.
+O arquivo exportado desse replay nao contem as 75 series de precos
+nem as previsoes contrafactuais para cada portfolio hipotetico.
+Logo, o experimento congelado nao comprova melhora ou piora
+das novas politicas para esse capital. O sistema deve marcar a
+diferenca de bases e NUNCA substituir o baseline atual
+pelo antigo na comparacao financeira oficial.
+
+O unico arquivo de saida do F5 continua sendo
+`output/pesquisa_vantagem_rotacao.zip`, com curva diaria,
+ordens, decisoes e valores HOLD/ROTATE/CASH por fold,
+documentacao, manifesto e fonte congelada. Testes incluem:
+sem veto por tempo, capital e custos de escolha,
+purge, embargo, dados futuros nao usados como features,
+fold 1 imutavel e paridade do Control antigo.
+
+**Situacao:** implementacao cientifica realizada nesta branch;
+nao integrada a main, nao aprovada para uso com dinheiro real,
+sem alteracao no Live.
