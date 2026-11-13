@@ -913,7 +913,7 @@ def test_sensibilidade_margens_recalcula_fold_1_somente_quando_pedido() -> None:
     import numpy as np
 
     script = importlib.import_module("pesquisar_permanencia_minima_spyder")
-    assert script.MODO == "permanencia_inteligente"
+    assert script.MODO == "decisao_economica_sem_prazo"
     assert script.MARGENS_ALTERNATIVAS == {1: 0.01, 2: 0.0, 3: 0.01}
     b = SimpleNamespace(
         dates=pd.date_range("2026-01-02", periods=3, freq="B"),
@@ -949,7 +949,7 @@ def test_sensibilidade_margens_nao_altera_pesquisa_de_deterioracao() -> None:
     script = (ROOT / "pesquisar_permanencia_minima_spyder.py").read_text(
         encoding="utf-8",
     )
-    assert 'MODO = "permanencia_inteligente"' in script
+    assert 'MODO = "decisao_economica_sem_prazo"' in script
     assert 'elif MODO == "deterioracao"' in script
     assert 'permitir_cash=True, aplicar_todos_folds=True' in script
     assert "OOS" not in script.split("# %% 12. Sensibilidade")[1].split(
@@ -1846,3 +1846,127 @@ def test_pi_rejeita_replay_fora_de_ordem_antes_de_retornos(tmp_path) -> None:
         z.writestr("strategy_predictions.csv", df.to_csv(index=False))
     with pytest.raises(ValueError, match="ordenado e unico"):
         script._pi_diagnostico_replay_atual(file)
+
+
+def test_sem_prazo_reavalia_hold_rotate_cash_sem_tempo_minimo():
+    import importlib
+    from types import SimpleNamespace
+    import numpy as np
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    config = {
+        "cat_fee_per_share": 0.0, "commission_rate": 0.0,
+        "sec_fee_rate": 0.0, "taf_fee_per_share": 0.0,
+        "taf_fee_cap": 0.0, "slippage_bps": 0.0,
+    }
+    b = SimpleNamespace(symbols=["AAA", "BBB"],
+                        cl=np.array([[10.0, 10.0], [10.0, 10.0]]),
+                        config=config)
+    # Nao ha parametro holding. Pode rotacionar na primeira reavaliacao.
+    import inspect
+    assert "holding" not in inspect.signature(
+        script._ve_decidir
+    ).parameters
+    rotate, details, ranked = script._ve_decidir(
+        b, 0, 0, 10000.0, 1000.0,
+        np.array([.02, .04]),
+    )
+    assert rotate == 1
+    assert details["acao"] == "ROTATE"
+    assert details["regra_tempo_minimo"] is False
+    assert details["vantagem_acao_vs_hold"] > 0
+    assert ranked[0]["acao"] == "ROTATE"
+    cash, details, _ = script._ve_decidir(
+        b, 0, 0, 10000.0, 1000.0,
+        np.array([-.03, -.01]),
+    )
+    assert cash == -1
+    assert details["acao"] == "CASH"
+    enter, details, _ = script._ve_decidir(
+        b, 0, -1, 10000.0, 0.0,
+        np.array([.02, -.01]),
+    )
+    assert enter == 0 and details["acao"] == "ENTER"
+
+
+def test_sem_prazo_calibracao_sem_vazamento_temporal():
+    import importlib
+    from types import SimpleNamespace
+    import numpy as np
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    rng = np.random.default_rng(256)
+    n, assets = 600, 12
+    days = pd.date_range("2020-01-01", periods=n, freq="B", tz="UTC")
+    folds = np.repeat([1, 2, 3], 200)
+    close = 100 * np.exp(
+        np.cumsum(rng.normal(.001, .008, (n + 1, assets)), axis=0)
+    )
+    opening = close * np.exp(rng.normal(0, .003, (n + 1, assets)))
+    scores = rng.normal(.025, .04, (n + 1, assets))
+    b = SimpleNamespace(
+        dates=days, fold=folds,
+        scores=scores, op=opening, cl=close,
+        vol20=np.full((n + 1, assets), .02),
+        ret5=np.full((n + 1, assets), .01),
+        symbols=[f"A{i:02d}" for i in range(assets)],
+        config={
+            "rotation_target_horizons": (5, 10, 20, 40, 60),
+            "rotation_target_horizon_weights": (.1, .15, .2, .3, .25),
+            "rotation_downside_penalty": .2,
+            "rotation_drawdown_penalty": .35,
+        },
+    )
+    for horizon in ("1d", "5_60"):
+        y = script._ve_rotulos(b, horizon)
+        predicted, report = script._ve_calibrar(b, y)
+        assert predicted.shape == (n, assets)
+        assert report["fold"].tolist() == [2, 3]
+        assert np.isnan(predicted[:200]).all()
+        assert np.isfinite(predicted[200:]).all()
+        assert (report["exemplos_treino"] > 1000).all()
+        for fold in (2, 3):
+            first = int(np.flatnonzero(folds == fold)[0])
+            train_end = days.get_loc(pd.Timestamp(
+                report.loc[report["fold"].eq(fold),
+                           "ultima_decisao_treino"].iloc[0]
+            ))
+            assert (
+                train_end + 60 + script.VE_EMBARGO_SESSOES < first
+            )
+
+
+def test_sem_prazo_nao_usa_rotulos_futuros_como_entrada():
+    import importlib
+    import numpy as np
+    from types import SimpleNamespace
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    n, assets = 600, 12
+    dates = pd.date_range("2020-01-01", periods=n, freq="B", tz="UTC")
+    rng = np.random.default_rng(3)
+    scores = rng.normal(0, .1, (n + 1, assets))
+    close = 100 * np.exp(
+        np.cumsum(rng.normal(0, .01, (n + 1, assets)), axis=0)
+    )
+    op = close * 1.0001
+    b = SimpleNamespace(
+        dates=dates, fold=np.repeat([1, 2, 3], 200),
+        scores=scores, op=op, cl=close,
+        vol20=np.full_like(scores, .025),
+        ret5=np.full_like(scores, .02),
+        symbols=[f"A{i}" for i in range(assets)],
+        config={
+            "rotation_target_horizons": (5, 10, 20, 40, 60),
+            "rotation_target_horizon_weights": (.1, .15, .2, .3, .25),
+            "rotation_downside_penalty": .2,
+            "rotation_drawdown_penalty": .35,
+        },
+    )
+    initial, _ = script._ve_calibrar(b, script._ve_rotulos(b, "1d"))
+    # Modificar os precos depois do inicio do fold 2 nao pode mudar
+    # o modelo que foi treinado no fold 1 para testar o fold 2.
+    changed = SimpleNamespace(**vars(b))
+    changed.cl = b.cl.copy()
+    changed.cl[201:] *= 2.0
+    altered, _ = script._ve_calibrar(
+        changed, script._ve_rotulos(changed, "1d")
+    )
+    np.testing.assert_allclose(initial[200:400], altered[200:400], atol=1e-12)
