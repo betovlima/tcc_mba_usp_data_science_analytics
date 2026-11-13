@@ -1679,6 +1679,9 @@ def test_pi_somente_diagnostico_nao_inventa_backtest(tmp_path, monkeypatch) -> N
         "current_asset": ["AAA"],
         "raw_best_asset": ["BBB"],
         "candidato_saida_antecipada": [True],
+        "walk_forward_fold": [2],
+        "outro_ativo_melhor": [True],
+        "retorno_control_no_pregao": [-0.02],
     })
     monkeypatch.setattr(
         script, "_pi_diagnostico_replay_atual",
@@ -1800,7 +1803,7 @@ def test_pi_retorno_da_trava_e_observado_so_depois_da_decisao(tmp_path) -> None:
         stat["fold"].eq("todos") & stat["grupo"].eq("excecao_proposta")
     ].iloc[0]
     assert flagged["observacoes"] == 3
-    assert flagged["pregoes_com_perda_5pct"] == 1
+    assert flagged["pregoes_com_perda_5pct"] == 2
     assert flagged["pregoes_positivos"] == 1
     assert flagged["pregoes_negativos"] == 2
     assert round(flagged["media_retorno_control"], 4) == round(
