@@ -202,3 +202,40 @@ manifesto e SHA-256. O capital de US$ 587 milhoes permanece apenas como
 checkpoint do snapshot historico congelado, nao como referencia desse replay
 atualizado. Nenhuma hipotese de melhoria foi validada ainda fora da amostra
 apos a escolha dessas condicoes.
+
+## 12/11/2026: impacto financeiro teorico dos alertas de cauda
+
+Fonte: pacote `pesquisa_vantagem_rotacao(6).zip`, CRC e 11 hashes internos
+conferidos. O manifesto do pacote vincula o replay ao capital final de
+**US$ 139.871.072,31**, 1.586 sessoes, 351 episodios e 884 decisoes de
+manutencao; nao se trata do antigo checkpoint de US$ 587 milhoes.
+
+Modelo exploratorio de risco de perda >=5% na sessao seguinte, treinado
+somente em folds cronologicamente anteriores:
+- Fold 2: AUC 0,6164; 42 alertas, 5 quedas >=5% identificadas
+  em 12 perdas observadas; 27 sessoes com alta apesar do alerta.
+- Fold 3: AUC 0,7218; 39 alertas, 8 quedas >=5% identificadas
+  em 16 perdas observadas; 22 sessoes com alta apesar do alerta.
+- Total: 81 alertas, 13 quedas >=5% identificadas, apenas 17 episodios
+  distintos alertados; 49 das 81 sessoes sinalizadas tiveram retorno positivo.
+- Em 13/08/2026, o alerta de CAPR precedeu valorizacao de **57,9572%**;
+  o alerta de 29/07/2026 NAO foi acionado antes da queda de **36,2253%**.
+
+**Teste economico limitado, sem executar ordens:** manter a curva de capital
+original, mas substituir por 0% os retornos close-to-close das 81 sessoes
+sinalizadas, preservando todos os demais fatores diarios, leva a
+**US$ 50.289.622,51** de capital final, contra **US$ 139.871.072,31** do
+Control (queda de aproximadamente 64,05% em relacao ao Control).
+O max drawdown desta curva teorica fica **-48,37%**, frente a **-41,68%**
+do Control. Isso NAO e um replay de ordens em abertura, nao inclui venda,
+recompra, custo extra, reentrada real ou alteracao de politica apos sair.
+Resultados sensiveis a sinais previamente escolhidos examinando a amostra.
+
+No mesmo arquivo `pesquisar_permanencia_minima_spyder.py`, modo
+`analisar_permanencia`, a auditoria exporta adicionalmente
+`impacto_alertas_curva_shadow.csv`,
+`impacto_alertas_por_decisao.csv` e
+`impacto_alertas_resumo_por_fold.csv` para o **mesmo**
+`output/pesquisa_vantagem_rotacao.zip`. Nao criar script, branch,
+sufixo versionado ou estrategia de negociacao sem validacao economica
+e causal independente. A estrategia operativa segue intocada.
