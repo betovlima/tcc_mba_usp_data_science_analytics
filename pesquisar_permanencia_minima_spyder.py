@@ -4533,24 +4533,105 @@ def _pi_replay(base: Base, politica: str):
     return curve, decisions, trades, summary, pd.DataFrame(rows)
 
 
-def _pi_localizar_base() -> Path:
-    candidates = (
-        ROOT / "output" / "pesquisa_permanencia_minima.zip",
-        ROOT / "dados" / "experimentos" / "permanencia_minima"
-        / "entradas" / "pesquisa_permanencia_minima.zip",
-        Path.home() / "Downloads" / "pesquisa_permanencia_minima.zip",
-        Path("/mnt/data/tcc_lab/pesquisa_permanencia_minima.zip"),
+def _pi_validar_zip_base(arquivo: Path) -> bool:
+    """Evita confundir um ZIP de relatorio com a fonte de precos e utilidades."""
+    required = (
+        "pesquisa_permanencia_minima/manifesto_experimento.json",
+        "pesquisa_permanencia_minima/decisoes_2_pregoes.csv",
+        "pesquisa_permanencia_minima/patrimonio_diario_2_pregoes.csv",
+        "pesquisa_permanencia_minima/utilidades_oos_todos_ativos.csv",
+        "pesquisa_permanencia_minima/margens_controle_por_fold.csv",
     )
-    found = next((p for p in candidates if p.is_file()), None)
-    if found is None:
-        raise FileNotFoundError(
-            "Para simular novas rotacoes e necessario o pacote congelado "
-            "pesquisa_permanencia_minima.zip, que contem as 75 cotacoes. "
-            "Coloque-o em output/ ou Downloads. "
-            "O replay atualizado sozinho permite auditar, nao negociar "
-            "trajetorias alternativas completas."
-        )
-    return found
+    try:
+        with ZipFile(arquivo) as z:
+            files = set(z.namelist())
+            return (
+                all(name in files for name in required)
+                and sum(
+                    name.startswith("pesquisa_permanencia_minima/cotacoes_ohlcv/")
+                    and name.endswith(".csv")
+                    for name in files
+                ) == 75
+            )
+    except (OSError, BadZipFile, ValueError):
+        return False
+
+
+def _pi_pastas_de_busca() -> list[Path]:
+    """Raiz do projeto, saidas anteriores e downloads, independente do Spyder."""
+    dirs = [
+        ROOT / "output", ROOT, ROOT.parent / "output", ROOT.parent,
+        Path.home() / "Downloads",
+        Path.home() / "Documents",
+        Path.home() / "Desktop",
+    ]
+    # Evita varrer todo o disco ou confundir ZIPs de projetos diferentes.
+    return list(dict.fromkeys(p for p in dirs if p.is_dir()))
+
+
+def _pi_localizar_base() -> Path | None:
+    """Recupera a fonte ORIGINAL de ZIPs anteriores sem novos downloads.
+
+    Relatorios antigos podem carregar a base completa em
+    dados_origem/pesquisa_permanencia_minima.zip. Nesse caso, extrai-se
+    somente esse membro, validando CRC, SHA e contrato antes de publicar.
+    """
+    target = ARQUIVO_ZIP
+    direct = []
+    for folder in _pi_pastas_de_busca():
+        direct.extend(folder.glob("pesquisa_permanencia_minima*.zip"))
+    for candidate in sorted(
+        set(direct), key=lambda x: (x != target, -x.stat().st_mtime)
+    ):
+        if _pi_validar_zip_base(candidate):
+            print(f"[DADOS] Base congelada localizada: {candidate}", flush=True)
+            return candidate
+
+    containers = []
+    for folder in _pi_pastas_de_busca():
+        containers.extend(folder.glob("pesquisa_vantagem_rotacao*.zip"))
+    # O ZIP atual e preferido, mas qualquer historico da mesma pesquisa
+    # que contenha a fonte valida serve como recuperacao.
+    embedded_member = "dados_origem/pesquisa_permanencia_minima.zip"
+    for archive in sorted(
+        set(containers), key=lambda x: x.stat().st_mtime, reverse=True
+    ):
+        try:
+            with ZipFile(archive) as z:
+                if embedded_member not in z.namelist():
+                    continue
+                data = z.read(embedded_member)  # valida CRC do membro
+        except (OSError, ValueError, BadZipFile, RuntimeError):
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        stage = target.with_name(".pesquisa_permanencia_minima_recuperacao.tmp")
+        try:
+            stage.write_bytes(data)
+            if not _pi_validar_zip_base(stage):
+                continue
+            # A validacao completa do ZIP interno ocorre antes de
+            # publicar a recuperacao com o nome canonico.
+            with ZipFile(stage) as inner:
+                if inner.testzip() is not None:
+                    continue
+                manifest = json.loads(inner.read(
+                    "pesquisa_permanencia_minima/manifesto_experimento.json"
+                ))
+                if manifest.get("status") != "completed" or manifest.get("folds") != 3:
+                    continue
+            digest = _hash_arquivo(stage)
+            stage.replace(target)
+            print(
+                "[DADOS] Base historica recuperada de",
+                archive.name, "| sha256", digest,
+                flush=True,
+            )
+            return target
+        except (OSError, BadZipFile, ValueError, KeyError):
+            continue
+        finally:
+            stage.unlink(missing_ok=True)
+    return None
 
 
 def _pi_diagnostico_replay_atual(source: Path) -> tuple[pd.DataFrame, dict]:
@@ -4616,9 +4697,69 @@ def _pi_diagnostico_replay_atual(source: Path) -> tuple[pd.DataFrame, dict]:
     return first, summary
 
 
+
+def _pi_somente_diagnostico_atual() -> None:
+    """Nao interrompe F5 quando so existe o replay completo atualizado.
+
+    Deixa registrado o que e possivel avaliar sem reconstruir ordens
+    alternativas. Nunca finge que o patrimonio alternativo foi simulado.
+    """
+    try:
+        replay = _a_localizar_replay()
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            "Nenhuma fonte historica completa foi encontrada. Foram "
+            "verificados os ZIPs de pesquisa ja existentes no projeto e "
+            "em Downloads, inclusive a base dentro de relatorios anteriores. "
+            "Tambem nao foi encontrado um backtest atualizado para diagnostico. "
+            "Nao e possivel reconstruir as rotacoes sem os precos, utilidades "
+            "e calendario originais; nenhum resultado foi substituido."
+        ) from exc
+    first, summary = _pi_diagnostico_replay_atual(replay)
+    dest = DESTINO_TEMP
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    first.to_csv(dest / "trava_primeiro_pregao_replay_atual.csv", index=False)
+    manifest = {
+        "modo": "permanencia_inteligente",
+        "status": "completed_observational_diagnostic_only",
+        "simulacao_contrafactual_executada": False,
+        "motivo": (
+            "A serie historica completa com precos e utilidades nao foi "
+            "encontrada localmente nem em ZIPs de saida anteriores."
+        ),
+        "replay_atual_somente_diagnostico": summary,
+        "dados_ausentes": (
+            "pesquisa_permanencia_minima.zip original ou relatorio "
+            "anterior com dados_origem/pesquisa_permanencia_minima.zip"
+        ),
+        "limitacoes": [
+            "Nenhuma operacao alternativa foi reconstruida.",
+            "Nenhum valor de capital contrafactual foi estimado.",
+            "A estrategia original permanece inalterada.",
+        ],
+    }
+    _write_json(dest / "manifesto_experimento.json", manifest)
+    (dest / "LEIA_ME.txt").write_text(
+        "Auditoria da trava de dois pregoes com o replay atualizado.\\n"
+        "A base completa nao foi localizada, portanto NAO se simulou "
+        "qualquer carteira alternativa.\\n", encoding="utf-8",
+    )
+    shutil.copyfile(Path(__file__), dest / "codigo_executado.py")
+    archive = _a_publicar_sem_fonte(dest)
+    print(
+        "[PERMANENCIA] Diagnostico do replay atual gerado, SEM "
+        "simulacao de novas operacoes. | ZIP", archive, flush=True,
+    )
+
+
 def executar_permanencia_inteligente() -> None:
     """Compara politica estatica e adaptativas sem alterar operacao real."""
     source = _pi_localizar_base()
+    if source is None:
+        _pi_somente_diagnostico_atual()
+        return
     base = carregar(source)
     reference, _, _, initial = simular(base)
     error = float(np.max(np.abs(reference - base.base_equity)))
