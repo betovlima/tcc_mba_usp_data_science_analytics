@@ -1406,6 +1406,7 @@ def test_economia_rejeita_falsa_vantagem_em_rotacao() -> None:
         "counterfactual_previous_asset_return": [.01] * 101,
         "chosen_market_return": [.02] * 101,
         "rotation_value_added": [999] * 101,
+        "entry_timestamp": [None] * 101,
         "asset": ["AAA"] * 101,
         "timestamp": pd.date_range("2020-01-01", periods=101).astype(str),
         "decision_timestamp": pd.date_range("2019-12-31", periods=101).astype(str),
