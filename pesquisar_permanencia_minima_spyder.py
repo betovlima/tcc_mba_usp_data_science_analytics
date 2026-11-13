@@ -4709,6 +4709,61 @@ def _pi_localizar_base() -> Path | None:
     return None
 
 
+def _pi_resumo_retorno_observado(first: pd.DataFrame) -> pd.DataFrame:
+    """Retorno realizado do proprio Control; NAO retorno de ativo concorrente.
+
+    A trava e avaliada com sinais do fechamento anterior. O retorno
+    observado no pregão de execucao so aparece depois, no resultado.
+    A comparacao e descritiva, sem otimizacao dos limiares.
+    """
+    required = {
+        "walk_forward_fold", "outro_ativo_melhor",
+        "candidato_saida_antecipada", "retorno_control_no_pregao",
+    }
+    missing = required.difference(first.columns)
+    if missing:
+        raise ValueError(f"Campos de auditoria ausentes: {sorted(missing)}")
+    groups = {
+        "todas_as_travas": first.index == first.index,
+        "outro_ativo_no_topo": first["outro_ativo_melhor"].eq(True),
+        "excecao_proposta": first["candidato_saida_antecipada"].eq(True),
+        "outro_no_topo_sem_excecao": (
+            first["outro_ativo_melhor"].eq(True)
+            & first["candidato_saida_antecipada"].eq(False)
+        ),
+        "sem_excecao": first["candidato_saida_antecipada"].eq(False),
+    }
+    rows = []
+    for fold in ("todos", 1, 2, 3):
+        fold_mask = (
+            pd.Series(True, index=first.index) if fold == "todos"
+            else first["walk_forward_fold"].eq(fold)
+        )
+        for label, mask in groups.items():
+            subset = first.loc[fold_mask & mask]
+            returns = subset["retorno_control_no_pregao"].dropna()
+            if returns.empty:
+                continue
+            rows.append({
+                "fold": fold, "grupo": label,
+                "observacoes": int(len(returns)),
+                "pregoes_positivos": int(returns.gt(0).sum()),
+                "pregoes_negativos": int(returns.lt(0).sum()),
+                "pregoes_com_perda_5pct": int(returns.le(-0.05).sum()),
+                "pregoes_com_alta_10pct": int(returns.ge(0.10).sum()),
+                "media_retorno_control": float(returns.mean()),
+                "mediana_retorno_control": float(returns.median()),
+                "menor_retorno_control": float(returns.min()),
+                "maior_retorno_control": float(returns.max()),
+                "limitacao": (
+                    "Retorno realizado da posicao mantida no Control; "
+                    "nao compara retorno do candidato nem a carteira "
+                    "que resultaria de uma rotacao antecipada."
+                ),
+            })
+    return pd.DataFrame(rows)
+
+
 def _pi_diagnostico_replay_atual(source: Path) -> tuple[pd.DataFrame, dict]:
     """Identifica candidatos a liberar a trava, SEM criar ordens ficticias."""
     from io import BytesIO
@@ -4721,7 +4776,7 @@ def _pi_diagnostico_replay_atual(source: Path) -> tuple[pd.DataFrame, dict]:
             raise ValueError("Replay com arquivos de decisoes ambiguos.")
         frame = pd.read_csv(BytesIO(z.read(names[0])), low_memory=False)
     needed = {
-        "decision_date", "walk_forward_fold",
+        "decision_date", "timestamp", "walk_forward_fold",
         "holding_days_at_decision", "min_hold_guard_applied",
         "raw_best_asset", "current_asset", "raw_best_score",
         "best_vs_current_gap", "effective_switch_margin",
@@ -4730,6 +4785,13 @@ def _pi_diagnostico_replay_atual(source: Path) -> tuple[pd.DataFrame, dict]:
     }
     if not needed.issubset(frame):
         raise ValueError("Replay atualizado sem diagnosticos da trava.")
+    timestamp = pd.to_datetime(frame["timestamp"], utc=True, errors="raise")
+    if not timestamp.is_monotonic_increasing or timestamp.duplicated().any():
+        raise ValueError("Replay sem calendario de execucao ordenado e unico.")
+    equity = pd.to_numeric(frame["strategy_equity"], errors="raise")
+    if not np.isfinite(equity).all() or equity.le(0).any():
+        raise ValueError("Patrimonio invalido para diagnostico da trava.")
+    frame["retorno_control_no_pregao"] = equity.pct_change()
     first = frame.loc[frame["min_hold_guard_applied"].eq(True)].copy()
     if not first["holding_days_at_decision"].eq(1).all():
         raise ValueError("A trava aplicada nao corresponde ao primeiro pregao.")
@@ -4746,6 +4808,7 @@ def _pi_diagnostico_replay_atual(source: Path) -> tuple[pd.DataFrame, dict]:
         & first["raw_best_score"].gt(first["rotation_cash_threshold"])
     )
     first["analise_sem_execucao_de_ordem"] = True
+    comparative = _pi_resumo_retorno_observado(first)
     summary = {
         "fonte_sha256": _hash_arquivo(source),
         "referencia_capital_final_observado": float(
@@ -4759,6 +4822,7 @@ def _pi_diagnostico_replay_atual(source: Path) -> tuple[pd.DataFrame, dict]:
         "possiveis_excecoes_primeiro_pregao": int(
             first["candidato_saida_antecipada"].sum()
         ),
+        "retornos_observados_da_trava": comparative.to_dict(orient="records"),
         "possiveis_excecoes_por_fold": {
             str(fold): int(group["candidato_saida_antecipada"].sum())
             for fold, group in first.groupby("walk_forward_fold")
@@ -4796,6 +4860,9 @@ def _pi_somente_diagnostico_atual() -> None:
         shutil.rmtree(dest)
     dest.mkdir(parents=True, exist_ok=True)
     first.to_csv(dest / "trava_primeiro_pregao_replay_atual.csv", index=False)
+    _pi_resumo_retorno_observado(first).to_csv(
+        dest / "retornos_observados_trava_por_fold.csv", index=False,
+    )
     manifest = {
         "modo": "permanencia_inteligente",
         "status": "completed_observational_diagnostic_only",
@@ -4813,13 +4880,16 @@ def _pi_somente_diagnostico_atual() -> None:
             "Nenhuma operacao alternativa foi reconstruida.",
             "Nenhum valor de capital contrafactual foi estimado.",
             "A estrategia original permanece inalterada.",
+            "Retornos observados sao do Control, nao dos concorrentes.",
         ],
     }
     _write_json(dest / "manifesto_experimento.json", manifest)
     (dest / "LEIA_ME.txt").write_text(
         "Auditoria da trava de dois pregoes com o replay atualizado.\\n"
         "A base completa nao foi localizada, portanto NAO se simulou "
-        "qualquer carteira alternativa.\\n", encoding="utf-8",
+        "qualquer carteira alternativa.\\n"
+        "Retornos observados da trava NAO sao lucros de rotacoes alternativas.\\n",
+        encoding="utf-8",
     )
     shutil.copyfile(Path(__file__), dest / "codigo_executado.py")
     archive = _a_publicar_sem_fonte(dest)
@@ -4913,6 +4983,9 @@ def executar_permanencia_inteligente() -> None:
         first, current_summary = _pi_diagnostico_replay_atual(replay)
         first.to_csv(
             dest / "trava_primeiro_pregao_replay_atual.csv", index=False,
+        )
+        _pi_resumo_retorno_observado(first).to_csv(
+            dest / "retornos_observados_trava_por_fold.csv", index=False,
         )
     manifest = {
         "modo": "permanencia_inteligente",
