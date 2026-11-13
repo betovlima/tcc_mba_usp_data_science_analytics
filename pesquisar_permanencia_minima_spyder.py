@@ -4301,8 +4301,7 @@ def _eco_diagnostico_previsao_diaria(
         dated["acao_shadow"].eq("CASH")
         & dated["walk_forward_fold"].isin((2, 3))
     ].copy()
-    if fired.empty:
-        raise ValueError("Nenhum caso CASH para investigar.")
+    # Zero alertas e um resultado valido de uma politica conservadora.
     fired["log_altas_perdidas"] = fired[
         "log_retorno_control_observado"
     ].clip(lower=0)
