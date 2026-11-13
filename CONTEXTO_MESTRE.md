@@ -610,3 +610,55 @@ o resultado futuro como entrada da regra.
 A base completa, quando disponivel, deve ser reutilizada com SHA
 verificado, nunca substituida por cotacoes atuais baixadas de novo.
 Nao houve alteracao na estrategia em operacao nem merge para main.
+
+## 13/11/2026: reproducao completa das quatro variantes com a fonte congelada recuperada
+
+Arquivo recebido `pesquisa_vantagem_rotacao(20261113-032250).zip`:
+CRC e 5 hashes SHA-256 validos; `simulacao_contrafactual_executada=false`.
+Isso **nao** significa que as hipoteses nao podem ser simuladas: a
+base historica de 75 cotacoes estava preservada em arquivo de pesquisa
+anterior e foi reutilizada, sem baixar cotacoes nem refazer modelos.
+
+Foi executado o **proprio** `pesquisar_permanencia_minima_spyder.py`,
+modo `permanencia_inteligente`, com
+`pesquisa_permanencia_minima.zip` original, SHA-256
+`9e51da49b77ecf07fa651c3e228dc16c6d51ef44a51b7aca657923f6f37eeb60`.
+O replay de producao atualizado, com US$ 139.871.072,31, entrou
+somente como auditoria observacional das 351 travas/38 excecoes.
+
+A curva do Control historico foi reproduzida com erro maximo
+**US$ 0,000000596**. Os 4 backtests alternativos no motor congelado,
+com calendario, custos e decisao do pregão anterior, produziram:
+
+| Politica | Capital historico final | Vs Control | Rotacoes | Intervencoes | Sharpe |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Control 2 pregoes | 587.165.941,13 | 0,00% | 354 | 0 | 2,729 |
+| Saida antecipada | 280.599.893,14 | -52,21% | 373 | 41 | 2,595 |
+| Confirmacao de gap | 100.124.258,54 | -82,95% | 285 | 110 | 2,436 |
+| Confirmacao e saida | 56.445.854,13 | -90,39% | 292 | 142 | 2,326 |
+| Extensao de um dia | 606.778.867,73 | +3,34% | 354 | 1 | 2,736 |
+
+O MDD foi -41,6828% em todos os cenarios. Nenhuma politica com
+multiplas intervencoes melhorou. A unica melhora resulta de UMA
+intervencao no fold 3 (09/12/2024), logo nao prova generalizacao.
+
+Para manter validade cronologica de modo EXPRESO, o decisor
+`_pi_decisao` agora retorna Control quando `fold==1` mesmo se
+um gatilho hipotetico do modelo alternativo seria acionado; teste
+especifico adicionado. Os numeros resultantes permaneceram iguais.
+
+O novo artefato completo `output/pesquisa_vantagem_rotacao.zip`
+foi validado por CRC e 17 SHA-256. Inclui 4 trajetorias completas
+com ordens e decisoes, comparacao por fold, manifesto e uma copia
+embutida da fonte original em
+`dados_origem/pesquisa_permanencia_minima.zip` para que futuras
+execucoes recuperem os dados automaticamente. SHA-256 do arquivo
+completo: `a8e7440861219b719814a0bf3ec34fbaf368818e2bb9313cc1effc405bdbc926`.
+Foi entregue como anexo no chat, nao commitado no GitHub.
+
+Cuidado: estes valores antigos do TCC **nao** substituem o
+baseline atualizado de US$ 139,87 milhoes. O arquivo de replay
+atualizado nao contem as 75 series completas e as utilidades
+contrafactuais; nao da para atribuir os valores da tabela a uma
+rotacao diferente no Control de 2026. E exploracao em folds ja vistos,
+nao confirmacao prospectiva. Nenhuma alteracao em producao.
