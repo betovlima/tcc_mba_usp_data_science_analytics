@@ -563,3 +563,50 @@ Nota metodologica: a base congelada antiga nao e igual ao snapshot
 atualizado. Ela permite testar logicamente o efeito de ordens
 alternativas, mas seus capitais historicos nao substituem o Control
 atualizado de US$ 139.871.072,31.
+
+## 13/11/2026: auditoria dos 38 gatilhos de excecao na base atual
+
+O pacote `pesquisa_vantagem_rotacao(20261113-023403).zip` foi
+verificado: cinco arquivos, quatro hashes SHA-256 conferidos e CRC
+integro. O manifesto registrou `completed_observational_diagnostic_only`,
+`simulacao_contrafactual_executada=false`: o computador local nao
+encontrou a base congelada com 75 cotacoes e utilidades. Nao houve
+novo backtest de rotacoes ou troca de capital.
+
+O replay atualizado exportado (`fonte_sha256`
+`46fe00a978418ab10d742dee855136ac6d5fbb7e726a9ee928f3109c178c06d9`)
+tem Control de US$ 139.871.072,31. Dentro das **351** decisoes em
+que a trava do primeiro pregao foi aplicada, houve **149** em que
+outro ativo estava no topo e **38** em que uma excecao hipotetica
+teria sido marcada: 8 no fold 1, 16 no fold 2, 14 no fold 3.
+
+Cruzamos por `timestamp` os 38 casos com os retornos de patrimonio
+da carteira original realizados na sessao executada apos o
+fechamento de cada decisao. Isto NAO e retorno contrafactual do
+ativo concorrente: e o resultado observado da posicao que foi
+mantida pela trava. Resultado nos **38** casos:
+- 22 sessoes positivas, 16 negativas; media +**1,3374%**,
+  mediana +**0,8091%**.
+- Nenhuma sessao perdeu 5% ou mais. A pior perdeu **4,7937%**;
+  a melhor ganhou **17,7784%**.
+- Fold 1 media +1,9222%; fold 2 media +1,6905%;
+  fold 3 media +0,5997%.
+- Nas 351 sessoes de trava, a media do Control foi +0,8827%.
+  Nas 111 sessoes com outro ativo no topo mas fora dos 38
+  gatilhos, media +0,9445%.
+- A selecao por forte gap de score e deterioracao de utilidade
+  NAO destacou um grupo com perdas graves no pregao seguinte.
+  Nao se demonstrou que antecipar a troca melhoraria capital,
+  pois os retornos da alternativa e a trajetoria de posicoes
+  apos trocar nao estao no ZIP.
+
+A funcao `_pi_diagnostico_replay_atual` calcula a variavel
+`retorno_control_no_pregao` apenas como ROTULO DE RESULTADO,
+DEPOIS dos sinais da decisao, e o relatorio
+`retornos_observados_trava_por_fold.csv` e produzido no mesmo
+ZIP de saida junto ao CSV das decisoes e manifesto. A verificacao
+de integridade, calendario ordenado e testes impedem atribuir
+o resultado futuro como entrada da regra.
+A base completa, quando disponivel, deve ser reutilizada com SHA
+verificado, nunca substituida por cotacoes atuais baixadas de novo.
+Nao houve alteracao na estrategia em operacao nem merge para main.
