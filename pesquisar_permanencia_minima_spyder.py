@@ -4447,6 +4447,7 @@ def _pi_decisao(
     }
     if (
         pos < 0 or holding < 1 or i < holding
+        or int(base.fold[i]) == 1
         or int(base.fold[i]) != int(base.fold[i - holding])
         or not np.isfinite(base.scores[i, pos])
     ):
