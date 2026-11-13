@@ -4560,7 +4560,9 @@ def _pi_validar_zip_base(arquivo: Path) -> bool:
 def _pi_pastas_de_busca() -> list[Path]:
     """Raiz do projeto, saidas anteriores e downloads, independente do Spyder."""
     dirs = [
-        ROOT / "output", ROOT, ROOT.parent / "output", ROOT.parent,
+        ROOT / "output", ROOT,
+        ROOT / "dados" / "experimentos" / "permanencia_minima" / "entradas",
+        ROOT.parent / "output", ROOT.parent,
         Path.home() / "Downloads",
         Path.home() / "Documents",
         Path.home() / "Desktop",
