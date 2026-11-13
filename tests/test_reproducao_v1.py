@@ -1108,6 +1108,10 @@ def test_modelo_cauda_preserva_treino_anterior_e_limiar_de_treino() -> None:
     assert metrics["perdas_5pct_teste"].ge(2).all()
     assert metrics["limiar_alerta_percentil_90_treino"].between(0, 1).all()
     assert metrics["cobertura_quedas"].between(0, 1).all()
+    assert metrics["auc_roc_treino"].between(0, 1).all()
+    assert metrics["auc_roc_oos_gap_treino_menos_teste"].notna().all()
+    assert metrics["brier_oos_nao_calibrado"].ge(0).all()
+    assert metrics["episodios_com_perda_teste"].ge(2).all()
     for _, row in metrics.iterrows():
         assert pd.Timestamp(row["ultima_execucao_treino"]) < (
             pd.Timestamp(row["primeira_decisao_teste"])
@@ -1242,3 +1246,70 @@ def test_primeiro_alerta_por_episodio_nao_usa_resultado_futuro() -> None:
     assert "primeiro_por_episodio=True" in source
     assert '.drop_duplicates(subset=["episodio_id"], keep="first")' in source
     assert "concentracao_alertas_por_episodio.csv" in source
+
+
+def test_sensibilidade_primeiro_alerta_mostra_inversao_por_um_episodio() -> None:
+    import importlib
+    import numpy as np
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    events = pd.DataFrame({
+        "episodio_id": [1, 2, 3],
+        "data_decisao": ["2026-01-02", "2026-01-03", "2026-01-04"],
+        "selected_asset": ["AAA", "BBB", "CCC"],
+        "walk_forward_fold": [2, 2, 3],
+        "retorno_control": [
+            np.exp(0.3) - 1, np.exp(-0.1) - 1, np.exp(-0.05) - 1,
+        ],
+        "contribuicao_log_alerta": [0.3, -0.1, -0.05],
+    })
+    influence, summary = script._a_sensibilidade_primeiro_alerta(
+        events, capital_control=10000.0,
+    )
+    assert len(influence) == 3
+    assert summary["episodios_distintos"] == 3
+    assert np.isclose(summary["capital_shadow_primeiros_alertas"],
+                      10000 * np.exp(-0.15))
+    assert summary["num_remocoes_que_invertem_conclusao"] == 1
+    assert influence.iloc[0]["episodio_id"] == 1
+    assert influence.iloc[0]["capital_apos_remover_um_alerta"] > 10000
+
+
+def test_sensibilidade_nao_permite_alertas_duplicados_por_episodio() -> None:
+    import importlib
+    import pytest
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    events = pd.DataFrame({
+        "episodio_id": [1, 1],
+        "data_decisao": ["2026-01-02", "2026-01-03"],
+        "selected_asset": ["AAA", "AAA"],
+        "walk_forward_fold": [2, 2],
+        "retorno_control": [0.01, 0.02],
+        "contribuicao_log_alerta": [0.01, 0.02],
+    })
+    with pytest.raises(ValueError, match="Mais de um primeiro alerta"):
+        script._a_sensibilidade_primeiro_alerta(
+            events, capital_control=10000,
+        )
+
+
+def test_ic_auc_bootstrap_reconhece_episodios_e_eventos_raros() -> None:
+    import importlib
+    import numpy as np
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    target = np.array([0, 1, 0, 1, 0, 0, 1, 0])
+    score = np.array([0.1, 0.8, 0.2, 0.7, 0.1, 0.2, 0.9, 0.2])
+    ids = np.array([1, 1, 2, 2, 3, 3, 4, 4])
+    low, high, n, positive = script._a_ic_auc_por_episodio(
+        target, score, ids, n_amostras=200, seed=11,
+    )
+    assert (n, positive) == (4, 3)
+    assert 0.0 <= low <= high <= 1.0
+    # Um unico episodio positivo nao fornece intervalo estavel.
+    small = script._a_ic_auc_por_episodio(
+        np.array([1, 0, 0]), np.array([0.8, 0.1, 0.2]),
+        np.array([1, 2, 3]), n_amostras=200,
+    )
+    assert small == (None, None, 3, 1)
