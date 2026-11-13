@@ -3369,6 +3369,94 @@ A_FEATURES_CAUSAS = (
 )
 
 
+
+def _a_ic_auc_por_episodio(
+    targets: np.ndarray, scores: np.ndarray, episodio_ids: np.ndarray,
+    *, n_amostras: int = 1200, seed: int = 42,
+) -> tuple[float | None, float | None, int, int]:
+    """Bootstrap de episodios (nao dias); intervalo exploratorio, nao prospectivo."""
+    from sklearn.metrics import roc_auc_score
+
+    y = np.asarray(targets, dtype=int)
+    p = np.asarray(scores, dtype=float)
+    g = np.asarray(episodio_ids)
+    if not (len(y) == len(p) == len(g)):
+        raise ValueError("Comprimentos de evento, score e episodio divergentes.")
+    groups = pd.Series(np.arange(len(g))).groupby(g, sort=True)
+    slots = [v.to_numpy(dtype=int) for _, v in groups]
+    positive_groups = int(len(np.unique(g[y == 1])))
+    if len(slots) < 2 or positive_groups < 2:
+        return None, None, int(len(slots)), positive_groups
+    rng = np.random.default_rng(seed)
+    estimates = []
+    for _ in range(n_amostras):
+        chosen = rng.integers(0, len(slots), len(slots))
+        idx = np.concatenate([slots[k] for k in chosen])
+        if np.unique(y[idx]).size == 2:
+            estimates.append(float(roc_auc_score(y[idx], p[idx])))
+    if len(estimates) < 100:
+        return None, None, int(len(slots)), positive_groups
+    low, high = np.quantile(estimates, [0.025, 0.975])
+    return float(low), float(high), int(len(slots)), positive_groups
+
+
+def _a_sensibilidade_primeiro_alerta(
+    alertas: pd.DataFrame, capital_control: float,
+) -> tuple[pd.DataFrame, dict]:
+    """Influencias leave-one-episode-out da ablacao teórica.
+
+    Nao retira alertas para tomar decisoes: revela quanto cada observacao
+    JA OCORRIDA altera a conclusao. Nao testa uma politica operacional.
+    """
+    needed = {
+        "episodio_id", "data_decisao", "selected_asset",
+        "contribuicao_log_alerta", "retorno_control", "walk_forward_fold",
+    }
+    if not needed.issubset(alertas):
+        raise ValueError("Dados incompletos para sensibilidade de episodios.")
+    if alertas["episodio_id"].duplicated().any():
+        raise ValueError("Mais de um primeiro alerta para mesmo episodio.")
+    if capital_control <= 0:
+        raise ValueError("Capital final do Control deve ser positivo.")
+    total = float(alertas["contribuicao_log_alerta"].sum())
+    shadow = float(capital_control * np.exp(-total))
+    res = alertas.loc[:, [
+        "episodio_id", "data_decisao", "selected_asset", "walk_forward_fold",
+        "retorno_control", "contribuicao_log_alerta",
+    ]].copy()
+    res["capital_apos_remover_um_alerta"] = (
+        float(capital_control) *
+        np.exp(-total + res["contribuicao_log_alerta"].to_numpy(float))
+    )
+    res["variacao_sobre_control_apos_remocao"] = (
+        res["capital_apos_remover_um_alerta"] / capital_control - 1
+    )
+    res["mudou_conclusao_para_superior_ao_control"] = (
+        res["capital_apos_remover_um_alerta"] > capital_control
+    )
+    res = res.sort_values("capital_apos_remover_um_alerta", ascending=False)
+    return res, {
+        "capital_control_final": float(capital_control),
+        "capital_shadow_primeiros_alertas": shadow,
+        "episodios_distintos": int(len(res)),
+        "capital_shadow_menor_apos_remocao": (
+            float(res["capital_apos_remover_um_alerta"].min())
+            if len(res) else float(capital_control)
+        ),
+        "capital_shadow_maior_apos_remocao": (
+            float(res["capital_apos_remover_um_alerta"].max())
+            if len(res) else float(capital_control)
+        ),
+        "num_remocoes_que_invertem_conclusao": int(
+            res["mudou_conclusao_para_superior_ao_control"].sum()
+        ),
+        "restricao": (
+            "Teste ex post, usando o retorno conhecido so para auditoria. "
+            "Nao permite selecionar que alertas ignorar nas operacoes."
+        ),
+    }
+
+
 def _a_experimento_risco_cauda_oos(
     diario: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -3380,7 +3468,9 @@ def _a_experimento_risco_cauda_oos(
     """
     from sklearn.impute import SimpleImputer
     from sklearn.linear_model import LogisticRegression
-    from sklearn.metrics import average_precision_score, roc_auc_score
+    from sklearn.metrics import (
+        average_precision_score, brier_score_loss, roc_auc_score,
+    )
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import StandardScaler
 
@@ -3435,7 +3525,36 @@ def _a_experimento_risco_cauda_oos(
         detected = int((alerts & (observed == 1)).sum())
         n_alert = int(alerts.sum())
         n_events = int(observed.sum())
+        ic_low, ic_high, episode_count, event_episode_count = (
+            _a_ic_auc_por_episodio(
+                observed, scores_test, test["episodio_id"].to_numpy(),
+                seed=42 + fold,
+            )
+        )
+        auc_train = float(roc_auc_score(y, scores_train))
+        auc_test = float(roc_auc_score(observed, scores_test))
         metrics.append({
+            "auc_roc_treino": auc_train,
+            "auc_roc_oos_gap_treino_menos_teste": auc_train - auc_test,
+            "precisao_media_treino": float(
+                average_precision_score(y, scores_train)
+            ),
+            "taxa_base_treino": float(np.mean(y)),
+            "brier_treino_nao_calibrado": float(
+                brier_score_loss(y, scores_train)
+            ),
+            "brier_oos_nao_calibrado": float(
+                brier_score_loss(observed, scores_test)
+            ),
+            "brier_baseline_constante_teste": float(
+                np.mean((observed - np.mean(y)) ** 2)
+            ),
+            "score_medio_previsto_teste": float(np.mean(scores_test)),
+            "episodios_teste": episode_count,
+            "episodios_com_perda_teste": event_episode_count,
+            "ic95_auc_bootstrap_episodios_inferior": ic_low,
+            "ic95_auc_bootstrap_episodios_superior": ic_high,
+            "ic_auc_amostras_episodios": 1200,
             "fold_teste": fold,
             "primeira_decisao_teste": str(start.date()),
             "ultima_execucao_treino": str(
@@ -3447,7 +3566,7 @@ def _a_experimento_risco_cauda_oos(
             "observacoes_teste": int(len(test)),
             "perdas_5pct_teste": n_events,
             "taxa_base_teste": n_events / len(test),
-            "auc_roc_oos": float(roc_auc_score(observed, scores_test)),
+            "auc_roc_oos": auc_test,
             "precisao_media_oos": float(
                 average_precision_score(observed, scores_test)
             ),
@@ -3699,6 +3818,16 @@ def executar_analise_permanencia() -> None:
     primeiro_resumo.to_csv(
         dest / "impacto_primeiro_alerta_resumo_por_fold.csv", index=False,
     )
+    sensibilidades, sensibilidade_resumo = _a_sensibilidade_primeiro_alerta(
+        primeiro_alertas,
+        capital_control=float(impacto_curva["capital_control_recalculado"].iloc[-1]),
+    )
+    sensibilidades.to_csv(
+        dest / "sensibilidade_primeiro_alerta_por_episodio.csv", index=False,
+    )
+    metrica_oos.to_csv(
+        dest / "generalizacao_risco_cauda_por_fold.csv", index=False,
+    )
     concentracao = (
         impacto_alertas.groupby(["episodio_id", "selected_asset"], as_index=False)
         .agg(
@@ -3737,6 +3866,7 @@ def executar_analise_permanencia() -> None:
             "nao_e_backtest_executavel": True,
             "resultados": impacto_resumo.to_dict(orient="records"),
             "primeiro_alerta_por_episodio": {
+                "sensibilidade_leave_one_episode_out": sensibilidade_resumo,
                 "regra": (
                     "Neutralizar apenas o dia seguinte ao primeiro alerta "
                     "cronologico por posicao historica; dias seguintes "
@@ -3768,6 +3898,10 @@ def executar_analise_permanencia() -> None:
             "Nao e backtest contrafactual de venda, rotacao ou caixa.",
             "O impacto close-to-close nao tem reentradas, novas ordens ou slippage.",
             "O primeiro alerta por episodio e hipotese idealizada: nao testa recompra real.",
+            "Treino e teste do classificador tem eventos raros por episodio.",
+            "AUC por bootstrap de episodios e estimativa exploratoria incerta.",
+            "O score balanced nao representa probabilidade calibrada de perda.",
+            "Usa apenas eventos futuros como rotulos e auditoria ex post.",
             "Nao treina modelos nem utiliza dados futuros nas features.",
             "Nenhuma conta real ou ordem externa e acessada.",
         ],
@@ -3779,7 +3913,9 @@ def executar_analise_permanencia() -> None:
         "Para cada horizonte futuro, observacoes sao censuradas em rotacoes.\n"
         "Os arquivos impacto_alertas_* sao ablacao de exposicao, nao ordens.\n"
         "impacto_primeiro_alerta_* neutraliza so 1 dia por episodio historico.\n"
-        "concentracao_alertas_por_episodio.csv explica a dependencia dos alertas.\n",
+        "concentracao_alertas_por_episodio.csv explica a dependencia dos alertas.\n"
+        "generalizacao_risco_cauda_por_fold.csv mede treino versus teste.\n"
+        "sensibilidade_primeiro_alerta_por_episodio.csv e teste leave-one-out.\n",
         encoding="utf-8",
     )
     shutil.copyfile(Path(__file__), dest / "codigo_executado.py")
