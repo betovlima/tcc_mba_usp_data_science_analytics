@@ -332,3 +332,72 @@ O modo `analisar_permanencia` inclui agora treino-vs-teste,
 bootstrap de AUC por episodio e leave-one-out de capital no
 manifesto e nos CSVs de qualidade e sensibilidade. Sem nova
 branch, sem nova versao de arquivo e sem alteracao da operacao.
+
+## 12/11/2026: primeira avaliacao economica cronologica de HOLD, ROTATE e CASH
+
+Execucao imediata sobre o replay exportado atual, com 1.586 sessoes,
+351 episodios e Control de **US$ 139.871.072,30749363**.
+O valor historico antigo permanece apenas como checkpoint de sua
+base antiga, nao e o alvo dos novos estudos.
+
+**Regras de validacao:** nenhum retreinamento do motor original e nenhum
+acesso a sistemas operacionais. Ridge(alpha=80), 12 sinais conhecidos
+no fechamento da decisao, fold 1 somente treino, folds 2 e 3 avaliados
+cronologicamente. Embargo de 30 dias-calendario na amostra diaria.
+Na comparacao de rotacoes, a amostra de treino tambem exige que o
+episodio tenha TERMINADO antes do embargo, evitando o rotulo futuro
+entrar no treinamento. Paridade da curva original melhor que US$ 0,01.
+
+**Teste A: CASH de um pregão com retorno close-to-close idealizado.**
+Classificador anterior de perda substituido por regressao Ridge direta
+do log-retorno do Control. CASH apenas se o log-retorno previsto de
+seguir a operacao original e inferior a -0,002. Um dia em CASH recebe
+retorno log -0,002 (custo hipotetico, 10bps por perna);
+no pregão seguinte a politica volta automaticamente a reproduzir a
+posicao Control, SEM simular o gap de abertura nem recalcular ordens.
+- Fold 2: 482 sessoes de treino, 504 de avaliacao, **249** dias em
+  CASH, dos quais **139** apresentaram alta originalmente.
+  Fator sombra/control no fold **0,06407346**.
+- Fold 3: 986 treino, 578 avaliacao, **6** dias em CASH, 3 com alta
+  original. Fator no fold **0,88905436**.
+- Acumulado: **255** dias em CASH; final da curva sombra
+  **US$ 7.967.726,13** vs Control **US$ 139.871.072,31**
+  (perda relativa ~94,30%). Resultado NEGATIVO.
+- NAO e simulacao executavel nem politica valida: sem preco das
+  aberturas, ordem, estado alternativo de carteira, impacto de mercado
+  e regresso operacional a posicao.
+
+**Teste B: rotacoes emparelhadas pelo mesmo intervalo historico.**
+O replay contem **350** pares de retornos do ativo comprado e do ativo
+anterior durante o intervalo em que a rotacao original foi mantida.
+Tres opcoes: ROTATE=retorno do escolhido, HOLD=retorno do anterior,
+CASH=zero bruto menos 0,002 hipotetico. Modelo Ridge multi-saida
+treinado nas rotacoes finalizadas dos folds anteriores, embargo de
+30 dias e teste por fold; nao encadeia alternativas num portfolio.
+- Fold 2: 141 rotacoes avaliadas; a escolha original superou HOLD em
+  **59,57%** dos casos, com vantagem log media **+0,027082**.
+  O novo modelo recomendou 62 ROTATE, 71 HOLD, 8 CASH;
+  sua vantagem log MEDIA pareada sobre a rotacao original foi
+  **-0,012079** por episodio.
+- Fold 3: 125 rotacoes, a original superou HOLD em **59,20%**,
+  vantagem log media **+0,024723**. O novo modelo recomendou
+  116 ROTATE, 9 HOLD, 0 CASH; vantagem log media **-0,002578**.
+- As somas de vantagens log de episodios nao sao capitalizaveis,
+  pois uma decisao alternativa alteraria o ativo de entrada na proxima
+  operacao; o replay nao contem todos os precos para recomputar
+  o estado posterior. NAO afirmar capital alternativo HOLD/ROTATE.
+
+**Conclusao provisoria:** o modelo economico exploratorio nao superou
+as escolhas originais, no shadow de caixa nem na comparacao pareada
+de rotacoes. A avaliacao fold2/3 ja participou de multiplas analises,
+logo nao constitui teste prospectivo independente. Nao usar em
+negociacao real. Avancar so com reproducoes de trajetorias executaveis
+sobre precos completos e novas janelas temporais genuinamente nao
+usadas na escolha da politica.
+
+**Entrega:** mesmo arquivo `pesquisar_permanencia_minima_spyder.py`,
+modo-padrao `vantagem_economica` (modos anteriores preservados).
+Mesmo `output/pesquisa_vantagem_rotacao.zip` com relatorios anteriores
+e quatro arquivos `vantagem_economica_*.csv`, manifesto,
+codigo, hashes CRC e SHA-256. Branch de pesquisa existente, sem
+deploy e sem integracao na principal.
