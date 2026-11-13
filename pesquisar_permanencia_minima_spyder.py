@@ -4248,7 +4248,7 @@ def executar_vantagem_economica() -> None:
     print(
         "[ECONOMIA] Control USD", round(baseline, 2),
         "| CASH shadow USD", round(float(cash["capital_shadow_cash"].iloc[-1]), 2),
-        "| rotacoes pareadas OOS", int(rot_folds["intervalos_avaliados"].sum()),
+        "| rotacoes pareadas avaliadas", int(rot_folds["intervalos_avaliados"].sum()),
         "| ZIP", archive,
     )
 
