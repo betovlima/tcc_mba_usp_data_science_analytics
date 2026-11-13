@@ -362,7 +362,7 @@ posicao Control, SEM simular o gap de abertura nem recalcular ordens.
   original. Fator no fold **0,88905436**.
 - Acumulado: **255** dias em CASH; final da curva sombra
   **US$ 7.967.726,13** vs Control **US$ 139.871.072,31**
-  (perda relativa ~94,30%). Resultado NEGATIVO.
+  (perda relativa ~94,30%). Sem custo adicional, a curva ainda terminaria\n  em **US$ 13.268.584,17** (perda relativa ~90,51%).\n  Resultado NEGATIVO mesmo sem atrito de negociacao.
 - NAO e simulacao executavel nem politica valida: sem preco das
   aberturas, ordem, estado alternativo de carteira, impacto de mercado
   e regresso operacional a posicao.
