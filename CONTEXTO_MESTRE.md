@@ -278,3 +278,57 @@ custos, diferenca entre abertura e fechamento, nem nova politica refitada.
 Os resultados sao diagnosticos de um comportamento observado e o
 episodio e definido pela trajetoria de posicao original. Repetir avaliacoes
 sobre esta amostra nao transforma essas regras em evidencias prospectivas.
+
+## 13/11/2026: generalizacao temporal e influencia dos primeiros alertas
+
+Novo pacote de saida recebido `pesquisa_vantagem_rotacao(8).zip`,
+com CRC e 18 hashes internos validados. Continua o replay concluido
+com 1.586 sessoes, 351 episodios, patrimonio final
+US$ 139.871.072,31. Nao usar os US$ 587 milhoes do snapshot de
+reproducao historica como referencial financeiro desta pesquisa.
+
+O classificador de risco de perda diaria >=5% foi REAJUSTADO, reproduzindo
+exatamente (erro de score numerico maximo <=2.3e-16) os scores exportados:
+- Fold 2: treino 328 obs / 13 eventos, AUC in-sample **0,796337**;
+  teste 221 obs / 12 eventos, AUC **0,616427**, gap **0,179910**.
+  Eventos de perda concentrados em apenas **9 episodios** distintos
+  dentre 67 episodios testados.
+- Fold 3: treino 550 obs / 25 eventos, AUC in-sample **0,776610**;
+  teste 328 obs / 16 eventos, AUC **0,721755**, gap **0,054855**.
+  Eventos em apenas **9 episodios** dentre 67 testados.
+- Bootstrap exploratorio de episodios, 1.200 replicacoes e seed
+  por fold 42+fold: intervalo empirico de 95% para AUC OOS
+  **fold 2: 0,348 a 0,892**, **fold 3: 0,446 a 0,877**.
+  Ambos os intervalos incluem AUC 0,5; nao ha comprovacao de
+  generalizacao robusta so com estes episodios.
+- Os scores logistic class_weight=balanced NAO sao probabilidades
+  calibradas: media prevista 0,492/0,458 versus incidencia
+  0,0543/0,0488 (folds 2/3).
+  Brier OOS do modelo 0,27166 / 0,21966, muito pior que o
+  preditor constante da prevalencia de treino 0,05157 / 0,04641.
+  Os limiares de score percentil 90 de treino sao apenas regras
+  de ranking, nao probabilidades de 63%-65% de queda.
+- Primeiro alerta por episodio: 17 intervencoes idealizadas,
+  capital teorico US$ 118.757.224,48 contra Control de
+  US$ 139.871.072,31. Analise leave-one-episode-out:
+  retirar o primeiro alerta de YANG em **07/10/2024** transforma
+  o resultado teorico em **US$ 161.489.949,61**, invertendo a
+  conclusao sobre vencer ou nao o Control. Retirar qualquer
+  dos outros 16 alertas individualmente nao supera o Control.
+  Isso e medida de fragilidade ex post, NAO autoriza remover
+  YANG da regra por conhecer a valorizacao posterior.
+
+**Diagnostico:** a queda do AUC do treino para OOS no fold 2 e
+compativel com dificuldade de generalizacao (risco de overfitting);
+underfitting nao ficou demonstrado. A variacao de resultados entre
+folds e episodios, o risco de seletividade da pesquisa e a
+calibracao ruim impedem uso em producao. Nem o primeiro alerta
+nem o shadow close-to-close simulam negociações reais, custo,
+abertura, ou o reposicionamento da carteira em CASH.
+
+A branch de pesquisa conserva `pesquisar_permanencia_minima_spyder.py`
+e o mesmo artefato `output/pesquisa_vantagem_rotacao.zip`.
+O modo `analisar_permanencia` inclui agora treino-vs-teste,
+bootstrap de AUC por episodio e leave-one-out de capital no
+manifesto e nos CSVs de qualidade e sensibilidade. Sem nova
+branch, sem nova versao de arquivo e sem alteracao da operacao.
