@@ -1595,3 +1595,108 @@ def test_permanencia_inteligente_paridade_diagnostico_replay(tmp_path) -> None:
     assert summary["travas_com_outro_ativo_no_topo"] == 1
     assert summary["possiveis_excecoes_primeiro_pregao"] == 1
     assert summary["referencia_capital_final_observado"] == 10500.0
+
+
+def _pi_fixture_zip_base() -> bytes:
+    import io
+    import json
+    from zipfile import ZIP_DEFLATED, ZipFile
+
+    stream = io.BytesIO()
+    with ZipFile(stream, "w", ZIP_DEFLATED) as z:
+        prefix = "pesquisa_permanencia_minima/"
+        z.writestr(prefix + "manifesto_experimento.json",
+                   json.dumps({"status": "completed", "folds": 3}))
+        z.writestr(prefix + "decisoes_2_pregoes.csv", "data\n2026-01-01\n")
+        z.writestr(prefix + "patrimonio_diario_2_pregoes.csv",
+                   "timestamp\n2026-01-02\n")
+        z.writestr(prefix + "utilidades_oos_todos_ativos.csv",
+                   "data_decisao,ativo,utilidade\n")
+        z.writestr(prefix + "margens_controle_por_fold.csv", "fold,margem\n")
+        for i in range(75):
+            z.writestr(prefix + f"cotacoes_ohlcv/T{i:02d}.csv",
+                       "timestamp,open,close,volume\n")
+    return stream.getvalue()
+
+
+def test_pi_recupera_base_completa_de_zip_anterior(tmp_path, monkeypatch) -> None:
+    import hashlib
+    import importlib
+    from zipfile import ZipFile
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    expected = _pi_fixture_zip_base()
+    output = tmp_path / "output"
+    output.mkdir()
+    previous = tmp_path / "pesquisa_vantagem_rotacao(3).zip"
+    with ZipFile(previous, "w") as z:
+        z.writestr("dados_origem/pesquisa_permanencia_minima.zip", expected)
+    monkeypatch.setattr(script, "_pi_pastas_de_busca",
+                        lambda: [output, tmp_path])
+    monkeypatch.setattr(
+        script, "ARQUIVO_ZIP", output / "pesquisa_permanencia_minima.zip"
+    )
+    found = script._pi_localizar_base()
+    assert found == output / "pesquisa_permanencia_minima.zip"
+    assert hashlib.sha256(found.read_bytes()).hexdigest() == (
+        hashlib.sha256(expected).hexdigest()
+    )
+    assert script._pi_validar_zip_base(found)
+    # Execucao posterior reutiliza a fonte validada, sem reextrair.
+    assert script._pi_localizar_base() == found
+
+
+def test_pi_ignora_pacote_embutido_corrompido(tmp_path, monkeypatch) -> None:
+    import importlib
+    from zipfile import ZipFile
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    invalid = tmp_path / "pesquisa_vantagem_rotacao.zip"
+    with ZipFile(invalid, "w") as z:
+        z.writestr("dados_origem/pesquisa_permanencia_minima.zip",
+                   b"isso nao e um ZIP")
+    monkeypatch.setattr(script, "_pi_pastas_de_busca", lambda: [tmp_path])
+    monkeypatch.setattr(script, "ARQUIVO_ZIP",
+                        tmp_path / "pesquisa_permanencia_minima.zip")
+    assert script._pi_localizar_base() is None
+    assert not (tmp_path / "pesquisa_permanencia_minima.zip").exists()
+    assert not (tmp_path / ".pesquisa_permanencia_minima_recuperacao.tmp").exists()
+
+
+def test_pi_somente_diagnostico_nao_inventa_backtest(tmp_path, monkeypatch) -> None:
+    import importlib
+    import json
+    from zipfile import ZipFile
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    output = tmp_path / "output"
+    output.mkdir()
+    replay = tmp_path / "replay_atual.zip"
+    replay.write_bytes(b"teste")
+    monkeypatch.setattr(script, "_a_localizar_replay", lambda: replay)
+    frame = pd.DataFrame({
+        "current_asset": ["AAA"],
+        "raw_best_asset": ["BBB"],
+        "candidato_saida_antecipada": [True],
+    })
+    monkeypatch.setattr(
+        script, "_pi_diagnostico_replay_atual",
+        lambda _: (frame, {
+            "sessoes": 1, "travas_primeiro_pregao": 1,
+            "possiveis_excecoes_primeiro_pregao": 1,
+        }),
+    )
+    monkeypatch.setattr(script, "DESTINO_TEMP", output / ".temporario")
+    monkeypatch.setattr(script, "DESTINO", output / "pesquisa_vantagem_rotacao")
+    script._pi_somente_diagnostico_atual()
+    archive = output / "pesquisa_vantagem_rotacao.zip"
+    with ZipFile(archive) as z:
+        meta = json.loads(z.read(
+            "pesquisa_vantagem_rotacao/manifesto_experimento.json"
+        ))
+    assert meta["status"] == "completed_observational_diagnostic_only"
+    assert meta["simulacao_contrafactual_executada"] is False
+    assert meta["replay_atual_somente_diagnostico"][
+        "possiveis_excecoes_primeiro_pregao"
+    ] == 1
+    assert "capital_alternativo" not in meta
