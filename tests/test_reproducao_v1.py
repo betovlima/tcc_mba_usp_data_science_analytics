@@ -1970,3 +1970,98 @@ def test_sem_prazo_nao_usa_rotulos_futuros_como_entrada():
         changed, script._ve_rotulos(changed, "1d")
     )
     np.testing.assert_allclose(initial[200:400], altered[200:400], atol=1e-12)
+
+
+def test_ve_bootstrap_uses_local_source_without_regenerating(
+    monkeypatch, tmp_path,
+) -> None:
+    import importlib
+
+    module = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    input_file = tmp_path / "pesquisa_permanencia_minima.zip"
+    input_file.write_bytes(b"mock")
+    monkeypatch.setattr(module, "_pi_localizar_base", lambda: input_file)
+    monkeypatch.setattr(
+        module, "verificar_fontes",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("Nao deveria verificar cache com ZIP completo")
+        ),
+    )
+    assert module._ve_recuperar_ou_reconstruir_base() == input_file
+
+
+def test_ve_bootstrap_rebuilds_only_from_integrity_checked_cache(
+    monkeypatch, tmp_path,
+) -> None:
+    import importlib
+
+    module = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    initial_mode = module.MODO
+    target = tmp_path / "output" / "pesquisa_permanencia_minima.zip"
+    target.parent.mkdir()
+    calls = []
+    monkeypatch.setattr(module, "ARQUIVO_ZIP", target)
+    monkeypatch.setattr(module, "_pi_localizar_base", lambda: None)
+
+    def verify():
+        calls.append(("verify", module.MODO))
+        return (None, {}, ())
+
+    def rebuild():
+        assert module.MODO == "comparar"
+        calls.append(("rebuild", module.MODO))
+        target.write_bytes(b"mock valid source")
+
+    monkeypatch.setattr(module, "verificar_fontes", verify)
+    monkeypatch.setattr(module, "main", rebuild)
+    monkeypatch.setattr(
+        module, "_pi_validar_zip_base",
+        lambda item: item == target and item.is_file(),
+    )
+    assert module._ve_recuperar_ou_reconstruir_base() == target
+    assert calls == [("verify", initial_mode), ("rebuild", "comparar")]
+    assert module.MODO == initial_mode
+
+
+def test_ve_bootstrap_restores_mode_when_reconstruction_fails(
+    monkeypatch, tmp_path,
+) -> None:
+    import importlib
+    import pytest
+
+    module = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    initial_mode = module.MODO
+    monkeypatch.setattr(module, "_pi_localizar_base", lambda: None)
+    monkeypatch.setattr(module, "verificar_fontes", lambda: None)
+
+    def broken_rebuild():
+        assert module.MODO == "comparar"
+        raise RuntimeError("fonte original falhou")
+
+    monkeypatch.setattr(module, "main", broken_rebuild)
+    with pytest.raises(RuntimeError, match="fonte original falhou"):
+        module._ve_recuperar_ou_reconstruir_base()
+    assert module.MODO == initial_mode
+
+
+def test_ve_bootstrap_missing_sources_has_actionable_error(
+    monkeypatch,
+) -> None:
+    import importlib
+    import pytest
+
+    module = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    monkeypatch.setattr(module, "_pi_localizar_base", lambda: None)
+    monkeypatch.setattr(
+        module, "verificar_fontes",
+        lambda: (_ for _ in ()).throw(
+            FileNotFoundError("faltou candidato original CRT.csv")
+        ),
+    )
+    with pytest.raises(
+        FileNotFoundError,
+        match="pesquisa_permanencia_minima.zip",
+    ) as caught:
+        module._ve_recuperar_ou_reconstruir_base()
+    assert "faltou candidato original CRT.csv" in str(caught.value)
+    assert "75 cotacoes" in str(caught.value)
