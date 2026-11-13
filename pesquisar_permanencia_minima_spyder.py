@@ -1,4 +1,4 @@
-"""TCC | Experimento contrafactual da permanencia minima: 0, 1, 2, 3 pregoes.
+"""TCC | Decisao economica diaria HOLD / ROTATE / CASH, sem prazo minimo.
 
 Este e o arquivo UNICO para todas as rodadas da pesquisa nesta branch:
     research/permanencia-minima-contrafactual-v1
@@ -6,8 +6,9 @@ Este e o arquivo UNICO para todas as rodadas da pesquisa nesta branch:
 Spyder: abra este arquivo e execute com F5.
 Terminal: python pesquisar_permanencia_minima_spyder.py
 
-Modos: MODO = "permanencia_inteligente" (padrao; estudo da trava de dois pregoes),
-"vantagem_economica" (comparacao economica), "analisar_permanencia",
+Modos: MODO = "decisao_economica_sem_prazo" (padrao; sem trava por tempo),
+"permanencia_inteligente" (experimento anterior),
+"vantagem_economica" (comparacao anterior), "analisar_permanencia",
 "sensibilidade_margens", "deterioracao",
 "vantagem_v3", "vantagem_v2", "vantagem" (historicos), "verificar" ou
 "comparar" (reproduz quatro permanencias).
@@ -15,7 +16,8 @@ Modos: MODO = "permanencia_inteligente" (padrao; estudo da trava de dois pregoes
 A reproduçao utiliza o motor cientifico congelado do TCC (v1.23.0),
 o mesmo conjunto de 77 ativos solicitados (75 efetivos), os mesmos
 modelos, folds, margem calibrada por fold, custos e execucoes exatas.
-No modo comparar, somente rotation_min_holding_days varia.
+No novo modo, nenhuma duracao minima condiciona HOLD, ROTATE ou CASH.
+O modo comparar, historico, varia rotation_min_holding_days.
 No modo vantagem_v3, uma regressao pareada estima a vantagem de troca
 considerando idade, retorno e risco da posicao efetiva. Um filtro causal
 de Kalman compara o efeito de suavizar a pontuacao de cada ativo.
@@ -31,11 +33,11 @@ Nao acessa MongoDB, nao busca novas cotacoes, nao reconstrói ativos
 descontinuados, nao altera a Winner Live nem escreve em dados/u67.
 Os 10 candidatos requerem o cache historico local e seus SHA-256
 conferidos contra evidencias/manifest_universo_congelado.json.
-Resultados completos: output/pesquisa_permanencia_minima/
-Pacote unico para analise: output/pesquisa_permanencia_minima.zip
-O ZIP inclui os quatro backtests, ranking integral, curvas, ordens, metricas
-por fold, cotacoes OHLCV congeladas, parametros, hashes e integridade verificada.
-So cria ZIP concluido se os 4 cenarios e a paridade do controle passarem.
+O modo padrao publica output/pesquisa_vantagem_rotacao.zip com:
+  Control congelado, tres politicas sem minimo, decisoes, custos, folds,
+  curvas e auditoria dos valores economicos dos candidatos.
+A base congelada de 75 ativos nao reproduz o Control Live de US$139,87M.
+Este ultimo depende de serie completa e scores de seu proprio replay.
 """
 from __future__ import annotations
 
