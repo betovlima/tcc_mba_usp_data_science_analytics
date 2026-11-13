@@ -4571,6 +4571,23 @@ def _pi_pastas_de_busca() -> list[Path]:
         Path.home() / "Desktop",
     ]
     # Evita varrer todo o disco ou confundir ZIPs de projetos diferentes.
+    # Instalacoes Windows podem redirecionar Downloads para OneDrive.
+    # Respeitar apenas diretorios curtos e conhecidos do usuario.
+    for base in (Path.home(), Path.home().parent):
+        if not base.is_dir():
+            continue
+        for one in base.glob("OneDrive*"):
+            if one.is_dir():
+                dirs.extend([
+                    one / "Downloads", one / "Documentos",
+                    one / "Documents", one / "Desktop",
+                    one / "Área de Trabalho",
+                ])
+    dirs.extend([
+        ROOT / "tcc_lab", ROOT.parent / "tcc_lab",
+        ROOT.parent / "tcc_nova_regra" / "output",
+        ROOT / "dados" / "experimentos" / "permanencia_minima",
+    ])
     return list(dict.fromkeys(p for p in dirs if p.is_dir()))
 
 
@@ -5277,17 +5294,65 @@ def _ve_rodar_politica(b: Base, tipo: str, expected: np.ndarray):
     return curve, decisions, trades, metrics, pd.DataFrame(rows)
 
 
+def _ve_recuperar_ou_reconstruir_base() -> Path:
+    """Usa fonte integral existente ou refaz o cache cientifico ja versionado.
+
+    Nenhuma cotacao nova e baixada. Se o ZIP antigo foi perdido, o
+    executor oficial pode recria-lo a partir do snapshot e dos CSVs
+    adicionais cuja integridade SHA-256 esta registrada no projeto.
+    """
+    located = _pi_localizar_base()
+    if located is not None:
+        return located
+
+    print(
+        "[BASE] Nao encontrei pacote de 75 ativos nos ZIPs existentes. "
+        "Verificando se o cache original permite reconstrucao local.",
+        flush=True,
+    )
+    try:
+        # Antes de iniciar treino/replay, validar a integridade das dez
+        # series adicionais e do universo historico congelado.
+        verificar_fontes()
+    except (FileNotFoundError, ModuleNotFoundError, ImportError) as exc:
+        raise FileNotFoundError(
+            "Nao ha pacote historico completo e o cache original tambem "
+            "esta incompleto. O arquivo necessario e "
+            "'pesquisa_permanencia_minima.zip' (75 cotacoes, scores e "
+            "decisoes congelados). Extraia o pacote de dados da pesquisa "
+            "na raiz deste repositorio; ele cria automaticamente "
+            "'output/pesquisa_permanencia_minima.zip'. "
+            "Nao vou baixar precos diferentes nem inventar resultados. "
+            f"Detalhe da verificacao: {exc}"
+        ) from exc
+
+    print(
+        "[BASE] Cache original verificado por SHA-256. "
+        "Reconstruindo uma unica vez a fonte historica de 75 ativos "
+        "com o executor oficial, sem novos downloads.",
+        flush=True,
+    )
+    previous_mode = MODO
+    try:
+        globals()["MODO"] = "comparar"
+        main()
+    finally:
+        globals()["MODO"] = previous_mode
+    if not _pi_validar_zip_base(ARQUIVO_ZIP):
+        raise RuntimeError(
+            "O executor oficial terminou, mas a fonte historica completa "
+            "nao foi publicada. Nenhum resultado alternativo sera gerado."
+        )
+    print(
+        "[BASE] Fonte historica reconstruida e validada:",
+        ARQUIVO_ZIP, "| sha256", _hash_arquivo(ARQUIVO_ZIP), flush=True,
+    )
+    return ARQUIVO_ZIP
+
+
 def executar_decisao_economica_sem_prazo() -> None:
     """Experimento reprodutivel, sem proibir rotacao em qualquer pregao."""
-    source = _pi_localizar_base()
-    if source is None:
-        raise FileNotFoundError(
-            "Os dados completos da pesquisa nao foram encontrados; "
-            "nao e possivel simular novas trajetorias sem as 75 cotacoes. "
-            "O programa procura automaticamente a fonte na saida de "
-            "pesquisas anteriores e em Downloads. Nenhuma curva parcial "
-            "sera publicada como resultado executavel."
-        )
+    source = _ve_recuperar_ou_reconstruir_base()
     b = carregar(source)
     control, control_decisions, control_trades, control_stats = simular(b)
     parity = float(np.max(np.abs(control - b.base_equity)))
