@@ -239,3 +239,42 @@ No mesmo arquivo `pesquisar_permanencia_minima_spyder.py`, modo
 `output/pesquisa_vantagem_rotacao.zip`. Nao criar script, branch,
 sufixo versionado ou estrategia de negociacao sem validacao economica
 e causal independente. A estrategia operativa segue intocada.
+
+## 13/11/2026: alertas repetidos versus primeiro alerta da posicao
+
+Analisado o pacote seguinte, identificado pelo SHA-256
+`4a944f808c21af247cef00b181b110909679995fdffe58651789b9f636a2f178`.
+Os 14 checksums internos, CRC, manifesto e serie de capital conferem.
+A referencia continua US$ 139.871.072,31, API 10.8.149.
+
+- 81 alertas emitidos em 17 episodios diferentes; 49 dos 81 dias
+  apresentaram valorizacao do ativo.
+- O somatorio dos log-retornos close-to-close dos dias alertados foi
+  +1,0229223424. Neutralizar esses dias gera US$ 50.289.622,51
+  na curva teorica, pior que o Control.
+- Grande concentracao de oportunidades: um alerta antes de CAPR subir
+  +57,9572% (14/08/2026) e outro antes de YANG subir +35,9833%
+  (08/10/2024). **Nao remover tais casos por conhecer o futuro.**
+- Nova analise diagnostica predefinida: neutralizar SOMENTE o dia
+  posterior ao primeiro alerta cronologico por episodio historico,
+  desconsiderando alertas posteriores ate a proxima troca de ativo.
+  Isso produz **17 dias** neutralizados, com 8 positivos e 9 negativos,
+  e capital teorico de **US$ 118.757.224,48**, drawdown -48,37%.
+  E melhor que neutralizar 81 dias, mas ainda inferior ao Control.
+- O principal alerta isolado que prejudica essa nova curva e o
+  primeiro alerta do episodio YANG em 07/10/2024, antes da alta
+  de +35,9833%. Nao ha regra causal demonstrada para filtrar o caso.
+
+O mesmo script `pesquisar_permanencia_minima_spyder.py` no modo
+`analisar_permanencia` passa a registrar os arquivos
+`impacto_primeiro_alerta_curva_shadow.csv`,
+`impacto_primeiro_alerta_por_episodio.csv`,
+`impacto_primeiro_alerta_resumo_por_fold.csv` e
+`concentracao_alertas_por_episodio.csv` no mesmo
+`output/pesquisa_vantagem_rotacao.zip`.
+
+**Limites:** nao e simulacao operacional de CASH com ordens em abertura,
+custos, diferenca entre abertura e fechamento, nem nova politica refitada.
+Os resultados sao diagnosticos de um comportamento observado e o
+episodio e definido pela trajetoria de posicao original. Repetir avaliacoes
+sobre esta amostra nao transforma essas regras em evidencias prospectivas.
