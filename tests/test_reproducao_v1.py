@@ -1184,3 +1184,61 @@ def test_impacto_alertas_recusa_data_de_decisao_incorreta() -> None:
         script._a_impacto_alertas_exposicao(
             diario, previsoes, capital_inicial=1000.0,
         )
+
+
+def test_primeiro_alerta_por_episodio_ignora_repeticoes_sem_olhar_futuro() -> None:
+    """Um primeiro alerta por episodio, mesmo com novos sinais dias depois."""
+    import importlib
+    import numpy as np
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    diario = pd.DataFrame({
+        "data_decisao": ["2026-01-02", "2026-01-05", "2026-01-06",
+                         "2026-01-07", "2026-01-08"],
+        "data_execucao": ["2026-01-05", "2026-01-06", "2026-01-07",
+                          "2026-01-08", "2026-01-09"],
+        "strategy_equity": [1100.0, 990.0, 1188.0, 1306.8, 1176.12],
+        "walk_forward_fold": [1, 2, 2, 3, 3],
+    })
+    previsoes = pd.DataFrame({
+        "data_decisao": ["2026-01-05", "2026-01-06", "2026-01-08"],
+        "data_execucao": ["2026-01-06", "2026-01-07", "2026-01-09"],
+        "alerta_limiar_treino": [True, True, True],
+        "episodio_id": [11, 11, 12],
+        "selected_asset": ["AAA", "AAA", "BBB"],
+        "probabilidade_modelo_nao_calibrada": [0.8, 0.9, 0.75],
+    })
+    all_curves, all_days, _ = script._a_impacto_alertas_exposicao(
+        diario, previsoes, capital_inicial=1000.0,
+    )
+    first_curves, first_days, metrics = script._a_impacto_alertas_exposicao(
+        diario, previsoes, capital_inicial=1000.0,
+        primeiro_por_episodio=True,
+    )
+    assert len(all_days) == 3
+    assert len(first_days) == 2
+    assert first_days["episodio_id"].tolist() == [11, 12]
+    assert first_days["data_execucao"].tolist() == [
+        "2026-01-06", "2026-01-09",
+    ]
+    np.testing.assert_allclose(
+        first_curves["retorno_exposicao_shadow"],
+        [.10, .0, .20, .10, .0], atol=1e-9,
+    )
+    assert np.isclose(
+        first_curves["capital_exposicao_shadow"].iloc[-1], 1452.0,
+    )
+    assert not np.isclose(
+        all_curves["capital_exposicao_shadow"].iloc[-1], 1452.0,
+    )
+    assert metrics.loc[metrics["fold"].eq("todos"),
+                       "sessoes_com_alerta"].iloc[0] == 2
+
+
+def test_primeiro_alerta_por_episodio_nao_usa_resultado_futuro() -> None:
+    source = (ROOT / "pesquisar_permanencia_minima_spyder.py").read_text(
+        encoding="utf-8"
+    )
+    assert "primeiro_por_episodio=True" in source
+    assert '.drop_duplicates(subset=["episodio_id"], keep="first")' in source
+    assert "concentracao_alertas_por_episodio.csv" in source
