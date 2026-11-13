@@ -1344,6 +1344,16 @@ def test_economia_shadow_reproduz_control_e_respeita_embargo() -> None:
         daily["strategy_equity"], rtol=1e-12, atol=1e-7,
     )
     assert (folds["decisoes_cash"] <= folds["decisoes_testadas"]).all()
+    diagnostic, by_year, concentration = module._eco_diagnostico_previsao_diaria(
+        results,
+    )
+    assert diagnostic["fold"].tolist() == [2, 3]
+    assert diagnostic["r2_treino"].notna().all()
+    assert diagnostic["r2_avaliacao_vs_media_do_treino"].notna().all()
+    assert diagnostic["paridade_maxima_das_previsoes"].lt(1e-10).all()
+    assert by_year["pregoes"].sum() == 320
+    assert by_year["dias_cash"].sum() == folds["decisoes_cash"].sum()
+    assert concentration["dias_cash"].sum() == folds["decisoes_cash"].sum()
     for _, row in folds.iterrows():
         assert pd.Timestamp(row["ultima_execucao_treino"]) < (
             pd.Timestamp(row["inicio_teste"]) - pd.Timedelta(days=30)
@@ -1413,3 +1423,60 @@ def test_economia_rejeita_falsa_vantagem_em_rotacao() -> None:
     })
     with pytest.raises(ValueError):
         module._eco_rotacoes_pareadas(frame)
+
+
+def test_economia_diagnostico_sem_cash_nao_inventa_casos() -> None:
+    import importlib
+    import numpy as np
+
+    module = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    dates = pd.date_range("2020-01-01", periods=480, freq="B", tz="UTC")
+    daily = pd.DataFrame({
+        "timestamp": dates.astype(str),
+        "decision_date": (dates - pd.Timedelta(days=1)).astype(str),
+        "walk_forward_fold": np.repeat([1, 2, 3], 160),
+        "selected_asset": ["AAA"] * 480,
+        "current_asset": ["AAA"] * 480,
+    })
+    # Retornos positivos: o modelo tem motivo para manter exposicao.
+    values = np.arange(480, dtype=float)
+    daily["strategy_equity"] = (
+        10000.0 * np.exp(np.cumsum(0.01 + 0.0001 * np.sin(values)))
+    )
+    for k in module.ECO_FEATURES:
+        daily[k] = np.sin(values / 20)
+    results, _ = module._eco_cash_diario(daily, initial=10000)
+    result, annual, concentration = module._eco_diagnostico_previsao_diaria(
+        results,
+    )
+    assert result["fold"].tolist() == [2, 3]
+    assert result["dias_cash"].sum() == 0
+    assert concentration.empty
+    assert annual["dias_cash"].sum() == 0
+
+
+def test_economia_diagnostico_detecta_previsoes_alteradas() -> None:
+    import importlib
+    import numpy as np
+    import pytest
+
+    module = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    dates = pd.date_range("2020-01-01", periods=480, freq="B", tz="UTC")
+    daily = pd.DataFrame({
+        "timestamp": dates.astype(str),
+        "decision_date": (dates - pd.Timedelta(days=1)).astype(str),
+        "walk_forward_fold": np.repeat([1, 2, 3], 160),
+        "selected_asset": ["AAA"] * 480,
+        "current_asset": ["AAA"] * 480,
+    })
+    values = np.arange(480, dtype=float)
+    daily["strategy_equity"] = (
+        10000.0 * np.exp(np.cumsum(0.001 + 0.0001 * np.cos(values)))
+    )
+    for k in module.ECO_FEATURES:
+        daily[k] = np.sin(values / 20)
+    report, _ = module._eco_cash_diario(daily, initial=10000)
+    report.loc[report["walk_forward_fold"].eq(2),
+               "log_retorno_esperado_control"] = -100
+    with pytest.raises(ValueError, match="diverge"):
+        module._eco_diagnostico_previsao_diaria(report)
