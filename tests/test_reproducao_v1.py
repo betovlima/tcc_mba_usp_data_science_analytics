@@ -1700,3 +1700,56 @@ def test_pi_somente_diagnostico_nao_inventa_backtest(tmp_path, monkeypatch) -> N
         "possiveis_excecoes_primeiro_pregao"
     ] == 1
     assert "capital_alternativo" not in meta
+
+
+def test_pi_recupera_pasta_completa_com_sha_verificado(
+    tmp_path, monkeypatch,
+) -> None:
+    import hashlib
+    import importlib
+    import json
+    from zipfile import ZipFile
+
+    script = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    base = tmp_path / "output" / "pesquisa_permanencia_minima"
+    bars = base / "cotacoes_ohlcv"
+    bars.mkdir(parents=True)
+    contents = {
+        "manifesto_experimento.json":
+            json.dumps({"status": "completed", "folds": 3}),
+        "decisoes_2_pregoes.csv": "data\n2025-01-01\n",
+        "patrimonio_diario_2_pregoes.csv": "timestamp\n2025-01-02\n",
+        "utilidades_oos_todos_ativos.csv": "data_decisao,ativo,utilidade\n",
+        "margens_controle_por_fold.csv": "fold,margem\n",
+    }
+    contents.update({
+        f"cotacoes_ohlcv/T{i:02d}.csv": "timestamp,open,close,volume\n"
+        for i in range(75)
+    })
+    hashes = {}
+    for name, value in contents.items():
+        target = base / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(value, encoding="utf-8")
+        hashes[name] = {
+            "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+            "bytes": target.stat().st_size,
+        }
+    (base / "arquivos_sha256.json").write_text(
+        json.dumps({"algoritmo": "SHA-256", "arquivos": hashes}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(script, "_pi_pastas_de_busca",
+                        lambda: [tmp_path / "output"])
+    recovered = tmp_path / "output" / "pesquisa_permanencia_minima.zip"
+    monkeypatch.setattr(script, "ARQUIVO_ZIP", recovered)
+    assert script._pi_localizar_base() == recovered
+    assert script._pi_validar_zip_base(recovered)
+    with ZipFile(recovered) as z:
+        assert z.testzip() is None
+        assert len([x for x in z.namelist() if "cotacoes_ohlcv/" in x]) == 75
+    # Se qualquer preco foi alterado, nao usar a pasta para gerar nova fonte.
+    recovered.unlink()
+    (bars / "T00.csv").write_text("adulterado\n", encoding="utf-8")
+    assert script._pi_localizar_base() is None
+    assert not recovered.exists()
