@@ -913,7 +913,7 @@ def test_sensibilidade_margens_recalcula_fold_1_somente_quando_pedido() -> None:
     import numpy as np
 
     script = importlib.import_module("pesquisar_permanencia_minima_spyder")
-    assert script.MODO == "analisar_permanencia"
+    assert script.MODO == "vantagem_economica"
     assert script.MARGENS_ALTERNATIVAS == {1: 0.01, 2: 0.0, 3: 0.01}
     b = SimpleNamespace(
         dates=pd.date_range("2026-01-02", periods=3, freq="B"),
@@ -949,7 +949,7 @@ def test_sensibilidade_margens_nao_altera_pesquisa_de_deterioracao() -> None:
     script = (ROOT / "pesquisar_permanencia_minima_spyder.py").read_text(
         encoding="utf-8",
     )
-    assert 'MODO = "analisar_permanencia"' in script
+    assert 'MODO = "vantagem_economica"' in script
     assert 'elif MODO == "deterioracao"' in script
     assert 'permitir_cash=True, aplicar_todos_folds=True' in script
     assert "OOS" not in script.split("# %% 12. Sensibilidade")[1].split(
@@ -1313,3 +1313,102 @@ def test_ic_auc_bootstrap_reconhece_episodios_e_eventos_raros() -> None:
         np.array([1, 2, 3]), n_amostras=200,
     )
     assert small == (None, None, 3, 1)
+
+
+def test_economia_shadow_reproduz_control_e_respeita_embargo() -> None:
+    import importlib
+    import numpy as np
+
+    module = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    dates = pd.date_range("2020-01-01", periods=480, freq="B", tz="UTC")
+    daily = pd.DataFrame({
+        "timestamp": dates.astype(str),
+        "decision_date": (dates - pd.Timedelta(days=1)).astype(str),
+        "walk_forward_fold": np.repeat([1, 2, 3], 160),
+        "selected_asset": ["AAA"] * 480,
+        "current_asset": ["AAA"] * 480,
+    })
+    t = np.arange(480)
+    rng = np.random.default_rng(47)
+    logr = np.where(t < 160, .001, -.001) + rng.normal(0, .003, 480)
+    daily["strategy_equity"] = 10000 * np.exp(np.cumsum(logr))
+    for k in module.ECO_FEATURES:
+        daily[k] = np.sin(t/20)
+    results, folds = module._eco_cash_diario(daily, initial=10000)
+    assert folds["fold"].tolist() == [2, 3]
+    assert results["log_retorno_esperado_control"].iloc[:160].isna().all()
+    assert results["acao_shadow"].iloc[:160].eq("HOLD").all()
+    assert results["acao_shadow"].isin(["HOLD", "ROTATE", "CASH"]).all()
+    np.testing.assert_allclose(
+        results["capital_control_reproduzido"],
+        daily["strategy_equity"], rtol=1e-12, atol=1e-7,
+    )
+    assert (folds["decisoes_cash"] <= folds["decisoes_testadas"]).all()
+    for _, row in folds.iterrows():
+        assert pd.Timestamp(row["ultima_execucao_treino"]) < (
+            pd.Timestamp(row["inicio_teste"]) - pd.Timedelta(days=30)
+        )
+
+
+def test_economia_rotacoes_pareadas_nao_inventa_trajetoria() -> None:
+    import importlib
+    import numpy as np
+
+    module = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    rng = np.random.default_rng(12)
+    dates = pd.date_range("2020-01-01", periods=420, freq="B", tz="UTC")
+    records = []
+    for i, dt in enumerate(dates[::3]):
+        fold = 1 if i < 50 else 2 if i < 95 else 3
+        prev = float(rng.normal(.01, .02))
+        chosen = float(rng.normal(.012, .025))
+        feature = {key: float(np.sin(i/15)) for key in module.ECO_FEATURES}
+        records.append({
+            "timestamp": str(dt),
+            "decision_timestamp": str(dt - pd.Timedelta(days=1)),
+            "action": "BUY", "asset": "AAA",
+            "rotation_from_asset": "BBB", "rotation_to_asset": "AAA",
+            "walk_forward_fold": fold, "chosen_market_return": chosen,
+            "counterfactual_previous_asset_return": prev,
+            "rotation_value_added": chosen-prev,
+            "subsequent_holding_days": 2, **feature,
+        })
+        records.append({
+            "timestamp": str(dt + pd.Timedelta(days=2)),
+            "entry_timestamp": str(dt), "action": "SELL", "asset": "AAA",
+        })
+    original = pd.DataFrame(records)
+    pairs, folds = module._eco_rotacoes_pareadas(original)
+    assert len(pairs) == 140
+    assert folds["intervalos_avaliados"].tolist() == [45, 45]
+    assert folds["fold"].tolist() == [2, 3]
+    assert pairs.loc[
+        pairs["walk_forward_fold"].eq(1), "acao_sugerida"
+    ].eq("NAO_AVALIADO").all()
+    assert pairs["log_vantagem_acao_sugerida_vs_rotate"].notna().sum() == 90
+    assert folds["sugeriu_rotate"].sum() + folds["sugeriu_hold"].sum() + (
+        folds["sugeriu_cash"].sum()
+    ) == 90
+    for _, row in folds.iterrows():
+        assert pd.Timestamp(row["ultima_saida_com_rotulo_treino"]) < (
+            pd.Timestamp(row["inicio_decisoes_teste"])
+            - pd.Timedelta(days=30)
+        )
+
+
+def test_economia_rejeita_falsa_vantagem_em_rotacao() -> None:
+    import importlib
+    import pytest
+
+    module = importlib.import_module("pesquisar_permanencia_minima_spyder")
+    frame = pd.DataFrame({
+        "action": ["BUY"] * 101,
+        "counterfactual_previous_asset_return": [.01] * 101,
+        "chosen_market_return": [.02] * 101,
+        "rotation_value_added": [999] * 101,
+        "asset": ["AAA"] * 101,
+        "timestamp": pd.date_range("2020-01-01", periods=101).astype(str),
+        "decision_timestamp": pd.date_range("2019-12-31", periods=101).astype(str),
+    })
+    with pytest.raises(ValueError):
+        module._eco_rotacoes_pareadas(frame)
