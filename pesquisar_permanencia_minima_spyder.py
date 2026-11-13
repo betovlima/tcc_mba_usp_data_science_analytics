@@ -57,7 +57,7 @@ import numpy as np
 import pandas as pd
 
 # %% 0. Um arquivo, uma branch; somente este seletor muda entre modos.
-MODO = "analisar_permanencia"  # "analisar_permanencia", "sensibilidade_margens", "deterioracao", "vantagem_v3", "vantagem_v2", "vantagem", "comparar", "verificar"
+MODO = "vantagem_economica"  # "analisar_permanencia", "sensibilidade_margens", "deterioracao", "vantagem_v3", "vantagem_v2", "vantagem", "comparar", "verificar"
 PERMANENCIAS = (0, 1, 2, 3)
 PERMANENCIA_CONTROLE = 2
 TOLERANCIA_CENTAVO = 0.01
@@ -3927,8 +3927,336 @@ def executar_analise_permanencia() -> None:
     )
     print("[ZIP]", archive, flush=True)
 
+
+# %% 14. Vantagem economica: avaliacoes pareadas e CASH shadow.
+# Testa decisoes registradas; nao muda a sequencia original de posicoes.
+ECO_FEATURES = (
+    "holding_days_at_decision", "score_change_from_entry",
+    "position_drawdown_from_peak", "position_return_since_entry",
+    "best_vs_second_gap", "best_vs_current_gap",
+    "spy_return_5", "universe_breadth_5",
+    "current_score", "raw_best_score", "cash_score",
+    "effective_switch_margin",
+)
+ECO_CUSTO_CASH = 0.002  # custo hipotetico: 10bps por operacao (ida/volta)
+ECO_EMBARGO_DIAS = 30
+
+
+def _eco_modelo():
+    from sklearn.impute import SimpleImputer
+    from sklearn.linear_model import Ridge
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+    return make_pipeline(
+        SimpleImputer(strategy="median"), StandardScaler(),
+        Ridge(alpha=80.0),
+    )
+
+
+def _eco_x(df: pd.DataFrame) -> pd.DataFrame:
+    missing = set(ECO_FEATURES) - set(df.columns)
+    if missing:
+        raise ValueError(f"Variaveis de decisao ausentes: {sorted(missing)}")
+    return df.loc[:, list(ECO_FEATURES)].apply(
+        pd.to_numeric, errors="coerce",
+    ).replace([np.inf, -np.inf], np.nan)
+
+
+def _eco_cash_diario(
+    frame: pd.DataFrame, initial: float,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Um dia de CASH contra a acao real, sem gap nem ordens simuladas."""
+    d = frame.copy().reset_index(drop=True)
+    execution = pd.to_datetime(d["timestamp"], utc=True)
+    decision = pd.to_datetime(d["decision_date"], utc=True)
+    if execution.duplicated().any() or not execution.is_monotonic_increasing:
+        raise ValueError("Datas nao unicas ou fora de ordem.")
+    equity = d["strategy_equity"].to_numpy(float)
+    if initial <= 0 or not np.isfinite(equity).all() or (equity <= 0).any():
+        raise ValueError("Capital inicial ou curva invalidos.")
+    logs = np.log(equity / np.r_[float(initial), equity[:-1]])
+    d["log_retorno_control_observado"] = logs
+    d["log_retorno_esperado_control"] = np.nan
+    d["retorno_esperado_vs_cash_apos_custo"] = np.nan
+    d["acao_original"] = np.where(
+        d["selected_asset"].eq(d["current_asset"]), "HOLD", "ROTATE",
+    )
+    d["acao_shadow"] = d["acao_original"]
+    details = []
+    for fold in (2, 3):
+        is_test = d["walk_forward_fold"].eq(fold)
+        if not is_test.any():
+            raise ValueError(f"Fold de teste ausente: {fold}")
+        start = decision.loc[is_test].min()
+        is_train = (
+            d["walk_forward_fold"].lt(fold)
+            & execution.lt(start - pd.Timedelta(days=ECO_EMBARGO_DIAS))
+        )
+        if int(is_train.sum()) < 100:
+            raise ValueError(f"Treino insuficiente para fold {fold}")
+        model = _eco_modelo()
+        model.fit(_eco_x(d.loc[is_train]), logs[is_train.to_numpy()])
+        predicted = model.predict(_eco_x(d.loc[is_test]))
+        choose_cash = predicted < -ECO_CUSTO_CASH
+        d.loc[is_test, "log_retorno_esperado_control"] = predicted
+        d.loc[is_test, "retorno_esperado_vs_cash_apos_custo"] = (
+            predicted + ECO_CUSTO_CASH
+        )
+        d.loc[is_test, "acao_shadow"] = np.where(
+            choose_cash, "CASH", d.loc[is_test, "acao_original"],
+        )
+        details.append({
+            "fold": fold, "treino": int(is_train.sum()),
+            "inicio_teste": str(start.date()),
+            "ultima_execucao_treino": str(execution.loc[is_train].max().date()),
+            "decisoes_cash": int(choose_cash.sum()),
+            "decisoes_testadas": int(is_test.sum()),
+        })
+    shadow_logs = np.where(d["acao_shadow"].eq("CASH"), -ECO_CUSTO_CASH, logs)
+    d["log_retorno_shadow"] = shadow_logs
+    d["capital_control_reproduzido"] = initial * np.exp(np.cumsum(logs))
+    d["capital_shadow_cash"] = initial * np.exp(np.cumsum(shadow_logs))
+    parity = np.max(np.abs(
+        d["capital_control_reproduzido"].to_numpy(float) - equity
+    ))
+    if parity > 0.01:
+        raise RuntimeError(f"Control nao reproduzido: USD {parity}")
+    summary = []
+    for info in details:
+        fold = info["fold"]
+        subset = d.loc[d["walk_forward_fold"].eq(fold)]
+        fired = subset.loc[subset["acao_shadow"].eq("CASH")]
+        first = int(subset.index.min())
+        prior_shadow = (
+            float(d["capital_shadow_cash"].iloc[first - 1]) if first
+            else initial
+        )
+        prior_ctrl = (
+            float(d["capital_control_reproduzido"].iloc[first - 1])
+            if first else initial
+        )
+        delta = float(
+            (fired["log_retorno_shadow"]
+             - fired["log_retorno_control_observado"]).sum()
+        )
+        info.update({
+            "cash_dias_com_alta_original": int(
+                fired["log_retorno_control_observado"].gt(0).sum()
+            ),
+            "cash_dias_com_queda_original": int(
+                fired["log_retorno_control_observado"].lt(0).sum()
+            ),
+            "capital_control_fim": float(
+                subset["capital_control_reproduzido"].iloc[-1]
+            ),
+            "capital_shadow_fim": float(
+                subset["capital_shadow_cash"].iloc[-1]
+            ),
+            "fator_shadow_vs_control_no_fold": float(np.exp(delta)),
+            "retorno_control_dentro_fold": (
+                float(subset["capital_control_reproduzido"].iloc[-1])
+                / prior_ctrl - 1
+            ),
+            "retorno_shadow_dentro_fold": (
+                float(subset["capital_shadow_cash"].iloc[-1])
+                / prior_shadow - 1
+            ),
+            "impacto_log_cash_vs_control_no_fold": delta,
+        })
+        summary.append(info)
+    return d, pd.DataFrame(summary)
+
+
+def _eco_rotacoes_pareadas(
+    trade: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Retornos ROTATE/HOLD/CASH no MESMO intervalo originalmente negociado.
+
+    Nao encadear as decisoes locais: a proxima posicao dependeria da
+    escolha alternativa, e seu historico de precos nao esta no export.
+    """
+    buys = trade.loc[
+        trade["action"].eq("BUY")
+        & trade["counterfactual_previous_asset_return"].notna()
+    ].copy().reset_index(drop=True)
+    if len(buys) < 100:
+        raise ValueError("Pares de rotacoes insuficientes.")
+    bought = pd.to_datetime(buys["timestamp"], utc=True)
+    decided = pd.to_datetime(buys["decision_timestamp"], utc=True)
+    sells = trade.loc[
+        trade["action"].isin(("SELL", "FINAL_SELL")),
+        ["entry_timestamp", "timestamp", "asset"],
+    ].copy()
+    sells["_entry"] = pd.to_datetime(sells["entry_timestamp"], utc=True)
+    sells["_end"] = pd.to_datetime(sells["timestamp"], utc=True)
+    buys["_bought"] = bought
+    buys["_decided"] = decided
+    buys = buys.merge(
+        sells[["_entry", "_end", "asset"]],
+        left_on=["_bought", "asset"],
+        right_on=["_entry", "asset"],
+        validate="one_to_one", how="left",
+    )
+    if buys["_end"].isna().any():
+        raise ValueError("Intervalo sem venda final para rotulo.")
+    rotate = buys["chosen_market_return"].to_numpy(float)
+    hold = buys["counterfactual_previous_asset_return"].to_numpy(float)
+    if np.min(np.r_[rotate, hold]) <= -1:
+        raise ValueError("Retorno de perda total ou inferior invalido.")
+    if np.max(np.abs(
+        buys["rotation_value_added"].to_numpy(float) - (rotate - hold)
+    )) > 1e-8:
+        raise ValueError("Vantagem de rotacao nao coincide com os retornos.")
+    observed = np.column_stack((
+        np.log1p(rotate), np.log1p(hold),
+        np.full(len(buys), -ECO_CUSTO_CASH),
+    ))
+    buys["acao_sugerida"] = "NAO_AVALIADO"
+    buys["log_retorno_esperado_rotate"] = np.nan
+    buys["log_retorno_esperado_hold"] = np.nan
+    buys["log_retorno_observado_rotate"] = observed[:, 0]
+    buys["log_retorno_observado_hold"] = observed[:, 1]
+    buys["log_retorno_observado_cash_teorico"] = observed[:, 2]
+    buys["log_vantagem_acao_sugerida_vs_rotate"] = np.nan
+    summary = []
+    for fold in (2, 3):
+        is_test = buys["walk_forward_fold"].eq(fold)
+        start = buys.loc[is_test, "_decided"].min()
+        is_train = (
+            buys["walk_forward_fold"].lt(fold)
+            & buys["_end"].lt(start - pd.Timedelta(days=ECO_EMBARGO_DIAS))
+        )
+        if int(is_train.sum()) < 40:
+            raise ValueError(f"Treino pareado insuficiente no fold {fold}")
+        model = _eco_modelo()
+        model.fit(
+            _eco_x(buys.loc[is_train]), observed[is_train.to_numpy(), :2],
+        )
+        forecast = model.predict(_eco_x(buys.loc[is_test]))
+        chosen = np.argmax(np.column_stack((
+            forecast,
+            np.full(int(is_test.sum()), -ECO_CUSTO_CASH),
+        )), axis=1)
+        actual = observed[is_test.to_numpy()]
+        advantages = actual[np.arange(len(chosen)), chosen] - actual[:, 0]
+        buys.loc[is_test, "acao_sugerida"] = (
+            np.array(["ROTATE", "HOLD", "CASH"])[chosen]
+        )
+        buys.loc[is_test, "log_retorno_esperado_rotate"] = forecast[:, 0]
+        buys.loc[is_test, "log_retorno_esperado_hold"] = forecast[:, 1]
+        buys.loc[is_test, "log_vantagem_acao_sugerida_vs_rotate"] = advantages
+        summary.append({
+            "fold": fold, "treino": int(is_train.sum()),
+            "intervalos_avaliados": int(is_test.sum()),
+            "ultima_saida_com_rotulo_treino": str(
+                buys.loc[is_train, "_end"].max().date()
+            ),
+            "inicio_decisoes_teste": str(start.date()),
+            "sugeriu_rotate": int((chosen == 0).sum()),
+            "sugeriu_hold": int((chosen == 1).sum()),
+            "sugeriu_cash": int((chosen == 2).sum()),
+            "vantagem_media_original_rotate_vs_hold_log": float(
+                (actual[:, 0] - actual[:, 1]).mean()
+            ),
+            "taxa_original_rotate_superior_hold": float(
+                (actual[:, 0] > actual[:, 1]).mean()
+            ),
+            "vantagem_media_sugerida_vs_rotate_log_por_intervalo": float(
+                advantages.mean()
+            ),
+            "soma_das_vantagens_log_locais_nao_capitalizavel": float(
+                advantages.sum()
+            ),
+            "decisoes_sugeridas_melhores_que_original": int(
+                (advantages > 0).sum()
+            ),
+            "decisoes_sugeridas_piores_que_original": int(
+                (advantages < 0).sum()
+            ),
+        })
+    cols = [
+        "timestamp", "decision_timestamp", "walk_forward_fold", "asset",
+        "rotation_from_asset", "rotation_to_asset",
+        "subsequent_holding_days", "chosen_market_return",
+        "counterfactual_previous_asset_return", "rotation_value_added",
+        "acao_sugerida", "log_retorno_esperado_rotate",
+        "log_retorno_esperado_hold", "log_retorno_observado_rotate",
+        "log_retorno_observado_hold", "log_retorno_observado_cash_teorico",
+        "log_vantagem_acao_sugerida_vs_rotate",
+    ]
+    return buys.loc[:, cols], pd.DataFrame(summary)
+
+
+def executar_vantagem_economica() -> None:
+    """Uma unica saida: auditoria existente e comparacao economica."""
+    from io import BytesIO
+
+    executar_analise_permanencia()
+    source = _a_localizar_replay()
+    with ZipFile(source) as z:
+        pred = next(n for n in z.namelist() if n.endswith("_predictions.csv"))
+        trades = next(n for n in z.namelist() if n.endswith("_trades.csv"))
+        metric = next(n for n in z.namelist() if n.endswith("_metrics.json"))
+        original = pd.read_csv(BytesIO(z.read(pred)), low_memory=False)
+        operations = pd.read_csv(BytesIO(z.read(trades)), low_memory=False)
+        metrics = json.loads(z.read(metric))
+    initial = float(metrics["initial_capital"])
+    cash, cash_folds = _eco_cash_diario(original, initial)
+    rotation, rot_folds = _eco_rotacoes_pareadas(operations)
+    baseline = float(metrics["strategy_ending_capital"])
+    if abs(float(cash["capital_control_reproduzido"].iloc[-1])-baseline) > .01:
+        raise RuntimeError("Falhou a paridade do Control atualizado.")
+    # O modo descritivo publicou em DESTINO e moveu DESTINO_TEMP; agora
+    # adicionamos ao pacote anterior e republicamos atomicamente.
+    dest = DESTINO
+    cash.to_csv(dest/"vantagem_economica_cash_diario_shadow.csv", index=False)
+    cash_folds.to_csv(dest/"vantagem_economica_cash_por_fold.csv", index=False)
+    rotation.to_csv(dest/"vantagem_economica_rotacoes_pareadas.csv", index=False)
+    rot_folds.to_csv(dest/"vantagem_economica_rotacoes_por_fold.csv", index=False)
+    manifest_file = dest/"manifesto_experimento.json"
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    manifest["estudo_vantagem_economica"] = {
+        "capital_control": baseline,
+        "capital_cash_shadow": float(cash["capital_shadow_cash"].iloc[-1]),
+        "custo_cash_teorico": ECO_CUSTO_CASH,
+        "cash_por_fold": cash_folds.to_dict(orient="records"),
+        "rotacoes_por_fold": rot_folds.to_dict(orient="records"),
+        "decisoes_contrafactuais_executaveis": False,
+        "limitacoes": [
+            "CASH de um dia e shadow close-to-close, nao operacao executada.",
+            "0.2% por dia de CASH e custo hipotetico, sem gap de abertura.",
+            "HOLD/ROTATE/CASH pareados sobre os intervalos originais.",
+            "Nao sao possiveis trajetorias alternativas com dados atuais.",
+            "Treino e rotulos anteriores ao embargo cronologico de 30 dias.",
+            "Folds de avaliacao ja examinados na pesquisa, sem teste novo.",
+        ],
+    }
+    _write_json(manifest_file, manifest)
+    with (dest/"LEIA_ME.txt").open("a", encoding="utf-8") as stream:
+        stream.write(
+            "\nVANTAGEM ECONOMICA: 4 CSVs vantagem_economica_*.\n"
+            "CASH diario = overlay close-to-close com custo hipotetico.\n"
+            "HOLD/ROTATE/CASH em rotacoes = comparacao por intervalo, "
+            "NAO carteira contrafactual executavel.\n"
+        )
+    shutil.copyfile(Path(__file__), dest/"codigo_executado.py")
+    (dest/"arquivos_sha256.json").unlink(missing_ok=True)
+    if DESTINO_TEMP.exists():
+        shutil.rmtree(DESTINO_TEMP)
+    dest.replace(DESTINO_TEMP)
+    archive = _a_publicar_sem_fonte(DESTINO_TEMP)
+    print(
+        "[ECONOMIA] Control USD", round(baseline, 2),
+        "| CASH shadow USD", round(float(cash["capital_shadow_cash"].iloc[-1]), 2),
+        "| rotacoes pareadas OOS", int(rot_folds["intervalos_avaliados"].sum()),
+        "| ZIP", archive,
+    )
+
+
 if __name__ == "__main__":
-    if MODO == "analisar_permanencia":
+    if MODO == "vantagem_economica":
+        executar_vantagem_economica()
+    elif MODO == "analisar_permanencia":
         executar_analise_permanencia()
     elif MODO == "sensibilidade_margens":
         executar_sensibilidade_margens()
