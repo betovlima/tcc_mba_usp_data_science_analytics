@@ -57,7 +57,7 @@ import numpy as np
 import pandas as pd
 
 # %% 0. Um arquivo, uma branch; somente este seletor muda entre modos.
-MODO = "vantagem_economica"  # "analisar_permanencia", "sensibilidade_margens", "deterioracao", "vantagem_v3", "vantagem_v2", "vantagem", "comparar", "verificar"
+MODO = "permanencia_inteligente"  # "analisar_permanencia", "sensibilidade_margens", "deterioracao", "vantagem_v3", "vantagem_v2", "vantagem", "comparar", "verificar"
 PERMANENCIAS = (0, 1, 2, 3)
 PERMANENCIA_CONTROLE = 2
 TOLERANCIA_CENTAVO = 0.01
@@ -4415,8 +4415,360 @@ def executar_vantagem_economica() -> None:
     )
 
 
+
+# %% 15. Permanencia inteligente: variantes causais sobre a trava de 2 pregoes.
+# Nao altera o classificador principal: compara apenas uso dinamico da trava.
+# O backtest completo desta etapa usa os precos CONGELADOS do pacote
+# de reproducao, e nao se confunde com o replay de producao atualizado.
+PI_GAP_URGENTE = 0.045
+PI_QUEDA_SCORE_URGENTE = -0.04
+PI_GAP_URGENTE_MULT_MARGEM = 3.0
+PI_CONFIRMACAO_GAP_FORTE = 0.05
+PI_CONFIRMACAO_MULT_MARGEM = 3.0
+PI_EXTENSAO_SCORE_MELHORA = 0.03
+PI_EXTENSAO_MULT_MARGEM = 2.0
+
+
+def _pi_decisao(
+    base: Base, i: int, pos: int, holding: int, *,
+    politica: str,
+) -> tuple[int, str, dict]:
+    """Regra por fechamento, sem cotacao de abertura futura no decisor."""
+    original = _d_control(base, i, pos, holding)
+    info = {
+        "data_decisao": str(base.dates[i]),
+        "fold": int(base.fold[i]),
+        "holding": int(holding),
+        "ativo_atual": base.symbols[pos] if pos >= 0 else "CASH",
+        "controle": base.symbols[original] if original >= 0 else "CASH",
+        "politica": politica,
+        "motivo": "CONTROL",
+    }
+    if (
+        pos < 0 or holding < 1 or i < holding
+        or int(base.fold[i]) != int(base.fold[i - holding])
+        or not np.isfinite(base.scores[i, pos])
+    ):
+        return original, "CONTROL", info
+    util = base.scores[i]
+    candidate = int(np.nanargmax(util))
+    current_score = float(util[pos])
+    best_score = float(util[candidate])
+    gap = best_score - current_score
+    margin = max(
+        float(base.config["rotation_switch_margin"]),
+        float(base.margens[int(base.fold[i])]),
+    )
+    change = current_score - float(base.scores[i - holding, pos])
+    info.update({
+        "melhor_ativo": base.symbols[candidate],
+        "gap_utilidade": gap,
+        "mudanca_score_desde_entrada": change,
+        "margem_efetiva": margin,
+    })
+    if politica not in {
+        "saida_antecipada", "confirmacao", "confirmacao_mais_saida",
+        "extensao_um_dia",
+    }:
+        raise ValueError(f"Politica desconhecida: {politica}")
+    target = original
+    if politica in {"saida_antecipada", "confirmacao_mais_saida"}:
+        if (
+            holding == 1 and candidate != pos
+            and np.isfinite(change)
+            and gap >= max(
+                PI_GAP_URGENTE,
+                PI_GAP_URGENTE_MULT_MARGEM * margin,
+            )
+            and change <= PI_QUEDA_SCORE_URGENTE
+            and best_score > float(base.config["rotation_cash_threshold"])
+        ):
+            target = candidate
+            info["motivo"] = "SAIDA_ANTE_DOS_DOIS_PREGOES"
+    if politica in {"confirmacao", "confirmacao_mais_saida"}:
+        if (
+            holding >= 2 and original == candidate
+            and candidate != pos
+            and gap < max(
+                PI_CONFIRMACAO_GAP_FORTE,
+                PI_CONFIRMACAO_MULT_MARGEM * margin,
+            )
+        ):
+            # A vantagem precisa existir TAMBEM no fechamento anterior,
+            # ou o decisor espera sem prazo fixo pelo proximo sinal.
+            yesterday = float(
+                base.scores[i - 1, candidate] - base.scores[i - 1, pos]
+            )
+            if not np.isfinite(yesterday) or yesterday <= 0:
+                target = pos
+                info["motivo"] = "ESPERAR_CONFIRMACAO_DA_VANTAGEM"
+    if politica == "extensao_um_dia":
+        if (
+            holding == 2 and original == candidate and candidate != pos
+            and gap < max(0.03, PI_EXTENSAO_MULT_MARGEM * margin)
+            and change > PI_EXTENSAO_SCORE_MELHORA
+            and current_score > float(base.config["rotation_cash_threshold"])
+        ):
+            target = pos
+            info["motivo"] = "MAIS_UM_PREGAO_POR_FORCA_RELATIVA"
+    info["decisao"] = base.symbols[target] if target >= 0 else "CASH"
+    return target, info["motivo"], info
+
+
+def _pi_replay(base: Base, politica: str):
+    rows = []
+
+    def decide(b, i, pos, holding, capital, quantity):
+        target, motivo, info = _pi_decisao(
+            b, i, pos, holding, politica=politica,
+        )
+        if motivo != "CONTROL":
+            rows.append(info)
+        return target, []
+
+    curve, decisions, trades, summary = simular(
+        base, decision_callback=decide, permitir_cash=False,
+    )
+    return curve, decisions, trades, summary, pd.DataFrame(rows)
+
+
+def _pi_localizar_base() -> Path:
+    candidates = (
+        ROOT / "output" / "pesquisa_permanencia_minima.zip",
+        ROOT / "dados" / "experimentos" / "permanencia_minima"
+        / "entradas" / "pesquisa_permanencia_minima.zip",
+        Path.home() / "Downloads" / "pesquisa_permanencia_minima.zip",
+        Path("/mnt/data/tcc_lab/pesquisa_permanencia_minima.zip"),
+    )
+    found = next((p for p in candidates if p.is_file()), None)
+    if found is None:
+        raise FileNotFoundError(
+            "Para simular novas rotacoes e necessario o pacote congelado "
+            "pesquisa_permanencia_minima.zip, que contem as 75 cotacoes. "
+            "Coloque-o em output/ ou Downloads. "
+            "O replay atualizado sozinho permite auditar, nao negociar "
+            "trajetorias alternativas completas."
+        )
+    return found
+
+
+def _pi_diagnostico_replay_atual(source: Path) -> tuple[pd.DataFrame, dict]:
+    """Identifica candidatos a liberar a trava, SEM criar ordens ficticias."""
+    from io import BytesIO
+
+    with ZipFile(source) as z:
+        if z.testzip() is not None:
+            raise ValueError("Replay atualizado corrompido.")
+        names = [n for n in z.namelist() if n.endswith("_predictions.csv")]
+        if len(names) != 1:
+            raise ValueError("Replay com arquivos de decisoes ambiguos.")
+        frame = pd.read_csv(BytesIO(z.read(names[0])), low_memory=False)
+    needed = {
+        "decision_date", "walk_forward_fold",
+        "holding_days_at_decision", "min_hold_guard_applied",
+        "raw_best_asset", "current_asset", "raw_best_score",
+        "best_vs_current_gap", "effective_switch_margin",
+        "score_change_from_entry", "rotation_cash_threshold",
+        "strategy_equity", "decision_is_rotation",
+    }
+    if not needed.issubset(frame):
+        raise ValueError("Replay atualizado sem diagnosticos da trava.")
+    first = frame.loc[frame["min_hold_guard_applied"].eq(True)].copy()
+    if not first["holding_days_at_decision"].eq(1).all():
+        raise ValueError("A trava aplicada nao corresponde ao primeiro pregao.")
+    margin = first["effective_switch_margin"].astype(float)
+    first["outro_ativo_melhor"] = (
+        first["raw_best_asset"].ne(first["current_asset"])
+    )
+    first["candidato_saida_antecipada"] = (
+        first["outro_ativo_melhor"]
+        & first["best_vs_current_gap"].ge(np.maximum(
+            PI_GAP_URGENTE, PI_GAP_URGENTE_MULT_MARGEM * margin,
+        ))
+        & first["score_change_from_entry"].le(PI_QUEDA_SCORE_URGENTE)
+        & first["raw_best_score"].gt(first["rotation_cash_threshold"])
+    )
+    first["analise_sem_execucao_de_ordem"] = True
+    summary = {
+        "fonte_sha256": _hash_arquivo(source),
+        "referencia_capital_final_observado": float(
+            frame["strategy_equity"].iloc[-1]
+        ),
+        "sessoes": int(len(frame)),
+        "travas_primeiro_pregao": int(len(first)),
+        "travas_com_outro_ativo_no_topo": int(
+            first["outro_ativo_melhor"].sum()
+        ),
+        "possiveis_excecoes_primeiro_pregao": int(
+            first["candidato_saida_antecipada"].sum()
+        ),
+        "possiveis_excecoes_por_fold": {
+            str(fold): int(group["candidato_saida_antecipada"].sum())
+            for fold, group in first.groupby("walk_forward_fold")
+        },
+        "alerta": (
+            "Sinais de possivel intervencao somente. Sem cenario "
+            "alternativo de patrimonio: faltam todas as series de precos "
+            "e as posicoes futuras mudariam apos a primeira troca."
+        ),
+    }
+    return first, summary
+
+
+def executar_permanencia_inteligente() -> None:
+    """Compara politica estatica e adaptativas sem alterar operacao real."""
+    source = _pi_localizar_base()
+    base = carregar(source)
+    reference, _, _, initial = simular(base)
+    error = float(np.max(np.abs(reference - base.base_equity)))
+    if error > TOLERANCIA_CENTAVO:
+        raise RuntimeError(
+            f"Paridade do replay historico falhou: USD {error:.8f}."
+        )
+    dest = DESTINO_TEMP
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    curves = pd.DataFrame({
+        "data_execucao": base.exec_dates,
+        "fold": base.fold,
+        "control_2_pregoes": reference,
+    })
+    summary = [{
+        "politica": "control_2_pregoes",
+        "capital_final": float(reference[-1]),
+        "capital_relativo_control_pct": 0.0,
+        "rotacoes": int(initial["rotacoes"]),
+        "taxas": float(initial["total_taxas"]),
+        **_resumo_curva(reference),
+    }]
+    per_fold = [
+        {"politica": "control_2_pregoes", **r}
+        for r in _performance_by_fold(base, reference)
+    ]
+    intervention_details = []
+    for policy in (
+        "saida_antecipada", "confirmacao", "confirmacao_mais_saida",
+        "extensao_um_dia",
+    ):
+        curve, decisions, trades, metrics, events = _pi_replay(base, policy)
+        curves[policy] = curve
+        fold_metrics = _performance_by_fold(base, curve)
+        per_fold.extend(
+            [{"politica": policy, **r} for r in fold_metrics]
+        )
+        summary.append({
+            "politica": policy,
+            "capital_final": float(curve[-1]),
+            "capital_relativo_control_pct": float(
+                100.0 * (curve[-1] / reference[-1] - 1.0)
+            ),
+            "rotacoes": int(metrics["rotacoes"]),
+            "taxas": float(metrics["total_taxas"]),
+            "intervencoes_total": int(len(events)),
+            **_resumo_curva(curve),
+        })
+        if not events.empty:
+            intervention_details.append(events)
+        decisions.to_csv(
+            dest / f"decisoes_{policy}.csv", index=False,
+        )
+        trades.to_csv(
+            dest / f"operacoes_{policy}.csv", index=False,
+        )
+    curves.to_csv(dest / "comparacao_patrimonio_diario.csv", index=False)
+    pd.DataFrame(summary).to_csv(
+        dest / "comparacao_resultados.csv", index=False,
+    )
+    pd.DataFrame(per_fold).to_csv(
+        dest / "comparacao_por_fold.csv", index=False,
+    )
+    if intervention_details:
+        pd.concat(intervention_details, ignore_index=True).to_csv(
+            dest / "intervencoes_adaptativas.csv", index=False,
+        )
+    current_summary = None
+    try:
+        replay = _a_localizar_replay()
+    except FileNotFoundError:
+        replay = None
+    if replay is not None:
+        first, current_summary = _pi_diagnostico_replay_atual(replay)
+        first.to_csv(
+            dest / "trava_primeiro_pregao_replay_atual.csv", index=False,
+        )
+    manifest = {
+        "modo": "permanencia_inteligente",
+        "status": "completed_exploratory_research_only",
+        "fonte_historica_sha256": _hash_arquivo(source),
+        "capital_control_historico": float(reference[-1]),
+        "paridade_historica_maxima_usd": error,
+        "replay_atual_somente_diagnostico": current_summary,
+        "periodos_validos_politica_adaptativa": [2, 3],
+        "fold_1": "Control preservado; nenhum efeito de politica alternativa",
+        "regra": {
+            "primeiro_pregao": (
+                "Aceita alternativa somente com gap muito expressivo "
+                "e utilidade da posicao em deterioracao."
+            ),
+            "apos_dois_pregoes": (
+                "Se o gap nao e forte, aguarda confirmacao da vantagem "
+                "no fechamento anterior."
+            ),
+            "terceiro_pregao": (
+                "Teste isolado de mais um dia quando score da posicao "
+                "melhora e concorrente tem vantagem pequena."
+            ),
+            "gap_urgente": PI_GAP_URGENTE,
+            "queda_score_urgente": PI_QUEDA_SCORE_URGENTE,
+            "multiplicador_margem_urgente": PI_GAP_URGENTE_MULT_MARGEM,
+            "confirmacao_gap_forte": PI_CONFIRMACAO_GAP_FORTE,
+            "confirmacao_multiplicador_margem": PI_CONFIRMACAO_MULT_MARGEM,
+            "extensao_melhoria_score": PI_EXTENSAO_SCORE_MELHORA,
+        },
+        "cenarios": summary,
+        "limitacoes": [
+            "Control historico de cotacoes congeladas NAO e o replay atualizado.",
+            "Resultados testados em periodos ja examinados na pesquisa.",
+            "Limiar fixado antes deste replay, sem calibracao prospectiva.",
+            "OHLCV historico permite contabilizar ordens hipoteticas; "
+            "nao reproduz negociacao real/impacto de mercado.",
+            "No replay atualizado so existe diagnostico da trava, "
+            "nao patrimonio contrafactual com troca de ativo.",
+            "Nenhuma mudanca no motor ou na operacao de contas reais.",
+        ],
+    }
+    _write_json(dest / "manifesto_experimento.json", manifest)
+    (dest / "LEIA_ME.txt").write_text(
+        "Permanencia minima adaptativa: analise sobre sinais de utilidade.\n"
+        "O replay completo das politicas usa base historica CONGELADA.\n"
+        "O replay atualizado e auditado, NAO reexecutado com novas ordens.\n"
+        "Fold1 permanece Control. Folds2-3 permitem intervencoes.\n"
+        "Nenhum resultado valida implementacao na operacao real.\n",
+        encoding="utf-8",
+    )
+    shutil.copyfile(Path(__file__), dest / "codigo_executado.py")
+    archive = _pacote(dest, source)
+    _publicar_pasta_vantagem(dest)
+    print(
+        f"[PERMANENCIA] Control historico USD {float(reference[-1]):,.2f}",
+        "| experimentos", len(summary)-1,
+        "| ZIP", archive,
+        flush=True,
+    )
+    if current_summary:
+        print(
+            "[REPLAY ATUAL] Travas", current_summary["travas_primeiro_pregao"],
+            "| sinais de excecao sem execucao",
+            current_summary["possiveis_excecoes_primeiro_pregao"],
+            flush=True,
+        )
+
+
 if __name__ == "__main__":
-    if MODO == "vantagem_economica":
+    if MODO == "permanencia_inteligente":
+        executar_permanencia_inteligente()
+    elif MODO == "vantagem_economica":
         executar_vantagem_economica()
     elif MODO == "analisar_permanencia":
         executar_analise_permanencia()
