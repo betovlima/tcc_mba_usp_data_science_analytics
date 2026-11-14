@@ -31,9 +31,15 @@ de dados, nunca simulada com informacao inventada.
 
 ## Obtencao automatica do historico no computador local
 
-O script principal agora prepara automaticamente `dados_intraday/winner_positions.csv`
-a partir de `pesquisa_permanencia_minima.zip`, que deve estar ao lado do script.
-A fonte e o SHA-256 sao registrados na saida.
+O script principal prepara automaticamente `dados_intraday/winner_positions.csv`
+a partir da selecao congelada do Control original, incluida no proprio script.
+Sao 1.560 sessoes, de 2020-07-22 ate 2026-10-06. A copia foi extraida
+do `comparacao_diaria_ativos_e_patrimonio.csv` da pesquisa anterior,
+sem reconstruir sinais nem baixar cotacoes diarias.
+
+**Nao e necessario copiar o ZIP anterior para a pasta do projeto.**
+Caso `pesquisa_permanencia_minima.zip` esteja disponivel, o leitor ainda
+aceita o arquivo original. A origem e o SHA-256 ficam registrados na saida.
 
 Ao pressionar **F5**, o script procura o repositorio da API operacional na
 estrutura habitual de pastas do computador. Ele **importa somente o leitor
