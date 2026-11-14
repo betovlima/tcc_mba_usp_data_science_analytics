@@ -1,6 +1,6 @@
 """TCC: comparador causal de segunda camada de permanencia intradiaria.
 
-Spyder F5. Nao acessa Alpaca, Mongo, MCT Live nem envia ordens.
+Spyder F5. Nao acessa Alpaca, Mongo, sistema Live nem envia ordens.
 Entrada: dados_intraday/*.csv, com timestamp UTC, symbol, open, high, low,
 close, volume e barras de 1 ou 5 minutos. Em 1 minuto, usa apenas grupos
 COMPLETOS de 5 minutos. Sinais as 10h30, 11h30 ... 15h30 de NY, calculados
