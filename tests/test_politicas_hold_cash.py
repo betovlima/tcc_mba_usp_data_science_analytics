@@ -71,6 +71,47 @@ def test_replay_respeita_trava_e_venda_causal_no_proximo_candle():
     assert summary["control_intradiario_final"] > 0
 
 
+def test_reentrada_reinicia_a_trava_de_dois_pregoes():
+    frame, positions = make_grid(days=6)
+    audit, _, sessions, ages = pol._auditar(frame, positions)
+    state = {(x.session, x.symbol): x.estado for x in audit.itertuples(index=False)}
+    sinais = {}
+    for session in positions.session.iloc[2:]:
+        checkpoint = sessions[(session, "SYN")].loc[
+            lambda x: x.horario].iloc[0].timestamp
+        sinais[(session, "SYN")] = {checkpoint: .1}
+    report, daily, events = pol._replay(
+        positions, sessions, ages, state, sinais, .4, 10000, save_events=True)
+    # Se a primeira venda foi no terceiro dia, a recompra no quarto
+    # nao pode ser liquidada nesse mesmo quarto ou quinto dia.
+    sinais_executados = events[
+        events.observacao == "sinal_fechado_aguardando_candle_seguinte"]
+    assert sinais_executados.session.tolist() == [
+        positions.session.iloc[2], positions.session.iloc[5]]
+    assert report["tentativas_saida"] == 2
+    assert report["saidas_bloqueadas"] == 0
+    # Dias na posicao efetiva, nao dias de selecao da Winner.
+    assert daily.dias_posicao_politica.tolist()[:6] == [1, 2, 3, 1, 2, 3]
+    assert all(events[events.observacao.str.startswith("sinal")].dias_posicao_politica == 3)
+
+
+def test_saida_total_nao_registra_bloqueios_falsos_depois():
+    frame, positions = make_grid(days=4)
+    audit, _, sessions, ages = pol._auditar(frame, positions)
+    state = {(x.session, x.symbol): x.estado for x in audit.itertuples(index=False)}
+    date = positions.session.iloc[2]
+    checkpoint = sessions[(date, "SYN")].loc[
+        lambda x: x.horario].iloc[0].timestamp
+    summary, daily, events = pol._replay(
+        positions, sessions, ages, state,
+        {(date, "SYN"): {checkpoint: .1}},
+        .4, 10000, save_events=True)
+    assert summary["tentativas_saida"] == 1
+    assert summary["saidas_bloqueadas"] == 0
+    assert (daily.saidas_bloqueadas_volume_ou_preco == 0).all()
+    assert summary["saidas_antecipadas"] == 1
+
+
 def test_stress_liquidez_nao_finge_execucao_de_capital_milionario():
     frame, positions = make_grid()
     audit, _, sessions, ages = pol._auditar(frame, positions)
