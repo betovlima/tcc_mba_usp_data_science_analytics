@@ -322,7 +322,7 @@ def zip_atomico(files):
 
 def executar():
     smoke=teste_causalidade()
-    paths=sorted(INPUT.glob("*.csv"))
+    paths=sorted(p for p in INPUT.glob("*.csv") if p.name!="winner_positions.csv")
     if not paths:
         result={"status":"aguardando_candles_intradiarios_reais","metodos":METHODS,
                 "teste_causalidade":smoke,"universo_winner_configurado":77,
@@ -332,12 +332,29 @@ def executar():
                     "codigo_executado.py":Path(__file__).read_bytes()})
         return result
     raw=pd.concat([pd.read_csv(p) for p in paths],ignore_index=True)
-    frame=features(preparar(raw))
+    bars=preparar(raw)
+    positions_file=INPUT/"winner_positions.csv"
+    conditioned=False
+    if positions_file.exists():
+        positions=pd.read_csv(positions_file)
+        if not {"session","symbol"}.issubset(positions.columns):
+            raise ValueError("winner_positions.csv precisa de session,symbol")
+        positions["session"]=positions.session.astype(str).str[:10]
+        positions["symbol"]=positions.symbol.astype(str).str.upper().str.strip()
+        if positions.duplicated(["session"]).any():
+            raise ValueError("Uma unica posicao selecionada por sessao")
+        bars=bars.merge(positions[["session","symbol"]],on=["session","symbol"],how="inner")
+        conditioned=True
+    if bars.empty:
+        raise ValueError("Nenhuma barra coincide com as selecoes da Winner")
+    frame=features(bars)
     ranking,events,split=benchmark(frame)
     result={"status":"piloto" if not ranking.empty else "amostra_insuficiente",
             "teste_causalidade":smoke,"sessoes":int(frame.session.nunique()),
             "ativos":sorted(frame.symbol.unique().tolist()),"split":split,
+            "condicionado_a_posicoes_winner":conditioned,
             "patrimonio_final":None,
+            "aviso": "Sem winner_positions.csv: comparacao metodologica, nao politica de permanencia da Winner" if not conditioned else "Amostra condicionada ao ativo selecionado; sem replay de patrimonio",
             "motivo_patrimonio":"Sem replay do Control e execucao/liquidez integrada",
             "nenhuma_ordem_real":True}
     zip_atomico({"status.json":json.dumps(result,indent=2,ensure_ascii=False,default=str).encode(),
