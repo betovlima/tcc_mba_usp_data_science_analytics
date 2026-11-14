@@ -70,6 +70,73 @@ um replay economico completo.
 nao do sinal atual do mercado. O modelo continua em uma branch de pesquisa,
 sem modificacoes no motor ou no ambiente operacional.
 
+## Nova etapa: auditoria, calibracao temporal e replay de HOLD/CASH
+
+O mesmo F5 executa agora um modulo independente,
+`pesquisar_politicas_intradiarias.py`, apos o comparador dos seis metodos.
+Ele utiliza exclusivamente os candles ja armazenados em cache e a selecao
+efetiva congelada do Control. Nenhuma ordem e enviada.
+
+### Divisao causal
+
+O treino original fornece os scores; a primeira metade da validacao ajusta
+uma regressao logistica de **calibracao** por metodo, e a segunda metade
+seleciona um limiar entre 0,25 e 0,50 pelo retorno ajustado a drawdown.
+A amostra de teste permanece intocada durante essas escolhas. Os modelos
+continuam exploratorios, sem declaracao de generalizacao em producao.
+
+### Politicas e execucao hipotetica
+
+A Winner escolhe o ativo a cada sessao. Dentro da sessao, a politica pode
+apenas **HOLD** ou antecipar uma saida para **CASH**, nunca comprar outro
+ticker. A saida e permitida depois de dois pregoes completos no mesmo
+ativo, portanto a partir do terceiro pregao consecutivo. Nao ha reentrada
+no mesmo dia; uma nova alocacao so comeca na sessao seguinte.
+
+Sinais usam unicamente candles de cinco minutos encerrados. A venda
+hipotetica usa o preco **open do candle seguinte**. E um fill idealizado,
+nao o livro de ofertas. Requer dados de abertura e encerramento da
+sessao e volume suficiente para a participacao maxima hipotetica de
+1% do candle de cinco minutos. Custos ilustrativos: dez pontos-base
+por lado. Ha dois cenarios: capital de US$ 10 mil e estresse com capital
+de US$ 68.160.546,39, aproximacao do Control antes do teste.
+
+**Atencao: isto e um REPLAY PROXY INTRADIARIO SEM OVERNIGHT.**
+O Control do replay e calculado exatamente sob as mesmas hipoteses
+simplificadas da nova politica, mas **NAO reproduz** o Control de
+US$ 587.165.941,13 do experimento diario, que contem retorno noturno,
+rotacoes, regras de execucao e liquidez proprias. Nao compare diretamente
+os patrimônios finais dessas duas fontes. A avaliacao de capacidade
+por volume e feita ex-post e nao comprova preenchimento de ordens
+reais; especialmente para o capital elevado, o resultado pode ser
+limitado por falta de capacidade.
+
+### Auditoria de dados e resultados
+
+O novo ZIP, sem mudar o nome `output/pesquisa_vantagem_rotacao.zip`,
+inclui arquivos adicionais:
+
+- `auditoria_sessoes.csv`: 1.560 sessoes, barras observadas e ausentes,
+  checkpoints validos e sessoes sem dados para execucao
+- `auditoria_movimentos_extremos.csv`: movimentos de 30 minutos acima de
+  20% em modulo, para verificacao manual (inclui o caso CORT de 2026-03-25,
+  se presente no cache)
+- `comparacao_modelos_calibrados.csv`: AUC, Brier calibrado e previsao
+  constante historica, tamanhos e limiares escolhidos
+- `previsoes_calibradas_teste.csv`: previsoes separadas dos labels futuros
+- `comparacao_politicas_intradiarias.csv`: capital final, diferenca
+  entre politica e referencia intradiaria, drawdown, Sharpe,
+  saidas antecipadas e restricoes de liquidez
+- `replay_patrimonio_intradiario.csv`: trilha diaria pareada
+- `decisoes_hold_cash.csv`: horario do sinal e da venda hipotetica
+- `manifesto_politicas_intradiarias.json`: premissas e avisos
+- `codigo_politicas_executado.py`: copia auditavel do modulo economico
+
+Retornos extremos sao **sinalizados, nunca excluidos automaticamente**
+do teste pelo retorno futuro: seria vies temporal. Os arquivos registram
+explicitamente o carater exploratorio, o metodo de validacao e o limite
+de comparabilidade com o Control congelado.
+
 ## Executar no Spyder
 
 Abrir `pesquisar_segunda_camada_intradiaria_spyder.py` e pressionar F5.
