@@ -1,12 +1,13 @@
 """Experimento complementar de politicas HOLD/CASH intradiarias.
 
-Somente pesquisa. Sinais causais a partir de candles encerrados, ordem
-hipotetica no candle seguinte, CASH ate o proximo pregao, sem rotacao
-intradiaria para outro ativo. Nao chama corretora nem envia ordens.
+Somente pesquisa. A camada 2 pode sair para CASH durante o pregao;
+no processamento de fechamento, RECOMPRA integralmente o ativo que
+a primeira camada escolheu no inicio do dia, independente do capital.
+No dia seguinte a camada 1 manda MANTER ou TROCAR. Nao envia ordens.
 
-O replay e uma APROXIMACAO intradiaria pareada, sem overnight; nao
-reproduz os 587 milhoes do Control diario congelado. No replay, ambos
-os lados compram na abertura e liquidam ao fim do mesmo pregao.
+Fechamento a preco conhecido somente apos o encerramento e compra
+integral sem limite de volume sao SUPOSICOES TEORICAS, nao fills reais.
+O replay tem overnight, mas nao reproduz os US$ 587m do Control original.
 """
 from __future__ import annotations
 
@@ -161,12 +162,17 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
             capital, save_events=False):
     """Carteira continua com dois livros, cotas fracionarias e fills PARCIAIS.
 
-    Mantem a posicao entre pregoes (incluindo overnight) quando o simbolo e
-    o mesmo. Reentrada apos saida somente em outro pregao e REINICIA a trava
-    de dois pregoes na posicao real, nao na selecao congelada. Sinal de um candle
-    encerrado so pode originar venda no OPEN do proximo candle. Cada ordem
-    executa no maximo 1% do volume do ULTIMO candle encerrado. A primeira
-    entrada possivel e as 09h35, sem olhar o volume futuro da barra atual.
+    Mantem o ativo escolhido pela primeira camada INTEGRALMENTE em carteira
+    ao final de cada pregao, mesmo se a camada 2 mandou CASH intradiario.
+    Ao fechar, compra todo o saldo ao preco do ultimo close observado, sem
+    limite de volume: fill IDEALIZADO, impossivel de confirmar ex-post.
+    Esse processamento e a unica excecao a regra de nao recomprar no dia.
+    No proximo pregao a camada 1 manda manter ou trocar, sempre soberana.
+
+    Durante o dia, sinais usam candles encerrados e venda no OPEN do
+    candle seguinte, limitada a 1% do volume do candle anterior.
+    A trava de dois pregoes e calculada na posicao efetiva, nao na selecao.
+    Reentrada apos venda total reinicia a idade da posicao.
 
     LIMITACAO MATERIAL: na ROTACAO entre ativos nao ha cotacao do ticker
     anterior no dia seguinte no cache corrente. A liquidacao e contabilizada
@@ -185,6 +191,7 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
     }
     n_exits, n_blocked, n_attempts, n_partial_exits = 0, 0, 0, 0
     n_stale, n_sessions_no_quote, n_rotations = 0, 0, 0
+    n_close_rebalances, n_close_without_price, n_proxy_close_fills = 0, 0, 0
     daily, events = [], []
     reference_return, policy_return = [], []
 
@@ -225,7 +232,12 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
         initial = {name: equity(book) for name, book in books.items()}
         fees_initial = {name: book["fees"] for name, book in books.items()}
         action, blocks, attempts, exit_time, exit_price = "HOLD", 0, 0, None, None
+        close_rebalance = {"ref": 0., "policy": 0.}
+        close_status = "sem_cotacao"
+        close_price = None
+        close_timestamp = None
         day_rotations = 0
+        first_layer_action = "TROCAR" if books["policy"]["symbol"] not in (None, pos.symbol) else "MANTER"
         for name, book in books.items():
             if book["symbol"] != pos.symbol:
                 if book["shares"] > 0 and book["last_price"] is not None:
@@ -327,13 +339,63 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
                                 "dias_mesmo_ativo": age,
                                 "dias_posicao_politica": books["policy"]["dias_posicao"],
                                 "observacao": "sinal_fechado_aguardando_candle_seguinte"})
-            actual_end = _number(g.iloc[-1].close)
-            if actual_end is None:
-                n_stale += 1
+            # Fechamento: CADA LIVRO aloca 100% do caixa disponivel
+            # no ativo selecionado pela camada 1 no inicio deste dia.
+            # Um preco observado e necessario. Nao cria candles/precos.
+            available_close = g.loc[g.close.notna(), ["timestamp", "close"]]
+            if available_close.empty:
+                n_close_without_price += 1
+                close_status = "sem_preco"
                 status = "sem_fechamento_observado"
             else:
-                for book in books.values():
-                    book["last_price"] = actual_end
+                last = available_close.iloc[-1]
+                actual_end = _number(last["close"])
+                close_price = actual_end
+                close_timestamp = (last["timestamp"] + pd.Timedelta(minutes=5)).isoformat()
+                last_bar_present = bool(pd.notna(g.iloc[-1].close))
+                close_status = ("preco_ultimo_candle" if last_bar_present
+                                else "ultimo_preco_disponivel_proxy")
+                if not last_bar_present:
+                    n_stale += 1
+                    status = "sem_candle_final_preco_proxy"
+                if actual_end is not None:
+                    for name, book in books.items():
+                        book["last_price"] = actual_end
+                        available_cash = max(0., book["cash"])
+                        # Alocacao integral independente do valor da conta
+                        # e de liquidez: simula fill no close apos conhece-lo.
+                        quantity = available_cash / (actual_end*(1+cost))
+                        if quantity > 1e-12:
+                            was_out = book["shares"] <= 1e-10
+                            book["shares"] += quantity
+                            book["cash"] = 0.
+                            book["fees"] += quantity * actual_end * cost
+                            book["buys"] += 1
+                            close_rebalance[name] = quantity
+                            n_proxy_close_fills += 1
+                            if name == "policy" and was_out:
+                                # Compra NO ENCERRAMENTO nao conta como pregao
+                                # completo na trava da camada 2.
+                                book["dias_posicao"] = 0
+                            if name == "policy" and save_events:
+                                events.append({
+                                    "session": pos.session, "symbol": pos.symbol,
+                                    "checkpoint_utc": None,
+                                    "execucao_teorica_utc": close_timestamp,
+                                    "probabilidade_calibrada": None,
+                                    "limiar": threshold,
+                                    "preco_execucao_teorico": actual_end,
+                                    "volume_5min": None,
+                                    "quantidade_executada": quantity,
+                                    "execucao_parcial": False,
+                                    "dias_mesmo_ativo": age,
+                                    "dias_posicao_politica": book["dias_posicao"],
+                                    "observacao": "compra_integral_fechamento_proxy_sem_fill_verificado"})
+                        book["pending_exit"] = False
+                    n_close_rebalances += 1
+                else:
+                    n_close_without_price += 1
+                    close_status = "sem_preco"
             if exit_triggered_today and books["policy"]["shares"] > 0:
                 n_partial_exits += 1
             if action in ("CASH", "SAIDA_PARCIAL"):
@@ -350,8 +412,18 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
         daily.append({
             "session": pos.session, "symbol": pos.symbol,
             "dias_mesmo_ativo": age,
+            "decisao_primeira_camada": first_layer_action,
             "dias_posicao_politica": books["policy"]["dias_posicao"],
             "estado_dados": status,
+            "rebalanceamento_fechamento": close_status,
+            "preco_fechamento_usado": close_price,
+            "horario_fechamento_proxy_utc": close_timestamp,
+            "quantidade_comprada_fechamento_ref": close_rebalance["ref"],
+            "quantidade_comprada_fechamento_politica": close_rebalance["policy"],
+            "alocacao_ref_100pct": (books["ref"]["cash"] <= 1e-7
+                                   and books["ref"]["shares"] > 0),
+            "alocacao_politica_100pct": (books["policy"]["cash"] <= 1e-7
+                                       and books["policy"]["shares"] > 0),
             "acao": action, "tentativas_saida": attempts,
             "saidas_bloqueadas_volume_ou_preco": blocks,
             "retorno_control_intradiario": ref_factor-1,
@@ -390,6 +462,13 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
         "compras_ou_vendas_parciais_politica": books["policy"]["fills_parciais"],
         "rotacoes_sem_cotacao_ticker_antigo": n_rotations,
         "sem_cotacao_fechamento": n_stale,
+        "fechamentos_com_rebalanceamento": n_close_rebalances,
+        "fechamentos_sem_preco": n_close_without_price,
+        "fills_proxy_fechamento_sem_volume": n_proxy_close_fills,
+        "cash_overnight_nao_desejado": int((
+            (d.politica_em_caixa > 1e-7)
+            & (d.rebalanceamento_fechamento != "sem_cotacao")
+            & (d.rebalanceamento_fechamento != "sem_preco")).sum()),
         "taxas_ref_usd": books["ref"]["fees"],
         "taxas_politica_usd": books["policy"]["fees"],
         "posicao_ref_final": books["ref"]["shares"],
@@ -505,7 +584,7 @@ def executar(frame, positions, funcoes, registrar=None):
             if calibrated else pd.DataFrame()),
     }
     manifesto = {
-        "tipo": "exploratorio_carteira_continua_com_overnight_e_liquidez_parcial",
+        "tipo": "exploratorio_carteira_continua_recompra_total_no_fechamento",
         "status": "proxy_continuo_nao_equivalente_ao_control_diario_original",
         "testes": "somente pregoes fora da amostra (split do estudo)",
         "calibracao": "metade inicial da validacao; modelo aprendido no treino",
@@ -514,7 +593,8 @@ def executar(frame, positions, funcoes, registrar=None):
         "custo_bps_por_lado": COST_BPS_PER_SIDE,
         "max_participacao_candle": MAX_VOLUME_PARTICIPATION,
         "aplicacao": "ativo da Winner congelado; nenhuma troca intradiaria",
-        "trava": "saida antecipada apenas a partir do terceiro pregao consecutivo",
+        "trava": ("saida intradiaria a partir do terceiro pregao completo de posicao "
+                  "efetiva; recompra ao fechamento nao conta como dia completo"),
         "execucao": ("open de candle posterior ao sinal; limite de volume "
                      "calculado pelo candle ANTERIOR ja encerrado"),
         "liquidez": ("entradas e saidas parciais em cada candle, ate 1% do volume da "
@@ -526,8 +606,15 @@ def executar(frame, positions, funcoes, registrar=None):
         "capital_inicial_cenarios": list(CAPITALS),
         "control_original_patrimonio_final_usd": ORIGINAL_CONTROL_FINAL,
         "control_original_comparavel": False,
-        "posicao_overnight": "mantida se ativo nao mudou, sem zeragem diaria",
-        "reentrada": "somente no proximo pregao apos saida completa",
+        "posicao_overnight": ("todo patrimonio teoricamente alocado no ativo escolhido "
+                              "pela camada 1 ao fim de cada pregao com cotacao"),
+        "reentrada": ("a camada 2 nao recompra durante o pregao apos saida; "
+                      "no fechamento a primeira camada determina recompra integral "
+                      "do mesmo ativo, sem limite de capital ou volume"),
+        "validacao_fill_fechamento": (
+            "preco de fechamento so conhecido ao final; compra integral no mesmo preco "
+            "e uma hipotese de pesquisa nao executavel apos o fechamento"),
+        "camada1_dia_seguinte": "seguir a proxima selecao congelada: MANTER ou TROCAR",
         "rotacoes_entre_ativos": (
             "serie de preco antigo no novo pregao indisponivel; liquidacao "
             "integral teorica ao fechamento anterior, SEM checar fill/volume. "
@@ -542,10 +629,11 @@ def executar(frame, positions, funcoes, registrar=None):
                             "sessoes_extremas": int(audit.revisao_extremo.sum())},
         "periodo_teste": [str(te.session.min()) if not te.empty else None,
                           str(te.session.max()) if not te.empty else None],
-        "nota": ("NAO comparar diretamente com US$ 587m originais. "
-                 "A carteira e continua e preserva overnight no mesmo ativo, "
-                 "mas as rotacoes exigem cotacoes adicionais para liquidacao "
-                 "executavel; resultados atuais permanecem um proxy."),
+        "nota": ("NAO comparar diretamente com US$ 587m originais. A carteira "
+                 "e recomposta integralmente no fechamento pelo preco do ultimo "
+                 "candle disponivel. O fill, especialmente para valores elevados, "
+                 "nao e verificavel e pode ser impossivel no mercado real. "
+                 "As rotacoes tambem permanecem estimativas."),
     }
     out["manifesto_politicas_intradiarias.json"] = json.dumps(
         manifesto, ensure_ascii=False, indent=2, default=str).encode("utf-8")
