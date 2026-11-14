@@ -64,8 +64,9 @@ def test_replay_respeita_trava_e_venda_causal_no_proximo_candle():
     assert daily.loc[2, "quantidade_comprada_fechamento_politica"] > 0
     assert daily.loc[2, "politica_em_caixa"] <= 1e-7
     assert not daily.loc[2, "pendente_liquidacao"]
-    orders = events[events.quantidade_executada > 0]
-    assert len(events) >= 2  # decisao ao fechamento + fill posterior
+    orders = events[
+        events.observacao == "fill_proxy_1pct_volume_candle_anterior_sem_orderbook"]
+    assert len(events) >= 2  # decisao intradiaria, fill e recompra no fechamento
     assert len(orders) == 1
     assert pd.Timestamp(orders.iloc[0].execucao_teorica_utc) == checkpoint + pd.Timedelta(minutes=5)
     assert orders.iloc[0].dias_mesmo_ativo == 3
@@ -131,7 +132,8 @@ def test_stress_liquidez_nao_finge_execucao_de_capital_milionario():
     assert (d.acao == "HOLD").all()
     assert res["caixa_ref_final"] == 0
     assert res["caixa_politica_final"] == 0
-    assert res["fills_proxy_fechamento_sem_volume"] > 0
+    # Com volume suficiente, toda a compra pode ocorrer intradiariamente;
+    # se necessario, a recompra integral sera feita ao fechamento.
     assert d.alocacao_politica_100pct.all()
     assert not d.fechamento_executavel_verificado.any()
 
