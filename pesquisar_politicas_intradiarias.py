@@ -171,8 +171,9 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
 
     Durante o dia, sinais usam candles encerrados e venda no OPEN do
     candle seguinte, limitada a 1% do volume do candle anterior.
-    A trava de dois pregoes e calculada na posicao efetiva, nao na selecao.
-    Reentrada apos venda total reinicia a idade da posicao.
+    Nao existe trava de permanencia minima na segunda camada: ela pode
+    vender desde o PRIMEIRO pregao, no primeiro checkpoint valido apos
+    existir uma posicao. A idade da posicao fica apenas para auditoria.
 
     LIMITACAO MATERIAL: na ROTACAO entre ativos nao ha cotacao do ticker
     anterior no dia seguinte no cache corrente. A liquidacao e contabilizada
@@ -257,7 +258,7 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
                 # A idade conta pregoes de posicao REAL mantida.
                 book["dias_posicao"] += 1
             else:
-                # Reentrada na mesma selecao reinicia a trava de dois pregoes.
+                # Reentrada reinicia a idade auditada da posicao, sem bloquear sinais.
                 book["dias_posicao"] = 0
                 if book["pending_exit"]:
                     book["pending_exit"] = False
@@ -318,8 +319,8 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
                         if name == "policy" and nova_posicao and quantity > 1e-10:
                             book["dias_posicao"] = 1
                 # So le o score APOS o fechamento do candle corrente.
-                if (books["policy"]["dias_posicao"] >= 3
-                    and not books["policy"]["pending_exit"]
+                # NENHUMA permanencia minima: o primeiro pregao ja e elegivel.
+                if (not books["policy"]["pending_exit"]
                     and not exit_triggered_today and bool(bar.horario)
                     and i + 1 < len(g) and bar.timestamp in prob.get(key, {})
                     and books["policy"]["shares"] > 0):
@@ -380,8 +381,8 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
                             close_rebalance[name] = quantity
                             n_proxy_close_fills += 1
                             if name == "policy" and was_out:
-                                # Compra NO ENCERRAMENTO nao conta como pregao
-                                # completo na trava da camada 2.
+                                # Compra no fechamento zera a idade auditada;
+                                # isso NAO interfere na elegibilidade de saida.
                                 book["dias_posicao"] = 0
                             if name == "policy" and save_events:
                                 events.append({
@@ -481,6 +482,8 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
         "caixa_ref_final": books["ref"]["cash"],
         "caixa_politica_final": books["policy"]["cash"],
         "dias_avaliados": len(d),
+        "permanencia_minima_imposta": False,
+        "primeiro_pregao_elegivel_saida": 1,
         "execucao_comprovada": False,
         "control_original_comparavel": False,
     }
@@ -598,8 +601,11 @@ def executar(frame, positions, funcoes, registrar=None):
         "custo_bps_por_lado": COST_BPS_PER_SIDE,
         "max_participacao_candle": MAX_VOLUME_PARTICIPATION,
         "aplicacao": "ativo da Winner congelado; nenhuma troca intradiaria",
-        "trava": ("saida intradiaria a partir do terceiro pregao completo de posicao "
-                  "efetiva; recompra ao fechamento nao conta como dia completo"),
+        "trava": "nenhuma permanencia minima; saida intradiaria permitida no primeiro pregao",
+        "permanencia_minima_imposta": False,
+        "primeiro_pregao_elegivel_saida": 1,
+        "observacao_idade": ("dias_posicao_politica e uma metrica de auditoria; "
+                            "nao bloqueia a decisao de venda"),
         "execucao": ("open de candle posterior ao sinal; limite de volume "
                      "calculado pelo candle ANTERIOR ja encerrado"),
         "liquidez": ("entradas e saidas parciais em cada candle, ate 1% do volume da "
