@@ -19,7 +19,10 @@ import pandas as pd
 
 METHODS = ("multirrolling", "bocpd", "hmm", "lightgbm",
            "pca_lightgbm", "fitted_q")
-THRESHOLDS = (0.25, 0.30, 0.35, 0.40, 0.45, 0.50)
+# Grade diagnostica com valores proximos das probabilidades calibradas
+# observadas no piloto (~0.35 a 0.53); nao escolhe limiar no teste.
+THRESHOLDS = (0.25, 0.30, 0.35, 0.38, 0.40, 0.41, 0.42, 0.43,
+              0.44, 0.45, 0.50)
 COST_BPS_PER_SIDE = 10.0
 MAX_VOLUME_PARTICIPATION = .01
 EXTREME_30M = .20
@@ -504,6 +507,20 @@ def _group_dates(d, days):
     return d[d.session.isin(days)].copy()
 
 
+def _baseline_saida_fixa(data, horario="10:25"):
+    """Referencia SEM ML: venda no primeiro checkpoint diario das 10h25 NY.
+
+    O horario e fixado ANTES de consultar resultados. Usa a mesma exigencia
+    de seis candles observados, mesmo book e recompra obrigatoria no close.
+    """
+    ny = data.timestamp.dt.tz_convert("America/New_York").dt.strftime("%H:%M")
+    ok = data.horario & ny.eq(horario)
+    sinais = data.loc[ok, ["session", "symbol", "timestamp"]]
+    return {(str(s), str(a)): {r.timestamp: 0.0}
+            for (s, a), group in sinais.groupby(["session", "symbol"], sort=False)
+            for r in group.itertuples(index=False)}
+
+
 def executar(frame, positions, funcoes, registrar=None):
     """Produz artefatos em memoria para o ZIP principal, sem acesso externo."""
     _log(registrar, "politicas", "Auditando cobertura, anomalias e viabilidade de capital.")
@@ -523,6 +540,20 @@ def executar(frame, positions, funcoes, registrar=None):
     _log(registrar, "politicas", f"Calibracao={cal.session.nunique()} dias, "
          f"selecao={sel.session.nunique()} dias, teste={te.session.nunique()} dias.")
     comparisons, metrics, decisions, curves, calibrated = [], [], [], [], []
+    sensitivity, validation_grid, fixed_comparison = [], [], []
+    fixed_map = _baseline_saida_fixa(te)
+    for cap in CAPITALS:
+        fixed_summary, _, _ = _replay(
+            selected, sessions, ages, status, fixed_map, 0.50, cap)
+        fixed_summary.update({
+            "metodo": "saida_fixa_1025_sem_ml",
+            "cenario_capital": ("micro_10000" if cap == CAPITALS[0]
+                               else "stress_control_68160546"),
+            "horario_ny": "10:25",
+            "status": "referencia_deterministica_nao_selecionada_no_teste"})
+        fixed_comparison.append(fixed_summary)
+    _log(registrar, "politicas",
+         "Baseline sem ML: venda fixa as 10h25 e recompra integral no fechamento.")
     for method in METHODS:
         _log(registrar, "politicas", f"{method}: calculando scores temporais.")
         val_scores = _scores(method, tr, va, funcoes)
@@ -550,10 +581,25 @@ def executar(frame, positions, funcoes, registrar=None):
             dd = summ["politica_max_dd"] or 0.0
             objective = math.log(final/CAPITALS[0]) + .5 * dd
             tuning.append((objective, threshold))
-        # Seleciona na segunda metade da validacao, jamais no teste.
+            validation_grid.append({
+                "metodo": method, "limiar": threshold,
+                "objetivo_validacao": objective,
+                "patrimonio_validacao": summ["politica_final"],
+                "control_validacao": summ["control_intradiario_final"],
+                "vendas_validacao": summ["saidas_antecipadas"],
+                "tentativas_validacao": summ["tentativas_saida"]})
+        # A escolha continua feita EXCLUSIVAMENTE na validacao.
+        # Uma politica sem nenhuma venda e uma opcao legitima.
         best = sorted(tuning, key=lambda v: (-v[0], v[1]))[0][1]
         metrics.append({"metodo": method, **calibration,
                         "limiar_validado": best,
+                        "prob_minima_teste": float(p_test.loc[valid].min())
+                           if valid.any() else None,
+                        "prob_mediana_teste": float(p_test.loc[valid].median())
+                           if valid.any() else None,
+                        "vendas_na_validacao_com_limiar_escolhido": next(
+                            v["vendas_validacao"] for v in validation_grid
+                            if v["metodo"] == method and v["limiar"] == best),
                         "calibracao_dias": cal.session.nunique(),
                         "selecao_dias": sel.session.nunique(),
                         "metodo_selecao": "log_capital_mais_0.5_maxDD_validacao"})
@@ -571,6 +617,32 @@ def executar(frame, positions, funcoes, registrar=None):
                 chosen["metodo"] = method
                 chosen["cenario_capital"] = summary["cenario_capital"]
                 decisions.append(chosen)
+        # Auditoria de limiares no teste: apenas descritiva, NAO altera
+        # o limiar escolhido em validacao nem alimenta o treinamento.
+        for threshold in THRESHOLDS:
+            for cap in CAPITALS:
+                if threshold == best:
+                    base_row = next(r for r in comparisons
+                                    if r["metodo"] == method
+                                    and r["capital_inicial"] == cap)
+                    candidate = dict(base_row)
+                else:
+                    candidate, _, _ = _replay(
+                        selected, sessions, ages, status, test_map,
+                        threshold, cap)
+                candidate.update({
+                    "metodo": method,
+                    "cenario_capital": ("micro_10000" if cap == CAPITALS[0]
+                                       else "stress_control_68160546"),
+                    "limiar": threshold,
+                    "limiar_escolhido_na_validacao": bool(threshold == best),
+                    "status": "sensibilidade_pos_teste_nao_serve_para_selecao"})
+                sensitivity.append(candidate)
+        if comparisons[-2]["tentativas_saida"] == 0:
+            _log(registrar, "politicas",
+                 f"{method}: limiar validado {best:.2f} nao gera nenhuma "
+                 "saida no teste; outros limiares somente na tabela "
+                 "exploratoria, sem escolher pelo teste.", "WARN")
         _log(registrar, "politicas", f"{method}: limiar={best:.2f}; "
              f"micro_final={comparisons[-2]['politica_final']:.2f}; "
              f"micro_base={comparisons[-2]['control_intradiario_final']:.2f}")
@@ -584,6 +656,9 @@ def executar(frame, positions, funcoes, registrar=None):
         "auditoria_movimentos_extremos.csv": csv(extreme),
         "comparacao_modelos_calibrados.csv": csv(pd.DataFrame(metrics)),
         "comparacao_politicas_intradiarias.csv": csv(pd.DataFrame(comparisons)),
+        "sensibilidade_limiares_teste.csv": csv(pd.DataFrame(sensitivity)),
+        "selecao_limiares_validacao.csv": csv(pd.DataFrame(validation_grid)),
+        "referencia_saida_fixa_1025.csv": csv(pd.DataFrame(fixed_comparison)),
         "replay_patrimonio_intradiario.csv": csv(pd.concat(curves, ignore_index=True)
             if curves else pd.DataFrame()),
         "decisoes_hold_cash.csv": csv(pd.concat(decisions, ignore_index=True)
@@ -598,6 +673,13 @@ def executar(frame, positions, funcoes, registrar=None):
         "calibracao": "metade inicial da validacao; modelo aprendido no treino",
         "selecao_limiar": "metade final da validacao; jamais usa teste",
         "limiares_testados": list(THRESHOLDS),
+        "referencia_sem_ml": (
+            "venda hipotetica as 10h25 NY em cada pregao elegivel, "
+            "mesmas regras de liquidez e recompra total no fechamento"),
+        "analise_sensibilidade": (
+            "todos os limiares no teste sao POS-TESTE exploratorios; "
+            "somente o limiar eleito na validacao e a politica principal. "
+            "Nao usar desempenho pos-teste para escolher politica"),
         "custo_bps_por_lado": COST_BPS_PER_SIDE,
         "max_participacao_candle": MAX_VOLUME_PARTICIPATION,
         "aplicacao": "ativo da Winner congelado; nenhuma troca intradiaria",
