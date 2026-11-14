@@ -6236,6 +6236,153 @@ def _piv_auditar_gatilhos_control(
     return auditoria, resumo, episodios
 
 
+
+# Auditoria EX POST de negociabilidade; os resultados nao alteram as politicas.
+def _piv_auditar_execucao(
+    b: Base, pareado: pd.DataFrame, operacoes: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Audita preco usado na abertura e primeira sessao com volume positivo.
+
+    Volume diario nao comprova preenchimento na abertura. Volume zero
+    nao equivale a confirmacao independente de suspensao de negociacao.
+    """
+    indices = {str(d): i for i, d in enumerate(b.dates)}
+    simbolos = {s: j for j, s in enumerate(b.symbols)}
+    limite = float(V2_PARTICIPACAO_ADV_MAX)
+    linhas = []
+    for r in pareado.itertuples(index=False):
+        i = indices.get(str(r.data_decisao))
+        if i is None:
+            raise ValueError("Decisao sem referencia OHLCV: " + str(r.data_decisao))
+        h = int(r.horizonte_pregoes)
+        atual = simbolos[str(r.ativo_atual)]
+        destino = simbolos.get(str(r.candidato), -1)
+        ini, fim = i + 1, i + h
+        capital = float(r.capital_control_na_decisao)
+        preco_ini = float(b.op[ini, atual])
+        quantidade = capital / preco_ini
+        volume_ini = float(b.volume[ini, atual])
+        volume_destino_ini = float(b.volume[ini, destino]) if destino >= 0 else np.nan
+        sem_volume_atual = not (np.isfinite(volume_ini) and volume_ini > 0)
+        sem_volume_destino = destino >= 0 and not (
+            np.isfinite(volume_destino_ini) and volume_destino_ini > 0)
+        primeira = None
+        for k in range(ini, min(len(b.op), ini + 20)):
+            vs = float(b.volume[k, atual])
+            vc = float(b.volume[k, destino]) if destino >= 0 else 1.0
+            if (np.isfinite(vs) and vs > 0 and np.isfinite(vc) and vc > 0
+                    and np.isfinite(b.op[k, atual]) and b.op[k, atual] > 0
+                    and (destino < 0 or
+                         (np.isfinite(b.op[k, destino]) and b.op[k, destino] > 0))):
+                primeira = k
+                break
+        price_first = float(b.op[primeira, atual]) if primeira is not None else np.nan
+        candidate_first = (
+            float(b.op[primeira, destino]) if primeira is not None and destino >= 0 else np.nan)
+        candidate_initial = float(b.op[ini, destino]) if destino >= 0 else np.nan
+        delay = int(primeira - ini) if primeira is not None else None
+        in_window = primeira is not None and primeira <= fim
+        part_sell, part_buy, advantage = np.nan, np.nan, np.nan
+        if primeira is not None:
+            part_sell = quantidade / float(b.volume[primeira, atual])
+            if destino >= 0:
+                sell = _preco(b, price_first, "SELL")
+                cash = max(0.0, quantidade * sell - _taxa(b, "SELL", quantidade, sell))
+                buy = _preco(b, candidate_first, "BUY")
+                qty = cash / buy
+                for _ in range(20):
+                    charge = _taxa(b, "BUY", qty, buy)
+                    new_qty = max(0.0, (cash - charge) / buy)
+                    if abs(new_qty - qty) < 1e-10:
+                        qty = new_qty
+                        break
+                    qty = new_qty
+                part_buy = qty / float(b.volume[primeira, destino])
+        enough = (in_window and np.isfinite(part_sell) and part_sell <= limite
+                  and (destino < 0 or (np.isfinite(part_buy) and part_buy <= limite)))
+        end_valid = (np.isfinite(b.volume[fim, atual]) and b.volume[fim, atual] > 0
+                     and (destino < 0 or (np.isfinite(b.volume[fim, destino])
+                                         and b.volume[fim, destino] > 0)))
+        if enough and end_valid:
+            sell = _preco(b, price_first, "SELL")
+            after_sell = max(0.0, quantidade * sell - _taxa(b, "SELL", quantidade, sell))
+            if destino < 0:
+                final_other = after_sell
+            else:
+                buy = _preco(b, candidate_first, "BUY")
+                balance = max(0.0, after_sell - qty * buy - _taxa(b, "BUY", qty, buy))
+                final_other = qty * float(b.cl[fim, destino]) + balance
+            final_hold = quantidade * float(b.cl[fim, atual])
+            advantage = 100.0 * (final_other - final_hold) / capital
+        if not in_window:
+            status = "SEM_SESSAO_NEGOCIAVEL_NO_HORIZONTE"
+        elif not enough:
+            status = "VOLUME_DIARIO_INSUFICIENTE_10PCT"
+        elif not end_valid:
+            status = "FECHAMENTO_SEM_VOLUME_REGISTRADO"
+        elif delay:
+            status = "ABERTURA_ADIADA_VOLUME_ZERO"
+        else:
+            status = "PROXY_EXECUTAVEL_VOLUME_10PCT"
+        first_date = (str(b.dates[primeira]) if primeira is not None and primeira < len(b.dates)
+                      else str(b.exec_dates[primeira - 1]) if primeira is not None else None)
+        linhas.append({
+            "data_decisao": str(r.data_decisao),
+            "abertura_planejada": str(r.data_execucao),
+            "fold": int(r.fold),
+            "acao": str(r.acao),
+            "ativo_atual": str(r.ativo_atual),
+            "candidato": str(r.candidato),
+            "horizonte_pregoes": h,
+            "volume_atual_abertura_planejada": volume_ini,
+            "volume_candidato_abertura_planejada": volume_destino_ini,
+            "sem_volume_atual_abertura_planejada": bool(sem_volume_atual),
+            "sem_volume_candidato_abertura_planejada": bool(sem_volume_destino),
+            "primeira_abertura_com_volume": first_date,
+            "adiamento_sessoes": delay,
+            "primeira_abertura_dentro_horizonte": bool(in_window),
+            "preco_atual_abertura_planejada": preco_ini,
+            "preco_atual_primeira_abertura_com_volume": price_first,
+            "variacao_preco_saida_por_adiamento_pct": (
+                100.0 * (price_first / preco_ini - 1.0) if primeira is not None else np.nan),
+            "preco_candidato_abertura_planejada": candidate_initial,
+            "preco_candidato_primeira_abertura_com_volume": candidate_first,
+            "participacao_volume_saida_primeira_sessao": part_sell,
+            "participacao_volume_entrada_primeira_sessao": part_buy,
+            "participacao_limite": limite,
+            "fechamento_horizonte_tem_volume": bool(end_valid),
+            "status_execucao_proxy": status,
+            "vantagem_contrafactual_original_pct": float(r.vantagem_vs_hold_liquida_pct),
+            "vantagem_proxy_apos_adiamento_pct": advantage,
+            "diferença_proxy_vs_original_pp": (
+                advantage - float(r.vantagem_vs_hold_liquida_pct)
+                if np.isfinite(advantage) else np.nan),
+        })
+    detalhe = pd.DataFrame(linhas)
+    resumo = detalhe.groupby(
+        ["fold", "acao", "horizonte_pregoes", "status_execucao_proxy"],
+        dropna=False,
+    ).agg(
+        casos=("ativo_atual", "size"),
+        vantagem_original_media_pct=("vantagem_contrafactual_original_pct", "mean"),
+        vantagem_proxy_media_pct=("vantagem_proxy_apos_adiamento_pct", "mean"),
+        atrasos_com_volume_zero=("adiamento_sessoes", lambda x: int((x.fillna(0) > 0).sum())),
+    ).reset_index()
+    ordens = operacoes.copy()
+    ordens["volume_dia"] = pd.to_numeric(ordens["volume_dia"], errors="coerce")
+    ordens["quantidade"] = pd.to_numeric(ordens["quantidade"], errors="coerce")
+    ordens["participacao_volume_auditada"] = (
+        ordens["quantidade"] / ordens["volume_dia"].where(ordens["volume_dia"] > 0))
+    ordens["status_liquidez"] = np.select(
+        [ordens["volume_dia"].isna() | ordens["volume_dia"].le(0),
+         ordens["participacao_volume_auditada"] > 1.0,
+         ordens["participacao_volume_auditada"] > limite],
+        ["SEM_VOLUME_REGISTRADO", "MAIOR_QUE_VOLUME_DIARIO_TOTAL", "ACIMA_10PCT_VOLUME_DIARIO"],
+        default="DENTRO_10PCT_VOLUME_DIARIO",
+    )
+    return detalhe, resumo, ordens
+
+
 def executar_permanencia_inteligente_v2() -> None:
     """Control intacto, tres politicas V2 e auditoria pareada."""
     fonte = _pi_localizar_base()
@@ -6258,6 +6405,12 @@ def executar_permanencia_inteligente_v2() -> None:
     auditoria_gatilhos, resumo_gatilhos, episodios_perda = _piv_auditar_gatilhos_control(
         b, previsto_1d, previsto_2d, pareado,
     )
+    auditoria_execucao, resumo_execucao, operacoes_execucao = _piv_auditar_execucao(
+        b, pareado, tc,
+    )
+    auditoria_execucao.to_csv(dest / "auditoria_exequibilidade_contrafactuais.csv", index=False)
+    resumo_execucao.to_csv(dest / "resumo_exequibilidade.csv", index=False)
+    operacoes_execucao.to_csv(dest / "auditoria_exequibilidade_operacoes_control.csv", index=False)
     auditoria_gatilhos.to_csv(dest / "auditoria_gatilhos_control.csv", index=False)
     resumo_gatilhos.to_csv(dest / "resumo_gatilhos_control.csv", index=False)
     episodios_perda.to_csv(dest / "episodios_perda_control.csv", index=False)
@@ -6334,6 +6487,15 @@ def executar_permanencia_inteligente_v2() -> None:
             "perdas_materiais_5d": int(auditoria_gatilhos[
                 "perda_material_5d"].sum()),
             "resultados_futuros_apenas_auditoria": True,
+        },
+        "auditoria_exequibilidade": {
+            "metodo": "barras OHLCV: primeira abertura com volume positivo, limite exploratorio de 10% do volume diario; nao comprova fill",
+            "avaliacao": "EX POST sem alimentar sinais, nao modifica patrimonio ou a politica Control",
+            "linhas_contrafactuais": int(len(auditoria_execucao)),
+            "sem_volume_atual_na_abertura_planejada": int(auditoria_execucao["sem_volume_atual_abertura_planejada"].sum()),
+            "sem_volume_candidato_na_abertura_planejada": int(auditoria_execucao["sem_volume_candidato_abertura_planejada"].sum()),
+            "contagem_por_status": {str(k): int(v) for k, v in auditoria_execucao["status_execucao_proxy"].value_counts().items()},
+            "ordens_control_maiores_que_volume_diario": int((operacoes_execucao["status_liquidez"] == "MAIOR_QUE_VOLUME_DIARIO_TOTAL").sum()),
         },
         "universo_efetivo": len(b.symbols),
         "folds": [1, 2, 3],
