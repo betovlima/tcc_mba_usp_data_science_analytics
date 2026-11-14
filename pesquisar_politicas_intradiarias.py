@@ -486,8 +486,8 @@ def executar(frame, positions, funcoes, registrar=None):
             if calibrated else pd.DataFrame()),
     }
     manifesto = {
-        "tipo": "exploratorio_intradiario_pareado_sem_overnight",
-        "status": "nao_equivalente_ao_control_diario_original",
+        "tipo": "exploratorio_carteira_continua_com_overnight_e_liquidez_parcial",
+        "status": "proxy_continuo_nao_equivalente_ao_control_diario_original",
         "testes": "somente pregoes fora da amostra (split do estudo)",
         "calibracao": "metade inicial da validacao; modelo aprendido no treino",
         "selecao_limiar": "metade final da validacao; jamais usa teste",
@@ -496,15 +496,23 @@ def executar(frame, positions, funcoes, registrar=None):
         "max_participacao_candle": MAX_VOLUME_PARTICIPATION,
         "aplicacao": "ativo da Winner congelado; nenhuma troca intradiaria",
         "trava": "saida antecipada apenas a partir do terceiro pregao consecutivo",
-        "execucao": "open do candle imediatamente posterior ao sinal; preco idealizado",
-        "liquidez": ("volume historico de 5min; capacidade verificada ex-post; "
-                     "nao e simulacao de livro de ofertas ou garantia de fill"),
-        "sem_negocio": "sessao sem abertura ou ultimo candle nao e operada por nenhum lado",
+        "execucao": ("open de candle posterior ao sinal; limite de volume "
+                     "calculado pelo candle ANTERIOR ja encerrado"),
+        "liquidez": ("entradas e saidas parciais em cada candle, ate 1% do volume da "
+                     "barra anterior; sem livro de ofertas nem garantia de fill"),
+        "sem_negocio": ("apenas candles observados originam ordens; se faltar cotacao "
+                       "de fechamento, posicao e marcada a ultimo preco observado"),
         "extremos": ("retorno 30min absoluto >= 20% sinalizado para revisao; "
                      "nao removido do replay principal para evitar filtro ex-post"),
         "capital_inicial_cenarios": list(CAPITALS),
         "control_original_patrimonio_final_usd": ORIGINAL_CONTROL_FINAL,
         "control_original_comparavel": False,
+        "posicao_overnight": "mantida se ativo nao mudou, sem zeragem diaria",
+        "reentrada": "somente no proximo pregao apos saida completa",
+        "rotacoes_entre_ativos": (
+            "serie de preco antigo no novo pregao indisponivel; liquidacao "
+            "integral teorica ao fechamento anterior, SEM checar fill/volume. "
+            "Nao e execucao comprovada."),
         "replay_original_587m_reproduzido": False,
         "dados_brutos_exportados": False,
         "nenhuma_ordem_real": True,
@@ -515,9 +523,10 @@ def executar(frame, positions, funcoes, registrar=None):
                             "sessoes_extremas": int(audit.revisao_extremo.sum())},
         "periodo_teste": [str(te.session.min()) if not te.empty else None,
                           str(te.session.max()) if not te.empty else None],
-        "nota": ("NAO comparar diretamente o capital do replay intradiario "
-                 "com os US$ 587m originais: o Control original inclui "
-                 "overnight, decisoes diarias e execucao propria."),
+        "nota": ("NAO comparar diretamente com US$ 587m originais. "
+                 "A carteira e continua e preserva overnight no mesmo ativo, "
+                 "mas as rotacoes exigem cotacoes adicionais para liquidacao "
+                 "executavel; resultados atuais permanecem um proxy."),
     }
     out["manifesto_politicas_intradiarias.json"] = json.dumps(
         manifesto, ensure_ascii=False, indent=2, default=str).encode("utf-8")
