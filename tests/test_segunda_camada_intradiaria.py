@@ -44,6 +44,45 @@ def test_rejeita_candles_duplicados():
         mod.preparar(pd.concat([x,x],ignore_index=True))
 
 
+def test_barras_5min_esparsas_com_mediana_10min_nao_abortam():
+    # Reproduz a causa da falha observada em ativos pouco liquidos:
+    # somente uma barra a cada 10 minutos (feed nominal continua 5Min).
+    raw=make_bars(days=1,symbol="AMS")
+    sparse=raw.iloc[::2].copy()
+    assert sparse.timestamp.diff().median()==pd.Timedelta(minutes=10)
+    regular=mod.preparar(sparse)
+    assert len(regular)==78
+    assert regular.close.notna().sum()==39
+    assert regular.close.isna().sum()==39
+    assert regular.loc[1,"timestamp"]-regular.loc[0,"timestamp"]==pd.Timedelta(minutes=5)
+    assert pd.isna(regular.loc[1,"close"])
+    assert regular.loc[2,"close"]==sparse.iloc[1]["close"]
+
+    result=mod.features(regular)
+    # Seis intervalos da grade = 30min. Nunca seis negociacoes esparsas = 60min.
+    expected=float(sparse.iloc[3]["close"])/float(sparse.iloc[0]["close"])-1
+    assert result.loc[0,"ret_futuro_30m"]==pytest.approx(expected)
+    assert pd.isna(result.loc[1,"ret_futuro_30m"])
+    # Nenhum checkpoint com candle ausente deve virar uma decisao por imputacao.
+    assert not result.horario.any()
+
+
+def test_lacuna_em_checkpoint_impede_previsao_artificial():
+    raw=make_bars(days=1,symbol="AMS")
+    # 10:25 e um checkpoint; seu candle e suprimido do feed.
+    clock=raw.timestamp.dt.tz_convert("America/New_York").dt.strftime("%H:%M")
+    bars=mod.preparar(raw.loc[clock!="10:25"].copy())
+    result=mod.features(bars)
+    at_1025=result.timestamp.dt.tz_convert("America/New_York").dt.strftime("%H:%M")=="10:25"
+    assert at_1025.sum()==1
+    assert pd.isna(result.loc[at_1025,"close"]).all()
+    assert not result.loc[at_1025,"horario"].any()
+    # Uma lacuna entre o checkpoint e o futuro invalida os labels que exigem
+    # preco naquele instante, sem deslocar a previsao para uma barra posterior.
+    at_0955=result.timestamp.dt.tz_convert("America/New_York").dt.strftime("%H:%M")=="09:55"
+    assert pd.isna(result.loc[at_0955,"ret_futuro_30m"]).all()
+
+
 def test_todas_as_tecnicas_mesmo_teste_cronologico():
     pytest.importorskip("sklearn")
     pytest.importorskip("lightgbm")
