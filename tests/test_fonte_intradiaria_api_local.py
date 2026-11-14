@@ -105,6 +105,31 @@ class HistoricoTccLocalTests(unittest.TestCase):
         self.assertNotIn("CASH", set(positions.symbol))
         self.assertTrue((research.INPUT / "winner_positions.csv").is_file())
 
+    def test_f5_exibe_progresso_e_inclui_logs_no_zip(self):
+        import contextlib
+        import io
+        root = Path(self.tmp.name)
+        output = root / "output" / "pesquisa_vantagem_rotacao.zip"
+        logfile = output.parent / "pesquisa_segunda_camada.log"
+        captured = io.StringIO()
+        with patch.object(research, "OUTPUT", output), \
+             patch.object(research, "LOG_FILE", logfile), \
+             patch.object(research, "_market_reader_local", \
+                          side_effect=RuntimeError("sem credenciais locais")), \
+             contextlib.redirect_stdout(captured):
+            result = research.executar()
+        self.assertEqual(result["status"], "aguardando_candles_intradiarios_reais")
+        self.assertIn("[inicio]", captured.getvalue())
+        self.assertIn("[posicoes]", captured.getvalue())
+        self.assertIn("[fonte]", captured.getvalue())
+        self.assertIn("[fim]", captured.getvalue())
+        self.assertTrue(logfile.is_file())
+        with ZipFile(output) as archive:
+            log = archive.read("segunda_camada_intradiaria/execucao.log").decode("utf-8")
+            self.assertIn("[inicio]", log)
+            self.assertIn("Leitor historico indisponivel", log)
+            self.assertIn("[fim]", log)
+
     def test_sem_api_historica_local_nao_inventa_cotacoes(self):
         positions, _ = research.preparar_posicoes_control()
         sample = positions.iloc[:1]
