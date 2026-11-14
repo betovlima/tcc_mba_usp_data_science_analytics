@@ -87,7 +87,7 @@ def _auditar(frame, positions):
                  "dias_mesmo_ativo": ages[pos.session], "candles_observados": 0,
                  "intervalos_sem_candle": 78, "checkpoints_validos": 0,
                  "extremos_30m": 0, "max_retorno_30m_abs": None,
-                 "estado": "sem_candles"}
+                 "revisao_extremo": False, "estado": "sem_candles"}
         if g is not None and not g.empty:
             known = g.close.notna()
             audit["candles_observados"] = int(known.sum())
@@ -96,6 +96,7 @@ def _auditar(frame, positions):
             future = pd.to_numeric(g.ret_futuro_30m, errors="coerce")
             abnormal = g[future.abs() >= EXTREME_30M]
             audit["extremos_30m"] = len(abnormal)
+            audit["revisao_extremo"] = bool(len(abnormal))
             audit["max_retorno_30m_abs"] = _number(future.abs().max())
             for x in abnormal.itertuples(index=False):
                 extreme.append({"session": pos.session, "symbol": pos.symbol,
@@ -104,7 +105,9 @@ def _auditar(frame, positions):
                                 "retorno_30m": _number(x.ret_futuro_30m),
                                 "status": "revisao_manual_nao_usar_como_prova_de_execucao"})
             if len(g) == 78 and known.iloc[0] and known.iloc[-1]:
-                audit["estado"] = "revisao_extremo" if len(abnormal) else "utilizavel"
+                # Flag de auditoria EX-POST: nunca filtrar retorno futuro
+                # da amostra principal, porque isso geraria lookahead.
+                audit["estado"] = "utilizavel"
             else:
                 audit["estado"] = "sem_abertura_ou_fechamento_observado"
             sessions[key] = g
@@ -182,9 +185,12 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
                 or entry_vol is None or close_vol is None):
                 reason = "ohlcv_execucao_invalido"
             else:
-                shares = b_cap / entry
+                # Capacidade deve considerar AMBOS os caminhos, pois o
+                # patrimonio da politica pode divergir do Control.
+                shares = max(b_cap, p_cap) / entry
                 if (shares > MAX_VOLUME_PARTICIPATION * entry_vol
-                    or shares > MAX_VOLUME_PARTICIPATION * close_vol):
+                    or max(b_cap, p_cap) / end >
+                       MAX_VOLUME_PARTICIPATION * close_vol):
                     reason = "liquidez_insuficiente_abertura_ou_fechamento"
         if g is not None and reason == "utilizavel":
             signal = prob.get(key, {})
@@ -374,9 +380,11 @@ def executar(frame, positions, funcoes, registrar=None):
         "aplicacao": "ativo da Winner congelado; nenhuma troca intradiaria",
         "trava": "saida antecipada apenas a partir do terceiro pregao consecutivo",
         "execucao": "open do candle imediatamente posterior ao sinal; preco idealizado",
-        "liquidez": "volume historico dos candles de 5min; capacidade verificada ex-post",
+        "liquidez": ("volume historico de 5min; capacidade verificada ex-post; "
+                     "nao e simulacao de livro de ofertas ou garantia de fill"),
         "sem_negocio": "sessao sem abertura ou ultimo candle nao e operada por nenhum lado",
-        "extremos": "retorno 30min absoluto >= 20% exige auditoria e nao e operado",
+        "extremos": ("retorno 30min absoluto >= 20% sinalizado para revisao; "
+                     "nao removido do replay principal para evitar filtro ex-post"),
         "capital_inicial_cenarios": list(CAPITALS),
         "control_original_patrimonio_final_usd": ORIGINAL_CONTROL_FINAL,
         "control_original_comparavel": False,
@@ -387,7 +395,7 @@ def executar(frame, positions, funcoes, registrar=None):
                             "sessoes_com_grade": int((audit.candles_observados>0).sum()),
                             "sessoes_com_falta_de_abertura_ou_fechamento": int(
                                 (audit.estado=="sem_abertura_ou_fechamento_observado").sum()),
-                            "sessoes_extremas": int((audit.estado=="revisao_extremo").sum())},
+                            "sessoes_extremas": int(audit.revisao_extremo.sum())},
         "periodo_teste": [str(te.session.min()) if not te.empty else None,
                           str(te.session.max()) if not te.empty else None],
         "nota": ("NAO comparar diretamente o capital do replay intradiario "
