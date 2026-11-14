@@ -162,7 +162,8 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
     """Carteira continua com dois livros, cotas fracionarias e fills PARCIAIS.
 
     Mantem a posicao entre pregoes (incluindo overnight) quando o simbolo e
-    o mesmo. Reentrada apos saida somente em outro pregao. Sinal de um candle
+    o mesmo. Reentrada apos saida somente em outro pregao e REINICIA a trava
+    de dois pregoes na posicao real, nao na selecao congelada. Sinal de um candle
     encerrado so pode originar venda no OPEN do proximo candle. Cada ordem
     executa no maximo 1% do volume do ULTIMO candle encerrado. A primeira
     entrada possivel e as 09h35, sem olhar o volume futuro da barra atual.
@@ -177,7 +178,7 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
     cost = COST_BPS_PER_SIDE / 10000
     books = {
         name: {"cash": float(capital), "shares": 0., "symbol": None,
-               "last_price": None, "pending_exit": False,
+               "last_price": None, "pending_exit": False, "dias_posicao": 0,
                "fees": 0., "buys": 0., "sells": 0.,
                "fills_parciais": 0, "rotacoes_estimadas": 0}
         for name in ("ref", "policy")
@@ -239,9 +240,15 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
                     day_rotations += 1
                 book["symbol"] = pos.symbol
                 book["pending_exit"] = False
-            elif book["pending_exit"] and book["shares"] == 0.:
-                # CASH apos saida ontem; compra novamente apenas hoje.
-                book["pending_exit"] = False
+                book["dias_posicao"] = 0
+            elif book["shares"] > 1e-10:
+                # A idade conta pregoes de posicao REAL mantida.
+                book["dias_posicao"] += 1
+            else:
+                # Reentrada na mesma selecao reinicia a trava de dois pregoes.
+                book["dias_posicao"] = 0
+                if book["pending_exit"]:
+                    book["pending_exit"] = False
         if day_rotations:
             n_rotations += 1
         if session is None or session.empty:
@@ -265,6 +272,10 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
                     book["last_price"] = px
                 for name, book in books.items():
                     if name == "policy" and book["pending_exit"]:
+                        if book["shares"] <= 1e-10:
+                            # Ja liquidada: nao transformar candles seguintes
+                            # em falsas ordens recusadas por liquidez.
+                            continue
                         quantity, incomplete = trade(book, "sell", px, volume)
                         if quantity > 0:
                             action = "CASH" if not incomplete else "SAIDA_PARCIAL"
@@ -283,13 +294,18 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
                                     "quantidade_executada": quantity,
                                     "execucao_parcial": bool(incomplete),
                                     "dias_mesmo_ativo": age,
+                                    "dias_posicao_politica": books["policy"]["dias_posicao"],
                                     "observacao": "fill_proxy_1pct_volume_candle_anterior_sem_orderbook"})
                         else:
                             blocks += 1
                     elif book["cash"] > 1e-7:
+                        nova_posicao = book["shares"] <= 1e-10
                         quantity, incomplete = trade(book, "buy", px, volume)
+                        if name == "policy" and nova_posicao and quantity > 1e-10:
+                            book["dias_posicao"] = 1
                 # So le o score APOS o fechamento do candle corrente.
-                if (age >= 3 and not books["policy"]["pending_exit"]
+                if (books["policy"]["dias_posicao"] >= 3
+                    and not books["policy"]["pending_exit"]
                     and not exit_triggered_today and bool(bar.horario)
                     and i + 1 < len(g) and bar.timestamp in prob.get(key, {})
                     and books["policy"]["shares"] > 0):
@@ -309,6 +325,7 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
                                 "quantidade_executada": 0,
                                 "execucao_parcial": False,
                                 "dias_mesmo_ativo": age,
+                                "dias_posicao_politica": books["policy"]["dias_posicao"],
                                 "observacao": "sinal_fechado_aguardando_candle_seguinte"})
             actual_end = _number(g.iloc[-1].close)
             if actual_end is None:
@@ -332,7 +349,9 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
         policy_return.append(policy_factor-1)
         daily.append({
             "session": pos.session, "symbol": pos.symbol,
-            "dias_mesmo_ativo": age, "estado_dados": status,
+            "dias_mesmo_ativo": age,
+            "dias_posicao_politica": books["policy"]["dias_posicao"],
+            "estado_dados": status,
             "acao": action, "tentativas_saida": attempts,
             "saidas_bloqueadas_volume_ou_preco": blocks,
             "retorno_control_intradiario": ref_factor-1,
