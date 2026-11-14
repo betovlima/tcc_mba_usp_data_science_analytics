@@ -6383,6 +6383,164 @@ def _piv_auditar_execucao(
     return detalhe, resumo, ordens
 
 
+
+# Testes observacionais de risco antes da entrada: sem nova politica operacional.
+def _piv_investigar_entradas(b: Base, trades: pd.DataFrame):
+    """Comparacoes de entradas do Control; retornos futuros somente EX POST."""
+    from sklearn.impute import SimpleImputer
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import roc_auc_score, average_precision_score
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    date_index = {str(d): i for i, d in enumerate(b.dates)}
+    symbols = {s: j for j, s in enumerate(b.symbols)}
+    rows = []
+    for trade in trades.itertuples(index=False):
+        if str(trade.acao) != "BUY":
+            continue
+        i = date_index[str(trade.data_decisao)]
+        j = symbols[str(trade.ativo)]
+        fold = int(b.fold[i])
+        current = int(b.base_current[i])
+        open_price = float(b.op[i+1, j])
+        current_score = float(b.scores[i, j])
+        ranking = b.scores[i].copy()
+        ranking[j] = np.nan
+        same_fold = i > 0 and int(b.fold[i - 1]) == fold
+        previous_score = float(b.scores[i-1, j]) if same_fold else np.nan
+        volume = float(b.volume[i+1, j])
+        part = float(trade.quantidade)/volume if volume > 0 else np.nan
+        r = {
+            "data_decisao": str(b.dates[i]), "fold": fold, "indice": i,
+            "ativo_escolhido": b.symbols[j],
+            "ativo_anterior": b.symbols[current] if current >= 0 else "CASH",
+            "capital_control_usd": float(b.base_equity[i - 1]) if i else float(b.config["initial_capital"]),
+            "retorno_anterior_1d_pct": 100.0*(b.cl[i,j]/b.cl[i-1,j]-1) if i else np.nan,
+            "retorno_anterior_5d_pct": 100.0*float(b.ret5[i,j]),
+            "retorno_anterior_20d_pct": 100.0*(b.cl[i,j]/b.cl[i-20,j]-1) if i>=20 else np.nan,
+            "retorno_mercado_1d_pct": (
+                100.0*(b.cl[i,symbols["SPY"]]/b.cl[i-1,symbols["SPY"]]-1)
+                if same_fold and "SPY" in symbols else np.nan),
+            "volatilidade_20d": float(b.vol20[i,j]),
+            "score_escolhido": current_score,
+            "variacao_score_1d": current_score-previous_score if np.isfinite(previous_score) else np.nan,
+            "distancia_score_segundo": current_score-float(np.nanmax(ranking)),
+            "adv20_usd": float(b.adv20[i,j]),
+            "participacao_volume_execucao": part,
+            "sem_volume_na_execucao": bool(volume<=0),
+            "capacidade_ate_10pct_volume": bool(volume>0 and part<=.1),
+            "salto_abertura_pct": 100.0*(open_price/float(b.cl[i,j])-1),
+        }
+        for horizon in (1,2,3,5,10,20):
+            valid = i+horizon<len(b.op) and int(b.fold[i+horizon-1])==fold
+            ret = float(b.cl[i+horizon,j]/open_price-1) if valid else np.nan
+            old_return = (float(b.cl[i+horizon,current]/b.op[i+1,current]-1)
+                          if valid and current>=0 else (0.0 if valid else np.nan))
+            r[f"retorno_ativo_{horizon}d_pct"] = 100.0*ret
+            r[f"vantagem_manter_anterior_{horizon}d_pct"] = 100.0*(old_return-ret) if valid else np.nan
+        r["perda_10pct_5d"] = bool(np.isfinite(r["retorno_ativo_5d_pct"]) and r["retorno_ativo_5d_pct"]<=-10)
+        rows.append(r)
+    entradas = pd.DataFrame(rows)
+    if len(entradas)!=355:
+        raise RuntimeError(f"Numero de compras Control inesperado: {len(entradas)}")
+    overview=[]
+    for threshold in (0,-5,-10,-15,-20,-30,-40):
+        for fold in (1,2,3):
+            data=entradas.loc[(entradas.fold==fold)
+                &(entradas.retorno_anterior_5d_pct<=threshold)
+                &(entradas.retorno_ativo_5d_pct.notna())]
+            overview.append({
+                "fold": fold, "queda_5d_minima_pct": threshold,
+                "compras": len(data),
+                "perdas_acima_10pct_em_5d": int(data.perda_10pct_5d.sum()),
+                "retorno_5d_medio_pct": float(data.retorno_ativo_5d_pct.mean()),
+                "retorno_5d_mediano_pct": float(data.retorno_ativo_5d_pct.median()),
+                "frequencia_retorno_5d_positivo": float((data.retorno_ativo_5d_pct>0).mean()) if len(data) else np.nan,
+                "media_vantagem_manter_anterior_5d_pct": float(data.vantagem_manter_anterior_5d_pct.mean()),
+                "percentual_entradas_com_volume_ate_10pct": float(data.capacidade_ate_10pct_volume.mean()) if len(data) else np.nan,
+            })
+    features=["retorno_anterior_1d_pct","retorno_anterior_5d_pct",
+              "retorno_anterior_20d_pct","volatilidade_20d","score_escolhido",
+              "variacao_score_1d","distancia_score_segundo","retorno_mercado_1d_pct"]
+    validation=[]
+    for fold in (2,3):
+        first=int(np.flatnonzero(b.fold==fold)[0])
+        train=entradas.loc[(entradas.fold<fold)&(entradas.indice+20<first)
+                           &entradas.retorno_ativo_5d_pct.notna()]
+        test=entradas.loc[(entradas.fold==fold)&entradas.retorno_ativo_5d_pct.notna()]
+        y=train.perda_10pct_5d.astype(int)
+        if len(train)<40 or len(np.unique(y))<2:
+            raise RuntimeError("Treino diagnostico insuficiente")
+        model=make_pipeline(SimpleImputer(strategy="median"),StandardScaler(),
+            LogisticRegression(C=.3,class_weight="balanced",max_iter=1000))
+        model.fit(train[features],y)
+        pred=model.predict_proba(test[features])[:,1]
+        outcome=test.perda_10pct_5d.astype(int).to_numpy()
+        validation.append({
+            "fold_teste":fold, "compras_treino":len(train), "perdas_treino":int(y.sum()),
+            "compras_teste":len(test), "perdas_teste":int(outcome.sum()),
+            "auc_roc":float(roc_auc_score(outcome,pred)) if len(set(outcome))==2 else np.nan,
+            "precisao_media":float(average_precision_score(outcome,pred)),
+            "frequencia_perda_teste":float(outcome.mean()),
+            "embargo_sessoes":20,
+            "score_nao_calibrado_como_probabilidade":True,
+        })
+        for ix,score in zip(test.index,pred):
+            entradas.loc[ix,"score_risco_exploratorio_oos"]=float(score)
+    return entradas,pd.DataFrame(overview),pd.DataFrame(validation),_piv_stress_veto(b)
+
+
+def _piv_stress_veto(b: Base) -> pd.DataFrame:
+    """Sensibilidade: preserva Fold 1, sem execucao realista de ordens parciais."""
+    tests=[
+        ("queda_previa_10pct",-.1,None,"todos"),
+        ("queda_previa_20pct",-.2,None,"todos"),
+        ("queda_previa_30pct",-.3,None,"todos"),
+        ("queda_previa_40pct",-.4,None,"todos"),
+        ("queda_previa_40pct_exceto_CAPR",-.4,None,"sem_CAPR"),
+        ("somente_CAPR_abaixo_40pct",-.4,None,"so_CAPR"),
+        ("limite_adv20_100pct",None,1.0,"todos"),
+        ("limite_adv20_10pct",None,.1,"todos"),
+    ]
+    rows=[]
+    for name,th,cap,selector_group in tests:
+        blocked=[]
+        def selector(base,i,pos,holding,capital,quantity):
+            target=_d_control(base,i,pos,holding)
+            if target<0 or target==pos:
+                return target,[]
+            candidate=base.symbols[target]
+            risk=(th is not None and np.isfinite(base.ret5[i,target])
+                  and float(base.ret5[i,target])<=th)
+            if selector_group=="sem_CAPR" and candidate=="CAPR":risk=False
+            if selector_group=="so_CAPR" and candidate!="CAPR":risk=False
+            adv=float(base.adv20[i,target])
+            illiquid=(cap is not None and
+                       (not np.isfinite(adv) or adv<=0 or capital/adv>cap))
+            if risk or illiquid:
+                blocked.append((i,candidate))
+                return pos,[]
+            return target,[]
+        curve,_d,_t,_m=simular(b,decision_callback=selector,permitir_cash=True)
+        if np.max(np.abs(curve[b.fold==1]-b.base_equity[b.fold==1]))>TOLERANCIA_CENTAVO:
+            raise RuntimeError("Fold 1 modificado no stress")
+        folds=_performance_by_fold(b,curve)
+        rows.append({
+            "hipotese_diagnostica":name,
+            "capital_final_usd":float(curve[-1]),
+            "diferenca_control_pct":100.0*(float(curve[-1])/float(b.base_equity[-1])-1),
+            "eventos_bloqueados":len(blocked),
+            "datas_bloqueio_unicas":len(set(x[0] for x in blocked)),
+            "fator_fold_2":float(folds[1]["fator_capital"]),
+            "fator_fold_3":float(folds[2]["fator_capital"]),
+            "drawdown_maximo":float(_resumo_curva(curve)["drawdown_maximo"]),
+            "nao_valida_custos_de_impacto_ou_vendas_parciais":True,
+            "resultado_retrospectivo_sem_holdout_independente":True,
+        })
+    return pd.DataFrame(rows)
+
+
 def executar_permanencia_inteligente_v2() -> None:
     """Control intacto, tres politicas V2 e auditoria pareada."""
     fonte = _pi_localizar_base()
@@ -6416,6 +6574,11 @@ def executar_permanencia_inteligente_v2() -> None:
     episodios_perda.to_csv(dest / "episodios_perda_control.csv", index=False)
     audit_1d.assign(horizonte="1d").to_csv(dest / "validacao_estimador_1d.csv", index=False)
     audit_2d.assign(horizonte="2d").to_csv(dest / "validacao_estimador_2d.csv", index=False)
+    entradas, resumo_entradas, validacao_risco, sensibilidades = _piv_investigar_entradas(b, tc)
+    entradas.to_csv(dest / "auditoria_entradas_control.csv", index=False)
+    resumo_entradas.to_csv(dest / "resumo_risco_entradas.csv", index=False)
+    validacao_risco.to_csv(dest / "validacao_risco_entradas.csv", index=False)
+    sensibilidades.to_csv(dest / "sensibilidade_vetos_entrada.csv", index=False)
     dc.to_csv(dest / "decisoes_control.csv", index=False)
     tc.to_csv(dest / "operacoes_control.csv", index=False)
     curvas = {"control_2_pregoes": control}
@@ -6475,6 +6638,14 @@ def executar_permanencia_inteligente_v2() -> None:
         "fonte_sha256": _hash_arquivo(fonte),
         "control_paridade_usd": desvio,
         "control_original_inviolado": True,
+        "investigacao_entradas": {
+            "n_compras_control": int(len(entradas)),
+            "n_quedas_anteriores_40pct": int((entradas["retorno_anterior_5d_pct"] <= -40).sum()),
+            "compras_com_volume_maior_que_total": int((entradas["participacao_volume_execucao"] > 1).sum()),
+            "validacao_temporal_risco": validacao_risco.to_dict(orient="records"),
+            "estudos_de_limite_somente_diagnosticos": True,
+            "sem_novas_politicas_promovidas": True,
+        },
         "control_capital_final_usd": float(control[-1]),
         "auditoria_vetos_control": {
             "decisoes_auditadas": int(len(auditoria_gatilhos)),
@@ -6527,6 +6698,9 @@ def executar_permanencia_inteligente_v2() -> None:
         "Auditoria de vetos: auditoria_gatilhos_control.csv, "
         "resumo_gatilhos_control.csv e episodios_perda_control.csv.\n"
         "Resultados futuros EX POST nao fazem parte da decisao.\n"
+        "Entradas: auditoria_entradas_control.csv, resumo_risco_entradas.csv, "
+        "validacao_risco_entradas.csv e sensibilidade_vetos_entrada.csv.\n"
+        "Resultados futuros EX POST; vetos de entrada nao foram promovidos.\n"
         "A pesquisa nao valida ganho futuro e nao modifica Winner Live.\n",
         encoding="utf-8")
     shutil.copyfile(Path(__file__), dest / "codigo_executado.py")
