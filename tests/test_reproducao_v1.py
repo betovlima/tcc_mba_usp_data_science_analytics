@@ -913,7 +913,7 @@ def test_sensibilidade_margens_recalcula_fold_1_somente_quando_pedido() -> None:
     import numpy as np
 
     script = importlib.import_module("pesquisar_permanencia_minima_spyder")
-    assert script.MODO == "decisao_economica_sem_prazo"
+    assert script.MODO == "saida_antecipada_economica"
     assert script.MARGENS_ALTERNATIVAS == {1: 0.01, 2: 0.0, 3: 0.01}
     b = SimpleNamespace(
         dates=pd.date_range("2026-01-02", periods=3, freq="B"),
@@ -949,7 +949,8 @@ def test_sensibilidade_margens_nao_altera_pesquisa_de_deterioracao() -> None:
     script = (ROOT / "pesquisar_permanencia_minima_spyder.py").read_text(
         encoding="utf-8",
     )
-    assert 'MODO = "decisao_economica_sem_prazo"' in script
+    assert 'MODO = "saida_antecipada_economica"' in script
+    assert 'elif MODO == "decisao_economica_sem_prazo"' in script
     assert 'elif MODO == "deterioracao"' in script
     assert 'permitir_cash=True, aplicar_todos_folds=True' in script
     assert "OOS" not in script.split("# %% 12. Sensibilidade")[1].split(
