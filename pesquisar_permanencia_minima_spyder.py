@@ -62,7 +62,7 @@ import numpy as np
 import pandas as pd
 
 # %% 0. Um arquivo, uma branch; somente este seletor muda entre modos.
-MODO = "permanencia_inteligente_v2"  # Outros modos historicos permanecem disponiveis.
+MODO = "saida_antecipada_economica"  # Outros modos historicos permanecem disponiveis.
 PERMANENCIAS = (0, 1, 2, 3)
 PERMANENCIA_CONTROLE = 2
 TOLERANCIA_CENTAVO = 0.01
