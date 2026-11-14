@@ -123,6 +123,27 @@ def test_saida_total_nao_registra_bloqueios_falsos_depois():
     assert summary["saidas_antecipadas"] == 1
 
 
+def test_baseline_sem_ml_sai_as_1025_no_primeiro_pregao():
+    frame, positions = make_grid(days=4)
+    signal = pol._baseline_saida_fixa(frame)
+    assert len(signal) == 4
+    assert all(len(v) == 1 for v in signal.values())
+    audit, _, sessions, ages = pol._auditar(frame, positions)
+    state = {(x.session, x.symbol): x.estado for x in audit.itertuples(index=False)}
+    summary, daily, events = pol._replay(
+        positions, sessions, ages, state, signal, .50, 10000,
+        save_events=True)
+    assert summary["tentativas_saida"] == 4
+    assert summary["saidas_antecipadas"] == 4
+    assert daily.alocacao_politica_100pct.all()
+    assert (daily.politica_em_caixa <= 1e-7).all()
+    signals = events[
+        events.observacao == "sinal_fechado_aguardando_candle_seguinte"]
+    assert signals.session.nunique() == 4
+    assert set(pd.to_datetime(signals.checkpoint_utc, utc=True)
+               .dt.tz_convert("America/New_York").dt.strftime("%H:%M")) == {"10:25"}
+
+
 def test_stress_liquidez_nao_finge_execucao_de_capital_milionario():
     frame, positions = make_grid()
     audit, _, sessions, ages = pol._auditar(frame, positions)
@@ -284,6 +305,9 @@ def test_replay_geral_gera_os_arquivos_e_preserva_control_original():
     assert meta["replay_original_587m_reproduzido"] is False
     assert "replay_patrimonio_intradiario.csv" in files
     assert "decisoes_hold_cash.csv" in files
+    assert "sensibilidade_limiares_teste.csv" in files
+    assert "selecao_limiares_validacao.csv" in files
+    assert "referencia_saida_fixa_1025.csv" in files
     assert "previsoes_calibradas_teste.csv" in files
     assert meta["periodo_teste"][0] is not None
     import io
@@ -295,3 +319,15 @@ def test_replay_geral_gera_os_arquivos_e_preserva_control_original():
     assert metrics.metodo.tolist() == ["multirrolling"]
     assert metrics.status.iloc[0] == "ok"
     assert metrics.amostras_teste.iloc[0] > 0
+    assert metrics.limiar_validado.iloc[0] in pol.THRESHOLDS
+    assert "prob_minima_teste" in metrics.columns
+    selection = pd.read_csv(io.BytesIO(files["selecao_limiares_validacao.csv"]))
+    exploration = pd.read_csv(io.BytesIO(files["sensibilidade_limiares_teste.csv"]))
+    fixed = pd.read_csv(io.BytesIO(files["referencia_saida_fixa_1025.csv"]))
+    assert len(selection) == len(pol.THRESHOLDS)
+    assert len(exploration) == len(pol.THRESHOLDS) * len(pol.CAPITALS)
+    assert exploration.limiar_escolhido_na_validacao.sum() == len(pol.CAPITALS)
+    assert fixed.metodo.tolist() == ["saida_fixa_1025_sem_ml"] * 2
+    assert (fixed.tentativas_saida > 0).all()
+    assert meta["primeiro_pregao_elegivel_saida"] == 1
+    assert meta["permanencia_minima_imposta"] is False
