@@ -51,7 +51,15 @@ FEATURES=("r1","r3","r6","r12","vol6","vol12","slope6","slope12",
           "slope24","accel","volume_rel","vwap_gap","range_pos","atr_rel","time_frac")
 
 
-def preparar(d):
+def preparar(d, *, informar_lacunas=False):
+    """Normaliza barras observadas em uma grade temporal fixa de cinco minutos.
+
+    Um ativo com poucos negocios pode ter intervalos de 10, 15 ou mais minutos
+    entre barras 5Min VALIDAS. Nao se deduz o timeframe pela mediana dessas
+    distancias; diferencas grandes sao lacunas reais, nao candles mais longos.
+    A grade representa lacunas com NaN, nunca ffill ou preco sintetico. Assim,
+    shift(-6) continua correspondendo a 30 minutos REAIS, e nao seis trades.
+    """
     req={"timestamp","symbol","open","high","low","close","volume"}
     if not req.issubset(d):
         raise ValueError(f"Colunas ausentes: {sorted(req-set(d.columns))}")
@@ -67,28 +75,63 @@ def preparar(d):
     if (d.high<d[["open","close","low"]].max(axis=1)).any() or (d.low>d[["open","close","high"]].min(axis=1)).any():
         raise ValueError("OHLC invalido")
     parts=[]
+    sessao_com_lacunas=0
+    barras_ausentes=0
+    sessoes_descartadas=0
     for symbol,src in d.sort_values("timestamp").groupby("symbol",sort=True):
         src=src.set_index("timestamp")
         ny=src.index.tz_convert("America/New_York")
         src=src.assign(session=ny.date,minute=ny.hour*60+ny.minute)
         src=src[(src.minute>=570)&(src.minute<960)]
         for session,s in src.groupby("session",sort=True):
-            if len(s)<2:continue
+            if len(s)<2:
+                sessoes_descartadas+=1
+                continue
             f=s[["open","high","low","close","volume"]]
-            freq=f.index.to_series().diff().median()
-            if freq<=pd.Timedelta(minutes=1):
+            # O feed de 5 minutos usa timestamps 09:30, 09:35, ...,
+            # independentemente de quantos intervalos nao tiveram negocios.
+            ny_index=f.index.tz_convert("America/New_York")
+            alinhado_5min=(
+                (ny_index.minute%5==0).all()
+                and (ny_index.second==0).all()
+                and (ny_index.microsecond==0).all()
+                and (f.index.to_series().diff().iloc[1:]>=pd.Timedelta(minutes=5)).all()
+            )
+            if alinhado_5min:
+                x=f
+            else:
+                # Alternativa: 1Min com barras realmente consecutivas.
+                # Somente agregados COM CINCO barras sao aceitos.
+                freq=f.index.to_series().diff().median()
+                if freq>pd.Timedelta(minutes=1):
+                    sessoes_descartadas+=1
+                    if informar_lacunas:
+                        registrar("cadencia",f"{symbol}/{session}: horario irregular nao "
+                                 "identificado como 5Min nem 1Min completo; sessao ignorada.", "WARN")
+                    continue
+                counts=f.close.resample("5min",label="left",closed="left").count()
                 x=f.resample("5min",label="left",closed="left").agg({
                     "open":"first","high":"max","low":"min","close":"last","volume":"sum"
-                }).dropna()
-                counts=f.close.resample("5min",label="left",closed="left").count()
-                x=x.loc[counts[counts>=5].index]
-            elif freq<=pd.Timedelta(minutes=5):
-                x=f
-            else:raise ValueError(f"Frequencia incompatível: {symbol}/{session}")
+                })
+                x=x.loc[counts[counts==5].index].dropna()
+            # Grade de 78 intervalos: sessao regular NY 09:30 a 15:55.
+            start=pd.Timestamp(str(session),tz="America/New_York")+pd.Timedelta(hours=9,minutes=30)
+            grade=pd.date_range(start.tz_convert("UTC"),periods=78,freq="5min",name="timestamp")
+            x=x.reindex(grade)
+            missing=int(x.close.isna().sum())
+            if missing:
+                sessao_com_lacunas+=1
+                barras_ausentes+=missing
+                if informar_lacunas and (missing>=12 or len(s)<12):
+                    registrar("lacunas",f"{symbol}/{session}: {missing}/78 intervalos "
+                             "sem barra observada; mantendo NaN, sem preencher preco.", "WARN")
             x=x.reset_index()
             x["symbol"]=symbol
             x["session"]=str(session)
             parts.append(x)
+    if informar_lacunas:
+        registrar("cadencia",f"Sessoes com lacunas={sessao_com_lacunas}; "
+                 f"intervalos ausentes={barras_ausentes}; sessoes ignoradas={sessoes_descartadas}.")
     return pd.concat(parts,ignore_index=True) if parts else pd.DataFrame()
 
 
@@ -129,7 +172,10 @@ def features(bars):
         d["ret_futuro_30m"]=c.shift(-H)/c-1
         d["alvo_alta"]=np.where(d.ret_futuro_30m.notna(),
                                   (d.ret_futuro_30m>CUSTO_BPS/10000).astype(int),np.nan)
-        d["horario"]=mins.isin([625,685,745,805,865,925])
+        # Nao emitir decisao se nao houve candle no checkpoint nem seis
+        # barras reais consecutivas no contexto imediato.
+        recentes=c.rolling(6,min_periods=6).count().eq(6)
+        d["horario"]=mins.isin([625,685,745,805,865,925]) & c.notna() & recentes
         result.append(d)
     return pd.concat(result,ignore_index=True) if result else pd.DataFrame()
 
@@ -609,8 +655,10 @@ def executar():
     cobertura=medir_cobertura(positions,raw)
     registrar("cobertura",f"Sessoes cobertas={cobertura.get('sessoes_cobertas',0)}/"
              f"{cobertura.get('sessoes_control',0)}; faltantes={cobertura.get('sessoes_faltantes','-')}.")
-    bars=preparar(raw)
-    registrar("dados",f"Candles validados={len(bars)}; iniciando features.")
+    bars=preparar(raw,informar_lacunas=True)
+    registrar("dados",f"Intervalos de grade={len(bars)}; "
+             f"candles efetivamente observados={int(bars.close.notna().sum())}; "
+             "iniciando features.")
     positions_file=INPUT/"winner_positions.csv"
     conditioned=False
     if positions_file.exists():
