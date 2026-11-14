@@ -87,29 +87,43 @@ continuam exploratorios, sem declaracao de generalizacao em producao.
 
 ### Politicas e execucao hipotetica
 
-A Winner escolhe o ativo a cada sessao. Dentro da sessao, a politica pode
-apenas **HOLD** ou antecipar uma saida para **CASH**, nunca comprar outro
-ticker. A saida e permitida depois de dois pregoes completos no mesmo
-ativo, portanto a partir do terceiro pregao consecutivo. Nao ha reentrada
-no mesmo dia; uma nova alocacao so comeca na sessao seguinte.
+A Winner escolhe o ativo em cada sessao. Dentro da sessao, a politica
+pode apenas **HOLD** ou sair para **CASH**, nunca trocar diretamente para
+outro ticker. A saida e permitida a partir do terceiro pregao consecutivo
+no mesmo ativo, apos dois pregoes completos. Nao ha recompra no mesmo dia.
 
-Sinais usam unicamente candles de cinco minutos encerrados. A venda
-hipotetica usa o preco **open do candle seguinte**. E um fill idealizado,
-nao o livro de ofertas. Requer dados de abertura e encerramento da
-sessao e volume suficiente para a participacao maxima hipotetica de
-1% do candle de cinco minutos. Custos ilustrativos: dez pontos-base
-por lado. Ha dois cenarios: capital de US$ 10 mil e estresse com capital
-de US$ 68.160.546,39, aproximacao do Control antes do teste.
+O replay novo **mantem as cotas entre pregoes** se o ativo da Winner
+continuar o mesmo. O patrimonio da posicao passa pelo fechamento e pela
+abertura seguinte, portanto inclui o retorno noturno observado. Uma
+saida pode executar **parcialmente** ao longo de varios candles; o saldo
+de cotas que nao foi liquidado continua exposto. Em outro pregao, CASH
+pode ser reinvestido na mesma selecao, respeitando os limites de volume.
 
-**Atencao: isto e um REPLAY PROXY INTRADIARIO SEM OVERNIGHT.**
-O Control do replay e calculado exatamente sob as mesmas hipoteses
-simplificadas da nova politica, mas **NAO reproduz** o Control de
-US$ 587.165.941,13 do experimento diario, que contem retorno noturno,
-rotacoes, regras de execucao e liquidez proprias. Nao compare diretamente
-os patrimônios finais dessas duas fontes. A avaliacao de capacidade
-por volume e feita ex-post e nao comprova preenchimento de ordens
-reais; especialmente para o capital elevado, o resultado pode ser
-limitado por falta de capacidade.
+Sinais usam apenas candles encerrados. A ordem usa o preco **open do
+candle seguinte**, com quantidade limitada a **1% do volume do candle
+anterior ja encerrado**. Nao ha informacao de livro de ofertas nem
+garantia de preenchimento nesse preco. A primeira compra de uma sessao
+usa o candle de 09h30 como referencia e so pode ocorrer a partir de
+09h35. Os custos ilustrativos sao dez pontos-base por lado.
+
+Sao comparados dois capitais iniciais: US$ 10 mil e US$ 68.160.546,39.
+O segundo e um **teste de capacidade**, nao uma simulacao fiel da
+carteira milionaria: compras e vendas parciais nao desaparecem apenas
+porque a ordem inteira excede o volume de um unico candle.
+
+**Limitacao ainda nao resolvida nas ROTACOES:** quando o ativo selecionado
+muda, o conjunto historico intradiario nao contem necessariamente a
+cotacao do ativo ANTERIOR no dia seguinte. Para manter uma curva
+exploratoria, o codigo zera esse ativo ao ultimo fechamento observado
+com custo, **sem comprovar volume ou preenchimento**. Cada evento e
+contabilizado em `rotacoes_sem_cotacao_ticker_antigo`. O patrimonio
+resultante NAO pode ser apresentado como plenamente executavel.
+
+O Control do replay continua sendo uma referencia proxy, com as mesmas
+restricoes de volume e suposicoes da politica. **Nao reproduz** os
+US$ 587.165.941,13 do Control diario congelado; a simulacao original
+usa suas proprias regras de selecao, rotacao, precificacao e execucao.
+Nao comparar diretamente esses dois resultados.
 
 ### Auditoria de dados e resultados
 
