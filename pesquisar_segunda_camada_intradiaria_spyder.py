@@ -336,7 +336,8 @@ def preparar_posicoes_control():
         positions=pd.DataFrame({
             "session":pd.to_datetime(original["data"],utc=True).dt.date.astype(str),
             "symbol":original["ativo_2_pregoes"].astype(str).str.upper().str.strip()})
-        positions=positions[positions.symbol.str.fullmatch(r"[A-Z][A-Z0-9.\-]{0,15}")].copy()
+        positions=positions[positions.symbol.str.fullmatch(r"[A-Z][A-Z0-9.\-]{0,15}") &
+                            (positions.symbol!="CASH")].copy()
         if positions.duplicated("session").any():raise ValueError("Control duplicou posicoes por sessao")
         INPUT.mkdir(parents=True,exist_ok=True)
         temp=file.with_suffix(".tmp")
@@ -349,7 +350,8 @@ def preparar_posicoes_control():
     positions=pd.read_csv(file,dtype=str)[["session","symbol"]]
     positions["session"]=pd.to_datetime(positions.session,errors="raise").dt.date.astype(str)
     positions["symbol"]=positions.symbol.str.upper().str.strip()
-    positions=positions[positions.symbol.str.fullmatch(r"[A-Z][A-Z0-9.\-]{0,15}")].copy()
+    positions=positions[positions.symbol.str.fullmatch(r"[A-Z][A-Z0-9.\-]{0,15}") &
+                            (positions.symbol!="CASH")].copy()
     if positions.duplicated("session").any():raise ValueError("winner_positions.csv contem sessoes duplicadas")
     origin.update({"sessoes":len(positions),"ativos":int(positions.symbol.nunique()),
                    "sha256":hashlib.sha256(file.read_bytes()).hexdigest()})
