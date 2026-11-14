@@ -36,6 +36,7 @@ def registrar(etapa, mensagem, nivel="INFO"):
     print(line, flush=True)
     if _LOG_ACTIVE:
         _LOG_LINES.append(line)
+        LOG_FILE.parent.mkdir(parents=True,exist_ok=True)
         with LOG_FILE.open("a", encoding="utf-8") as handle:
             handle.write(line+"\n")
 
@@ -601,6 +602,7 @@ def executar():
                     "codigo_executado.py":Path(__file__).read_bytes(),
                     "execucao.log":log_blob()})
         registrar("zip",f"Arquivo gerado: {OUTPUT}")
+        _LOG_ACTIVE=False
         return result
     registrar("dados",f"CSV intradiarios encontrados={len(paths)}; iniciando leitura.")
     raw=pd.concat([pd.read_csv(p) for p in paths],ignore_index=True)
@@ -644,6 +646,7 @@ def executar():
                  "codigo_executado.py":Path(__file__).read_bytes(),
                  "execucao.log":log_blob()})
     registrar("zip",f"Arquivo gerado: {OUTPUT}")
+    _LOG_ACTIVE=False
     return result
 
 
