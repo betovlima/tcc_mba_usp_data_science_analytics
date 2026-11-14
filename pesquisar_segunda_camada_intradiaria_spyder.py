@@ -1,8 +1,8 @@
 """TCC: comparador causal de segunda camada de permanencia intradiaria.
 
 Spyder F5. Extrai posicoes do Control congelado e consulta OHLCV 5Min RAW/SIP
-usando apenas o leitor de dados historicos da API MCT INSTALADA LOCALMENTE.
-Nao modifica o MCT, nao chama endpoints de ordem nem envia operacoes reais.
+usando apenas o leitor de dados historicos da API local INSTALADA LOCALMENTE.
+Nao modifica o local, nao chama endpoints de ordem nem envia operacoes reais.
 Os candles sao armazenados em dados_intraday/cotacoes_5min/ e reutilizados.
 Fora da maquina do usuario, sem as credenciais e o snapshot, a rotina falha
 informando a ausencia de dados, sem inventar retornos ou patrimonio.
@@ -311,8 +311,8 @@ def zip_atomico(files):
 
 
 
-# Fonte historica no PC: somente leitura, usando o leitor Alpaca do MCT.
-# NENHUMA alteracao no MCT, endpoints, conta de corretora ou Winner.
+# Fonte historica no PC: somente leitura, usando o leitor Alpaca do local.
+# NENHUMA alteracao no local, endpoints, conta de corretora ou Winner.
 FORCAR_DOWNLOAD=False
 MAX_GRUPOS_DOWNLOAD=None  # None: processar todos os meses ausentes.
 SNAPSHOT_CONTROL=ROOT/"pesquisa_permanencia_minima.zip"
@@ -356,7 +356,7 @@ def preparar_posicoes_control():
     return positions,origin
 
 
-def _market_reader_mct():
+def _market_reader_local():
     """Nao usa endpoint de grafico recente, que nao retorna OHLCV historico."""
     import sys
     from importlib.util import find_spec
@@ -370,7 +370,7 @@ def _market_reader_mct():
         (p/"market_cycle_trader_api"/"infrastructure"/"market_data"/"alpaca.py").exists()),None)
     if candidate is not None and str(candidate) not in sys.path:sys.path.insert(0,str(candidate))
     if find_spec("market_cycle_trader_api") is None:
-        raise RuntimeError("Codigo da API MCT nao encontrado na pasta de projetos")
+        raise RuntimeError("Codigo da API local nao encontrado na pasta de projetos")
     from market_cycle_trader_api.core.environment import load_project_environment
     from market_cycle_trader_api.infrastructure.persistence.mongo_repository import get_alpaca_credentials
     from market_cycle_trader_api.infrastructure.market_data.alpaca import download_stock_bars
@@ -391,15 +391,15 @@ def preencher_cache_control(positions):
              if FORCAR_DOWNLOAD or not (folder/f"{a}_{m}.csv").is_file()]
     report={"status":"cache_completo" if not pending else "pendente",
             "total_grupos":len(groups),"em_cache":len(groups)-len(pending),
-            "novos_baixados":0,"falhas":[],"fonte":"servico_historico_MCT_local_Alpaca_RAW_SIP_5Min",
-            "alteracoes_mct":False,"operacoes_reais":False}
+            "novos_baixados":0,"falhas":[],"fonte":"servico_historico_local_local_Alpaca_RAW_SIP_5Min",
+            "alteracoes_local":False,"operacoes_reais":False}
     if not pending:return report
     try:
-        download,creds=_market_reader_mct()
+        download,creds=_market_reader_local()
     except Exception as error:
-        report["status"]="mct_local_indisponivel"
-        report["falhas"].append({"etapa":"configuracao_mct","tipo":type(error).__name__,
-                                 "motivo":"MCT nao encontrado ou credenciais Alpaca nao disponiveis"})
+        report["status"]="local_local_indisponivel"
+        report["falhas"].append({"etapa":"configuracao_local","tipo":type(error).__name__,
+                                 "motivo":"local nao encontrado ou credenciais Alpaca nao disponiveis"})
         return report
     requests=pending if MAX_GRUPOS_DOWNLOAD is None else pending[:MAX_GRUPOS_DOWNLOAD]
     for symbol,month,sessions in requests:
