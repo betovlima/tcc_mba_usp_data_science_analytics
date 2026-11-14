@@ -6,7 +6,8 @@ Este e o arquivo UNICO para todas as rodadas da pesquisa nesta branch:
 Spyder: abra este arquivo e execute com F5.
 Terminal: python pesquisar_permanencia_minima_spyder.py
 
-Modos: MODO = "decisao_economica_sem_prazo" (padrao; sem trava por tempo),
+Modos: MODO = "saida_antecipada_economica" (padrao; Control + 3 politicas),
+"decisao_economica_sem_prazo" (sem trava por tempo),
 "permanencia_inteligente" (experimento anterior),
 "vantagem_economica" (comparacao anterior), "analisar_permanencia",
 "sensibilidade_margens", "deterioracao",
@@ -16,7 +17,7 @@ Modos: MODO = "decisao_economica_sem_prazo" (padrao; sem trava por tempo),
 A reproduçao utiliza o motor cientifico congelado do TCC (v1.23.0),
 o mesmo conjunto de 77 ativos solicitados (75 efetivos), os mesmos
 modelos, folds, margem calibrada por fold, custos e execucoes exatas.
-No novo modo, nenhuma duracao minima condiciona HOLD, ROTATE ou CASH.
+No modo sem prazo, nenhuma duracao minima condiciona HOLD, ROTATE ou CASH.
 O modo comparar, historico, varia rotation_min_holding_days.
 No modo vantagem_v3, uma regressao pareada estima a vantagem de troca
 considerando idade, retorno e risco da posicao efetiva. Um filtro causal
@@ -34,8 +35,8 @@ descontinuados, nao altera a Winner Live nem escreve em dados/u67.
 Os 10 candidatos requerem o cache historico local e seus SHA-256
 conferidos contra evidencias/manifest_universo_congelado.json.
 O modo padrao publica output/pesquisa_vantagem_rotacao.zip com:
-  Control congelado, tres politicas sem minimo, decisoes, custos, folds,
-  curvas e auditoria dos valores economicos dos candidatos.
+  Control de dois pregoes, tres politicas de saida antecipada, custos,
+  folds, patrimonio anual/diario e auditoria do primeiro pregao.
 A base congelada de 75 ativos nao reproduz o Control Live de US$139,87M.
 Este ultimo depende de serie completa e scores de seu proprio replay.
 """
@@ -60,7 +61,7 @@ import numpy as np
 import pandas as pd
 
 # %% 0. Um arquivo, uma branch; somente este seletor muda entre modos.
-MODO = "decisao_economica_sem_prazo"  # "vantagem_economica", "analisar_permanencia", "sensibilidade_margens", "deterioracao", "vantagem_v3", "vantagem_v2", "vantagem", "comparar", "verificar"
+MODO = "saida_antecipada_economica"  # Outros modos historicos permanecem disponiveis.
 PERMANENCIAS = (0, 1, 2, 3)
 PERMANENCIA_CONTROLE = 2
 TOLERANCIA_CENTAVO = 0.01
@@ -5498,8 +5499,383 @@ def executar_decisao_economica_sem_prazo() -> None:
         )
     print("[ZIP]", archive, flush=True)
 
+
+# %% 17. Permanencia de 2 pregoes com saida antecipada economicamente justificada.
+# Executa no mesmo F5, sem reestimar o LightGBM nem alterar a Winner Live.
+# Nenhum dado ou preco e baixado; exige a fonte historica congelada completa.
+PA_POLITICAS = (
+    "saida_urgente_utilidade",
+    "saida_urgente_com_vantagem_liquida",
+    "saida_economica_com_deterioracao",
+)
+
+
+def _pa_decidir(
+    b: Base, i: int, pos: int, holding: int, capital: float,
+    quantity: float, previsoes: np.ndarray, *, politica: str,
+) -> tuple[int, dict, list[dict]]:
+    """Decisor causal na sessao i; executa somente na abertura de i+1.
+
+    Os rotulos futuros nao sao consultados. As previsoes sao OOF com embargo
+    cronologico; custo estimado utiliza apenas o fechamento conhecido.
+    """
+    if politica not in PA_POLITICAS:
+        raise ValueError(f"Politica de permanencia desconhecida: {politica}")
+    original = _d_control(b, i, pos, holding)
+    fold = int(b.fold[i])
+    registro = {
+        "data_decisao": str(b.dates[i]),
+        "data_execucao": str(b.exec_dates[i]),
+        "fold": fold,
+        "politica": politica,
+        "ativo_atual": b.symbols[pos] if pos >= 0 else "CASH",
+        "idade_posicao": int(holding),
+        "decisao_control_no_mesmo_estado": (
+            b.symbols[original] if original >= 0 else "CASH"
+        ),
+        "candidato": None,
+        "utilidade_atual": None,
+        "utilidade_candidato": None,
+        "gap_utilidade": None,
+        "mudanca_utilidade_desde_entrada": None,
+        "margem_calibrada": None,
+        "limiar_gap_urgente": None,
+        "vantagem_prevista_1d": None,
+        "custo_estimado": None,
+        "vantagem_liquida_prevista_1d": None,
+        "saida_antecipada": False,
+        "decisao": b.symbols[original] if original >= 0 else "CASH",
+        "motivo": "CONTROL",
+    }
+    if pos < 0 or holding != 1 or fold == 1 or original != pos:
+        registro["motivo"] = "FORA_DA_TRAVA_PRIMEIRO_PREGAO"
+        return original, registro, []
+    if i < 1 or int(b.fold[i - 1]) != fold:
+        registro["motivo"] = "FRONTEIRA_DE_FOLD"
+        return original, registro, []
+    atual = float(b.scores[i, pos])
+    anterior = float(b.scores[i - 1, pos])
+    validos = np.flatnonzero(np.isfinite(b.scores[i]))
+    if (not len(validos) or not np.isfinite(atual)
+            or not np.isfinite(anterior)):
+        registro["motivo"] = "SCORE_ATUAL_OU_ENTRADA_INVALIDO"
+        return original, registro, []
+
+    candidato = int(validos[np.argmax(b.scores[i, validos])])
+    if candidato == pos:
+        registro["motivo"] = "POSICAO_AINDA_E_TOP1"
+        return original, registro, []
+
+    score_candidato = float(b.scores[i, candidato])
+    gap = float(score_candidato - atual)
+    variacao = float(atual - anterior)
+    margem = max(
+        float(b.config["rotation_switch_margin"]),
+        float(b.margens[fold]),
+    )
+    urgencia = max(PI_GAP_URGENTE, PI_GAP_URGENTE_MULT_MARGEM * margem)
+    registro.update({
+        "candidato": b.symbols[candidato],
+        "utilidade_atual": atual,
+        "utilidade_candidato": score_candidato,
+        "gap_utilidade": gap,
+        "mudanca_utilidade_desde_entrada": variacao,
+        "margem_calibrada": margem,
+        "limiar_gap_urgente": urgencia,
+    })
+    if score_candidato <= float(b.config["rotation_cash_threshold"]):
+        registro["motivo"] = "CANDIDATO_SEM_UTILIDADE_POSITIVA"
+        return original, registro, []
+
+    urgente = gap >= urgencia and variacao <= PI_QUEDA_SCORE_URGENTE
+    deteriorando = gap >= margem and variacao < 0.0
+    if politica == "saida_urgente_utilidade":
+        gatilho = urgente
+    elif politica == "saida_urgente_com_vantagem_liquida":
+        gatilho = urgente
+    else:
+        gatilho = deteriorando
+
+    if not gatilho:
+        registro["motivo"] = (
+            "GAP_OU_QUEDA_INSUFICIENTE"
+            if politica != "saida_economica_com_deterioracao"
+            else "SEM_DETERIORACAO_COM_VANTAGEM"
+        )
+        return original, registro, []
+
+    # Somente valores observados no fechamento i entram no custo.
+    custo = _custo_estimado(b, i, pos, candidato, capital, quantity)
+    atual_previsto = float(previsoes[i, pos])
+    candidato_previsto = float(previsoes[i, candidato])
+    vantagem = candidato_previsto - atual_previsto
+    liquida = vantagem - custo
+    registro.update({
+        "vantagem_prevista_1d": vantagem if np.isfinite(vantagem) else None,
+        "custo_estimado": custo if np.isfinite(custo) else None,
+        "vantagem_liquida_prevista_1d": liquida if np.isfinite(liquida) else None,
+    })
+    ranking = [{
+        "candidato": b.symbols[candidato],
+        "vantagem_prevista": float(vantagem) if np.isfinite(vantagem) else None,
+        "custo_estimado": float(custo) if np.isfinite(custo) else None,
+        "vantagem_liquida": float(liquida) if np.isfinite(liquida) else None,
+    }]
+    if politica != "saida_urgente_utilidade" and (
+        not np.isfinite(liquida) or liquida <= 0.0
+    ):
+        registro["motivo"] = "VANTAGEM_ECONOMICA_LIQUIDA_NAO_POSITIVA"
+        return original, registro, ranking
+
+    registro["saida_antecipada"] = True
+    registro["decisao"] = b.symbols[candidato]
+    registro["motivo"] = (
+        "URGENCIA_UTILIDADE"
+        if politica == "saida_urgente_utilidade"
+        else "ROTACAO_ANTECIPADA_COM_VANTAGEM_LIQUIDA"
+    )
+    return candidato, registro, ranking
+
+
+def _pa_desempenho_anual(
+    b: Base, curvas: dict[str, np.ndarray],
+) -> pd.DataFrame:
+    """Retorno anual realizado de cada politica, com capital carregado."""
+    anos = np.asarray(pd.DatetimeIndex(b.exec_dates).year, dtype=int)
+    rows = []
+    for nome, curva in curvas.items():
+        for ano in sorted(set(anos)):
+            indices = np.flatnonzero(anos == ano)
+            inicio, fim = int(indices[0]), int(indices[-1])
+            capital_inicial = (
+                float(curva[inicio - 1]) if inicio > 0
+                else float(b.config["initial_capital"])
+            )
+            capital_final = float(curva[fim])
+            rows.append({
+                "politica": nome, "ano": int(ano),
+                "capital_inicial": capital_inicial,
+                "capital_final": capital_final,
+                "retorno_ano_pct": 100.0 * (
+                    capital_final / capital_inicial - 1.0
+                ),
+            })
+    return pd.DataFrame(rows)
+
+
+def executar_saida_antecipada_economica() -> None:
+    """Control + tres intervencoes no primeiro pregao, fora da amostra.
+
+    A ausencia do pacote de 75 series aborta. Nao cria bridge de precos,
+    nao baixa cotacoes, nao republica ZIP so com diagnostico observacional.
+    """
+    fonte = _pi_localizar_base()
+    if fonte is None or not _pi_validar_zip_base(fonte):
+        raise FileNotFoundError(
+            "Fonte historica completa do TCC nao encontrada: "
+            "pesquisa_permanencia_minima.zip com 75 OHLCV, 3 folds, "
+            "scores e decisoes. Restaure o arquivo original sem "
+            "reconstruir a base ou baixar novas cotacoes. "
+            "O ZIP anterior de resultados permanece intacto."
+        )
+    b = carregar(fonte)
+    control, decisoes_control, operacoes_control, metricas_control = simular(b)
+    diferencas = np.abs(control - b.base_equity)
+    desvio = float(np.max(diferencas))
+    if not np.isfinite(desvio) or desvio > TOLERANCIA_CENTAVO:
+        raise RuntimeError(
+            f"Falha na paridade do Control de dois pregoes: "
+            f"USD {desvio:.8f}. ZIP anterior preservado."
+        )
+    print("[CONTROL] Paridade ate USD 0,01 confirmada", flush=True)
+
+    # Retorno de abertura para fechamento do proximo pregao e ROTULO.
+    # Somente treino em folds passados, embargo >= 30+max(horizonte) dias.
+    previsoes, auditoria_treino = _ve_calibrar(
+        b, _ve_rotulos(b, "1d"),
+    )
+    destino = DESTINO_TEMP
+    if destino.exists():
+        shutil.rmtree(destino)
+    destino.mkdir(parents=True)
+
+    curvas = {"control_2_pregoes": control}
+    diarios = pd.DataFrame({
+        "data_execucao": b.exec_dates,
+        "fold": b.fold,
+        "control_2_pregoes": control,
+    })
+    resumos = [{
+        "politica": "control_2_pregoes",
+        "capital_final": float(control[-1]),
+        "diferenca_vs_control_pct": 0.0,
+        "rotacoes": int(metricas_control["rotacoes"]),
+        "taxas_usd": float(metricas_control["total_taxas"]),
+        "saidas_antecipadas": 0,
+        **_resumo_curva(control),
+    }]
+    por_fold = [
+        {"politica": "control_2_pregoes", **row}
+        for row in _performance_by_fold(b, control)
+    ]
+    decisoes_control.to_csv(destino / "decisoes_control.csv", index=False)
+    operacoes_control.to_csv(destino / "operacoes_control.csv", index=False)
+    auditorias = []
+    for politica in PA_POLITICAS:
+        registros = []
+
+        def decidir(base, i, pos, holding, capital, quantity):
+            alvo, info, ranking = _pa_decidir(
+                base, i, pos, holding, capital, quantity,
+                previsoes, politica=politica,
+            )
+            # Auditoria tambem das decisoes sem troca, para identificar
+            # bloqueios e controles que nao dispararam antecipacao.
+            if pos >= 0 and holding == 1:
+                registros.append(info)
+            return alvo, ranking
+
+        curva, decisoes, operacoes, metricas = simular(
+            b, decision_callback=decidir, permitir_cash=True,
+        )
+        if not np.array_equal(
+            curva[b.fold == 1], control[b.fold == 1],
+        ):
+            raise RuntimeError(
+                f"Fold 1 divergiu do Control na politica {politica}"
+            )
+        if not np.isfinite(curva).all() or (curva <= 0).any():
+            raise RuntimeError(f"Curva invalida na politica {politica}")
+        linhas = pd.DataFrame(registros)
+        if not linhas.empty:
+            auditorias.append(linhas)
+        contador = int(sum(
+            bool(reg["saida_antecipada"]) for reg in registros
+        ))
+        curvas[politica] = curva
+        diarios[politica] = curva
+        resumos.append({
+            "politica": politica,
+            "capital_final": float(curva[-1]),
+            "diferenca_vs_control_pct": (
+                100.0 * (float(curva[-1]) / float(control[-1]) - 1.0)
+            ),
+            "rotacoes": int(metricas["rotacoes"]),
+            "taxas_usd": float(metricas["total_taxas"]),
+            "saidas_antecipadas": contador,
+            **_resumo_curva(curva),
+        })
+        por_fold.extend(
+            {"politica": politica, **row}
+            for row in _performance_by_fold(b, curva)
+        )
+        decisoes.to_csv(
+            destino / f"decisoes_{politica}.csv", index=False,
+        )
+        operacoes.to_csv(
+            destino / f"operacoes_{politica}.csv", index=False,
+        )
+        print(
+            f"[SAIDA ANTECIPADA] {politica}: "
+            f"USD {float(curva[-1]):,.2f} | "
+            f"rotacoes {metricas['rotacoes']} | "
+            f"saidas no primeiro pregao {contador}",
+            flush=True,
+        )
+
+    diarios.to_csv(destino / "comparacao_patrimonio_diario.csv", index=False)
+    pd.DataFrame(resumos).to_csv(
+        destino / "comparacao_politicas.csv", index=False,
+    )
+    pd.DataFrame(por_fold).to_csv(
+        destino / "comparacao_por_fold.csv", index=False,
+    )
+    _pa_desempenho_anual(b, curvas).to_csv(
+        destino / "comparacao_por_ano.csv", index=False,
+    )
+    auditoria = (
+        pd.concat(auditorias, ignore_index=True)
+        if auditorias else pd.DataFrame(columns=[
+            "data_decisao", "fold", "politica", "ativo_atual",
+            "candidato", "decisao", "motivo", "saida_antecipada",
+        ])
+    )
+    auditoria.to_csv(
+        destino / "auditoria_primeiro_pregao.csv", index=False,
+    )
+    auditoria_treino.to_csv(
+        destino / "validacao_temporal_estimador_1d.csv", index=False,
+    )
+    _write_json(destino / "manifesto_experimento.json", {
+        "modo": "saida_antecipada_economica",
+        "status": "completed_exploratory_research_only",
+        "fonte_sha256": _hash_arquivo(fonte),
+        "folds": [1, 2, 3],
+        "fold_1": "Control inalterado; politicas somente nos folds 2 e 3.",
+        "reproducao_control_desvio_maximo_usd": desvio,
+        "regra_control_minimo_pregoes": 2,
+        "politicas": list(PA_POLITICAS),
+        "regra_candidatos": (
+            "So candidato top1 com score valido e acima de CASH; "
+            "troca antecipada somente se holding = 1, mesmos folds, "
+            "gap minimo e score atual deteriorando."
+        ),
+        "politica_urgencia": {
+            "gap_minimo": PI_GAP_URGENTE,
+            "gap_multiplicador_margem": PI_GAP_URGENTE_MULT_MARGEM,
+            "queda_score_minima": PI_QUEDA_SCORE_URGENTE,
+        },
+        "politica_economica": (
+            "Vantagem prevista de abertura a fechamento do proximo "
+            "pregao relativa ao ativo atual, menos custo estimado "
+            "de rotacao observado no fechamento; liquido > 0."
+        ),
+        "previsao": {
+            "modelo": "Ridge StandardScaler OOF",
+            "rotulo": "1d proxima abertura ate fechamento",
+            "alpha": VE_ALPHA_RIDGE,
+            "embargo_sessoes": VE_EMBARGO_SESSOES,
+            "sem_previsoes_fold_1": True,
+        },
+        "cenarios": resumos,
+        "limitacoes": [
+            "Resultados retrospectivos em folds ja pesquisados; "
+            "nao constituem validacao prospectiva independente.",
+            "Escolha por limiares fixos/exploratorios; "
+            "nao reivindicar otimizacao estatistica.",
+            "Custos da decisao usam fechamento conhecido; "
+            "contabilidade executa abertura seguinte.",
+            "O ganho previsto 1d NAO e probabilidade calibrada.",
+            "Auditoria do Control no mesmo estado da politica; "
+            "apos divergencia nao equivale a mesma trajetoria.",
+            "OHLCV congelado nao simula impacto ou liquidez real.",
+            "Nenhuma alteracao na Winner Live ou ordens Alpaca.",
+        ],
+    })
+    (destino / "LEIA_ME.txt").write_text(
+        "Permanencia minima mais inteligente: Control de 2 pregoes "
+        "versus tres politicas de saida antecipada.\n"
+        "Fold 1: Control identico. Folds 2 e 3: teste "
+        "contrafactual sem olhar o futuro na decisao.\n"
+        "Arquivos: comparacao_politicas.csv, comparacao_por_fold.csv, "
+        "comparacao_por_ano.csv, comparacao_patrimonio_diario.csv, "
+        "auditoria_primeiro_pregao.csv, decisoes_*.csv, "
+        "operacoes_*.csv, validacao_temporal_estimador_1d.csv.\n"
+        "O resultado financeiro e hipotetico sobre historico congelado "
+        "de 75 ativos; NAO se aplica automaticamente a Winner Live.\n",
+        encoding="utf-8",
+    )
+    shutil.copyfile(Path(__file__), destino / "codigo_executado.py")
+    archive = _pacote(destino, fonte)
+    _publicar_pasta_vantagem(destino)
+    print("[ZIP] ", archive, flush=True)
+    print("[CONTROL] Capital final:", float(control[-1]), flush=True)
+
+
 if __name__ == "__main__":
-    if MODO == "decisao_economica_sem_prazo":
+    if MODO == "saida_antecipada_economica":
+        executar_saida_antecipada_economica()
+    elif MODO == "decisao_economica_sem_prazo":
         executar_decisao_economica_sem_prazo()
     elif MODO == "permanencia_inteligente":
         executar_permanencia_inteligente()
