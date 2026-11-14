@@ -102,11 +102,12 @@ def test_overnight_e_posicao_carregada_sem_recompra_diaria():
 
 def test_saida_parcial_continua_sem_recompra_no_mesmo_dia():
     frame, positions = make_grid(days=4)
-    # Ate o checkpoint 10h25, posicao integral. Depois, liquidez baixa.
+    # A barra que fecha em 10h30 tem pouco volume. O primeiro
+    # fill na abertura seguinte deve usar o volume conhecido as 10h25.
     date = positions.session.iloc[2]
     frame = frame.copy()
     clock = frame.timestamp.dt.tz_convert("America/New_York").dt.strftime("%H:%M")
-    after = (frame.session == date) & (clock >= "10:30")
+    after = (frame.session == date) & (clock >= "10:25")
     frame.loc[after, "volume"] = 100.0
     audit, _, sessions, ages = pol._auditar(frame, positions)
     checkpoint = sessions[(date, "SYN")].loc[
