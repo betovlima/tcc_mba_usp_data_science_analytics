@@ -13,6 +13,8 @@ import hashlib
 import json
 import math
 import os
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -22,6 +24,24 @@ import pandas as pd
 ROOT=Path(__file__).resolve().parent
 INPUT=ROOT/"dados_intraday"
 OUTPUT=ROOT/"output"/"pesquisa_vantagem_rotacao.zip"
+LOG_FILE=OUTPUT.parent/"pesquisa_segunda_camada.log"
+_LOG_LINES=[]
+_LOG_ACTIVE=False
+
+
+def registrar(etapa, mensagem, nivel="INFO"):
+    """Console imediato e log local, sem expor credenciais nem respostas privadas."""
+    line=(f"[{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}] "
+          f"{nivel} [{etapa}] {mensagem}")
+    print(line, flush=True)
+    if _LOG_ACTIVE:
+        _LOG_LINES.append(line)
+        with LOG_FILE.open("a", encoding="utf-8") as handle:
+            handle.write(line+"\n")
+
+
+def log_blob():
+    return ("\n".join(_LOG_LINES)+"\n").encode("utf-8")
 SEED=20261114
 H=6  # 30 min em candles de cinco minutos
 CUSTO_BPS=10
@@ -244,13 +264,21 @@ def metricas(y,s):
 
 def benchmark(d):
     tr,va,te,split=split_cronologico(d)
-    if te.empty:return pd.DataFrame(),pd.DataFrame(),split
+    registrar("validacao",f"Treino={tr.session.nunique()} dias, validacao={va.session.nunique()} dias, "
+             f"teste={te.session.nunique()} dias.")
+    if te.empty:
+        registrar("validacao","Amostra insuficiente para separar treino e teste.", "WARN")
+        return pd.DataFrame(),pd.DataFrame(),split
     history=pd.concat([tr,va]).sort_values(["symbol","timestamp"])
     variance=history.r1.dropna().var()
     results=[];predictions=[]
     for method in METHODS:
+        registrar("modelo",f"Iniciando metodo={method}")
+        tic=time.monotonic()
         if method=="ofi_l1":
-            results.append({"metodo":method,"status":"nao_avaliavel_sem_quotes_L1"});continue
+            results.append({"metodo":method,"status":"nao_avaliavel_sem_quotes_L1"})
+            registrar("modelo","ofi_l1: sem historico de quotes L1; metodo nao avaliavel.", "WARN")
+            continue
         if method=="multirrolling":score=rolling_scores(te)
         elif method=="bocpd":score=bocpd(te,variance)
         elif method=="hmm":score=hmm(history,te)
@@ -258,10 +286,15 @@ def benchmark(d):
         elif method=="pca_lightgbm":score=lgb_scores(history,te,pca=True)
         else:score=fqi(history,te)
         if score is None:
-            results.append({"metodo":method,"status":"treino_insuficiente_ou_dependencia_ausente"});continue
+            results.append({"metodo":method,"status":"treino_insuficiente_ou_dependencia_ausente"})
+            registrar("modelo",f"{method}: sem treino suficiente ou biblioteca ausente.", "WARN")
+            continue
         hourly=te[te.horario]
         s=score.reindex(hourly.index)
-        results.append({"metodo":method,**metricas(hourly.alvo_alta,s)})
+        measures=metricas(hourly.alvo_alta,s)
+        results.append({"metodo":method,**measures})
+        registrar("modelo",f"{method}: status={measures['status']} "
+                 f"amostras={measures['observacoes']} tempo={time.monotonic()-tic:.1f}s")
         for idx,v in s.dropna().items():
             row=hourly.loc[idx]
             predictions.append({"metodo":method,"symbol":row.symbol,
@@ -451,7 +484,9 @@ def _market_reader_local():
 
 def preencher_cache_control(positions):
     """Baixa somente meses/ativos que o Control manteve; reutiliza CSVs."""
-    if positions.empty:return {"status":"sem_posicoes"}
+    if positions.empty:
+        registrar("posicoes","Nenhuma sessao do Control disponivel para consulta.", "WARN")
+        return {"status":"sem_posicoes"}
     folder=INPUT/"cotacoes_5min"
     folder.mkdir(parents=True,exist_ok=True)
     work=positions.assign(month=positions.session.str[:7])
@@ -463,16 +498,26 @@ def preencher_cache_control(positions):
             "total_grupos":len(groups),"em_cache":len(groups)-len(pending),
             "novos_baixados":0,"falhas":[],"fonte":"servico_historico_local_local_Alpaca_RAW_SIP_5Min",
             "alteracoes_local":False,"operacoes_reais":False}
-    if not pending:return report
+    registrar("cache",f"Grupos ativo/mes={len(groups)}; cache={len(groups)-len(pending)}; "
+             f"faltam={len(pending)}; download_forcado={FORCAR_DOWNLOAD}")
+    if not pending:
+        registrar("cache","Todos os grupos ja estao em cache.")
+        return report
     try:
         download,creds=_market_reader_local()
     except Exception as error:
         report["status"]="local_local_indisponivel"
         report["falhas"].append({"etapa":"configuracao_local","tipo":type(error).__name__,
                                  "motivo":"local nao encontrado ou credenciais Alpaca nao disponiveis"})
+        registrar("fonte",f"Leitor historico indisponivel: {type(error).__name__}. "
+                 "Conferir instalacao da API local e permissao de dados.", "ERROR")
         return report
     requests=pending if MAX_GRUPOS_DOWNLOAD is None else pending[:MAX_GRUPOS_DOWNLOAD]
-    for symbol,month,sessions in requests:
+    registrar("coleta",f"Iniciando {len(requests)} consultas historicas 5Min RAW/SIP; "
+             "a primeira execucao pode ser demorada.")
+    for n,(symbol,month,sessions) in enumerate(requests,1):
+        tic=time.monotonic()
+        registrar("coleta",f"[{n}/{len(requests)}] {symbol} {month}, sessoes={len(sessions)}: consultando")
         file=folder/f"{symbol}_{month}.csv"
         try:
             start=pd.Timestamp(f"{month}-01",tz="America/New_York")
@@ -481,25 +526,35 @@ def preencher_cache_control(positions):
                            symbol=symbol,timeframe="5Min",start=start.tz_convert("UTC"),
                            end=end.tz_convert("UTC"),feed="sip",adjustment="raw")
             if frame is None or frame.empty:
-                report["falhas"].append({"ativo":symbol,"mes":month,"motivo":"sem_candles"});continue
+                report["falhas"].append({"ativo":symbol,"mes":month,"motivo":"sem_candles"})
+                registrar("coleta",f"[{n}/{len(requests)}] {symbol} {month}: sem candles.", "WARN")
+                continue
             frame=frame.reset_index()
             frame["timestamp"]=pd.to_datetime(frame.timestamp,utc=True)
             local=frame.timestamp.dt.tz_convert("America/New_York")
             mins=local.dt.hour*60+local.dt.minute
             frame=frame[(local.dt.date.astype(str).isin(set(sessions)))&(mins>=570)&(mins<960)].copy()
             if frame.empty:
-                report["falhas"].append({"ativo":symbol,"mes":month,"motivo":"sem_candles_na_sessao"});continue
+                report["falhas"].append({"ativo":symbol,"mes":month,"motivo":"sem_candles_na_sessao"})
+                registrar("coleta",f"[{n}/{len(requests)}] {symbol} {month}: sem candles nas sessoes Control.", "WARN")
+                continue
             frame["symbol"]=symbol
             frame=frame[["timestamp","symbol","open","high","low","close","volume"]]
             tmp=file.with_suffix(".csv.tmp")
             frame.to_csv(tmp,index=False)
             os.replace(tmp,file)
             report["novos_baixados"]+=1
+            registrar("coleta",f"[{n}/{len(requests)}] {symbol} {month}: "
+                     f"{len(frame)} candles salvos em {time.monotonic()-tic:.1f}s.")
         except Exception as error:
             report["falhas"].append({"ativo":symbol,"mes":month,"motivo":"erro_consulta",
                                     "tipo":type(error).__name__})
+            registrar("coleta",f"[{n}/{len(requests)}] {symbol} {month}: "
+                     f"falhou ({type(error).__name__}), em {time.monotonic()-tic:.1f}s.", "ERROR")
     report["grupos_faltantes"]=sum(not(folder/f"{a}_{m}.csv").is_file() for a,m,_ in groups)
     report["status"]="cache_completo" if not report["grupos_faltantes"] else "cache_parcial"
+    registrar("cache",f"Download concluido: novos={report['novos_baixados']}, "
+             f"faltantes={report['grupos_faltantes']}, falhas={len(report['falhas'])}.")
     return report
 
 
@@ -516,24 +571,44 @@ def medir_cobertura(positions,raw):
 
 
 def executar():
+    global _LOG_ACTIVE
+    _LOG_ACTIVE=False
+    _LOG_LINES.clear()
+    LOG_FILE.parent.mkdir(parents=True,exist_ok=True)
+    LOG_FILE.write_text("",encoding="utf-8")
+    _LOG_ACTIVE=True
+    registrar("inicio","Pesquisa intradiaria iniciada, somente leitura; nenhuma ordem sera enviada.")
+    tic=time.monotonic()
     smoke=teste_causalidade()
+    registrar("teste",f"Causalidade sintetica: {smoke['status']}.")
     positions,origem=preparar_posicoes_control()
+    registrar("posicoes",f"Origem={origem['status']}; sessoes={len(positions)}; "
+             f"ativos={positions.symbol.nunique() if not positions.empty else 0}.")
     aquisicao=preencher_cache_control(positions)
+    registrar("fonte",f"Aquisicao={aquisicao['status']}.")
     paths=(sorted(p for p in INPUT.glob("*.csv") if p.name!="winner_positions.csv")
            +sorted((INPUT/"cotacoes_5min").glob("*.csv")))
     if not paths:
+        registrar("dados","Nenhum CSV intradiario real encontrado; sem treinamento.", "WARN")
         result={"status":"aguardando_candles_intradiarios_reais","metodos":METHODS,
                 "origem_control":origem,"aquisicao":aquisicao,
                 "cobertura":medir_cobertura(positions,pd.DataFrame()),
                 "teste_causalidade":smoke,"universo_winner_configurado":77,
                 "patrimonio_final":None,"motivo":"Sem OHLCV intradiario completo; nao inventar patrimonio",
                 "nenhuma_ordem_real":True}
+        registrar("fim",f"Status={result['status']}, duracao={time.monotonic()-tic:.1f}s.")
         zip_atomico({"status.json":json.dumps(result,indent=2,ensure_ascii=False).encode(),
-                    "codigo_executado.py":Path(__file__).read_bytes()})
+                    "codigo_executado.py":Path(__file__).read_bytes(),
+                    "execucao.log":log_blob()})
+        registrar("zip",f"Arquivo gerado: {OUTPUT}")
         return result
+    registrar("dados",f"CSV intradiarios encontrados={len(paths)}; iniciando leitura.")
     raw=pd.concat([pd.read_csv(p) for p in paths],ignore_index=True)
     cobertura=medir_cobertura(positions,raw)
+    registrar("cobertura",f"Sessoes cobertas={cobertura.get('sessoes_cobertas',0)}/"
+             f"{cobertura.get('sessoes_control',0)}; faltantes={cobertura.get('sessoes_faltantes','-')}.")
     bars=preparar(raw)
+    registrar("dados",f"Candles validados={len(bars)}; iniciando features.")
     positions_file=INPUT/"winner_positions.csv"
     conditioned=False
     if positions_file.exists():
@@ -549,7 +624,9 @@ def executar():
     if bars.empty:
         raise ValueError("Nenhuma barra coincide com as selecoes da Winner")
     frame=features(bars)
+    registrar("features",f"Linhas={len(frame)}; decisoes horarias={int(frame.horario.sum())}.")
     ranking,events,split=benchmark(frame)
+    registrar("avaliacao",f"Metodos avaliados={len(ranking)}; previsoes={len(events)}.")
     result={"status":("piloto" if cobertura.get("sessoes_faltantes",1)==0 else "piloto_parcial")
             if not ranking.empty else "amostra_insuficiente",
             "origem_control":origem,"aquisicao":aquisicao,"cobertura":cobertura,
@@ -560,13 +637,21 @@ def executar():
             "aviso": "Sem winner_positions.csv: comparacao metodologica, nao politica de permanencia da Winner" if not conditioned else "Amostra condicionada ao ativo selecionado; sem replay de patrimonio",
             "motivo_patrimonio":"Sem replay do Control e execucao/liquidez integrada",
             "nenhuma_ordem_real":True}
+    registrar("fim",f"Status={result['status']}, duracao={time.monotonic()-tic:.1f}s.")
     zip_atomico({"status.json":json.dumps(result,indent=2,ensure_ascii=False,default=str).encode(),
                  "comparacao_metodos.csv":ranking.to_csv(index=False).encode(),
                  "previsoes_horarias.csv":events.to_csv(index=False).encode(),
-                 "codigo_executado.py":Path(__file__).read_bytes()})
+                 "codigo_executado.py":Path(__file__).read_bytes(),
+                 "execucao.log":log_blob()})
+    registrar("zip",f"Arquivo gerado: {OUTPUT}")
     return result
 
 
 if __name__=="__main__":
-    print(json.dumps(executar(),ensure_ascii=False,indent=2,default=str))
-    print("ZIP:",OUTPUT)
+    try:
+        print(json.dumps(executar(),ensure_ascii=False,indent=2,default=str))
+        print("ZIP:",OUTPUT)
+    except Exception as exc:
+        registrar("erro",f"Execucao interrompida: {type(exc).__name__}; "
+                 f"consulte o traceback no console. Log parcial: {LOG_FILE}", "ERROR")
+        raise
