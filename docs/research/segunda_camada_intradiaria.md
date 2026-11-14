@@ -29,6 +29,41 @@ Assim, **seis tecnicas executaveis** compartilham o mesmo pipeline de dados,
 e **OFI** e explicitamente registrada como NAO_AVALIAVEL por insuficiencia
 de dados, nunca simulada com informacao inventada.
 
+## Obtencao automatica do historico no computador local
+
+O script principal agora prepara automaticamente `dados_intraday/winner_positions.csv`
+a partir de `pesquisa_permanencia_minima.zip`, que deve estar ao lado do script.
+A fonte e o SHA-256 sao registrados na saida.
+
+Ao pressionar **F5**, o script procura o repositorio da API operacional na
+estrutura habitual de pastas do computador. Ele **importa somente o leitor
+historico RAW/SIP 5Min de acoes** e utiliza a configuracao de acesso Alpaca
+ja instalada com a API. Nao e necessario iniciar um segundo treino, nao
+existe endpoint de ordem no TCC e nenhuma operacao Live e enviada.
+
+**Importante:** isto usa a biblioteca de dados da API local, nao seu endpoint
+HTTP de grafico: o endpoint de grafico apresenta somente precos recentes e
+nao entrega o OHLCV necessario para o treinamento. O codigo do servico
+operacional deve estar acessivel localmente com suas dependencias e suas
+credenciais historicas ja configuradas. Nenhuma credencial e salva no ZIP.
+
+Somente os pares de ativo e mes em que o Control esteve comprado sao
+consultados. O resultado fica no cache privado
+`dados_intraday/cotacoes_5min/<ATIVO>_<AAAA-MM>.csv`.
+Na proxima execucao com F5, os CSVs validados sao reutilizados.
+`FORCAR_DOWNLOAD = True` permite atualizar o cache, se necessario.
+
+A primeira execucao pode exigir muitas consultas historicas. Falhas de
+permissao, rate limit, suspensoes ou falta de barras nao geram cotacoes
+sinteticas. O ZIP inclui `aquisicao`, `origem_control` e `cobertura`,
+e os indicadores sao identificados como **parciais** ate completar as
+sessoes da carteira. Nenhum resultado de patrimonio final e inferido sem
+um replay economico completo.
+
+**Reprodutibilidade:** a selecao vem exclusivamente do snapshot congelado,
+nao do sinal atual do mercado. O modelo continua em uma branch de pesquisa,
+sem modificacoes no motor ou no ambiente operacional.
+
 ## Executar no Spyder
 
 Abrir `pesquisar_segunda_camada_intradiaria_spyder.py` e pressionar F5.
