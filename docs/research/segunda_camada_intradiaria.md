@@ -89,8 +89,11 @@ continuam exploratorios, sem declaracao de generalizacao em producao.
 
 A Winner escolhe o ativo em cada sessao. Dentro da sessao, a politica
 pode apenas **HOLD** ou sair para **CASH**, nunca trocar diretamente para
-outro ticker. A saida e permitida a partir do terceiro pregao consecutivo
-no mesmo ativo, apos dois pregoes completos. Nao ha recompra no mesmo dia.
+outro ticker. A saida so e permitida a partir do terceiro pregao de POSICAO
+efetivamente aberta, apos dois pregoes completos mantendo a posicao.
+Se houver venda integral e recompra no pregao seguinte, a contagem de
+permanencia reinicia. O calendario de selecoes da Winner nao substitui a
+idade da carteira. Nao ha recompra no mesmo dia.
 
 O replay novo **mantem as cotas entre pregoes** se o ativo da Winner
 continuar o mesmo. O patrimonio da posicao passa pelo fechamento e pela
