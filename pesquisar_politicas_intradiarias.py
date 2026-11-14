@@ -164,7 +164,8 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
     Mantem a posicao entre pregoes (incluindo overnight) quando o simbolo e
     o mesmo. Reentrada apos saida somente em outro pregao. Sinal de um candle
     encerrado so pode originar venda no OPEN do proximo candle. Cada ordem
-    executa no maximo 1% do volume OBSERVADO do candle de 5 minutos.
+    executa no maximo 1% do volume do ULTIMO candle encerrado. A primeira
+    entrada possivel e as 09h35, sem olhar o volume futuro da barra atual.
 
     LIMITACAO MATERIAL: na ROTACAO entre ativos nao ha cotacao do ticker
     anterior no dia seguinte no cache corrente. A liquidacao e contabilizada
@@ -249,10 +250,14 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
         else:
             g = session.sort_values("timestamp").reset_index(drop=True)
             exit_triggered_today = False
-            n_first_buy = 0
             for i, bar in enumerate(g.itertuples(index=False)):
-                px, volume = _number(bar.open), _number(bar.volume)
-                if px is None or volume is None:
+                px = _number(bar.open)
+                # O limite da ordem na abertura usa apenas volume de
+                # candle ANTERIOR ja encerrado. Nunca usa volume futuro
+                # do proprio candle que esta abrindo.
+                volume = _number(g.iloc[i-1].volume) if i > 0 else None
+                prior_close = _number(g.iloc[i-1].close) if i > 0 else None
+                if px is None or volume is None or prior_close is None:
                     continue
                 # Marca no ultimo OPEN conhecido antes de negociar,
                 # sem carregar preco de outro ativo como se fosse atual.
@@ -278,12 +283,11 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
                                     "quantidade_executada": quantity,
                                     "execucao_parcial": bool(incomplete),
                                     "dias_mesmo_ativo": age,
-                                    "observacao": "fill_proxy_1pct_volume_open_sem_orderbook"})
+                                    "observacao": "fill_proxy_1pct_volume_candle_anterior_sem_orderbook"})
                         else:
                             blocks += 1
                     elif book["cash"] > 1e-7:
                         quantity, incomplete = trade(book, "buy", px, volume)
-                        n_first_buy += int(name == "policy" and quantity > 0)
                 # So le o score APOS o fechamento do candle corrente.
                 if (age >= 3 and not books["policy"]["pending_exit"]
                     and not exit_triggered_today and bool(bar.horario)
