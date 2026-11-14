@@ -7,7 +7,7 @@ pela Winner (camada 1). Universo da Winner: **77 ativos solicitados**,
 dos quais **75 foram efetivos no Control historico congelado**.
 
 Nao refazer o ranking intradiario, nao trocar diretamente para outro ativo e
-nao alterar Winner Live, MCT de producao ou main.
+nao alterar Winner Live, sistema operacional de producao ou main.
 
 Esta branch nasce da branch
 `research/permanencia-minima-contrafactual-v1`, preservando o Control.
