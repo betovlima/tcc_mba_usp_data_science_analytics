@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
-import pytest
 
 import pesquisar_permanencia_minima_spyder as research
 
