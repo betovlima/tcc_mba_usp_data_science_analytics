@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -97,7 +96,6 @@ def test_retorno_extremo_auditado_sem_filtrar_futuro_do_replay():
 
 
 def test_calibracao_nao_usa_labels_da_amostra_de_teste():
-    from sklearn.metrics import brier_score_loss
     frame, _ = make_grid(days=24)
     days = sorted(frame.session.unique())
     cal = frame[frame.session.isin(days[:10])]
