@@ -159,111 +159,224 @@ def _calibrar(cal, sel, tst, scores_cal, scores_sel, scores_test):
 
 def _replay(positions, sessions, ages, audit_status, prob, threshold,
             capital, save_events=False):
-    """Replay intradiario proxy, igual para baseline e candidatos.
+    """Carteira continua com dois livros, cotas fracionarias e fills PARCIAIS.
 
-    Valor total somente e investido se o volume de 5min comportaria 100%
-    da compra e da venda teorica com participacao maxima de 1% do volume.
-    A capacidade da saida e observada ex-post, nunca usada como feature.
+    Mantem a posicao entre pregoes (incluindo overnight) quando o simbolo e
+    o mesmo. Reentrada apos saida somente em outro pregao. Sinal de um candle
+    encerrado so pode originar venda no OPEN do proximo candle. Cada ordem
+    executa no maximo 1% do volume OBSERVADO do candle de 5 minutos.
+
+    LIMITACAO MATERIAL: na ROTACAO entre ativos nao ha cotacao do ticker
+    anterior no dia seguinte no cache corrente. A liquidacao e contabilizada
+    pelo ultimo fechamento real do dia anterior, sem validar o fill. E uma
+    hipotese otimista de contabilidade, NAO e um replay executavel completo.
+    Cada rotacao assim estimada e registrada e invalida a certificacao de
+    viabilidade do patrimonio final. Nunca usar resultado como Control real.
     """
-    b_cap, p_cap = float(capital), float(capital)
     cost = COST_BPS_PER_SIDE / 10000
+    books = {
+        name: {"cash": float(capital), "shares": 0., "symbol": None,
+               "last_price": None, "pending_exit": False,
+               "fees": 0., "buys": 0., "sells": 0.,
+               "fills_parciais": 0, "rotacoes_estimadas": 0}
+        for name in ("ref", "policy")
+    }
+    n_exits, n_blocked, n_attempts, n_partial_exits = 0, 0, 0, 0
+    n_stale, n_sessions_no_quote, n_rotations = 0, 0, 0
     daily, events = [], []
-    for pos in positions.itertuples(index=False):
-        key = (pos.session, pos.symbol)
-        g = sessions.get(key)
-        reason = audit_status.get(key, "sem_candles")
-        age = ages.get(pos.session, 0)
-        choice = "HOLD"
-        attempts, blocks = 0, 0
-        exit_price = None
-        exit_time = None
-        if g is not None and reason == "utilizavel":
-            first, last = g.iloc[0], g.iloc[-1]
-            entry, end = _number(first.open), _number(last.close)
-            entry_vol, close_vol = _number(first.volume), _number(last.volume)
-            if (entry is None or end is None or entry <= 0 or end <= 0
-                or entry_vol is None or close_vol is None):
-                reason = "ohlcv_execucao_invalido"
-            else:
-                # Capacidade deve considerar AMBOS os caminhos, pois o
-                # patrimonio da politica pode divergir do Control.
-                shares = max(b_cap, p_cap) / entry
-                if (shares > MAX_VOLUME_PARTICIPATION * entry_vol
-                    or max(b_cap, p_cap) / end >
-                       MAX_VOLUME_PARTICIPATION * close_vol):
-                    reason = "liquidez_insuficiente_abertura_ou_fechamento"
-        if g is not None and reason == "utilizavel":
-            signal = prob.get(key, {})
-            if age >= 3:
-                for i in range(77):
-                    r = g.iloc[i]
-                    if not bool(r.horario) or r.timestamp not in signal:
-                        continue
-                    probability = signal[r.timestamp]
-                    if probability is None or not np.isfinite(probability):
-                        continue
-                    if probability >= threshold:
-                        continue
-                    attempts += 1
-                    next_bar = g.iloc[i + 1]
-                    px, vol = _number(next_bar.open), _number(next_bar.volume)
-                    if px is None or vol is None or px <= 0:
-                        blocks += 1
-                        continue
-                    shares_at_exit = p_cap / entry
-                    if shares_at_exit > MAX_VOLUME_PARTICIPATION * vol:
-                        blocks += 1
-                        continue
-                    exit_price = px
-                    exit_time = next_bar.timestamp.isoformat()
-                    choice = "CASH"
-                    if save_events:
-                        events.append({"session": pos.session, "symbol": pos.symbol,
-                                       "checkpoint_utc": r.timestamp.isoformat(),
-                                       "execucao_teorica_utc": exit_time,
-                                       "probabilidade_calibrada": probability,
-                                       "limiar": threshold,
-                                       "preco_execucao_teorico": exit_price,
-                                       "volume_5min": vol,
-                                       "dias_mesmo_ativo": age,
-                                       "observacao": "preco_open_5min_optimista_sem_orderbook"})
-                    break
-            reference_factor = end / entry * (1-cost)**2
-            policy_factor = (exit_price / entry if exit_price is not None
-                             else end / entry) * (1-cost)**2
+    reference_return, policy_return = [], []
+
+    def equity(book):
+        price = book["last_price"]
+        return book["cash"] + book["shares"] * (price if price is not None else 0.)
+
+    def trade(book, side, price, volume):
+        if price is None or volume is None or price <= 0 or volume <= 0:
+            return 0., False
+        capacity = MAX_VOLUME_PARTICIPATION * volume
+        if side == "buy":
+            quantity = min(book["cash"] / (price * (1 + cost)), capacity)
+            quantity = max(0., quantity)
+            book["cash"] -= quantity * price * (1 + cost)
+            book["shares"] += quantity
+            book["buys"] += int(quantity > 1e-12)
+            incomplete = book["cash"] > max(1e-7, equity(book)*1e-6)
         else:
-            reference_factor = 1.0
-            policy_factor = 1.0
-            choice = "SEM_EXECUCAO"
-        before_b, before_p = b_cap, p_cap
-        b_cap *= reference_factor
-        p_cap *= policy_factor
-        daily.append({"session": pos.session, "symbol": pos.symbol,
-                      "dias_mesmo_ativo": age, "estado_dados": reason,
-                      "acao": choice, "tentativas_saida": attempts,
-                      "saidas_bloqueadas_volume_ou_preco": blocks,
-                      "retorno_control_intradiario": reference_factor-1,
-                      "retorno_politica_intradiaria": policy_factor-1,
-                      "control_capital": b_cap, "politica_capital": p_cap,
-                      "controle_inicio_dia": before_b,
-                      "politica_inicio_dia": before_p,
-                      "preco_saida": exit_price, "saida_utc": exit_time})
+            quantity = min(book["shares"], capacity)
+            quantity = max(0., quantity)
+            book["cash"] += quantity * price * (1 - cost)
+            book["shares"] -= quantity
+            if book["shares"] < 1e-10:
+                book["shares"] = 0.
+            book["sells"] += int(quantity > 1e-12)
+            incomplete = book["shares"] > 1e-10
+        book["fees"] += quantity * price * cost
+        if quantity > 0 and incomplete:
+            book["fills_parciais"] += 1
+        return quantity, incomplete
+
+    for pos in positions.sort_values("session").itertuples(index=False):
+        key = (pos.session, pos.symbol)
+        session = sessions.get(key)
+        status = audit_status.get(key, "sem_candles")
+        age = ages.get(pos.session, 0)
+        initial = {name: equity(book) for name, book in books.items()}
+        fees_initial = {name: book["fees"] for name, book in books.items()}
+        action, blocks, attempts, exit_time, exit_price = "HOLD", 0, 0, None, None
+        day_rotations = 0
+        for name, book in books.items():
+            if book["symbol"] != pos.symbol:
+                if book["shares"] > 0 and book["last_price"] is not None:
+                    # Sem barras do ativo antigo no novo dia, NAO ha fill
+                    # verificavel. Liquidacao pelo fechamento anterior,
+                    # identificada explicitamente como estimativa.
+                    close = book["last_price"]
+                    book["cash"] += book["shares"] * close * (1-cost)
+                    book["fees"] += book["shares"] * close * cost
+                    book["shares"] = 0.
+                    book["rotacoes_estimadas"] += 1
+                    day_rotations += 1
+                book["symbol"] = pos.symbol
+                book["pending_exit"] = False
+            elif book["pending_exit"] and book["shares"] == 0.:
+                # CASH apos saida ontem; compra novamente apenas hoje.
+                book["pending_exit"] = False
+        if day_rotations:
+            n_rotations += 1
+        if session is None or session.empty:
+            n_sessions_no_quote += 1
+            action = "SEM_COTACAO"
+        else:
+            g = session.sort_values("timestamp").reset_index(drop=True)
+            exit_triggered_today = False
+            n_first_buy = 0
+            for i, bar in enumerate(g.itertuples(index=False)):
+                px, volume = _number(bar.open), _number(bar.volume)
+                if px is None or volume is None:
+                    continue
+                # Marca no ultimo OPEN conhecido antes de negociar,
+                # sem carregar preco de outro ativo como se fosse atual.
+                for book in books.values():
+                    book["last_price"] = px
+                for name, book in books.items():
+                    if name == "policy" and book["pending_exit"]:
+                        quantity, incomplete = trade(book, "sell", px, volume)
+                        if quantity > 0:
+                            action = "CASH" if not incomplete else "SAIDA_PARCIAL"
+                            if exit_time is None:
+                                exit_time, exit_price = bar.timestamp.isoformat(), px
+                            if save_events:
+                                events.append({
+                                    "session": pos.session, "symbol": pos.symbol,
+                                    "checkpoint_utc": None if i == 0 else
+                                        g.iloc[max(0, i-1)].timestamp.isoformat(),
+                                    "execucao_teorica_utc": bar.timestamp.isoformat(),
+                                    "probabilidade_calibrada": None,
+                                    "limiar": threshold,
+                                    "preco_execucao_teorico": px,
+                                    "volume_5min": volume,
+                                    "quantidade_executada": quantity,
+                                    "execucao_parcial": bool(incomplete),
+                                    "dias_mesmo_ativo": age,
+                                    "observacao": "fill_proxy_1pct_volume_open_sem_orderbook"})
+                        else:
+                            blocks += 1
+                    elif book["cash"] > 1e-7:
+                        quantity, incomplete = trade(book, "buy", px, volume)
+                        n_first_buy += int(name == "policy" and quantity > 0)
+                # So le o score APOS o fechamento do candle corrente.
+                if (age >= 3 and not books["policy"]["pending_exit"]
+                    and not exit_triggered_today and bool(bar.horario)
+                    and i + 1 < len(g) and bar.timestamp in prob.get(key, {})
+                    and books["policy"]["shares"] > 0):
+                    signal = _number(prob[key][bar.timestamp])
+                    if signal is not None and signal < threshold:
+                        books["policy"]["pending_exit"] = True
+                        exit_triggered_today = True
+                        attempts += 1
+                        if save_events:
+                            events.append({
+                                "session": pos.session, "symbol": pos.symbol,
+                                "checkpoint_utc": bar.timestamp.isoformat(),
+                                "execucao_teorica_utc": None,
+                                "probabilidade_calibrada": signal,
+                                "limiar": threshold, "preco_execucao_teorico": None,
+                                "volume_5min": None,
+                                "quantidade_executada": 0,
+                                "execucao_parcial": False,
+                                "dias_mesmo_ativo": age,
+                                "observacao": "sinal_fechado_aguardando_candle_seguinte"})
+            actual_end = _number(g.iloc[-1].close)
+            if actual_end is None:
+                n_stale += 1
+                status = "sem_fechamento_observado"
+            else:
+                for book in books.values():
+                    book["last_price"] = actual_end
+            if exit_triggered_today and books["policy"]["shares"] > 0:
+                n_partial_exits += 1
+            if action in ("CASH", "SAIDA_PARCIAL"):
+                n_exits += 1
+            elif books["policy"]["pending_exit"]:
+                action = "SAIDA_PENDENTE"
+        n_attempts += attempts
+        n_blocked += blocks
+        end_equity = {name: equity(book) for name, book in books.items()}
+        ref_factor = end_equity["ref"] / initial["ref"] if initial["ref"] > 0 else 1.
+        policy_factor = end_equity["policy"] / initial["policy"] if initial["policy"] > 0 else 1.
+        reference_return.append(ref_factor-1)
+        policy_return.append(policy_factor-1)
+        daily.append({
+            "session": pos.session, "symbol": pos.symbol,
+            "dias_mesmo_ativo": age, "estado_dados": status,
+            "acao": action, "tentativas_saida": attempts,
+            "saidas_bloqueadas_volume_ou_preco": blocks,
+            "retorno_control_intradiario": ref_factor-1,
+            "retorno_politica_intradiaria": policy_factor-1,
+            "control_capital": end_equity["ref"],
+            "politica_capital": end_equity["policy"],
+            "controle_inicio_dia": initial["ref"],
+            "politica_inicio_dia": initial["policy"],
+            "preco_saida": exit_price, "saida_utc": exit_time,
+            "control_em_caixa": books["ref"]["cash"],
+            "politica_em_caixa": books["policy"]["cash"],
+            "control_quantidade": books["ref"]["shares"],
+            "politica_quantidade": books["policy"]["shares"],
+            "control_taxas_dia": books["ref"]["fees"]-fees_initial["ref"],
+            "politica_taxas_dia": books["policy"]["fees"]-fees_initial["policy"],
+            "rotacoes_estimadas_dia": day_rotations,
+            "pendente_liquidacao": books["policy"]["pending_exit"]})
     d = pd.DataFrame(daily)
-    risk_b = _metricas_serie(d.retorno_control_intradiario)
-    risk_p = _metricas_serie(d.retorno_politica_intradiaria)
-    summary = {"capital_inicial": capital,
-               "control_intradiario_final": b_cap, "politica_final": p_cap,
-               "diferenca_usd": p_cap-b_cap,
-               "diferenca_pct": (p_cap/b_cap-1)*100 if b_cap > 0 else None,
-               "control_max_dd": risk_b["max_drawdown"],
-               "politica_max_dd": risk_p["max_drawdown"],
-               "control_sharpe": risk_b["sharpe"],
-               "politica_sharpe": risk_p["sharpe"],
-               "saidas_antecipadas": int((d.acao=="CASH").sum()),
-               "nao_executaveis": int((d.acao=="SEM_EXECUCAO").sum()),
-               "tentativas_saida": int(d.tentativas_saida.sum()),
-               "saidas_bloqueadas": int(d.saidas_bloqueadas_volume_ou_preco.sum()),
-               "dias_avaliados": len(d)}
+    risk_b, risk_p = _metricas_serie(reference_return), _metricas_serie(policy_return)
+    b_cap = equity(books["ref"])
+    p_cap = equity(books["policy"])
+    summary = {
+        "capital_inicial": capital,
+        "control_intradiario_final": b_cap, "politica_final": p_cap,
+        "diferenca_usd": p_cap-b_cap,
+        "diferenca_pct": (p_cap/b_cap-1)*100 if b_cap > 0 else None,
+        "control_max_dd": risk_b["max_drawdown"],
+        "politica_max_dd": risk_p["max_drawdown"],
+        "control_sharpe": risk_b["sharpe"],
+        "politica_sharpe": risk_p["sharpe"],
+        "saidas_antecipadas": n_exits,
+        "nao_executaveis": n_sessions_no_quote,
+        "tentativas_saida": n_attempts, "saidas_bloqueadas": n_blocked,
+        "saidas_parciais_ao_fim_do_pregao": n_partial_exits,
+        "compras_parciais_ref": books["ref"]["fills_parciais"],
+        "compras_ou_vendas_parciais_politica": books["policy"]["fills_parciais"],
+        "rotacoes_sem_cotacao_ticker_antigo": n_rotations,
+        "sem_cotacao_fechamento": n_stale,
+        "taxas_ref_usd": books["ref"]["fees"],
+        "taxas_politica_usd": books["policy"]["fees"],
+        "posicao_ref_final": books["ref"]["shares"],
+        "posicao_politica_final": books["policy"]["shares"],
+        "caixa_ref_final": books["ref"]["cash"],
+        "caixa_politica_final": books["policy"]["cash"],
+        "dias_avaliados": len(d),
+        "execucao_comprovada": False,
+        "control_original_comparavel": False,
+    }
     return summary, d, pd.DataFrame(events)
 
 
