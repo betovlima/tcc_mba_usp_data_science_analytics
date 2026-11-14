@@ -45,59 +45,65 @@ def make_grid(days=4):
     return frames, positions
 
 
-def test_replay_respeita_trava_e_venda_causal_no_proximo_candle():
-    frame, positions = make_grid()
+def test_primeiro_pregao_pode_sair_com_sinal_causal():
+    frame, positions = make_grid(days=4)
     audit, extreme, sessions, ages = pol._auditar(frame, positions)
     assert len(extreme) == 0
     assert set(audit.estado) == {"utilizavel"}
-    assert [ages[d] for d in positions.session] == [1, 2, 3, 4]
-    day = positions.session.iloc[2]
+    day = positions.session.iloc[0]
     group = sessions[(day, "SYN")]
     checkpoint = group[group.horario].iloc[0].timestamp
     signal = {(day, "SYN"): {checkpoint: .1}}
     state = {(x.session, x.symbol): x.estado for x in audit.itertuples(index=False)}
     summary, daily, events = pol._replay(
         positions, sessions, ages, state, signal, .4, 10000, save_events=True)
-    assert daily.acao.tolist()[:3] == ["HOLD", "HOLD", "CASH"]
+
+    # Sem nenhuma restricao de 2 pregoes: venda no primeiro dia.
+    assert daily.loc[0, "acao"] == "CASH"
+    assert summary["primeiro_pregao_elegivel_saida"] == 1
+    assert summary["permanencia_minima_imposta"] is False
+    assert summary["tentativas_saida"] == 1
     assert summary["saidas_antecipadas"] == 1
-    assert daily.loc[2, "alocacao_politica_100pct"]
-    assert daily.loc[2, "quantidade_comprada_fechamento_politica"] > 0
-    assert daily.loc[2, "politica_em_caixa"] <= 1e-7
-    assert not daily.loc[2, "pendente_liquidacao"]
+    signals = events[events.observacao == "sinal_fechado_aguardando_candle_seguinte"]
     orders = events[
         events.observacao == "fill_proxy_1pct_volume_candle_anterior_sem_orderbook"]
-    assert len(events) >= 2  # decisao intradiaria, fill e recompra no fechamento
+    assert len(signals) == 1
     assert len(orders) == 1
+    assert signals.iloc[0].dias_posicao_politica == 1
     assert pd.Timestamp(orders.iloc[0].execucao_teorica_utc) == checkpoint + pd.Timedelta(minutes=5)
-    assert orders.iloc[0].dias_mesmo_ativo == 3
+    assert orders.iloc[0].dias_mesmo_ativo == 1
+
+    # O fechamento obrigatorio recompra integralmente o ativo escolhido.
+    assert daily.loc[0, "alocacao_politica_100pct"]
+    assert daily.loc[0, "quantidade_comprada_fechamento_politica"] > 0
+    assert daily.loc[0, "politica_em_caixa"] <= 1e-7
+    assert not daily.loc[0, "pendente_liquidacao"]
     assert summary["rotacoes_sem_cotacao_ticker_antigo"] == 0
-    assert daily.control_quantidade.iloc[0] > 0
-    assert all(daily.acao.iloc[i] == "HOLD" for i in (0, 1))
-    assert summary["control_intradiario_final"] > 0
 
 
-def test_reentrada_reinicia_a_trava_de_dois_pregoes():
+def test_saida_disponivel_no_primeiro_e_segundo_pregoes_apos_recompra():
     frame, positions = make_grid(days=6)
     audit, _, sessions, ages = pol._auditar(frame, positions)
     state = {(x.session, x.symbol): x.estado for x in audit.itertuples(index=False)}
     sinais = {}
-    for session in positions.session.iloc[2:]:
+    for session in positions.session:
         checkpoint = sessions[(session, "SYN")].loc[
             lambda x: x.horario].iloc[0].timestamp
         sinais[(session, "SYN")] = {checkpoint: .1}
     report, daily, events = pol._replay(
         positions, sessions, ages, state, sinais, .4, 10000, save_events=True)
-    # Se a primeira venda foi no terceiro dia, a recompra no quarto
-    # nao pode ser liquidada nesse mesmo quarto ou quinto dia.
-    sinais_executados = events[
+    signals = events[
         events.observacao == "sinal_fechado_aguardando_candle_seguinte"]
-    assert sinais_executados.session.tolist() == [
-        positions.session.iloc[2], positions.session.iloc[5]]
-    assert report["tentativas_saida"] == 2
+
+    # A recompra no fechamento NAO torna o pregao seguinte inelegivel.
+    assert signals.session.tolist() == positions.session.tolist()
+    assert report["tentativas_saida"] == len(positions)
     assert report["saidas_bloqueadas"] == 0
-    # Dias na posicao efetiva, nao dias de selecao da Winner.
-    assert daily.dias_posicao_politica.tolist()[:6] == [1, 2, 0, 1, 2, 0]
-    assert all(events[events.observacao.str.startswith("sinal")].dias_posicao_politica == 3)
+    assert (daily.acao == "CASH").all()
+    assert daily.alocacao_politica_100pct.all()
+    assert (daily.politica_em_caixa <= 1e-7).all()
+    assert (signals.dias_posicao_politica == 1).all()
+    assert report["permanencia_minima_imposta"] is False
 
 
 def test_saida_total_nao_registra_bloqueios_falsos_depois():
