@@ -6683,7 +6683,7 @@ def executar_permanencia_inteligente_v2() -> None:
         "sem_future_leakage_decisao": "rotulos futuros usados SOMENTE em treino maturado e auditoria",
         "limitacoes": [
             "A fonte TCC congelada nao corresponde ao backtest de producao de 13/11.",
-            "Limiar de risco e criterios sao exploratorios, sem otimizacao OOS independente.",
+            "Limiar de risco e criterios sao exploratorios, sem otimizacao independente fora da amostra.",
             "Comparacao pareada usa abertura seguinte e fechamento futuro com custo estimado no fechamento.",
             "ADV20 e proxy de liquidez; slippage e impacto real nao simulados.",
             "Operacoes reais Alpaca e dividendos de producao nao sao dados de treino.",
