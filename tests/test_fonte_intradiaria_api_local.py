@@ -91,14 +91,26 @@ class HistoricoTccLocalTests(unittest.TestCase):
         self.assertEqual(c["sessoes_cobertas"], 1)
         self.assertEqual(c["sessoes_faltantes"], 1)
 
-    def test_missing_control_and_missing_local_fail_without_faking_prices(self):
+    def test_control_snapshot_embutido_sem_zip_externo_e_com_sha(self):
+        # Reproduz exatamente o ambiente do usuario: sem ZIP local.
         positions, manifest = research.preparar_posicoes_control()
-        self.assertTrue(positions.empty)
-        self.assertEqual(manifest["status"], "snapshot_control_ausente")
-        positions = pd.DataFrame({"session":["2026-07-28"],"symbol":["CAPR"]})
+        self.assertEqual(manifest["status"], "posicoes_control_congeladas_embutidas")
+        self.assertEqual(len(positions), 1560)
+        self.assertEqual(positions.session.iloc[0], "2020-07-22")
+        self.assertEqual(positions.session.iloc[-1], "2026-10-06")
+        self.assertEqual(positions.symbol.iloc[0], "NBR")
+        self.assertEqual(positions.symbol.iloc[-1], "CAPR")
+        self.assertEqual(manifest["sha256"], research._POSICOES_CONTROL_SHA256)
+        self.assertEqual(manifest["ativos"], 54)
+        self.assertNotIn("CASH", set(positions.symbol))
+        self.assertTrue((research.INPUT / "winner_positions.csv").is_file())
+
+    def test_sem_api_historica_local_nao_inventa_cotacoes(self):
+        positions, _ = research.preparar_posicoes_control()
+        sample = positions.iloc[:1]
         with patch.object(research, "_market_reader_local",
-                          side_effect=RuntimeError("no local local")):
-            result = research.preencher_cache_control(positions)
+                          side_effect=RuntimeError("not configured")):
+            result = research.preencher_cache_control(sample)
         self.assertEqual(result["status"], "local_local_indisponivel")
         self.assertFalse(list((research.INPUT / "cotacoes_5min").glob("*.csv")))
 
