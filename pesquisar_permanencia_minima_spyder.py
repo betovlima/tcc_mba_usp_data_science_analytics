@@ -1,4 +1,4 @@
-"""TCC | Decisao economica diaria HOLD / ROTATE / CASH, sem prazo minimo.
+"""TCC | Permanencia inteligente V2, auditoria de HOLD / ROTATE / CASH.
 
 Este e o arquivo UNICO para todas as rodadas da pesquisa nesta branch:
     research/permanencia-minima-contrafactual-v1
@@ -6,7 +6,8 @@ Este e o arquivo UNICO para todas as rodadas da pesquisa nesta branch:
 Spyder: abra este arquivo e execute com F5.
 Terminal: python pesquisar_permanencia_minima_spyder.py
 
-Modos: MODO = "saida_antecipada_economica" (padrao; Control + 3 politicas),
+Modos: MODO = "permanencia_inteligente_v2" (padrao),
+"saida_antecipada_economica" (anterior; Control + 3 politicas),
 "decisao_economica_sem_prazo" (sem trava por tempo),
 "permanencia_inteligente" (experimento anterior),
 "vantagem_economica" (comparacao anterior), "analisar_permanencia",
@@ -61,7 +62,7 @@ import numpy as np
 import pandas as pd
 
 # %% 0. Um arquivo, uma branch; somente este seletor muda entre modos.
-MODO = "saida_antecipada_economica"  # Outros modos historicos permanecem disponiveis.
+MODO = "permanencia_inteligente_v2"  # Outros modos historicos permanecem disponiveis.
 PERMANENCIAS = (0, 1, 2, 3)
 PERMANENCIA_CONTROLE = 2
 TOLERANCIA_CENTAVO = 0.01
@@ -5872,8 +5873,510 @@ def executar_saida_antecipada_economica() -> None:
     print("[CONTROL] Capital final:", float(control[-1]), flush=True)
 
 
+
+# %% 19. Permanencia inteligente V2: contrafactuais pareados e politicas causais.
+V2_HORIZONTES = (1, 2, 3, 5, 10)
+V2_CANDIDATOS_TOP = 5
+V2_PARTICIPACAO_ADV_MAX = 0.10
+V2_QUEDA_5D_DEFENSIVA = -0.08
+
+
+def _piv2_rotulo_2d(b: Base) -> np.ndarray:
+    """Retorno de abertura de t+1 ate fechamento de t+2, so como rotulo."""
+    n = len(b.dates)
+    resultado = np.full((n, len(b.symbols)), np.nan, dtype=float)
+    resultado[:-1] = np.log(b.cl[2:n + 1] / b.op[1:n])
+    return resultado
+
+
+def _piv2_hipoteses(b: Base, i: int, pos: int, holding: int,
+                    capital: float, quantidade: float,
+                    previstas_1d: np.ndarray, previstas_2d: np.ndarray,
+                    politica: str) -> tuple[int, dict, list]:
+    """Decisao apenas com dados conhecidos no fechamento t."""
+    original = _d_control(b, i, pos, holding)
+    fold = int(b.fold[i])
+    info = {
+        "data_decisao": str(b.dates[i]),
+        "data_execucao": str(b.exec_dates[i]),
+        "fold": fold,
+        "politica": politica,
+        "ativo_atual": b.symbols[pos] if pos >= 0 else "CASH",
+        "holding": int(holding),
+        "controle_mesmo_estado": b.symbols[original] if original >= 0 else "CASH",
+        "decisao": b.symbols[original] if original >= 0 else "CASH",
+        "motivo": "CONTROL",
+        "intervencao_antecipada": False,
+        "intervencao_pos_trava": False,
+        "candidato": None,
+        "gap_utilidade": None,
+        "queda_score_1d": None,
+        "vantagem_prevista_1d": None,
+        "vantagem_prevista_2d": None,
+        "custo_estimado": None,
+        "participacao_adv20_estimada": None,
+    }
+    if fold == 1 or pos < 0 or i == 0 or b.fold[i - 1] != fold:
+        return original, info, []
+    score = b.scores[i]
+    atual = float(score[pos])
+    anterior = float(b.scores[i - 1, pos])
+    if not np.isfinite(atual) or not np.isfinite(anterior):
+        return original, info, []
+    queda = atual - anterior
+    info["queda_score_1d"] = queda
+    margem = max(float(b.config["rotation_switch_margin"]),
+                 float(b.margens[fold]))
+    risco = (
+        holding >= 2 and original == pos and
+        np.isfinite(b.ret5[i, pos]) and
+        float(b.ret5[i, pos]) <= V2_QUEDA_5D_DEFENSIVA and
+        queda < 0.0
+    )
+    if (politica in {"v2_protecao_pos_trava", "v2_combinada"}) and risco:
+        info.update({"decisao": "CASH", "motivo": "VETO_RISCO_POS_TRAVA",
+                     "intervencao_pos_trava": True})
+        return -1, info, []
+    if politica not in {"v2_saida_multihorizonte", "v2_combinada"}:
+        return original, info, []
+    if not (holding == 1 and original == pos):
+        return original, info, []
+    urgencia = max(PI_GAP_URGENTE, PI_GAP_URGENTE_MULT_MARGEM * margem)
+    ranking = []
+    for cand in np.argsort(-np.nan_to_num(score, nan=-np.inf))[:V2_CANDIDATOS_TOP]:
+        cand = int(cand)
+        if cand == pos or not np.isfinite(score[cand]):
+            continue
+        gap = float(score[cand] - atual)
+        if (gap < urgencia or queda > PI_QUEDA_SCORE_URGENTE or
+                score[cand] <= float(b.config["rotation_cash_threshold"])):
+            continue
+        custo = _custo_estimado(b, i, pos, cand, capital, quantidade)
+        vantagem_1 = float(previstas_1d[i, cand] - previstas_1d[i, pos])
+        vantagem_2 = float(previstas_2d[i, cand] - previstas_2d[i, pos])
+        adv = float(b.adv20[i, cand])
+        participacao = capital / adv if np.isfinite(adv) and adv > 0 else np.inf
+        ranking.append({
+            "candidato": b.symbols[cand], "indice": cand,
+            "gap_utilidade": gap,
+            "vantagem_prevista_1d": vantagem_1,
+            "vantagem_prevista_2d": vantagem_2,
+            "custo_estimado": custo,
+            "participacao_adv20_estimada": participacao,
+            "vantagem_liquida": vantagem_2 - custo,
+            "qualifica": bool(
+                np.isfinite(vantagem_1) and np.isfinite(vantagem_2)
+                and vantagem_1 > custo and vantagem_2 > custo
+                and participacao <= V2_PARTICIPACAO_ADV_MAX
+            ),
+        })
+    ranking.sort(key=lambda x: (not x["qualifica"],
+                                -(x["vantagem_prevista_2d"] - x["custo_estimado"]),
+                                x["candidato"]))
+    if ranking:
+        escolhido = ranking[0]
+        info.update({k: escolhido[k] for k in (
+            "candidato", "gap_utilidade", "vantagem_prevista_1d",
+            "vantagem_prevista_2d", "custo_estimado",
+            "participacao_adv20_estimada")})
+        if escolhido["qualifica"]:
+            info.update({"decisao": escolhido["candidato"],
+                         "motivo": "ROTACAO_PRECOCE_MULTIHORIZONTE",
+                         "intervencao_antecipada": True})
+            return int(escolhido["indice"]), info, ranking
+    return original, info, ranking
+
+
+def _piv2_auditoria_pareada(b: Base) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Resultados FUTUROS no mesmo estado/capital. Nao usados no decisor."""
+    registros = []
+    n = len(b.dates)
+    for i in range(n):
+        pos = int(b.base_current[i])
+        holding = int(b.base_holding[i])
+        if pos < 0 or b.fold[i] == 1:
+            continue
+        score = b.scores[i]
+        if not np.isfinite(score[pos]):
+            continue
+        capital = float(b.base_equity[i - 1]) if i else float(b.config["initial_capital"])
+        if not np.isfinite(capital) or capital <= 0:
+            continue
+        quantidade = capital / float(b.cl[i, pos])
+        candidatos = [int(j) for j in np.argsort(-np.nan_to_num(score, nan=-np.inf))[:V2_CANDIDATOS_TOP]
+                      if int(j) != pos and np.isfinite(score[j])]
+        alternativas = [(-1, "CASH"), *[(j, "ROTATE") for j in candidatos]]
+        for h in V2_HORIZONTES:
+            if i + h >= len(b.cl):
+                continue
+            atual = float(b.cl[i + h, pos] / b.op[i + 1, pos] - 1.0)
+            for j, acao in alternativas:
+                if j == -1:
+                    preco = _preco(b, float(b.cl[i, pos]), "SELL")
+                    custo = _taxa(b, "SELL", quantidade, preco) / capital
+                    custo += max(0.0, float(b.config["slippage_bps"])) / 10000
+                    candidato = "CASH"
+                    alternativo = 0.0
+                    participacao = 0.0
+                    gap = -float(score[pos])
+                else:
+                    custo = _custo_estimado(b, i, pos, j, capital, quantidade)
+                    candidato = b.symbols[j]
+                    alternativo = float(b.cl[i + h, j] / b.op[i + 1, j] - 1.0)
+                    adv = float(b.adv20[i, j])
+                    participacao = capital / adv if np.isfinite(adv) and adv > 0 else np.nan
+                    gap = float(score[j] - score[pos])
+                registros.append({
+                    "data_decisao": str(b.dates[i]),
+                    "data_execucao": str(b.exec_dates[i]),
+                    "fold": int(b.fold[i]),
+                    "fase": "PRIMEIRO_PREGAO" if holding == 1 else "POS_TRAVA",
+                    "decisao_control": (b.symbols[_d_control(b, i, pos, holding)]
+                                         if _d_control(b, i, pos, holding) >= 0 else "CASH"),
+                    "acao_control": ("HOLD" if _d_control(b, i, pos, holding) == pos
+                                      else ("CASH" if _d_control(b, i, pos, holding) < 0
+                                            else "ROTATE")),
+                    "holding": holding,
+                    "ativo_atual": b.symbols[pos],
+                    "candidato": candidato,
+                    "acao": acao,
+                    "horizonte_pregoes": h,
+                    "capital_control_na_decisao": capital,
+                    "score_atual": float(score[pos]),
+                    "score_candidato": float(score[j]) if j >= 0 else 0.0,
+                    "gap_utilidade": gap,
+                    "retorno_hold_pct": 100.0 * atual,
+                    "retorno_alternativa_bruto_pct": 100.0 * alternativo,
+                    "custo_estimado_pct": 100.0 * custo,
+                    "vantagem_vs_hold_liquida_pct": 100.0 * (alternativo - atual - custo),
+                    "participacao_adv20_estimada": participacao,
+                    "liquidez_ate_10pct_adv20": bool(j == -1 or (np.isfinite(participacao) and participacao <= V2_PARTICIPACAO_ADV_MAX)),
+                })
+    frame = pd.DataFrame(registros)
+    resumo = frame.groupby(["fase", "acao_control", "fold", "acao", "horizonte_pregoes"], dropna=False).agg(
+        observacoes=("vantagem_vs_hold_liquida_pct", "size"),
+        vantagem_media_pct=("vantagem_vs_hold_liquida_pct", "mean"),
+        vantagem_mediana_pct=("vantagem_vs_hold_liquida_pct", "median"),
+        proporcao_vantagem_positiva=("vantagem_vs_hold_liquida_pct", lambda s: float((s > 0).mean())),
+        proporcao_liquidez_ate_10pct=("liquidez_ate_10pct_adv20", "mean"),
+    ).reset_index()
+    return frame, resumo
+
+
+
+# Auditoria observacional dos vetos. Nao muda ordens, custos ou o Control.
+def _piv_auditar_gatilhos_control(
+    b: Base, previsto_1d: np.ndarray, previsto_2d: np.ndarray,
+    pareado: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Explica TODOS os vetos e rotula resultados futuros apenas ex post.
+
+    As condicoes de decisao usam unicamente barras e scores ate o
+    fechamento t. Retornos posteriores sao rotulos de auditoria, nunca
+    usados para escolher candidatos nem alterar o backtest.
+    """
+    outcomes: dict[tuple[str, int, str], dict] = {}
+    for horizonte in (1, 5, 10):
+        h = pareado.loc[pareado["horizonte_pregoes"] == horizonte]
+        for acao in ("CASH", "ROTATE"):
+            subset = h.loc[h["acao"] == acao].sort_values(
+                "vantagem_vs_hold_liquida_pct", ascending=False)
+            for _, r in subset.drop_duplicates("data_decisao").iterrows():
+                outcomes[(str(r["data_decisao"]), horizonte, acao)] = r.to_dict()
+
+    records: list[dict] = []
+    for i in range(len(b.dates)):
+        pos = int(b.base_current[i])
+        if pos < 0:
+            continue
+        holding = int(b.base_holding[i])
+        fold = int(b.fold[i])
+        escolhido = _d_control(b, i, pos, holding)
+        if escolhido != int(b.base_actions[i]):
+            raise RuntimeError(
+                f"Acao Control divergente em {b.dates[i]}: "
+                f"{escolhido} versus {b.base_actions[i]}"
+            )
+        tipo = "HOLD" if escolhido == pos else (
+            "CASH" if escolhido < 0 else "ROTATE")
+        atual = float(b.scores[i, pos])
+        mesma_fase = i > 0 and int(b.fold[i - 1]) == fold
+        anterior = float(b.scores[i - 1, pos]) if mesma_fase else np.nan
+        delta = atual - anterior if np.isfinite(atual) and np.isfinite(anterior) else np.nan
+        ret5 = float(b.ret5[i, pos])
+        capital = (float(b.base_equity[i - 1]) if i > 0
+                   else float(b.config["initial_capital"]))
+        quantidade = capital / float(b.cl[i, pos])
+        ranking = [int(j) for j in np.argsort(
+            -np.nan_to_num(b.scores[i], nan=-np.inf))
+            if int(j) != pos and np.isfinite(b.scores[i, j])]
+        primeiro = ranking[0] if ranking else -1
+        gap = (float(b.scores[i, primeiro] - atual)
+               if primeiro >= 0 and np.isfinite(atual) else np.nan)
+        margem = max(float(b.config["rotation_switch_margin"]),
+                     float(b.margens[fold]))
+        urgencia = max(PI_GAP_URGENTE,
+                       PI_GAP_URGENTE_MULT_MARGEM * margem)
+
+        if fold == 1:
+            veto_precoce = "FOLD_1_PRESERVADO"
+        elif holding != 1:
+            veto_precoce = "FORA_DO_PRIMEIRO_PREGAO"
+        elif tipo != "HOLD":
+            veto_precoce = "CONTROL_JA_ALTERA_POSICAO"
+        elif not mesma_fase or not np.isfinite(delta):
+            veto_precoce = "SEM_SCORE_ANTERIOR_NO_FOLD"
+        elif not np.isfinite(gap) or gap < urgencia:
+            veto_precoce = "GAP_UTILIDADE_INSUFICIENTE"
+        elif delta > PI_QUEDA_SCORE_URGENTE:
+            veto_precoce = "DETERIORACAO_SCORE_INSUFICIENTE"
+        else:
+            qualificaram, bloqueio_economico, bloqueio_liquidez = 0, 0, 0
+            for j in ranking[:V2_CANDIDATOS_TOP]:
+                if (float(b.scores[i, j]) <= float(b.config["rotation_cash_threshold"])
+                        or float(b.scores[i, j] - atual) < urgencia):
+                    continue
+                custo = _custo_estimado(b, i, pos, j, capital, quantidade)
+                v1 = float(previsto_1d[i, j] - previsto_1d[i, pos])
+                v2 = float(previsto_2d[i, j] - previsto_2d[i, pos])
+                adv = float(b.adv20[i, j])
+                part = capital / adv if np.isfinite(adv) and adv > 0 else np.inf
+                if not (np.isfinite(v1) and np.isfinite(v2)
+                        and v1 > custo and v2 > custo):
+                    bloqueio_economico += 1
+                elif part > V2_PARTICIPACAO_ADV_MAX:
+                    bloqueio_liquidez += 1
+                else:
+                    qualificaram += 1
+            veto_precoce = (
+                "ROTACAO_PRECOCE_AUTORIZADA" if qualificaram else
+                "ESTIMADOR_SEM_VANTAGEM_LIQUIDA" if bloqueio_economico else
+                "LIQUIDEZ_INSUFICIENTE" if bloqueio_liquidez else
+                "CANDIDATOS_INELEGIVEIS"
+            )
+
+        if fold == 1:
+            veto_cash = "FOLD_1_PRESERVADO"
+        elif holding < 2:
+            veto_cash = "TRAVA_DE_DOIS_PREGOES"
+        elif tipo != "HOLD":
+            veto_cash = "CONTROL_JA_ALTERA_POSICAO"
+        elif not np.isfinite(ret5):
+            veto_cash = "SEM_RETORNO_5D"
+        elif ret5 > V2_QUEDA_5D_DEFENSIVA:
+            veto_cash = "QUEDA_5D_INSUFICIENTE"
+        elif not np.isfinite(delta):
+            veto_cash = "SEM_SCORE_ANTERIOR_NO_FOLD"
+        elif delta >= 0:
+            veto_cash = "SCORE_NAO_DETERIOROU"
+        else:
+            veto_cash = "CASH_DEFENSIVO_AUTORIZADO"
+
+        data = str(b.dates[i])
+        registro = {
+            "data_decisao": data,
+            "data_execucao": str(b.exec_dates[i]),
+            "fold": fold,
+            "ativo_atual": b.symbols[pos],
+            "holding_pregoes": holding,
+            "fase": "PRIMEIRO_PREGAO" if holding == 1 else "POS_TRAVA",
+            "acao_control": tipo,
+            "destino_control": b.symbols[escolhido] if escolhido >= 0 else "CASH",
+            "score_atual": atual,
+            "score_anterior": anterior,
+            "variacao_score_1d": delta,
+            "retorno_previo_5d_pct": 100.0 * ret5,
+            "melhor_candidato_por_score": b.symbols[primeiro] if primeiro >= 0 else None,
+            "gap_score_melhor_candidato": gap,
+            "gap_requerido_rotacao_precoce": urgencia,
+            "motivo_veto_rotacao_precoce": veto_precoce,
+            "motivo_veto_saida_cash": veto_cash,
+            "capital_control_usd": capital,
+        }
+        for horizonte in (1, 5, 10):
+            for acao, nome in (("CASH", "cash"), ("ROTATE", "melhor_rotacao_expost")):
+                item = outcomes.get((data, horizonte, acao))
+                registro[f"vantagem_{nome}_{horizonte}d_pct"] = (
+                    float(item["vantagem_vs_hold_liquida_pct"]) if item else np.nan)
+                if acao == "ROTATE" and horizonte == 5:
+                    registro["melhor_rotacao_expost_5d"] = (
+                        str(item["candidato"]) if item else None)
+            if (i + horizonte < len(b.cl)
+                    and int(b.fold[min(i + horizonte - 1, len(b.fold) - 1)]) == fold):
+                registro[f"retorno_hold_{horizonte}d_pct"] = 100.0 * (
+                    float(b.cl[i + horizonte, pos]) / float(b.op[i + 1, pos]) - 1.0)
+            else:
+                registro[f"retorno_hold_{horizonte}d_pct"] = np.nan
+        r5 = registro["retorno_hold_5d_pct"]
+        vc5 = registro["vantagem_cash_5d_pct"]
+        vr5 = registro["vantagem_melhor_rotacao_expost_5d_pct"]
+        registro["perda_material_5d"] = bool(np.isfinite(r5) and r5 <= -8.0)
+        registro["cash_evitaria_perda_5d"] = bool(
+            tipo == "HOLD" and np.isfinite(vc5) and vc5 >= 5.0)
+        registro["melhor_rotacao_superaria_hold_5d"] = bool(
+            tipo == "HOLD" and np.isfinite(vr5) and vr5 >= 5.0)
+        registro["falso_alarme_cash_5d"] = bool(
+            veto_cash == "CASH_DEFENSIVO_AUTORIZADO"
+            and np.isfinite(vc5) and vc5 < 0)
+        records.append(registro)
+
+    auditoria = pd.DataFrame(records)
+    cols = ["fold", "fase", "acao_control", "motivo_veto_saida_cash"]
+    resumo = auditoria.groupby(cols, dropna=False).agg(
+        sessoes=("ativo_atual", "size"),
+        retorno_medio_hold_5d_pct=("retorno_hold_5d_pct", "mean"),
+        vantagem_media_cash_5d_pct=("vantagem_cash_5d_pct", "mean"),
+        perdas_materiais_5d=("perda_material_5d", "sum"),
+        falsos_alarmes_cash=("falso_alarme_cash_5d", "sum"),
+    ).reset_index()
+    episodios = auditoria.loc[
+        (auditoria["acao_control"] == "HOLD")
+        & auditoria["retorno_hold_5d_pct"].notna()
+    ].sort_values("retorno_hold_5d_pct").head(50).copy()
+    return auditoria, resumo, episodios
+
+
+def executar_permanencia_inteligente_v2() -> None:
+    """Control intacto, tres politicas V2 e auditoria pareada."""
+    fonte = _pi_localizar_base()
+    if fonte is None or not _pi_validar_zip_base(fonte):
+        raise FileNotFoundError("Fonte historica completa original ausente. Nao baixar ou reconstruir cotacoes.")
+    b = carregar(fonte)
+    control, dc, tc, mc = simular(b)
+    desvio = float(np.max(np.abs(control - b.base_equity)))
+    if desvio > TOLERANCIA_CENTAVO:
+        raise RuntimeError(f"Paridade Control falhou: USD {desvio:.8f}")
+    previsto_1d, audit_1d = _ve_calibrar(b, _ve_rotulos(b, "1d"))
+    previsto_2d, audit_2d = _ve_calibrar(b, _piv2_rotulo_2d(b))
+    dest = DESTINO_TEMP
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    pareado, resumo_pareado = _piv2_auditoria_pareada(b)
+    pareado.to_csv(dest / "contrafactual_pareado_por_decisao.csv", index=False)
+    resumo_pareado.to_csv(dest / "contrafactual_pareado_resumo.csv", index=False)
+    auditoria_gatilhos, resumo_gatilhos, episodios_perda = _piv_auditar_gatilhos_control(
+        b, previsto_1d, previsto_2d, pareado,
+    )
+    auditoria_gatilhos.to_csv(dest / "auditoria_gatilhos_control.csv", index=False)
+    resumo_gatilhos.to_csv(dest / "resumo_gatilhos_control.csv", index=False)
+    episodios_perda.to_csv(dest / "episodios_perda_control.csv", index=False)
+    audit_1d.assign(horizonte="1d").to_csv(dest / "validacao_estimador_1d.csv", index=False)
+    audit_2d.assign(horizonte="2d").to_csv(dest / "validacao_estimador_2d.csv", index=False)
+    dc.to_csv(dest / "decisoes_control.csv", index=False)
+    tc.to_csv(dest / "operacoes_control.csv", index=False)
+    curvas = {"control_2_pregoes": control}
+    resumos = [{"politica": "control_2_pregoes", "capital_final": float(control[-1]),
+                "diferenca_vs_control_pct": 0.0, "rotacoes": mc["rotacoes"],
+                "taxas_usd": mc["total_taxas"], "saidas_antecipadas": 0,
+                "saidas_cash_pos_trava": 0, **_resumo_curva(control)}]
+    folds = [{"politica": "control_2_pregoes", **f} for f in _performance_by_fold(b, control)]
+    diarios = pd.DataFrame({"data_execucao": b.exec_dates, "fold": b.fold,
+                            "control_2_pregoes": control})
+    for politica in ("saida_urgente_com_vantagem_liquida",
+                     "v2_saida_multihorizonte", "v2_protecao_pos_trava",
+                     "v2_combinada"):
+        registros = []
+        def decider(base, i, pos, holding, capital, quantity):
+            if politica == "saida_urgente_com_vantagem_liquida":
+                alvo, info, ranking = _pa_decidir(
+                    base, i, pos, holding, capital, quantity, previsto_1d,
+                    politica=politica)
+                precoce, defensiva = bool(info["saida_antecipada"]), False
+            else:
+                alvo, info, ranking = _piv2_hipoteses(
+                    base, i, pos, holding, capital, quantity,
+                    previsto_1d, previsto_2d, politica)
+                precoce = bool(info["intervencao_antecipada"])
+                defensiva = bool(info["intervencao_pos_trava"])
+            if precoce or defensiva or (pos >= 0 and holding == 1):
+                registros.append(info)
+            return alvo, ranking
+        curve, decisions, trades, metrics = simular(
+            b, decision_callback=decider, permitir_cash=True)
+        if not np.array_equal(curve[b.fold == 1], control[b.fold == 1]):
+            raise RuntimeError("Fold 1 foi alterado: " + politica)
+        if not np.isfinite(curve).all() or (curve <= 0).any():
+            raise RuntimeError("Curva invalida: " + politica)
+        precoce = sum(bool(r.get("intervencao_antecipada", r.get("saida_antecipada", False))) for r in registros)
+        defensiva = sum(bool(r.get("intervencao_pos_trava", False)) for r in registros)
+        curvas[politica], diarios[politica] = curve, curve
+        resumos.append({
+            "politica": politica, "capital_final": float(curve[-1]),
+            "diferenca_vs_control_pct": 100 * (curve[-1] / control[-1] - 1.0),
+            "rotacoes": metrics["rotacoes"], "taxas_usd": metrics["total_taxas"],
+            "saidas_antecipadas": precoce, "saidas_cash_pos_trava": defensiva,
+            **_resumo_curva(curve)})
+        folds.extend({"politica": politica, **f} for f in _performance_by_fold(b, curve))
+        pd.DataFrame(registros).to_csv(dest / f"auditoria_{politica}.csv", index=False)
+        decisions.to_csv(dest / f"decisoes_{politica}.csv", index=False)
+        trades.to_csv(dest / f"operacoes_{politica}.csv", index=False)
+        print(f"[V2] {politica}: USD {curve[-1]:,.2f} | precoce={precoce} | CASH={defensiva}", flush=True)
+    diarios.to_csv(dest / "comparacao_patrimonio_diario.csv", index=False)
+    pd.DataFrame(resumos).to_csv(dest / "comparacao_politicas.csv", index=False)
+    pd.DataFrame(folds).to_csv(dest / "comparacao_por_fold.csv", index=False)
+    _pa_desempenho_anual(b, curvas).to_csv(dest / "comparacao_por_ano.csv", index=False)
+    _write_json(dest / "manifesto_experimento.json", {
+        "modo": "permanencia_inteligente_v2",
+        "status": "pesquisa_exploratoria_retrospetiva_sem_validacao_prospectiva",
+        "fonte_sha256": _hash_arquivo(fonte),
+        "control_paridade_usd": desvio,
+        "control_original_inviolado": True,
+        "control_capital_final_usd": float(control[-1]),
+        "auditoria_vetos_control": {
+            "decisoes_auditadas": int(len(auditoria_gatilhos)),
+            "vetos_cash_por_motivo": {
+                str(k): int(v) for k, v in auditoria_gatilhos[
+                    "motivo_veto_saida_cash"].value_counts().items()
+            },
+            "falsos_alarmes_cash_5d": int(auditoria_gatilhos[
+                "falso_alarme_cash_5d"].sum()),
+            "perdas_materiais_5d": int(auditoria_gatilhos[
+                "perda_material_5d"].sum()),
+            "resultados_futuros_apenas_auditoria": True,
+        },
+        "universo_efetivo": len(b.symbols),
+        "folds": [1, 2, 3],
+        "fold_1": "inalterado para todas as politicas",
+        "politicas": list(curvas.keys()),
+        "rotulo_1d": "proxima abertura ate proximo fechamento",
+        "rotulo_2d": "proxima abertura ate fechamento de dois pregoes",
+        "purge_embargo_sessoes": VE_EMBARGO_SESSOES,
+        "maior_horizonte_que_define_embargo": max(b.config["rotation_target_horizons"]),
+        "horizontes_contrafactuais": list(V2_HORIZONTES),
+        "top_candidatos_auditados": V2_CANDIDATOS_TOP,
+        "participacao_maxima_adv20": V2_PARTICIPACAO_ADV_MAX,
+        "limiar_retorno_5d_protecao": V2_QUEDA_5D_DEFENSIVA,
+        "sem_future_leakage_decisao": "rotulos futuros usados SOMENTE em treino maturado e auditoria",
+        "limitacoes": [
+            "A fonte TCC congelada nao corresponde ao backtest de producao de 13/11.",
+            "Limiar de risco e criterios sao exploratorios, sem otimizacao OOS independente.",
+            "Comparacao pareada usa abertura seguinte e fechamento futuro com custo estimado no fechamento.",
+            "ADV20 e proxy de liquidez; slippage e impacto real nao simulados.",
+            "Operacoes reais Alpaca e dividendos de producao nao sao dados de treino.",
+            "Nao altera Live, broker, branch main ou modelos da Winner."],
+        "cenarios": resumos})
+    (dest / "LEIA_ME.txt").write_text(
+        "Permanencia inteligente V2, script unico Spyder.\n"
+        "Fonte congelada TCC, sem downloads; Control com paridade obrigatoria.\n"
+        "Contrafactuais pareados de HOLD/ROTATE/CASH nos horizontes 1,2,3,5,10.\n"
+        "Futuros apenas no treinamento maturado e na auditoria, nunca na decisao.\n"
+        "Politicas: V1 anterior, V2 precoce, V2 CASH pos-trava, combinada.\n"
+        "Auditoria de vetos: auditoria_gatilhos_control.csv, "
+        "resumo_gatilhos_control.csv e episodios_perda_control.csv.\n"
+        "Resultados futuros EX POST nao fazem parte da decisao.\n"
+        "A pesquisa nao valida ganho futuro e nao modifica Winner Live.\n",
+        encoding="utf-8")
+    shutil.copyfile(Path(__file__), dest / "codigo_executado.py")
+    archive = _pacote(dest, fonte)
+    _publicar_pasta_vantagem(dest)
+    print("[V2 ZIP]", archive, "| Control:", control[-1], flush=True)
+
+
 if __name__ == "__main__":
-    if MODO == "saida_antecipada_economica":
+    if MODO == "permanencia_inteligente_v2":
+        executar_permanencia_inteligente_v2()
+    elif MODO == "saida_antecipada_economica":
         executar_saida_antecipada_economica()
     elif MODO == "decisao_economica_sem_prazo":
         executar_decisao_economica_sem_prazo()
