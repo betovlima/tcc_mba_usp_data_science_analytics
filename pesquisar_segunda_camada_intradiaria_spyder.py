@@ -1,21 +1,11 @@
 """TCC: comparador causal de segunda camada de permanencia intradiaria.
 
-Spyder F5. Nao acessa Alpaca, Mongo, sistema Live nem envia ordens.
-Entrada: dados_intraday/*.csv, com timestamp UTC, symbol, open, high, low,
-close, volume e barras de 1 ou 5 minutos. Em 1 minuto, usa apenas grupos
-COMPLETOS de 5 minutos. Sinais as 10h30, 11h30 ... 15h30 de NY, calculados
-sobre o candle anterior ja encerrado.
-
-Metodos:
-  multirrolling: regressao causal em 3 escalas
-  bocpd: Bayesian Online Change Point Detection Normal-Normal
-  hmm: filtro sequencial de HMM gaussiano 2 estados
-  lightgbm: modelo supervisionado de retorno 30 minutos
-  pca_lightgbm: PCA preco/volume + LightGBM (proxy, NAO deep PVB-FPCA)
-  fitted_q: aproximacao de optimal stopping, CASH terminal
-  ofi_l1: INDISPONIVEL sem quotes de bid/ask com tamanhos
-Nenhum metodo escolhe outro ativo. Comparacao exploratoria apenas; para
-resultados da Winner faltam replay integrado e dataset intradiario completo.
+Spyder F5. Extrai posicoes do Control congelado e consulta OHLCV 5Min RAW/SIP
+usando apenas o leitor de dados historicos da API MCT INSTALADA LOCALMENTE.
+Nao modifica o MCT, nao chama endpoints de ordem nem envia operacoes reais.
+Os candles sao armazenados em dados_intraday/cotacoes_5min/ e reutilizados.
+Fora da maquina do usuario, sem as credenciais e o snapshot, a rotina falha
+informando a ausencia de dados, sem inventar retornos ou patrimonio.
 """
 from __future__ import annotations
 
@@ -320,11 +310,151 @@ def zip_atomico(files):
     os.replace(temp,OUTPUT)
 
 
+
+# Fonte historica no PC: somente leitura, usando o leitor Alpaca do MCT.
+# NENHUMA alteracao no MCT, endpoints, conta de corretora ou Winner.
+FORCAR_DOWNLOAD=False
+MAX_GRUPOS_DOWNLOAD=None  # None: processar todos os meses ausentes.
+SNAPSHOT_CONTROL=ROOT/"pesquisa_permanencia_minima.zip"
+
+
+def preparar_posicoes_control():
+    file=INPUT/"winner_positions.csv"
+    if not file.is_file():
+        snapshot=next((p for p in [SNAPSHOT_CONTROL,ROOT.parent/"pesquisa_permanencia_minima.zip"]
+                       if p.is_file()),None)
+        if snapshot is None:
+            return pd.DataFrame(),{"status":"snapshot_control_ausente",
+                  "instrucao":"Coloque pesquisa_permanencia_minima.zip ao lado do script ou winner_positions.csv em dados_intraday"}
+        import io
+        with ZipFile(snapshot) as z:
+            names=[n for n in z.namelist() if n.endswith("/comparacao_diaria_ativos_e_patrimonio.csv")]
+            if len(names)!=1:raise ValueError("Snapshot sem historico diario das posicoes")
+            original=pd.read_csv(io.BytesIO(z.read(names[0])))
+        if not {"data","ativo_2_pregoes"}.issubset(original):
+            raise ValueError("Colunas do Control congelado ausentes")
+        positions=pd.DataFrame({
+            "session":pd.to_datetime(original["data"],utc=True).dt.date.astype(str),
+            "symbol":original["ativo_2_pregoes"].astype(str).str.upper().str.strip()})
+        positions=positions[positions.symbol.str.fullmatch(r"[A-Z][A-Z0-9.\-]{0,15}")].copy()
+        if positions.duplicated("session").any():raise ValueError("Control duplicou posicoes por sessao")
+        INPUT.mkdir(parents=True,exist_ok=True)
+        temp=file.with_suffix(".tmp")
+        positions.to_csv(temp,index=False)
+        os.replace(temp,file)
+        origin={"status":"derivado_do_control_congelado",
+                "snapshot_sha256":hashlib.sha256(snapshot.read_bytes()).hexdigest()}
+    else:
+        origin={"status":"arquivo_existente_reutilizado"}
+    positions=pd.read_csv(file,dtype=str)[["session","symbol"]]
+    positions["session"]=pd.to_datetime(positions.session,errors="raise").dt.date.astype(str)
+    positions["symbol"]=positions.symbol.str.upper().str.strip()
+    positions=positions[positions.symbol.str.fullmatch(r"[A-Z][A-Z0-9.\-]{0,15}")].copy()
+    if positions.duplicated("session").any():raise ValueError("winner_positions.csv contem sessoes duplicadas")
+    origin.update({"sessoes":len(positions),"ativos":int(positions.symbol.nunique()),
+                   "sha256":hashlib.sha256(file.read_bytes()).hexdigest()})
+    return positions,origin
+
+
+def _market_reader_mct():
+    """Nao usa endpoint de grafico recente, que nao retorna OHLCV historico."""
+    import sys
+    from importlib.util import find_spec
+    candidates=[
+        ROOT.parent/"market_cycle_trader_api"/"src",
+        ROOT.parent/"extrema_backtest_dashboard_mongo"/"market_cycle_trader"/"market_cycle_trader_api"/"src",
+        ROOT.parent/"market_cycle_trader"/"market_cycle_trader_api"/"src",
+        Path.home()/"des"/"gpt"/"extrema_backtest_dashboard_mongo"/"market_cycle_trader"/"market_cycle_trader_api"/"src",
+    ]
+    candidate=next((p for p in candidates if
+        (p/"market_cycle_trader_api"/"infrastructure"/"market_data"/"alpaca.py").exists()),None)
+    if candidate is not None and str(candidate) not in sys.path:sys.path.insert(0,str(candidate))
+    if find_spec("market_cycle_trader_api") is None:
+        raise RuntimeError("Codigo da API MCT nao encontrado na pasta de projetos")
+    from market_cycle_trader_api.core.environment import load_project_environment
+    from market_cycle_trader_api.infrastructure.persistence.mongo_repository import get_alpaca_credentials
+    from market_cycle_trader_api.infrastructure.market_data.alpaca import download_stock_bars
+    load_project_environment(candidate.parent.parent/".env" if candidate is not None else None)
+    credentials=get_alpaca_credentials()
+    return download_stock_bars,credentials
+
+
+def preencher_cache_control(positions):
+    """Baixa somente meses/ativos que o Control manteve; reutiliza CSVs."""
+    if positions.empty:return {"status":"sem_posicoes"}
+    folder=INPUT/"cotacoes_5min"
+    folder.mkdir(parents=True,exist_ok=True)
+    work=positions.assign(month=positions.session.str[:7])
+    groups=[(a,m,sorted(g.session.unique().tolist()))
+            for (a,m),g in work.groupby(["symbol","month"],sort=True)]
+    pending=[(a,m,sessions) for a,m,sessions in groups
+             if FORCAR_DOWNLOAD or not (folder/f"{a}_{m}.csv").is_file()]
+    report={"status":"cache_completo" if not pending else "pendente",
+            "total_grupos":len(groups),"em_cache":len(groups)-len(pending),
+            "novos_baixados":0,"falhas":[],"fonte":"servico_historico_MCT_local_Alpaca_RAW_SIP_5Min",
+            "alteracoes_mct":False,"operacoes_reais":False}
+    if not pending:return report
+    try:
+        download,creds=_market_reader_mct()
+    except Exception as error:
+        report["status"]="mct_local_indisponivel"
+        report["falhas"].append({"etapa":"configuracao_mct","tipo":type(error).__name__,
+                                 "motivo":"MCT nao encontrado ou credenciais Alpaca nao disponiveis"})
+        return report
+    requests=pending if MAX_GRUPOS_DOWNLOAD is None else pending[:MAX_GRUPOS_DOWNLOAD]
+    for symbol,month,sessions in requests:
+        file=folder/f"{symbol}_{month}.csv"
+        try:
+            start=pd.Timestamp(f"{month}-01",tz="America/New_York")
+            end=start+pd.offsets.MonthBegin(1)
+            frame=download(api_key_id=creds["api_key_id"],secret_key=creds["secret_key"],
+                           symbol=symbol,timeframe="5Min",start=start.tz_convert("UTC"),
+                           end=end.tz_convert("UTC"),feed="sip",adjustment="raw")
+            if frame is None or frame.empty:
+                report["falhas"].append({"ativo":symbol,"mes":month,"motivo":"sem_candles"});continue
+            frame=frame.reset_index()
+            frame["timestamp"]=pd.to_datetime(frame.timestamp,utc=True)
+            local=frame.timestamp.dt.tz_convert("America/New_York")
+            mins=local.dt.hour*60+local.dt.minute
+            frame=frame[(local.dt.date.astype(str).isin(set(sessions)))&(mins>=570)&(mins<960)].copy()
+            if frame.empty:
+                report["falhas"].append({"ativo":symbol,"mes":month,"motivo":"sem_candles_na_sessao"});continue
+            frame["symbol"]=symbol
+            frame=frame[["timestamp","symbol","open","high","low","close","volume"]]
+            tmp=file.with_suffix(".csv.tmp")
+            frame.to_csv(tmp,index=False)
+            os.replace(tmp,file)
+            report["novos_baixados"]+=1
+        except Exception as error:
+            report["falhas"].append({"ativo":symbol,"mes":month,"motivo":"erro_consulta",
+                                    "tipo":type(error).__name__})
+    report["grupos_faltantes"]=sum(not(folder/f"{a}_{m}.csv").is_file() for a,m,_ in groups)
+    report["status"]="cache_completo" if not report["grupos_faltantes"] else "cache_parcial"
+    return report
+
+
+def medir_cobertura(positions,raw):
+    if positions.empty:return {"sessoes_control":0,"sessoes_cobertas":0}
+    if raw.empty:return {"sessoes_control":len(positions),"sessoes_cobertas":0}
+    local=pd.to_datetime(raw.timestamp,utc=True).dt.tz_convert("America/New_York")
+    got=pd.DataFrame({"session":local.dt.date.astype(str),"symbol":raw.symbol})
+    got=got.drop_duplicates()
+    covered=positions.merge(got,on=["session","symbol"],how="inner").session.nunique()
+    return {"sessoes_control":len(positions),"sessoes_cobertas":int(covered),
+            "sessoes_faltantes":int(len(positions)-covered),
+            "cobertura_pct":round(100*covered/len(positions),2)}
+
+
 def executar():
     smoke=teste_causalidade()
-    paths=sorted(p for p in INPUT.glob("*.csv") if p.name!="winner_positions.csv")
+    positions,origem=preparar_posicoes_control()
+    aquisicao=preencher_cache_control(positions)
+    paths=(sorted(p for p in INPUT.glob("*.csv") if p.name!="winner_positions.csv")
+           +sorted((INPUT/"cotacoes_5min").glob("*.csv")))
     if not paths:
         result={"status":"aguardando_candles_intradiarios_reais","metodos":METHODS,
+                "origem_control":origem,"aquisicao":aquisicao,
+                "cobertura":medir_cobertura(positions,pd.DataFrame()),
                 "teste_causalidade":smoke,"universo_winner_configurado":77,
                 "patrimonio_final":None,"motivo":"Sem OHLCV intradiario completo; nao inventar patrimonio",
                 "nenhuma_ordem_real":True}
@@ -332,6 +462,7 @@ def executar():
                     "codigo_executado.py":Path(__file__).read_bytes()})
         return result
     raw=pd.concat([pd.read_csv(p) for p in paths],ignore_index=True)
+    cobertura=medir_cobertura(positions,raw)
     bars=preparar(raw)
     positions_file=INPUT/"winner_positions.csv"
     conditioned=False
@@ -349,7 +480,9 @@ def executar():
         raise ValueError("Nenhuma barra coincide com as selecoes da Winner")
     frame=features(bars)
     ranking,events,split=benchmark(frame)
-    result={"status":"piloto" if not ranking.empty else "amostra_insuficiente",
+    result={"status":("piloto" if cobertura.get("sessoes_faltantes",1)==0 else "piloto_parcial")
+            if not ranking.empty else "amostra_insuficiente",
+            "origem_control":origem,"aquisicao":aquisicao,"cobertura":cobertura,
             "teste_causalidade":smoke,"sessoes":int(frame.session.nunique()),
             "ativos":sorted(frame.symbol.unique().tolist()),"split":split,
             "condicionado_a_posicoes_winner":conditioned,
