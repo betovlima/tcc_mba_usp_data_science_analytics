@@ -700,7 +700,8 @@ def executar():
             "patrimonio_final":None,
             "aviso": "Sem winner_positions.csv: comparacao metodologica, nao politica de permanencia da Winner" if not conditioned else "Amostra condicionada ao ativo selecionado; sem replay de patrimonio",
             "motivo_patrimonio":"Patrimonio do Control original nao reproduzido pelo replay intradiario: "
-                                "simulacao proxy separada sem overnight; consultar manifesto das politicas",
+                                "simulacao continua com compra integral hipotetica no fechamento; "
+                                "nao e fill comprovado; consultar manifesto das politicas",
             "politicas_intradiarias":{"status":"proxy_gerado",
                 "capital_final_original_comparavel":False,
                 "cenarios":[10000.0,68160546.38689804]},
