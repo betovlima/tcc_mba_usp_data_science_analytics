@@ -374,11 +374,15 @@ def _market_reader_local():
     if find_spec("market_cycle_trader_api") is None:
         raise RuntimeError("Codigo da API local nao encontrado na pasta de projetos")
     from market_cycle_trader_api.core.environment import load_project_environment
-    from market_cycle_trader_api.infrastructure.persistence.mongo_repository import get_alpaca_credentials
     from market_cycle_trader_api.infrastructure.market_data.alpaca import download_stock_bars
     load_project_environment(candidate.parent.parent/".env" if candidate is not None else None)
-    credentials=get_alpaca_credentials()
-    return download_stock_bars,credentials
+    # Usa a configuracao de mercado existente, sem carregar pymongo/Mongo.
+    key=next((os.getenv(k) for k in ("ALPACA_API_KEY_ID","APCA_API_KEY_ID") if os.getenv(k)),None)
+    secret=next((os.getenv(k) for k in ("ALPACA_SECRET_KEY","ALPACA_API_SECRET_KEY","APCA_API_SECRET_KEY")
+                 if os.getenv(k)),None)
+    if not key or not secret:
+        raise RuntimeError("Credenciais historicas nao estao configuradas na API local")
+    return download_stock_bars,{"api_key_id":key,"secret_key":secret}
 
 
 def preencher_cache_control(positions):
