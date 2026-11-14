@@ -60,6 +60,10 @@ def test_replay_respeita_trava_e_venda_causal_no_proximo_candle():
         positions, sessions, ages, state, signal, .4, 10000, save_events=True)
     assert daily.acao.tolist()[:3] == ["HOLD", "HOLD", "CASH"]
     assert summary["saidas_antecipadas"] == 1
+    assert daily.loc[2, "alocacao_politica_100pct"]
+    assert daily.loc[2, "quantidade_comprada_fechamento_politica"] > 0
+    assert daily.loc[2, "politica_em_caixa"] <= 1e-7
+    assert not daily.loc[2, "pendente_liquidacao"]
     orders = events[events.quantidade_executada > 0]
     assert len(events) >= 2  # decisao ao fechamento + fill posterior
     assert len(orders) == 1
@@ -91,7 +95,7 @@ def test_reentrada_reinicia_a_trava_de_dois_pregoes():
     assert report["tentativas_saida"] == 2
     assert report["saidas_bloqueadas"] == 0
     # Dias na posicao efetiva, nao dias de selecao da Winner.
-    assert daily.dias_posicao_politica.tolist()[:6] == [1, 2, 3, 1, 2, 3]
+    assert daily.dias_posicao_politica.tolist()[:6] == [1, 2, 0, 1, 2, 0]
     assert all(events[events.observacao.str.startswith("sinal")].dias_posicao_politica == 3)
 
 
@@ -125,7 +129,11 @@ def test_stress_liquidez_nao_finge_execucao_de_capital_milionario():
     assert (d.control_quantidade > 0).all()
     assert res["control_original_comparavel"] is False
     assert (d.acao == "HOLD").all()
-    assert res["caixa_ref_final"] >= 0
+    assert res["caixa_ref_final"] == 0
+    assert res["caixa_politica_final"] == 0
+    assert res["fills_proxy_fechamento_sem_volume"] > 0
+    assert d.alocacao_politica_100pct.all()
+    assert not d.fechamento_executavel_verificado.any()
 
 
 def test_overnight_e_posicao_carregada_sem_recompra_diaria():
@@ -141,7 +149,7 @@ def test_overnight_e_posicao_carregada_sem_recompra_diaria():
     assert result["taxas_ref_usd"] > 0
 
 
-def test_saida_parcial_continua_sem_recompra_no_mesmo_dia():
+def test_saida_parcial_intra_e_recompra_integral_ao_fechamento():
     frame, positions = make_grid(days=4)
     # A barra que fecha em 10h30 tem pouco volume. O primeiro
     # fill na abertura seguinte deve usar o volume conhecido as 10h25.
@@ -159,14 +167,68 @@ def test_saida_parcial_continua_sem_recompra_no_mesmo_dia():
         positions, sessions, ages, state, signal, .4, 10000, save_events=True)
     row = daily[daily.session == date].iloc[0]
     assert row.acao == "SAIDA_PARCIAL"
-    assert row.pendente_liquidacao
+    assert not row.pendente_liquidacao
     assert row.politica_quantidade > 0
     assert result["saidas_parciais_ao_fim_do_pregao"] > 0
-    sells = events[(events.session == date) & (events.quantidade_executada > 0)]
+    sells = events[(events.session == date) &
+                   (events.observacao == "fill_proxy_1pct_volume_candle_anterior_sem_orderbook")]
     assert len(sells) > 0
     assert sells.quantidade_executada.max() <= 1.000001
-    assert row.politica_em_caixa > 0
-    assert daily[daily.session == positions.session.iloc[3]].iloc[0].politica_quantidade < row.politica_quantidade
+    assert row.politica_em_caixa <= 1e-7
+    assert row.alocacao_politica_100pct
+    assert row.quantidade_comprada_fechamento_politica > 0
+    assert (events.observacao == "compra_integral_fechamento_proxy_sem_fill_verificado").any()
+
+
+def test_primeira_camada_troca_ativo_apenas_no_pregao_seguinte():
+    frame, positions = make_grid(days=4)
+    other = positions.session.iloc[2]
+    frame.loc[frame.session >= other, "symbol"] = "NEW"
+    positions.loc[positions.session >= other, "symbol"] = "NEW"
+    audit, _, sessions, ages = pol._auditar(frame, positions)
+    state = {(x.session, x.symbol): x.estado for x in audit.itertuples(index=False)}
+    summary, daily, _ = pol._replay(positions, sessions, ages, state, {}, .4, 10000)
+    assert daily.symbol.tolist() == ["SYN", "SYN", "NEW", "NEW"]
+    assert daily.decisao_primeira_camada.tolist() == [
+        "MANTER", "MANTER", "TROCAR", "MANTER"]
+    assert summary["rotacoes_sem_cotacao_ticker_antigo"] == 1
+    assert daily.alocacao_politica_100pct.all()
+    assert (daily.politica_em_caixa <= 1e-7).all()
+    assert daily.loc[2, "quantidade_comprada_fechamento_politica"] >= 0
+
+
+def test_compra_de_fechamento_independente_do_volume_ou_montante():
+    frame, positions = make_grid(days=4)
+    frame.loc[:, "volume"] = 1.0
+    audit, _, sessions, ages = pol._auditar(frame, positions)
+    state = {(x.session, x.symbol): x.estado for x in audit.itertuples(index=False)}
+    capital = 68160546.38689804
+    summary, daily, events = pol._replay(
+        positions, sessions, ages, state, {}, .4, capital, save_events=True)
+    # Liquidez de apenas 1 acao/candle: mercado real nao permitiria
+    # a compra, mas o cenario teorico precisa registrar a alocacao completa.
+    assert (daily.politica_em_caixa <= 1e-7).all()
+    assert daily.alocacao_politica_100pct.all()
+    assert (daily.quantidade_comprada_fechamento_politica > 1000).any()
+    assert summary["fills_proxy_fechamento_sem_volume"] > 0
+    assert not summary["execucao_comprovada"]
+    assert (events.observacao == "compra_integral_fechamento_proxy_sem_fill_verificado").any()
+
+
+def test_sem_cotacao_nao_gera_preco_de_fechamento_sintetico():
+    frame, positions = make_grid(days=2)
+    first_day = positions.session.iloc[0]
+    frame = frame.loc[frame.session != first_day]
+    audit, _, sessions, ages = pol._auditar(frame, positions)
+    state = {(x.session, x.symbol): x.estado for x in audit.itertuples(index=False)}
+    summary, daily, _ = pol._replay(positions, sessions, ages, state, {}, .4, 10000)
+    row = daily.iloc[0]
+    assert row.rebalanceamento_fechamento == "sem_preco"
+    assert pd.isna(row.preco_fechamento_usado)
+    assert row.politica_quantidade == 0
+    assert summary["fechamentos_sem_preco"] >= 1
+    assert not row.alocacao_politica_100pct
+    assert daily.iloc[1].alocacao_politica_100pct
 
 
 def test_retorno_extremo_auditado_sem_filtrar_futuro_do_replay():
