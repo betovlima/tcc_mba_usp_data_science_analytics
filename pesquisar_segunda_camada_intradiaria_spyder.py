@@ -317,6 +317,59 @@ FORCAR_DOWNLOAD=False
 MAX_GRUPOS_DOWNLOAD=None  # None: processar todos os meses ausentes.
 SNAPSHOT_CONTROL=ROOT/"pesquisa_permanencia_minima.zip"
 
+# Posicoes originais OOS extraidas do arquivo congelado de permanencia.
+# Somente pregao e ativo mantido; nenhum preco ou score foi recalculado.
+_POSICOES_CONTROL_SHA256="91f3570ab3d0fd479f4cab36b00a5b14baf9638459181bf3363f7fbc81f2469a"
+_POSICOES_CONTROL_LZMA_B64="""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"""
+
+
+def _posicoes_congeladas_embutidas():
+    import base64
+    import lzma
+    original=lzma.decompress(base64.b64decode(_POSICOES_CONTROL_LZMA_B64))
+    if hashlib.sha256(original).hexdigest()!=_POSICOES_CONTROL_SHA256:
+        raise RuntimeError("Snapshot embutido de posicoes Control nao passou no SHA-256")
+    from io import BytesIO
+    data=pd.read_csv(BytesIO(original),dtype=str)
+    if (len(data)!=1560 or data.session.iloc[0]!="2020-07-22"
+        or data.session.iloc[-1]!="2026-10-06"
+        or data.duplicated("session").any()):
+        raise RuntimeError("Snapshot embutido de posicoes Control tem calendario invalido")
+    return original
+
+
+
 
 def preparar_posicoes_control():
     file=INPUT/"winner_positions.csv"
@@ -324,8 +377,19 @@ def preparar_posicoes_control():
         snapshot=next((p for p in [SNAPSHOT_CONTROL,ROOT.parent/"pesquisa_permanencia_minima.zip"]
                        if p.is_file()),None)
         if snapshot is None:
-            return pd.DataFrame(),{"status":"snapshot_control_ausente",
-                  "instrucao":"Coloque pesquisa_permanencia_minima.zip ao lado do script ou winner_positions.csv em dados_intraday"}
+            # Posicoes Control congeladas acompanham o proprio script.
+            original=_posicoes_congeladas_embutidas()
+            INPUT.mkdir(parents=True,exist_ok=True)
+            temp=file.with_suffix(".tmp")
+            temp.write_bytes(original)
+            os.replace(temp,file)
+            origin={"status":"posicoes_control_congeladas_embutidas",
+                    "origem":"Control original 2 pregoes / comparacao_diaria_ativos_e_patrimonio",
+                    "snapshot_posicoes_sha256":_POSICOES_CONTROL_SHA256}
+            positions=pd.read_csv(file,dtype=str)
+            origin.update({"sessoes":int(len(positions)),"ativos":int(positions.symbol.nunique()),
+                           "sha256":hashlib.sha256(file.read_bytes()).hexdigest()})
+            return positions,origin
         import io
         with ZipFile(snapshot) as z:
             names=[n for n in z.namelist() if n.endswith("/comparacao_diaria_ativos_e_patrimonio.csv")]
