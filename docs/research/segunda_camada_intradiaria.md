@@ -87,46 +87,60 @@ continuam exploratorios, sem declaracao de generalizacao em producao.
 
 ### Politicas e execucao hipotetica
 
-A Winner escolhe o ativo em cada sessao. Dentro da sessao, a politica
-pode apenas **HOLD** ou sair para **CASH**, nunca trocar diretamente para
-outro ticker. A saida so e permitida a partir do terceiro pregao de POSICAO
-efetivamente aberta, apos dois pregoes completos mantendo a posicao.
-Se houver venda integral e recompra no pregao seguinte, a contagem de
-permanencia reinicia. O calendario de selecoes da Winner nao substitui a
-idade da carteira. Nao ha recompra no mesmo dia.
+A primeira camada escolhe o ativo no inicio de cada pregao, a partir da
+selecao historica congelada. Essa selecao NAO muda durante o dia. A
+segunda camada so pode decidir HOLD ou CASH intradiario, sem trocar
+diretamente para outro ativo. A venda antecipada exige dois pregoes
+completos de posicao efetiva; a recompra integral ao fechamento reinicia
+a contagem se a posicao tinha sido totalmente zerada.
 
-O replay novo **mantem as cotas entre pregoes** se o ativo da Winner
-continuar o mesmo. O patrimonio da posicao passa pelo fechamento e pela
-abertura seguinte, portanto inclui o retorno noturno observado. Uma
-saida pode executar **parcialmente** ao longo de varios candles; o saldo
-de cotas que nao foi liquidado continua exposto. Em outro pregao, CASH
-pode ser reinvestido na mesma selecao, respeitando os limites de volume.
+**Regra obrigatoria de fechamento:** ao processar o fim de CADA pregao,
+o replay realoca **100% do saldo em caixa** no ativo escolhido pela
+primeira camada no inicio daquele mesmo pregao, independentemente do
+patrimonio, tamanho da ordem ou volume negociado. Se a segunda camada
+tiver vendido tudo ou parte do ativo, compra de volta a quantidade
+necessaria. Nao carrega CASH por decisao da segunda camada para o
+dia seguinte. Essa recompra de fechamento e a UNICA excecao a proibicao
+de recompra no mesmo dia. Quando o ativo permanece o mesmo, suas
+cotas continuam carregadas entre pregoes com retorno overnight.
 
-Sinais usam apenas candles encerrados. A ordem usa o preco **open do
-candle seguinte**, com quantidade limitada a **1% do volume do candle
-anterior ja encerrado**. Nao ha informacao de livro de ofertas nem
-garantia de preenchimento nesse preco. A primeira compra de uma sessao
-usa o candle de 09h30 como referencia e so pode ocorrer a partir de
-09h35. Os custos ilustrativos sao dez pontos-base por lado.
+**No pregao seguinte**, a primeira camada escolhe novamente. Se selecionar
+o mesmo ativo, permanece nele; se escolher outro, o replay tenta fazer
+a rotacao. A primeira camada tem prioridade sobre a trava intradiaria
+da segunda camada.
 
-Sao comparados dois capitais iniciais: US$ 10 mil e US$ 68.160.546,39.
-O segundo e um **teste de capacidade**, nao uma simulacao fiel da
-carteira milionaria: compras e vendas parciais nao desaparecem apenas
-porque a ordem inteira excede o volume de um unico candle.
+As vendas intradiarias continuam limitadas a **1% do volume do candle
+anterior ja encerrado**, usando o OPEN da barra seguinte ao sinal.
+Podem ocorrer execucoes parciais, sem atribuir volume ficticio. O replay
+considera dez pontos-base de custo por lado.
 
-**Limitacao ainda nao resolvida nas ROTACOES:** quando o ativo selecionado
-muda, o conjunto historico intradiario nao contem necessariamente a
-cotacao do ativo ANTERIOR no dia seguinte. Para manter uma curva
-exploratoria, o codigo zera esse ativo ao ultimo fechamento observado
-com custo, **sem comprovar volume ou preenchimento**. Cada evento e
-contabilizado em `rotacoes_sem_cotacao_ticker_antigo`. O patrimonio
-resultante NAO pode ser apresentado como plenamente executavel.
+**Atenção metodologica:** para cumprir a ordem de alocacao integral,
+o replay assume compra de todas as cotas necessarias pelo ultimo CLOSE
+observado ao final da sessao, SEM limite de volume. Esse preco so se
+torna conhecido quando a barra termina. Portanto a compra de
+fechamento nao e um fill causal comprovado: e uma HIPOTESE
+idealizada de estudo, especialmente arriscada para o cenario de
+US$ 68.160.546,39. O CSV informa quantidade adquirida no fechamento,
+cash final, verificacao de 100% da alocacao, preco de referencia e
+`fechamento_executavel_verificado=False`. Se nao houver QUALQUER preco
+observado no pregao, nao inventa cotacao e marca `sem_preco`.
+Se o ultimo candle da grade faltar, registra que o preco usado e
+apenas o ultimo disponivel, nao o fechamento certificado.
 
-O Control do replay continua sendo uma referencia proxy, com as mesmas
-restricoes de volume e suposicoes da politica. **Nao reproduz** os
-US$ 587.165.941,13 do Control diario congelado; a simulacao original
-usa suas proprias regras de selecao, rotacao, precificacao e execucao.
-Nao comparar diretamente esses dois resultados.
+**Rotacoes ainda sao uma limitacao:** quando muda o ativo no dia seguinte,
+o historico pode nao incluir o ativo antigo nesse novo dia. O replay
+faz liquidacao teorica pelo ultimo fechamento observado, sem comprovar
+execucao ou liquidez, e registra
+`rotacoes_sem_cotacao_ticker_antigo`. Esse resultado e exploratorio,
+nao reproduz o Control diario de US$ 587.165.941,13.
+
+O ZIP habitual inclui `replay_patrimonio_intradiario.csv` com
+`decisao_primeira_camada`, `rebalanceamento_fechamento`,
+`quantidade_comprada_fechamento_politica`,
+`alocacao_politica_100pct` e `politica_em_caixa`. O arquivo
+`decisoes_hold_cash.csv` registra as recompras teoricas de fechamento.
+As estrategias sao comparadas com uma referencia proxy sujeita a
+essas mesmas hipoteses, jamais como prova de rentabilidade executavel.
 
 ### Auditoria de dados e resultados
 
