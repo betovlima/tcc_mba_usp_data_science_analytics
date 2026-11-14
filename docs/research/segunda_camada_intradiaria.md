@@ -161,10 +161,34 @@ inclui arquivos adicionais:
 - `comparacao_politicas_intradiarias.csv`: capital final, diferenca
   entre politica e referencia intradiaria, drawdown, Sharpe,
   saidas antecipadas e restricoes de liquidez
+- `selecao_limiares_validacao.csv`: objetivo e numero de vendas de CADA
+  limiar na metade final da validacao, usada para selecionar a politica
+- `sensibilidade_limiares_teste.csv`: desfecho para todos os limiares
+  na amostra de teste, **somente para diagnostico pos-teste**. Nunca
+  escolher a politica pelo melhor resultado desse arquivo
+- `referencia_saida_fixa_1025.csv`: regra simples SEM modelo, com venda
+  no checkpoint valido de 10h25 de Nova York e realocacao integral no
+  fechamento; comparacao com o mesmo Control proxy e mesmos custos
 - `replay_patrimonio_intradiario.csv`: trilha diaria pareada
 - `decisoes_hold_cash.csv`: horario do sinal e da venda hipotetica
 - `manifesto_politicas_intradiarias.json`: premissas e avisos
 - `codigo_politicas_executado.py`: copia auditavel do modulo economico
+
+Os limiares agora incluem 0,25; 0,30; 0,35; 0,38; 0,40;
+0,41; 0,42; 0,43; 0,44; 0,45 e 0,50. Essa exploracao foi motivada
+pelo piloto em que todos os modelos escolheram 0,25 e NAO houve
+nenhuma saida antecipada. **Politica sem venda continua permitida**
+quando ela tem o melhor objetivo de validacao. Nao e correto forcar
+negocios apenas para demonstrar atividade do ML. Resultados da
+sensibilidade no teste sao descritivos, nao elegiveis para selecionar
+limiar retroativamente. A referencia de venda fixa controla o efeito
+de um horario automatico de saida, independente de previsoes.
+
+Importante para a pergunta de pesquisa: o alvo supervisionado ainda
+e retorno em 30 minutos, enquanto a politica economica vende e
+recompra no fechamento. Esse desalinhamento exige pesquisa posterior
+sobre vantagem de permanecer ate o fechamento, com treino e teste
+cronologicos independentes.
 
 Retornos extremos sao **sinalizados, nunca excluidos automaticamente**
 do teste pelo retorno futuro: seria vies temporal. Os arquivos registram
