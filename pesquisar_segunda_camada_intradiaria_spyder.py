@@ -677,6 +677,20 @@ def executar():
     registrar("features",f"Linhas={len(frame)}; decisoes horarias={int(frame.horario.sum())}.")
     ranking,events,split=benchmark(frame)
     registrar("avaliacao",f"Metodos avaliados={len(ranking)}; previsoes={len(events)}.")
+    # Camada economica exploratoria. Codigo independente, sem acesso a ordens.
+    import importlib.util
+    source_politicas=ROOT/"pesquisar_politicas_intradiarias.py"
+    spec=importlib.util.spec_from_file_location("politicas_intradiarias_tcc",source_politicas)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Modulo de pesquisa das politicas nao encontrado")
+    mod=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    funcoes={"rolling":rolling_scores,"bocpd":bocpd,"hmm":hmm,
+             "lgb":lgb_scores,"fqi":fqi,"split":split_cronologico}
+    extras,manifesto_politicas=mod.executar(frame,positions,funcoes,registrar=registrar)
+    registrar("politicas",f"Replay concluido: periodo={manifesto_politicas['periodo_teste']}; "
+             "capital intradiario comparado ao Control intradiario, "
+             "nao ao Control diario original.")
     result={"status":("piloto" if cobertura.get("sessoes_faltantes",1)==0 else "piloto_parcial")
             if not ranking.empty else "amostra_insuficiente",
             "origem_control":origem,"aquisicao":aquisicao,"cobertura":cobertura,
@@ -685,14 +699,19 @@ def executar():
             "condicionado_a_posicoes_winner":conditioned,
             "patrimonio_final":None,
             "aviso": "Sem winner_positions.csv: comparacao metodologica, nao politica de permanencia da Winner" if not conditioned else "Amostra condicionada ao ativo selecionado; sem replay de patrimonio",
-            "motivo_patrimonio":"Sem replay do Control e execucao/liquidez integrada",
+            "motivo_patrimonio":"Patrimonio do Control original nao reproduzido pelo replay intradiario: "
+                                "simulacao proxy separada sem overnight; consultar manifesto das politicas",
+            "politicas_intradiarias":{"status":"proxy_gerado",
+                "capital_final_original_comparavel":False,
+                "cenarios":[10000.0,68160546.38689804]},
             "nenhuma_ordem_real":True}
     registrar("fim",f"Status={result['status']}, duracao={time.monotonic()-tic:.1f}s.")
     zip_atomico({"status.json":json.dumps(result,indent=2,ensure_ascii=False,default=str).encode(),
                  "comparacao_metodos.csv":ranking.to_csv(index=False).encode(),
                  "previsoes_horarias.csv":events.to_csv(index=False).encode(),
                  "codigo_executado.py":Path(__file__).read_bytes(),
-                 "execucao.log":log_blob()})
+                 "codigo_politicas_executado.py":source_politicas.read_bytes(),
+                 "execucao.log":log_blob(), **extras})
     registrar("zip",f"Arquivo gerado: {OUTPUT}")
     _LOG_ACTIVE=False
     return result
