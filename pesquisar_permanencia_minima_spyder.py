@@ -1,4 +1,4 @@
-"""TCC | Decisao economica diaria HOLD / ROTATE / CASH, sem prazo minimo.
+"""TCC | Permanencia inteligente V2, auditoria de HOLD / ROTATE / CASH.
 
 Este e o arquivo UNICO para todas as rodadas da pesquisa nesta branch:
     research/permanencia-minima-contrafactual-v1
@@ -6031,6 +6031,11 @@ def _piv2_auditoria_pareada(b: Base) -> tuple[pd.DataFrame, pd.DataFrame]:
                     "data_execucao": str(b.exec_dates[i]),
                     "fold": int(b.fold[i]),
                     "fase": "PRIMEIRO_PREGAO" if holding == 1 else "POS_TRAVA",
+                    "decisao_control": (b.symbols[_d_control(b, i, pos, holding)]
+                                         if _d_control(b, i, pos, holding) >= 0 else "CASH"),
+                    "acao_control": ("HOLD" if _d_control(b, i, pos, holding) == pos
+                                      else ("CASH" if _d_control(b, i, pos, holding) < 0
+                                            else "ROTATE")),
                     "holding": holding,
                     "ativo_atual": b.symbols[pos],
                     "candidato": candidato,
@@ -6048,7 +6053,7 @@ def _piv2_auditoria_pareada(b: Base) -> tuple[pd.DataFrame, pd.DataFrame]:
                     "liquidez_ate_10pct_adv20": bool(j == -1 or (np.isfinite(participacao) and participacao <= V2_PARTICIPACAO_ADV_MAX)),
                 })
     frame = pd.DataFrame(registros)
-    resumo = frame.groupby(["fase", "fold", "acao", "horizonte_pregoes"], dropna=False).agg(
+    resumo = frame.groupby(["fase", "acao_control", "fold", "acao", "horizonte_pregoes"], dropna=False).agg(
         observacoes=("vantagem_vs_hold_liquida_pct", "size"),
         vantagem_media_pct=("vantagem_vs_hold_liquida_pct", "mean"),
         vantagem_mediana_pct=("vantagem_vs_hold_liquida_pct", "median"),
