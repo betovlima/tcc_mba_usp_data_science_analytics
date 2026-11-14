@@ -60,9 +60,13 @@ def test_replay_respeita_trava_e_venda_causal_no_proximo_candle():
         positions, sessions, ages, state, signal, .4, 10000, save_events=True)
     assert daily.acao.tolist()[:3] == ["HOLD", "HOLD", "CASH"]
     assert summary["saidas_antecipadas"] == 1
-    assert len(events) == 1
-    assert pd.Timestamp(events.iloc[0].execucao_teorica_utc) == checkpoint + pd.Timedelta(minutes=5)
-    assert events.iloc[0].dias_mesmo_ativo == 3
+    orders = events[events.quantidade_executada > 0]
+    assert len(events) >= 2  # decisao ao fechamento + fill posterior
+    assert len(orders) == 1
+    assert pd.Timestamp(orders.iloc[0].execucao_teorica_utc) == checkpoint + pd.Timedelta(minutes=5)
+    assert orders.iloc[0].dias_mesmo_ativo == 3
+    assert summary["rotacoes_sem_cotacao_ticker_antigo"] == 0
+    assert daily.control_quantidade.iloc[0] > 0
     assert all(daily.acao.iloc[i] == "HOLD" for i in (0, 1))
     assert summary["control_intradiario_final"] > 0
 
@@ -74,10 +78,53 @@ def test_stress_liquidez_nao_finge_execucao_de_capital_milionario():
     initial = 68160546.38689804
     res, d, _ = pol._replay(positions, sessions, ages, state, {},
                             .4, initial)
-    assert res["nao_executaveis"] == len(positions)
-    assert np.isclose(res["politica_final"], initial)
-    assert np.isclose(res["control_intradiario_final"], initial)
-    assert (d.acao == "SEM_EXECUCAO").all()
+    # Volume de 5Min limita QUANTIDADE, nao impede todas as compras.
+    assert res["nao_executaveis"] == 0
+    assert res["compras_parciais_ref"] > 0
+    assert (d.control_quantidade > 0).all()
+    assert res["control_original_comparavel"] is False
+    assert (d.acao == "HOLD").all()
+    assert res["caixa_ref_final"] >= 0
+
+
+def test_overnight_e_posicao_carregada_sem_recompra_diaria():
+    frame, positions = make_grid(days=4)
+    audit, _, sessions, ages = pol._auditar(frame, positions)
+    state = {(x.session, x.symbol): x.estado for x in audit.itertuples(index=False)}
+    result, daily, _ = pol._replay(
+        positions, sessions, ages, state, {}, .35, 10000)
+    assert (daily.control_quantidade > 0).all()
+    assert daily.control_quantidade.iloc[1] == daily.control_quantidade.iloc[0]
+    assert daily.control_taxas_dia.iloc[1] == 0
+    assert daily.controle_inicio_dia.iloc[1] == daily.control_capital.iloc[0]
+    assert result["taxas_ref_usd"] > 0
+
+
+def test_saida_parcial_continua_sem_recompra_no_mesmo_dia():
+    frame, positions = make_grid(days=4)
+    # Ate o checkpoint 10h25, posicao integral. Depois, liquidez baixa.
+    date = positions.session.iloc[2]
+    frame = frame.copy()
+    clock = frame.timestamp.dt.tz_convert("America/New_York").dt.strftime("%H:%M")
+    after = (frame.session == date) & (clock >= "10:30")
+    frame.loc[after, "volume"] = 100.0
+    audit, _, sessions, ages = pol._auditar(frame, positions)
+    checkpoint = sessions[(date, "SYN")].loc[
+        lambda x: x.horario].iloc[0].timestamp
+    signal = {(date, "SYN"): {checkpoint: .1}}
+    state = {(x.session, x.symbol): x.estado for x in audit.itertuples(index=False)}
+    result, daily, events = pol._replay(
+        positions, sessions, ages, state, signal, .4, 10000, save_events=True)
+    row = daily[daily.session == date].iloc[0]
+    assert row.acao == "SAIDA_PARCIAL"
+    assert row.pendente_liquidacao
+    assert row.politica_quantidade > 0
+    assert result["saidas_parciais_ao_fim_do_pregao"] > 0
+    sells = events[(events.session == date) & (events.quantidade_executada > 0)]
+    assert len(sells) > 0
+    assert sells.quantidade_executada.max() <= 1.000001
+    assert row.politica_em_caixa > 0
+    assert daily[daily.session == positions.session.iloc[3]].iloc[0].politica_quantidade < row.politica_quantidade
 
 
 def test_retorno_extremo_auditado_sem_filtrar_futuro_do_replay():
