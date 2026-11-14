@@ -265,6 +265,8 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
             n_rotations += 1
         if session is None or session.empty:
             n_sessions_no_quote += 1
+            n_close_without_price += 1
+            close_status = "sem_preco"
             action = "SEM_COTACAO"
         else:
             g = session.sort_values("timestamp").reset_index(drop=True)
@@ -339,6 +341,10 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
                                 "dias_mesmo_ativo": age,
                                 "dias_posicao_politica": books["policy"]["dias_posicao"],
                                 "observacao": "sinal_fechado_aguardando_candle_seguinte"})
+            # As ordens de saida nao completadas durante o dia continuam
+            # parciais na auditoria mesmo depois da recompra de fechamento.
+            if exit_triggered_today and books["policy"]["shares"] > 1e-10:
+                n_partial_exits += 1
             # Fechamento: CADA LIVRO aloca 100% do caixa disponivel
             # no ativo selecionado pela camada 1 no inicio deste dia.
             # Um preco observado e necessario. Nao cria candles/precos.
@@ -365,7 +371,7 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
                         # Alocacao integral independente do valor da conta
                         # e de liquidez: simula fill no close apos conhece-lo.
                         quantity = available_cash / (actual_end*(1+cost))
-                        if quantity > 1e-12:
+                        if quantity > 0:
                             was_out = book["shares"] <= 1e-10
                             book["shares"] += quantity
                             book["cash"] = 0.
@@ -396,8 +402,6 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
                 else:
                     n_close_without_price += 1
                     close_status = "sem_preco"
-            if exit_triggered_today and books["policy"]["shares"] > 0:
-                n_partial_exits += 1
             if action in ("CASH", "SAIDA_PARCIAL"):
                 n_exits += 1
             elif books["policy"]["pending_exit"]:
@@ -416,6 +420,7 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
             "dias_posicao_politica": books["policy"]["dias_posicao"],
             "estado_dados": status,
             "rebalanceamento_fechamento": close_status,
+            "fechamento_executavel_verificado": False,
             "preco_fechamento_usado": close_price,
             "horario_fechamento_proxy_utc": close_timestamp,
             "quantidade_comprada_fechamento_ref": close_rebalance["ref"],
@@ -467,8 +472,8 @@ def _replay(positions, sessions, ages, audit_status, prob, threshold,
         "fills_proxy_fechamento_sem_volume": n_proxy_close_fills,
         "cash_overnight_nao_desejado": int((
             (d.politica_em_caixa > 1e-7)
-            & (d.rebalanceamento_fechamento != "sem_cotacao")
-            & (d.rebalanceamento_fechamento != "sem_preco")).sum()),
+            & (~d.rebalanceamento_fechamento.isin(["sem_cotacao", "sem_preco"]))
+        ).sum()),
         "taxas_ref_usd": books["ref"]["fees"],
         "taxas_politica_usd": books["policy"]["fees"],
         "posicao_ref_final": books["ref"]["shares"],
