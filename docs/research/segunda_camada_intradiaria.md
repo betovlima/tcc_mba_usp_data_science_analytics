@@ -90,9 +90,11 @@ continuam exploratorios, sem declaracao de generalizacao em producao.
 A primeira camada escolhe o ativo no inicio de cada pregao, a partir da
 selecao historica congelada. Essa selecao NAO muda durante o dia. A
 segunda camada so pode decidir HOLD ou CASH intradiario, sem trocar
-diretamente para outro ativo. A venda antecipada exige dois pregoes
-completos de posicao efetiva; a recompra integral ao fechamento reinicia
-a contagem se a posicao tinha sido totalmente zerada.
+diretamente para outro ativo. **Nao existe mais permanencia minima de dois
+pregoes.** A venda antecipada pode acontecer ja no **primeiro pregao** da
+posicao, no primeiro checkpoint valido apos o candle de mercado e depois
+de existir uma posicao, desde que o score do metodo dispare o sinal.
+A contagem de dias em posicao e somente informativa: nao impede a venda.
 
 **Regra obrigatoria de fechamento:** ao processar o fim de CADA pregao,
 o replay realoca **100% do saldo em caixa** no ativo escolhido pela
@@ -106,8 +108,9 @@ cotas continuam carregadas entre pregoes com retorno overnight.
 
 **No pregao seguinte**, a primeira camada escolhe novamente. Se selecionar
 o mesmo ativo, permanece nele; se escolher outro, o replay tenta fazer
-a rotacao. A primeira camada tem prioridade sobre a trava intradiaria
-da segunda camada.
+a rotacao. A primeira camada permanece soberana sobre a escolha do
+ativo; a segunda camada atua sem trava por numero de dias, apenas
+durante o pregao.
 
 As vendas intradiarias continuam limitadas a **1% do volume do candle
 anterior ja encerrado**, usando o OPEN da barra seguinte ao sinal.
