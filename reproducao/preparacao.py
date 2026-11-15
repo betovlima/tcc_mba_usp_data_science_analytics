@@ -266,6 +266,7 @@ def prepare_model_frames(
     paths: SnapshotPaths,
     *,
     assets: tuple[str, ...] = ASSETS,
+    source_paths: dict[str, SnapshotPaths] | None = None,
     allow_structural_assets: frozenset[str] = frozenset({"DOC", "CLMT"}),
     csv_float_precision: str | None = None,
 ) -> tuple[
@@ -290,9 +291,11 @@ def prepare_model_frames(
     exclusions: list[dict[str, Any]] = []
     diagnostics: list[dict[str, Any]] = []
 
+    sources = dict(source_paths or {})
     for position, symbol in enumerate(assets, start=1):
-        raw_path = paths.raw_bars / f"{symbol}.csv"
-        action_path = paths.corporate_actions / f"{symbol}.csv"
+        asset_paths = sources.get(symbol, paths)
+        raw_path = asset_paths.raw_bars / f"{symbol}.csv"
+        action_path = asset_paths.corporate_actions / f"{symbol}.csv"
         raw = load_raw_bar_file(
             raw_path,
             float_precision=csv_float_precision,
