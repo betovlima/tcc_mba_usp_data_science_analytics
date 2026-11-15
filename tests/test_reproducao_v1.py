@@ -851,3 +851,164 @@ def test_single_preparation_pass_uses_both_frozen_input_directories(tmp_path) ->
     assert exclusions == []
     assert len(diagnostics) == 2
     assert audit["eligible_assets"] == 2
+
+
+def test_reproducao_integrada_usa_77_desde_o_primeiro_fold(tmp_path, monkeypatch) -> None:
+    """Exercise the runner with sorted model order and an unsorted 77-asset contract.
+
+    Simulates the expensive ML/replay calls while checking that the actual
+    orchestration never builds a separate reference or joins model caches.
+    """
+    import hashlib
+    import json
+    import numpy as np
+
+    import engine.modelo_lightgbm as model
+    import engine.rotacao as rotation
+    import reproducao.artefatos as artifacts
+    import reproducao.dados as data
+    import reproducao.experimento as experiment
+    import reproducao.graficos as graphs
+
+    additions = ("CRT", "NBR", "CAPR", "PNBK", "PENN", "JBL",
+                 "STAG", "MCHB", "LAD", "TOWN")
+    requested = (*U67_REQUESTED_ASSETS, *additions)
+    assert len(requested) == 77
+    root = tmp_path / "tcc"
+    evidence_dir = root / "evidencias"
+    evidence_dir.mkdir(parents=True)
+    cache = root / "dados" / ".u67_expansion_cache" / "full_raw_20261006"
+    for folder in ("raw_bars", "corporate_actions"):
+        (cache / folder).mkdir(parents=True)
+    hashes = {}
+    for symbol in additions:
+        raw = (cache / "raw_bars" / f"{symbol}.csv")
+        actions = (cache / "corporate_actions" / f"{symbol}.csv")
+        raw.write_text("frozen-" + symbol, encoding="utf-8")
+        actions.write_text("actions-" + symbol, encoding="utf-8")
+        hashes[symbol] = {
+            "raw_sha256": hashlib.sha256(raw.read_bytes()).hexdigest(),
+            "corporate_actions_sha256": hashlib.sha256(actions.read_bytes()).hexdigest(),
+        }
+    (evidence_dir / "manifest_universo_congelado.json").write_text(
+        json.dumps({
+            "selected_assets": list(additions),
+            "candidate_file_hashes": hashes,
+            "snapshot_sha256": "test_frozen_snapshot",
+            "analysis_end_date": "2020-01-17",
+        }), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        data, "validate_snapshot",
+        lambda path: {
+            "snapshot_sha256": "test_frozen_snapshot",
+            "assets": list(U67_REQUESTED_ASSETS),
+        },
+    )
+    dates = pd.date_range("2020-01-02", periods=12, freq="B", tz="UTC")
+    bars = pd.DataFrame({
+        "open": [10.0] * len(dates),
+        "high": [11.0] * len(dates),
+        "low": [9.0] * len(dates),
+        "close": [10.5] * len(dates),
+        "volume": [1000.0] * len(dates),
+    }, index=dates)
+    prepared_calls = []
+
+    def prepare(_paths, *, assets, source_paths, csv_float_precision):
+        prepared_calls.append(tuple(assets))
+        assert tuple(assets) == requested
+        assert set(source_paths) == set(additions)
+        return (
+            {symbol: bars.copy() for symbol in assets},
+            [],
+            [],
+            {"eligible_assets": 77, "excluded_assets": []},
+        )
+
+    import reproducao.preparacao as preparation
+    monkeypatch.setattr(preparation, "prepare_model_frames", prepare)
+
+    def context(raw, config):
+        assert len(raw) == 77
+        symbols = sorted(raw)
+        folds = [
+            {
+                "fold_id": index,
+                "train_end_index": 3,
+                "calibration_start_index": 3,
+                "calibration_end_index": 6,
+                "final_fit_end_index": 8,
+                "decision_dates": dates[8:12],
+            }
+            for index in (1, 2, 3)
+        ]
+        return raw, dates, "AAA", symbols, folds, dates[8:12], {}, {}
+
+    monkeypatch.setattr(model, "_construir_contexto_execucao", context)
+    fits = []
+
+    def fit(frames, symbols, train_dates, config, *, phase, progress_callback):
+        assert len(frames) == len(symbols) == 77
+        assert symbols == sorted(requested)
+        fits.append(phase)
+        progress_callback(77, 77, "cpu")
+        return {symbol: object() for symbol in symbols}
+
+    monkeypatch.setattr(model, "_ajustar_modelos_lightgbm", fit)
+    monkeypatch.setattr(
+        model, "_precalcular_utilidades_modelo",
+        lambda models, frames, symbols, timestamps, config: (
+            {pd.Timestamp(t): np.array([0.0] + [0.5] * 77)
+             for t in timestamps},
+            {},
+        ),
+    )
+    monkeypatch.setattr(
+        model, "diagnosticos_fora_amostra",
+        lambda models, frames, symbols, dates, cache, *, fold_id:
+            {"fold_id": fold_id, "by_asset": {symbol: {} for symbol in symbols}},
+    )
+    monkeypatch.setattr(
+        rotation, "_politica_utilidade",
+        lambda *args, **kwargs: lambda timestamp, current, holding: (1, 0.5),
+    )
+    monkeypatch.setattr(rotation, "_crescimento_politica_simples",
+                        lambda *args: 1.0)
+    monkeypatch.setattr(
+        rotation, "_simular_exato",
+        lambda backend, policy, frames, symbols, decision_dates, *args, **kwargs:
+            SimpleNamespace(
+                metrics={"capital_rotations": 2},
+                predictions=pd.DataFrame(
+                    {"strategy_equity": [10000.0, 10500.0, 11000.0]},
+                    index=decision_dates[1:],
+                ),
+                trades=pd.DataFrame({"asset": ["DOC"], "action": ["BUY"]}),
+            ) if len(frames) == len(symbols) == 77 else
+            (_ for _ in ()).throw(AssertionError("Replay without 77 assets")),
+    )
+    monkeypatch.setattr(
+        experiment, "summarize_metrics",
+        lambda result, folds, initial: {"ending_capital": 11000.0, "folds": []},
+    )
+    monkeypatch.setattr(graphs, "gerar_analises_backtest",
+                        lambda *args, **kwargs: None)
+    monkeypatch.setattr(artifacts, "sinal_sonoro_conclusao", lambda: None)
+
+    result = experiment.reproduzir_universo_congelado(
+        root=root,
+        output=root / "output" / "reproducao_universo",
+        version="universe77-test",
+        execution_schema="universe-reproduction-v4",
+    )
+    assert prepared_calls == [requested]
+    assert len(fits) == 6
+    assert all("universe77_fold_" in phase for phase in fits)
+    assert result["universe"]["effective_count"] == 77
+    assert set(result["universe"]["trained_assets"]) == set(requested)
+    assert len(result["calibration"]["fit_counts"]) == 6
+    assert all(row["model_count"] == 77 for row in
+               result["calibration"]["fit_counts"])
+    assert (root / "output" / "reproducao_universo" /
+            "pacote_reproducao_universo.zip").is_file()
