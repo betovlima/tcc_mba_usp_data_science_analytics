@@ -71,7 +71,8 @@ class SnapshotPaths:
         )
 
     @classmethod
-    def u67(cls, project_root: Path) -> "SnapshotPaths":
+    def archived_source(cls, project_root: Path) -> "SnapshotPaths":
+        """Localizacao fisica de arquivos antigos; nao define universo de ativos."""
         return cls.from_root(project_root / "dados" / "u67")
 
     def ensure(self) -> None:
