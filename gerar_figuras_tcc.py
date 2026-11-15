@@ -170,7 +170,11 @@ def main() -> None:
     gain_rows = []
     for f in diagnostics:
         assets = f["by_asset"]
-        assert len(assets) == 65
+        if len(assets) != 77:
+            raise RuntimeError(
+                "Evidencias de figuras desatualizadas. Gere primeiro a "
+                "reproducao com 77 ativos e atualize as evidencias das figuras."
+            )
         for label, begin, end in GROUPS:
             gain = np.mean([sum(a["final_fit_feature_importance_gain"][k]
                                 for k in names[begin:end]) for a in assets.values()])
@@ -261,7 +265,7 @@ def main() -> None:
         "snapshot_sha256": evidence["snapshot_sha256"],
         "fontes": {str(p.relative_to(ROOT)): digest(p) for p in [curve_path, evidence_path]},
         "retornos_anuais": "Capital final de cada ano / capital da última sessão do ano anterior - 1; primeiro intervalo começa em US$ 10.000; 2020 e 2026 parciais; sem anualização.",
-        "importancias": "Soma dos ganhos normalizados de atributos do grupo em cada modelo; média simples entre 65 modelos finais em cada fold. Soma dos oito grupos igual a um.",
+        "importancias": "Soma dos ganhos normalizados de atributos do grupo em cada modelo; média simples entre os 77 modelos finais em cada fold. Soma dos oito grupos igual a um.",
         "limite_importancias": "Ganhos do treinamento; não são efeitos causais nem importâncias medidas no teste. Grupos têm números diferentes de atributos.",
         "figuras": {p.name: digest(p) for p in sorted(OUT.glob("figura_*"))},
     }
