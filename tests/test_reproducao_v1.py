@@ -243,8 +243,8 @@ def test_official_runner_delegates_to_exact_replay() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(encoding="utf-8")
     assert "67" not in source
     assert "reproduzir_universo_congelado(" in source
-    assert "REPRODUCTION_VERSION = \"1.23.0\"" in source
-    assert "EXECUTION_SCHEMA = \"universe-reproduction-v3\"" in source
+    assert 'REPRODUCTION_VERSION = "1.23.0+universe77.test"' in source
+    assert 'EXECUTION_SCHEMA = "universe-reproduction-v4"' in source
     assert "pesquisar_expansao_u67_spyder" not in source
     assert "download_raw_bars" not in source
     assert "download_corporate_actions" not in source
