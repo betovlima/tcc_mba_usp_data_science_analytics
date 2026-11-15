@@ -117,7 +117,6 @@ def reproduzir_universo_congelado(
 
     import numpy as np
 
-    from engine.configuracao import U67_REQUESTED_ASSETS
     from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
     from engine.modelo_lightgbm import (
         _ajustar_modelos_lightgbm,
@@ -145,24 +144,25 @@ def reproduzir_universo_congelado(
         (root / "evidencias" / "manifest_universo_congelado.json")
         .read_text(encoding="utf-8")
     )
-    selected = tuple(contract["selected_assets"])
-    base_assets = tuple(U67_REQUESTED_ASSETS)
-    requested = (*base_assets, *selected)
-    if len(requested) != 77 or len(set(requested)) != 77:
-        raise RuntimeError(
-            "O experimento exige exatamente 77 ativos distintos, sem exclusoes."
-        )
+    from engine.configuracao import ASSETS
+    if len(ASSETS) != 77 or len(set(ASSETS)) != 77:
+        raise RuntimeError("Contrato oficial exige 77 ativos distintos.")
     print("[universe] requested=77 preparation=single_pass folds=joint", flush=True)
-
-    base_data = SnapshotPaths.u67(root)
-    candidate_data = SnapshotPaths.from_root(
+    source_data = SnapshotPaths.archived_source(root)
+    external_data = SnapshotPaths.from_root(
         root / "dados" / ".u67_expansion_cache" / "full_raw_20261006"
     )
-    snapshot = validate_snapshot(base_data)
+    snapshot = validate_snapshot(source_data)
     if snapshot.get("snapshot_sha256") != contract["snapshot_sha256"]:
         raise RuntimeError("Identidade do snapshot congelado divergente.")
-    if tuple(snapshot.get("assets") or ()) != base_assets:
-        raise RuntimeError("Lista do snapshot base divergente da configuracao.")
+    source_symbols = set(snapshot.get("assets") or ())
+    extra_symbols = set(contract["candidate_file_hashes"])
+    if (
+        len(source_symbols) != len(snapshot.get("assets") or ())
+        or source_symbols & extra_symbols
+        or source_symbols | extra_symbols != set(ASSETS)
+    ):
+        raise RuntimeError("Arquivos congelados nao cobrem todos os ASSETS.")
 
     def digest(path: Path) -> str:
         sha = hashlib.sha256()
@@ -173,15 +173,13 @@ def reproduzir_universo_congelado(
 
     # A origem dos arquivos e dupla por razoes historicas, mas o painel de
     # dados, o treino, a calibracao e o replay sao UNICOS para os 77.
-    candidate_hashes: dict[str, dict[str, str]] = {}
-    if len(selected) != 10 or set(contract["candidate_file_hashes"]) != set(selected):
-        raise RuntimeError("Manifesto dos dez ativos adicionais incompleto.")
-    for symbol in selected:
+    external_hashes: dict[str, dict[str, str]] = {}
+    for symbol in extra_symbols:
         expected = contract["candidate_file_hashes"][symbol]
         paths = {
-            "raw_sha256": candidate_data.raw_bars / f"{symbol}.csv",
+            "raw_sha256": external_data.raw_bars / f"{symbol}.csv",
             "corporate_actions_sha256": (
-                candidate_data.corporate_actions / f"{symbol}.csv"
+                external_data.corporate_actions / f"{symbol}.csv"
             ),
         }
         observed = {}
@@ -197,25 +195,25 @@ def reproduzir_universo_congelado(
                     f"{symbol}: SHA-256 divergente em {name}; "
                     "nao modificar o historico para obter um resultado."
                 )
-        candidate_hashes[symbol] = observed
+        external_hashes[symbol] = observed
 
     raw, exclusions, diagnostics, data_audit = prepare_model_frames(
-        base_data,
-        assets=requested,
-        source_paths={symbol: candidate_data for symbol in selected},
+        source_data,
+        assets=ASSETS,
+        source_paths={symbol: external_data for symbol in extra_symbols},
         csv_float_precision="round_trip",
     )
-    if exclusions or set(raw) != set(requested) or len(raw) != 77:
+    if exclusions or set(raw) != set(ASSETS) or len(raw) != 77:
         raise RuntimeError(
             "Universo de entrada incompleto: "
             f"esperados=77 preparados={len(raw)} "
-            f"ausentes={sorted(set(requested) - set(raw))} "
+            f"ausentes={sorted(set(ASSETS) - set(raw))} "
             f"exclusoes={exclusions}"
         )
     print("[universe] prepared=77/77 excluded=0", flush=True)
 
     config = build_control_config(
-        {symbol: raw[symbol] for symbol in requested}
+        {symbol: raw[symbol] for symbol in ASSETS}
     ).copiar_modelo(update={"analysis_end_date": contract["analysis_end_date"]})
     (
         frames,
@@ -227,18 +225,18 @@ def reproduzir_universo_congelado(
         decision_to_fold,
         decision_metadata,
     ) = _construir_contexto_execucao(
-        {symbol: raw[symbol] for symbol in requested},
+        {symbol: raw[symbol] for symbol in ASSETS},
         config,
     )
     if (
         len(frames) != 77
         or len(symbols) != 77
-        or set(symbols) != set(requested)
+        or set(symbols) != set(ASSETS)
     ):
         raise RuntimeError(
             "Painel unificado nao possui 77 ativos: "
             f"frames={len(frames)} modelos={len(symbols)} "
-            f"ausentes={sorted(set(requested) - set(symbols))}"
+            f"ausentes={sorted(set(ASSETS) - set(symbols))}"
         )
     if len(folds) != 3:
         raise RuntimeError(
@@ -249,7 +247,7 @@ def reproduzir_universo_congelado(
     required_dates = pd.DatetimeIndex(common_dates).normalize()
     execution_dates = pd.DatetimeIndex(all_decision_dates[1:])
     continuity_rows = []
-    for symbol in requested:
+    for symbol in ASSETS:
         available_dates = pd.DatetimeIndex(raw[symbol].index).normalize()
         missing = required_dates.difference(available_dates)
         execution = frames[symbol].reindex(execution_dates)
@@ -314,11 +312,11 @@ def reproduzir_universo_congelado(
             phase=f"universe77_fold_{fold_id}_calibration",
             progress_callback=on_fit(fold_id, "calibration"),
         )
-        if set(calibration_models) != set(requested):
+        if set(calibration_models) != set(ASSETS):
             raise RuntimeError(
                 f"fold={fold_id}: modelos de calibracao incompletos "
                 f"({len(calibration_models)}/77), "
-                f"ausentes={sorted(set(requested)-set(calibration_models))}"
+                f"ausentes={sorted(set(ASSETS)-set(calibration_models))}"
             )
         calibration_cache, _ = _precalcular_utilidades_modelo(
             calibration_models, frames, symbols, calibration_dates, config
@@ -363,11 +361,11 @@ def reproduzir_universo_congelado(
             phase=f"universe77_fold_{fold_id}_final",
             progress_callback=on_fit(fold_id, "final_fit"),
         )
-        if set(final_models) != set(requested):
+        if set(final_models) != set(ASSETS):
             raise RuntimeError(
                 f"fold={fold_id}: modelos finais incompletos "
                 f"({len(final_models)}/77), "
-                f"ausentes={sorted(set(requested)-set(final_models))}"
+                f"ausentes={sorted(set(ASSETS)-set(final_models))}"
             )
         decision_cache, _ = _precalcular_utilidades_modelo(
             final_models, frames, symbols, decision_dates, config
@@ -434,10 +432,10 @@ def reproduzir_universo_congelado(
     if output.exists():
         shutil.rmtree(output)
     output.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({"asset": requested}).to_csv(
+    pd.DataFrame({"asset": ASSETS}).to_csv(
         output / "requested_assets.csv", index=False
     )
-    pd.DataFrame({"asset": requested}).to_csv(
+    pd.DataFrame({"asset": ASSETS}).to_csv(
         output / "effective_assets.csv", index=False
     )
     pd.DataFrame(columns=["symbol", "reason"]).to_csv(
@@ -479,15 +477,15 @@ def reproduzir_universo_congelado(
             "full_refresh": False,
             "database_used": False,
             "snapshot_sha256": snapshot["snapshot_sha256"],
-            "candidate_file_hashes": candidate_hashes,
-            "candidate_cache_committed_to_git": False,
+            "external_source_sha256": external_hashes,
+            "external_snapshot_committed_to_git": False,
             "data_audit": data_audit,
             "diagnostics": diagnostics,
         },
         "universe": {
-            "requested_assets": list(requested),
+            "requested_assets": list(ASSETS),
             "requested_count": 77,
-            "effective_assets": list(requested),
+            "effective_assets": list(ASSETS),
             "effective_count": 77,
             "trained_assets": symbols,
             "trained_count_each_fold": 77,
