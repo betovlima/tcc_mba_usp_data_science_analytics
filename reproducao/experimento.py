@@ -113,7 +113,7 @@ def reproduzir_universo_congelado(
     from datetime import datetime
     import hashlib
     import json
-     import shutil
+    import shutil
     import time
 
     from reproducao.dados import validate_snapshot
