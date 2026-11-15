@@ -110,7 +110,6 @@ def reproduzir_universo_congelado(
     permitido neste caminho; os dados dos candidatos precisam corresponder
     exatamente aos hashes versionados em evidencias/.
     """
-    from datetime import datetime
     import hashlib
     import json
     import shutil
@@ -289,13 +288,9 @@ def reproduzir_universo_congelado(
     exact = None
     expected_capital = None
 
-    # So depois da validacao dos inputs e do replay, preparar a saida.
+    # So apos replay concluido, sobrescrever o MESMO diretorio e ZIP.
+    # Nao criar variantes ou pastas versionadas entre execucoes de teste.
     if output.exists():
-        backup = output.with_name(
-            output.name + "_backup_" + datetime.now().strftime("%Y%m%d_%H%M%S")
-        )
-        shutil.copytree(output, backup)
-        print(f"[output] backup anterior={backup}", flush=True)
         shutil.rmtree(output)
     output.mkdir(parents=True, exist_ok=True)
 
