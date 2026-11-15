@@ -89,6 +89,11 @@ As sete figuras em PNG e SVG, as tabelas derivadas e sua procedência ficam em
 treina modelos nem executa outro backtest. Ele é separado da reprodução.
 
 O executor oficial em teste exige **77 ativos efetivos**, incluindo DOC e CLMT.
+As duas pastas de dados são somente fontes históricas: a preparação percorre
+**1/77 até 77/77 em uma única passagem**. Em cada um dos três folds, os 77
+ativos são treinados, calibrados e avaliados **juntos**, pelo mesmo modelo
+LightGBM Control e pela mesma política de rotação de capital. Não há treinamento
+separado da base seguido de inclusão posterior dos dez ativos.
 O capital da execução anterior não é um checkpoint válido para esse novo universo.
 Não há nova busca de ativos nem otimização do universo. A reprodução usa os hiperparâmetros fixados pela campanha histórica e calibra
 a margem de troca por busca em grade em cada janela temporal. Ela não repete a
@@ -162,14 +167,16 @@ A integração da pesquisa histórica (commit `13e5ed39ed0e700d2eb8c90bc8bee64ad
 
 `reproduzir_experimento.py` agora executa o **mesmo replay financeiro de dez candidatos** usado na pesquisa de expansão, e não somente a referência base. O arquivo do executor usa nomenclatura genérica; a adaptação preserva a rotina histórica por trás de `reproducao/experimento.py`, sem duplicar a matemática. A saída é `output/reproducao_universo/pacote_reproducao_universo.zip`.
 
-O código valida primeiro a identidade do snapshot, a composição do universo e os **20 hashes dos CSVs** (barras e eventos de dez ativos). Depois treina a referência e os candidatos por fold e calibra conjuntamente. O resultado da primeira execução válida com os 77 efetivos será um novo checkpoint, ainda não homologado. Nenhuma chamada de download é feita pelo executor. O cenário é histórico, não uma previsão de resultado futuro. **O resultado publicado em 21/10/2026 pertence à campanha anterior.** A branch de correção mantém o mesmo snapshot e o mesmo cache, mas não afirma que reproduziu aquele capital usando 77 ativos efetivos. O ZIP conferido é `pacote_reproducao_universo.zip`, SHA-256 `0c3518387556f147897baf121cb089f532f8355a8bb074c91fe0a6b5ec4b6ac8`. O pacote contém 29 arquivos, incluindo `predictions.csv` (1.560 sessões), `trades.csv` (710 registros), `reproducao_universo.json` e análises gráficas. O checkpoint foi confirmado também pelos modos de pesquisa `decision_validation` e `assurance_validation` sobre o mesmo recorte congelado. O cache local continua **não versionado**: clones limpos não têm, por si só, os arquivos suficientes para refazer o replay.
+O código valida primeiro a identidade do snapshot, a composição do universo e os **20 hashes dos CSVs** (barras e eventos de dez ativos). Depois treina e calibra **os 77 ativos juntos, em cada fold**. O resultado da primeira execução válida com os 77 efetivos será um novo checkpoint, ainda não homologado. Nenhuma chamada de download é feita pelo executor. O cenário é histórico, não uma previsão de resultado futuro. **O resultado publicado em 21/10/2026 pertence à campanha anterior.** A branch de correção mantém o mesmo snapshot e o mesmo cache, mas não afirma que reproduziu aquele capital usando 77 ativos efetivos. O ZIP conferido é `pacote_reproducao_universo.zip`, SHA-256 `0c3518387556f147897baf121cb089f532f8355a8bb074c91fe0a6b5ec4b6ac8`. O pacote contém 29 arquivos, incluindo `predictions.csv` (1.560 sessões), `trades.csv` (710 registros), `reproducao_universo.json` e análises gráficas. O checkpoint foi confirmado também pelos modos de pesquisa `decision_validation` e `assurance_validation` sobre o mesmo recorte congelado. O cache local continua **não versionado**: clones limpos não têm, por si só, os arquivos suficientes para refazer o replay.
 
 
 ## Correção do universo efetivo de 77 ativos (branch de teste)
 
-A branch `fix/tcc-universo-77-efetivos` mantém a origem congelada e exige que os
-67 ativos da base, inclusive DOC e CLMT, sejam processados. Somados aos dez
-selecionados, o replay deve conter **77 ativos distintos e nenhum excluído**.
+A branch `fix/tcc-universo-77-efetivos` mantém a origem congelada e
+prepara os **77 ativos de uma vez**, incluindo DOC e CLMT. Os arquivos
+historicamente guardados em duas pastas são unidos **antes** do treinamento.
+Cada fold ajusta 77 modelos em uma única rodada e o replay opera com a mesma
+lista completa. Qualquer ausência interrompe a execução.
 
 - **DOC:** o arquivo histórico de `DOC` anterior a 04/03/2024 segue a
   companhia sucessora Healthpeak, negociada anteriormente como `PEAK`, e
