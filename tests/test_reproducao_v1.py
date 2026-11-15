@@ -6,7 +6,10 @@ from types import SimpleNamespace
 import pandas as pd
 
 from reproducao.dados import SnapshotPaths
-from reproducao.preparacao import load_raw_bar_file, structural_identity_issue
+from reproducao.preparacao import (
+    _validated_structural_lineage, load_raw_bar_file,
+    prepare_model_frames, structural_identity_issue,
+)
 from reproducao.graficos import (
     calcular_retornos_mensais,
     construir_rotacoes,
@@ -134,7 +137,7 @@ def test_clmt_cusip_transition_accepts_float_parsed_cusip() -> None:
     assert issue["symbol"] == "CLMT"
 
 
-def test_clmt_cusip_transition_is_structurally_excluded() -> None:
+def test_clmt_cusip_transition_is_detected_and_audited() -> None:
     issue = structural_identity_issue(
         "CLMT",
         [
@@ -711,7 +714,11 @@ def test_official_reproduction_uses_selected_universe_contract() -> None:
     assert contract["snapshot_sha256"] == (
         "e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575"
     )
-    assert contract["expected_ending_capital"] == 587_165_941.1330212
+    # O manifesto preserva a historia, mas NAO valida o novo replay de 77.
+    runner = (ROOT / "reproducao" / "experimento.py").read_text(encoding="utf-8")
+    assert "len(expected_universe) != 77" in runner
+    assert '"checkpoint_validation": "awaiting_first_77_asset_baseline"' in runner
+    assert "expected_capital = None" in runner
     assert contract["selected_assets"] == [
         "CRT", "NBR", "CAPR", "PNBK", "PENN",
         "JBL", "STAG", "MCHB", "LAD", "TOWN",
@@ -757,3 +764,49 @@ def test_official_runner_silences_only_pandas4_warning() -> None:
     assert 'warnings.filterwarnings(' in source
     assert '"ignore"' in source
     assert 'warnings.filterwarnings("ignore")' not in source
+
+
+def test_real_snapshot_prepares_all_source_assets_with_audited_doc_clmt() -> None:
+    """Regression: never report success after silently excluding two securities."""
+    frames, exclusions, diagnostics, audit = prepare_model_frames(
+        SnapshotPaths.u67(ROOT),
+        assets=U67_REQUESTED_ASSETS,
+        csv_float_precision="round_trip",
+    )
+    assert tuple(frames) == U67_REQUESTED_ASSETS
+    assert len(frames) == 67
+    assert exclusions == []
+    assert audit["eligible_assets"] == 67
+    lineages = {row["symbol"]: row for row in audit["validated_structural_lineages"]}
+    assert set(lineages) == {"DOC", "CLMT"}
+    assert lineages["DOC"]["historical_execution_symbol"] == "PEAK"
+    assert lineages["CLMT"]["conversion_ratio"] == "1:1"
+    assert len(diagnostics) == 67
+    for symbol in ("DOC", "CLMT"):
+        assert len(frames[symbol]) > 2500
+
+
+def test_historical_lineage_refuses_unverified_corporate_actions() -> None:
+    import pytest
+
+    with pytest.raises(RuntimeError, match="DOC"):
+        _validated_structural_lineage("DOC", [])
+    with pytest.raises(RuntimeError, match="CLMT"):
+        _validated_structural_lineage("CLMT", [])
+    with pytest.raises(RuntimeError, match="transicao societaria"):
+        _validated_structural_lineage("UNKNOWN", [])
+
+
+def test_selected_universe_contract_never_reduces_to_fewer_assets() -> None:
+    import json
+
+    contract = json.loads(
+        (ROOT / "evidencias" / "manifest_universo_congelado.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    requested = list(U67_REQUESTED_ASSETS) + contract["selected_assets"]
+    assert len(requested) == 77
+    assert len(set(requested)) == 77
+    assert requested[46:48] == ["DOC", "CLMT"]
+    assert requested[-10:] == contract["selected_assets"]
