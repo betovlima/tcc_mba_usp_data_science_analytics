@@ -716,9 +716,17 @@ def test_official_reproduction_uses_selected_universe_contract() -> None:
     )
     # O manifesto preserva a historia, mas NAO valida o novo replay de 77.
     runner = (ROOT / "reproducao" / "experimento.py").read_text(encoding="utf-8")
-    assert "len(expected_universe) != 77" in runner
+    assert "len(requested) != 77" in runner
     assert '"checkpoint_validation": "awaiting_first_77_asset_baseline"' in runner
     assert "expected_capital = None" in runner
+    assert runner.count("prepare_model_frames(") == 1
+    assert "source_paths={symbol: candidate_data for symbol in selected}" in runner
+    assert "_train_baseline_states(" not in runner
+    assert "_train_candidate_caches(" not in runner
+    assert "_evaluate_scenario(" not in runner
+    assert "_ajustar_modelos_lightgbm(" in runner
+    assert "_precalcular_utilidades_modelo(" in runner
+    assert '"trained_count_each_fold": 77' in runner
     assert contract["selected_assets"] == [
         "CRT", "NBR", "CAPR", "PNBK", "PENN",
         "JBL", "STAG", "MCHB", "LAD", "TOWN",
@@ -810,3 +818,36 @@ def test_selected_universe_contract_never_reduces_to_fewer_assets() -> None:
     assert len(set(requested)) == 77
     assert requested[46:48] == ["DOC", "CLMT"]
     assert requested[-10:] == contract["selected_assets"]
+
+
+def test_single_preparation_pass_uses_both_frozen_input_directories(tmp_path) -> None:
+    from reproducao.dados import SnapshotPaths
+
+    base = SnapshotPaths.from_root(tmp_path / "source")
+    additional = SnapshotPaths.from_root(tmp_path / "additional")
+    base.ensure()
+    additional.ensure()
+    sessions = pd.date_range("2020-01-02", periods=4, freq="B", tz="UTC")
+    for symbol, source in (("AAA", base), ("BBB", additional)):
+        pd.DataFrame({
+            "timestamp": sessions,
+            "open": [10.0, 11.0, 12.0, 13.0],
+            "high": [11.0, 12.0, 13.0, 14.0],
+            "low": [9.0, 10.0, 11.0, 12.0],
+            "close": [10.5, 11.5, 12.5, 13.5],
+            "volume": [1000, 1100, 1200, 1300],
+        }).to_csv(source.raw_bars / f"{symbol}.csv", index=False)
+        pd.DataFrame(columns=["action_type", "symbol"]).to_csv(
+            source.corporate_actions / f"{symbol}.csv", index=False
+        )
+
+    frames, exclusions, diagnostics, audit = prepare_model_frames(
+        base,
+        assets=("AAA", "BBB"),
+        source_paths={"BBB": additional},
+        csv_float_precision="round_trip",
+    )
+    assert list(frames) == ["AAA", "BBB"]
+    assert exclusions == []
+    assert len(diagnostics) == 2
+    assert audit["eligible_assets"] == 2
