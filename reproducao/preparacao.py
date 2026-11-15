@@ -1,4 +1,4 @@
-"""Validacao, exclusoes estruturais e normalizacao local de splits."""
+"""Validacao, linhagens societarias e normalizacao local de splits."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,9 +11,9 @@ from reproducao.dados import SnapshotPaths
 from engine.configuracao import ASSETS
 
 
-# Exclusoes estruturais conhecidas e deliberadas. O snapshot permanece
-# congelado; a exclusao acontece apenas no pipeline de modelagem.
-KNOWN_STRUCTURAL_EXCLUSIONS: dict[str, dict[str, Any]] = {
+# Transicoes societarias auditadas no snapshot congelado.
+# Nenhum ativo configurado pode desaparecer silenciosamente da reproducao.
+KNOWN_STRUCTURAL_TRANSITIONS: dict[str, dict[str, Any]] = {
     "CLMT": {
         "symbol": "CLMT",
         "reason": "structural_identity_change",
@@ -100,7 +100,7 @@ def structural_identity_issue(
 ) -> dict[str, Any] | None:
     normalized = symbol.strip().upper()
 
-    known = KNOWN_STRUCTURAL_EXCLUSIONS.get(normalized)
+    known = KNOWN_STRUCTURAL_TRANSITIONS.get(normalized)
     if known is not None:
         matching = next(
             (
