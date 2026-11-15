@@ -2332,7 +2332,7 @@ def _run_assurance_validation(
             "source_direct_financially_tested_candidates": (
                 SOURCE_DIRECT_TESTED_COUNT
             ),
-            "source_subset_unique_scenarios": SOURCE_SUBSET_UNIQUE_SCENARIOS,
+            "source_subset_unique_scenarios": len(scenario_metrics_cache),
             "candidate_pool_for_temporal_validation": symbols,
             "candidate_pool_was_discovered_using_full_controlled_window": True,
             "interpretation": (
@@ -3092,10 +3092,11 @@ def _run_decision_validation(
     ].to_numpy(dtype=np.float64)
     effective_trials = _effective_trial_count(returns_matrix)
     selected_returns = _daily_returns(selected_result)
+    observed_scenario_count = len(full_search_keys)
     dsr_raw = _deflated_sharpe_ratio(
         selected_returns,
         trial_sharpes,
-        float(SOURCE_SUBSET_UNIQUE_SCENARIOS),
+        float(observed_scenario_count),
     )
     dsr_effective = _deflated_sharpe_ratio(
         selected_returns,
@@ -3105,24 +3106,18 @@ def _run_decision_validation(
     dsr_conservative = _deflated_sharpe_ratio(
         selected_returns,
         trial_sharpes,
-        float(
-            SOURCE_DIRECT_TESTED_COUNT
-            + SOURCE_SUBSET_UNIQUE_SCENARIOS
-        ),
+        float(SOURCE_DIRECT_TESTED_COUNT + observed_scenario_count),
     )
     multiple_testing_summary = {
-        "subset_scenario_count": SOURCE_SUBSET_UNIQUE_SCENARIOS,
+        "subset_scenario_count": observed_scenario_count,
         "direct_candidate_count": SOURCE_DIRECT_TESTED_COUNT,
-        "effective_independent_trial_count_from_subset_returns": (
-            effective_trials
-        ),
+        "effective_independent_trial_count_from_subset_returns": effective_trials,
         "dsr_subset_raw_trials": dsr_raw,
         "dsr_subset_effective_trials": dsr_effective,
-        "dsr_conservative_326_trials": dsr_conservative,
-        "conservative_326_note": (
-            "Sensitivity calculation: 146 marginal candidate tests plus 180 "
-            "subset scenarios. These trials are correlated and not identical "
-            "strategy families, so this is not an independent-trial estimate."
+        "dsr_conservative_trials": dsr_conservative,
+        "conservative_note": (
+            "Sensitivity calculation: candidate tests plus the observed "
+            "subset search count; correlated trials are not independent."
         ),
     }
 
