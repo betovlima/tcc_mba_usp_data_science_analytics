@@ -960,7 +960,7 @@ def test_reproducao_integrada_usa_77_desde_o_primeiro_fold(tmp_path, monkeypatch
 
     monkeypatch.setattr(model, "_ajustar_modelos_lightgbm", fit)
     monkeypatch.setattr(
-        model, "_precalcular_utilidades_modelo",
+        rotation, "_precalcular_utilidades_modelo",
         lambda models, frames, symbols, timestamps, config: (
             {pd.Timestamp(t): np.array([0.0] + [0.5] * 77)
              for t in timestamps},
