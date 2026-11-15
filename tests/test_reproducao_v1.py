@@ -334,7 +334,7 @@ def test_official_reproduction_uses_exact_input_manifest() -> None:
     assert "_train_baseline_states(" not in helper
     assert "_train_candidate_caches(" not in helper
     assert "_evaluate_scenario(" not in helper
-    assert "digest(path)" in helper
+    assert "digest(file_path)" in helper
     assert "download_raw_bars(" not in helper
     assert "download_corporate_actions(" not in helper
 
