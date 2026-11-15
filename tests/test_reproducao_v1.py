@@ -328,9 +328,12 @@ def test_official_reproduction_uses_exact_input_manifest() -> None:
     helper = (ROOT / "reproducao" / "experimento.py").read_text(encoding="utf-8")
     assert "67" not in source
     assert "manifest_universo_congelado.json" in helper
-    assert "_train_baseline_states(" in helper
-    assert "_train_candidate_caches(" in helper
-    assert "_evaluate_scenario(" in helper
+    assert "_ajustar_modelos_lightgbm(" in helper
+    assert "_precalcular_utilidades_modelo(" in helper
+    assert "assets=requested" in helper
+    assert "_train_baseline_states(" not in helper
+    assert "_train_candidate_caches(" not in helper
+    assert "_evaluate_scenario(" not in helper
     assert "digest(path)" in helper
     assert "download_raw_bars(" not in helper
     assert "download_corporate_actions(" not in helper
