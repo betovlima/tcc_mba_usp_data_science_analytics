@@ -26,15 +26,14 @@ ASSETS = (
     "BXMT", "PXLW", "KKR", "SCSC", "LKFT", "DNN", "VNCE", "UNFI", "DOC",
     "CLMT", "APD", "MGM", "MAN", "MYE", "YANG", "MKSI", "MCS", "ECC",
     "COLB", "AMS", "FOXF", "THO", "WDAY", "EXR", "XEL", "SBFG", "PAYX",
-    "MUX", "SXC",
+    "MUX", "SXC", "CRT", "NBR", "CAPR", "PNBK", "PENN", "JBL",
+    "STAG", "MCHB", "LAD", "TOWN",
 )
 
 
-U67_REQUESTED_ASSETS = ASSETS
-U67_EXPECTED_REQUESTED_COUNT = 67
-U67_EXPECTED_EFFECTIVE_COUNT = U67_EXPECTED_REQUESTED_COUNT
-U67_EXPECTED_EXCLUSIONS = frozenset()
-
+# Contrato unico da estrategia. Nenhum subconjunto entra nesta configuracao.
+if len(ASSETS) != 77 or len(set(ASSETS)) != 77:
+    raise RuntimeError("O universo oficial deve ter exatamente 77 ativos distintos.")
 
 
 def _configuracoes_lightgbm() -> dict[str, Any]:
