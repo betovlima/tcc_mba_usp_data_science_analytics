@@ -1,3 +1,5 @@
+> **Correção em teste (15/11/2026):** a branch `fix/tcc-universo-77-efetivos` exige 77 ativos efetivamente processados. Os números das campanhas históricas abaixo são apenas registros anteriores e não certificam este novo universo.
+
 # Pesquisa exploratória — evolução do universo e agrupamento por semelhança
 
 ## Objetivo
@@ -145,13 +147,13 @@ experimental diferente.
 
 Também foi corrigida uma ambiguidade da primeira figura: U56 e U67 são
 quantidades documentadas do universo, enquanto os mapas atuais conseguem
-representar 54 e 65 ativos, respectivamente, porque DOC e CLMT são excluídos
+representar subconjuntos históricos por exclusões societárias (agora em revisão)
 pela preparação estrutural da versão final. Na sequência U56 -> U59 -> U67,
 os mapas passam a exibir:
 
 - U56: 56 documentados, 54 representados;
 - U59: 59 documentados, 57 representados;
-- U67: 67 documentados, 65 representados.
+- U67: 67 documentados; contagem reduzida na campanha anterior, não aplicável à reprodução atual.
 
 Por fim, a quantidade de grupos deixou de ser fixada arbitrariamente em quatro.
 O script testa K=2..6 e seleciona a quantidade de grupos com maior índice
@@ -281,7 +283,7 @@ Resultados observados:
 - classificados como `no_bars`: 395;
 - candidatos que passaram a exigência de histórico: 21;
 - candidatos com 52 atributos válidos: 21;
-- U67 representado por 65 ativos, com DOC e CLMT excluídos;
+- U67 foi representado por subconjunto reduzido na campanha anterior; essa exclusão foi retirada do processamento atual;
 - PCA PC1+PC2: aproximadamente 72,22% da variação;
 - K=2 escolhido para o U67, silhouette aproximado 0,4637;
 - distribuição dos grupos U67: 58 e 7 ativos.
@@ -334,7 +336,7 @@ compatível com a exigência de uma janela longa comparável à do U67.
 Referência U67:
 
 - 67 ativos documentados;
-- 65 representados após DOC e CLMT;
+- universo reduzido daquela análise antes de rever DOC e CLMT;
 - K=2 escolhido;
 - silhouette=0,463660;
 - PC1=50,47% e PC2=21,75%;
@@ -550,7 +552,7 @@ Resumo da busca:
 - séries obtidas/reutilizadas: 499;
 - cobertura: 99,80%;
 - candidatos com histórico suficiente e 52 atributos: 162;
-- U67 representado por 65 ativos;
+- U67 representado pelo subconjunto da execução histórica anterior;
 - K=2;
 - silhouette=0,463660;
 - PC1+PC2=72,2225% da variação do U67.
