@@ -23,8 +23,8 @@ if _PANDAS4_WARNING is not None:
 
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "output" / "reproducao_universo"
-REPRODUCTION_VERSION = "1.23.0"
-EXECUTION_SCHEMA = "universe-reproduction-v3"
+REPRODUCTION_VERSION = "1.23.0+universe77.test"
+EXECUTION_SCHEMA = "universe-reproduction-v4"
 
 
 def main() -> dict:
