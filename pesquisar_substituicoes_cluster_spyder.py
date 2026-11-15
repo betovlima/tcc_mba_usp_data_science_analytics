@@ -340,12 +340,10 @@ def _prepare_data(
         assets=U67_REQUESTED_ASSETS,
         csv_float_precision="round_trip",
     )
-    if len(u67_raw) != 65 or {
-        str(item.get("symbol"))
-        for item in u67_exclusions
-    } != {"CLMT", "DOC"}:
+    if len(u67_raw) != len(U67_REQUESTED_ASSETS) or u67_exclusions:
         raise RuntimeError(
-            "O contrato efetivo U67 precisa continuar em 65 ativos."
+            "O universo de origem esta incompleto: todos os ativos "
+            "configurados devem participar do processamento."
         )
 
     candidate_raw, candidate_exclusions, _, _ = prepare_model_frames(
