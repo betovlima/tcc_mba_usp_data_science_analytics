@@ -1,4 +1,4 @@
-"""Apoio enxuto para a reproducao oficial do U67 Control."""
+"""Apoio da reproducao oficial do universo completo de 77 ativos."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -113,8 +113,7 @@ def reproduzir_universo_congelado(
     from datetime import datetime
     import hashlib
     import json
-    import math
-    import shutil
+     import shutil
     import time
 
     from reproducao.dados import validate_snapshot
@@ -188,11 +187,17 @@ def reproduzir_universo_congelado(
         csv_float_precision="round_trip",
     )
     excluded = frozenset(str(item.get("symbol") or "").upper() for item in exclusions)
-    if excluded != pesquisa.U67_EXPECTED_EXCLUSIONS:
-        raise RuntimeError("Exclusoes estruturais divergentes.")
+    if excluded or exclusions:
+        raise RuntimeError(
+            "Universo incompleto: nenhuma exclusao e permitida na reproducao "
+            f"de 77 ativos: {sorted(excluded)}."
+        )
     baseline_order = tuple(symbol for symbol in requested if symbol in raw)
-    if len(baseline_order) != pesquisa.U67_EXPECTED_EFFECTIVE_COUNT:
-        raise RuntimeError("Tamanho do universo base efetivo divergente.")
+    if baseline_order != requested or len(baseline_order) != pesquisa.U67_EXPECTED_REQUESTED_COUNT:
+        raise RuntimeError(
+            "Universo base incompleto: todos os 67 ativos devem ser "
+            "efetivamente preparados."
+        )
 
     config = build_control_config(
         {symbol: raw[symbol] for symbol in baseline_order},
@@ -225,15 +230,14 @@ def reproduzir_universo_congelado(
     baseline_metrics = pesquisa._scenario_metrics(
         baseline_result, folds, float(config.initial_capital)
     )
-    expected_base = float(contract["baseline_ending_capital"])
-    if not math.isclose(
-        baseline_metrics["ending_capital"], expected_base, rel_tol=0.0, abs_tol=0.01
-    ):
-        raise RuntimeError(
-            "Referencia historica divergente: "
-            f"{baseline_metrics['ending_capital']:.8f} versus {expected_base:.8f}"
-        )
-    print(f"[base] capital=US$ {baseline_metrics['ending_capital']:,.2f}", flush=True)
+    # O checkpoint de origem foi obtido com outro universo efetivo. Ele NAO
+    # pode ser usado como assert nem como meta financeira nesta nova execucao.
+    print(
+        f"[base] ativos={len(baseline_symbols)} "
+        f"capital=US$ {baseline_metrics['ending_capital']:,.2f} "
+        "checkpoint=pendente_77_ativos",
+        flush=True,
+    )
 
     frames, continuity, verified_hashes = pesquisa._prepare_candidate_frames(
         list(selected), common_dates, all_decision_dates, config
@@ -268,19 +272,22 @@ def reproduzir_universo_congelado(
         decision_metadata,
         config,
     )
-    expected_capital = float(contract["expected_ending_capital"])
     capital = float(metrics["ending_capital"])
-    exact = math.isclose(capital, expected_capital, rel_tol=0.0, abs_tol=0.01)
-    if not exact:
+    effective = [*baseline_symbols, *selected]
+    expected_universe = [*requested, *selected]
+    if len(expected_universe) != 77 or len(set(expected_universe)) != 77:
+        raise RuntimeError("Contrato Winner exige exatamente 77 ativos distintos.")
+    if effective != expected_universe:
         raise RuntimeError(
-            f"Reproducao divergente: observado=US$ {capital:,.8f}, "
-            f"esperado=US$ {expected_capital:,.8f}. "
-            "Nao altere os dados nem os parametros; audite a diferenca."
+            "Os 77 ativos nao participaram integralmente do replay. "
+            f"esperados={len(expected_universe)} efetivos={len(effective)} "
+            f"ausentes={sorted(set(expected_universe) - set(effective))}"
         )
 
-    effective = sorted([*baseline_symbols, *selected])
-    if len(effective) != len(baseline_symbols) + len(selected):
-        raise RuntimeError("Identidade duplicada no universo expandido.")
+    # Sem um primeiro checkpoint validado com estes 77 ativos, nao se pode
+    # certificar reproducao monetaria exata contra o resultado anterior.
+    exact = None
+    expected_capital = None
 
     # So depois da validacao dos inputs e do replay, preparar a saida.
     if output.exists():
@@ -318,11 +325,13 @@ def reproduzir_universo_congelado(
         "status": "completed",
         "purpose": "reproducao_universo_selecionado",
         "reproduced_exact_to_cent": exact,
+        "checkpoint_validation": "awaiting_first_77_asset_baseline",
         "analysis_end_date": contract["analysis_end_date"],
         "checkpoint": {
             "observed_capital": capital,
             "expected_capital": expected_capital,
-            "delta": capital - expected_capital,
+            "delta": None,
+            "status": "not_comparable_to_previous_universe",
         },
         "data": {
             "source": "alpaca",
@@ -363,7 +372,8 @@ def reproduzir_universo_congelado(
         archive_name="pacote_reproducao_universo.zip",
     )
     print(
-        f"[done] capital=US$ {capital:,.2f} exact_to_cent={exact} "
+        f"[done] capital=US$ {capital:,.2f} effective_assets={len(effective)} "
+        f"checkpoint=pending "
         f"package={package}",
         flush=True,
     )
