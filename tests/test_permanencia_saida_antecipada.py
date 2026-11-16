@@ -152,7 +152,7 @@ def test_research_uses_existing_single_file_and_same_zip_not_live():
     source = (Path(__file__).resolve().parents[1]
               / "pesquisar_permanencia_minima_spyder.py").read_text(
                   encoding="utf-8")
-    assert 'MODO = "comparar_raw_operacional"' in source
+    assert 'MODO = "saida_antecipada_economica"' in source
     assert 'DESTINO = ROOT / "output" / "pesquisa_vantagem_rotacao"' in source
     assert "_pi_localizar_base()" in source
     assert '"codigo_executado.py"' in source
