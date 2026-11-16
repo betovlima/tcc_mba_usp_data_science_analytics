@@ -226,7 +226,31 @@ def download_raw_bars(
     )
     start = pd.Timestamp(START_DATE, tz="UTC").to_pydatetime()
     bar_end = pd.Timestamp(bar_snapshot_as_of_end, tz="UTC")
-    api_end = (bar_end + pd.Timedelta(days=1)).to_pydatetime()
+    api_end = bar_end + pd.Timedelta(days=1)
+    # Mesma janela segura RAW/SIP usada no MCT: candle diario de uma
+    # sessao recente somente depois de fechamento XNYS + 20 minutos.
+    # Para datas antigas, manter a fronteira original (dia seguinte UTC).
+    now_utc = pd.Timestamp.now(tz="UTC")
+    if api_end > now_utc - pd.Timedelta(minutes=15):
+        import exchange_calendars as xcals
+
+        calendar = xcals.get_calendar("XNYS")
+        session = calendar.date_to_session(
+            pd.Timestamp(bar_snapshot_as_of_end), direction="previous"
+        )
+        if session.date().isoformat() != bar_snapshot_as_of_end:
+            raise RuntimeError(
+                f"Data final {bar_snapshot_as_of_end} nao e um pregao XNYS."
+            )
+        close_at = calendar.session_close(session).tz_convert("UTC")
+        safe_at = close_at + pd.Timedelta(minutes=20)
+        if now_utc < safe_at:
+            raise RuntimeError(
+                f"RecentSIPDailyBarNotYetSafe: aguardar {safe_at.isoformat()} "
+                f"para baixar o candle completo de {bar_snapshot_as_of_end}."
+            )
+        api_end = close_at
+    api_end = api_end.to_pydatetime()
 
     print(
         "[alpaca-bars] loader=alpaca_raw_sip_daily "
