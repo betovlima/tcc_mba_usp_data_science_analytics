@@ -524,6 +524,94 @@ def build_snapshot_manifest(
     return manifest
 
 
+
+
+def preparar_snapshot_raw_atualizado(
+    project_root: Path,
+    paths: SnapshotPaths,
+    assets: tuple[str, ...],
+    analysis_end_date: str,
+) -> dict[str, Any]:
+    """Faz uma coleta integral do universo configurado sem tocar no snapshot anterior."""
+    paths.ensure()
+    credentials = load_alpaca_credentials(project_root)
+    bars = download_raw_bars(
+        credentials, paths, assets=assets,
+        bar_snapshot_as_of_end=analysis_end_date,
+        analysis_end_date=analysis_end_date,
+    )
+    events = download_corporate_actions(
+        credentials, paths, assets=assets, query_end=analysis_end_date,
+    )
+    build_snapshot_manifest(
+        paths, bars, events, bar_snapshot_as_of_end=analysis_end_date,
+        analysis_end_date=analysis_end_date, assets=assets,
+        snapshot_name="tcc_full_raw_sip_replay",
+    )
+    manifest = validate_snapshot(paths)
+    if tuple(manifest["assets"]) != tuple(assets):
+        raise RuntimeError("Snapshot atualizado nao corresponde aos ativos configurados.")
+    return manifest
+
+
+def auditar_revisoes_raw(
+    novo: SnapshotPaths,
+    referencias: tuple[SnapshotPaths, ...],
+    assets: tuple[str, ...],
+) -> pd.DataFrame:
+    """Separa mudancas historicas de novas sessoes incluidas no corte."""
+    import numpy as np
+
+    output: list[dict[str, Any]] = []
+    cols = ("open", "high", "low", "close", "volume")
+    for symbol in assets:
+        prior = next(
+            (src.raw_bars / f"{symbol}.csv" for src in referencias
+             if (src.raw_bars / f"{symbol}.csv").is_file()),
+            None,
+        )
+        entry = {
+            "asset": symbol, "comparado": prior is not None,
+            "sessoes_comuns": 0, "sessoes_historicas_alteradas": 0,
+            "sessoes_novas": 0, "sessoes_antigas_ausentes": 0,
+            "primeira_revisao_historica": None,
+            "ultima_revisao_historica": None,
+        }
+        if prior is None:
+            output.append(entry)
+            continue
+        left = pd.read_csv(prior, float_precision="round_trip")
+        right = pd.read_csv(
+            novo.raw_bars / f"{symbol}.csv", float_precision="round_trip"
+        )
+        for frame in (left, right):
+            frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+            frame.set_index("timestamp", inplace=True)
+            frame.sort_index(inplace=True)
+            if not frame.index.is_unique:
+                raise RuntimeError(f"{symbol}: sessao RAW duplicada na auditoria.")
+        shared = left.index.intersection(right.index)
+        entry.update({
+            "sessoes_comuns": len(shared),
+            "sessoes_novas": len(right.index.difference(left.index)),
+            "sessoes_antigas_ausentes": len(left.index.difference(right.index)),
+        })
+        if len(shared):
+            changed = (~np.isclose(
+                left.loc[shared, cols].to_numpy(dtype=float),
+                right.loc[shared, cols].to_numpy(dtype=float),
+                rtol=0, atol=1e-10, equal_nan=True,
+            )).any(axis=1)
+            dates = shared[changed]
+            entry["sessoes_historicas_alteradas"] = int(len(dates))
+            if len(dates):
+                entry["primeira_revisao_historica"] = dates.min().date().isoformat()
+                entry["ultima_revisao_historica"] = dates.max().date().isoformat()
+        output.append(entry)
+    return pd.DataFrame(output)
+
+
+
 def validate_snapshot(paths: SnapshotPaths) -> dict[str, Any]:
     if not paths.manifest.exists():
         raise RuntimeError("manifest.json nao encontrado; crie o snapshot primeiro.")
