@@ -6712,305 +6712,414 @@ def executar_permanencia_inteligente_v2() -> None:
 
 
 
-# %% Pesquisa de paridade RAW/SIP: fonte fresca, replay TCC sem alterar o checkpoint.
-DATA_FINAL_OPERACIONAL = None  # None: ultimo pregao XNYS com candle seguro (D + 20 min).
-ZIP_BACKTEST_OPERACIONAL = None  # Opcional: caminho do ZIP OPERACIONAL para comparacao diaria.
+# %% Comparacao RAW/SIP: replica a execucao CONJUNTA v1.23.0+dynamic-universe.test.
+# Referencia: pacote_reproducao_universo, 75 ativos em um unico treino e replay.
+# Nenhum caminho separado de U67, candidatos, baseline ou complemento.
+DATA_FINAL_OPERACIONAL = None  # None: ultimo XNYS com candle SIP completo.
+ZIP_BACKTEST_OPERACIONAL = None  # Opcional: ZIP do backtest MCT com mesma data final.
+
+# Mesma ordem de requested_assets.csv do checkpoint 1.23.0+dynamic-universe.test.
+# Uma unica lista operacional de pesquisa, com os 75 modelos no mesmo contexto.
+UNIVERSO_TCC_REFERENCIA = tuple("""
+NVDA AAPL MSFT AMZN GOOGL META TSLA AMD JPM SPY AVGO NFLX CRM ORCL COST
+LLY XOM CAT WMT V HD ADC ADEA ADI ADM DDS CNQ VRTS XSD CXW ENS CORT
+CCK CEF GKOS RACE TX UNF BXMT PXLW KKR SCSC LKFT DNN VNCE UNFI APD
+MGM MAN MYE YANG MKSI MCS ECC COLB AMS FOXF THO WDAY EXR XEL SBFG
+PAYX MUX SXC CRT NBR CAPR PNBK PENN JBL STAG MCHB LAD TOWN
+""".split())
 
 
 def _raw_operacional_cutoff() -> str:
     import exchange_calendars as xcals
-    agora = pd.Timestamp(datetime.now(timezone.utc))
-    calendario = xcals.get_calendar("XNYS")
-    local = agora.tz_convert("America/New_York").date()
-    sessao = calendario.date_to_session(pd.Timestamp(local), direction="previous")
-    while agora < calendario.session_close(sessao).tz_convert("UTC") + pd.Timedelta(minutes=20):
-        sessao = calendario.previous_session(sessao)
-    ultima = sessao.date().isoformat()
+
+    now = pd.Timestamp(datetime.now(timezone.utc))
+    calendar = xcals.get_calendar("XNYS")
+    local_day = now.tz_convert("America/New_York").date()
+    session = calendar.date_to_session(pd.Timestamp(local_day), direction="previous")
+    while now < calendar.session_close(session).tz_convert("UTC") + pd.Timedelta(minutes=20):
+        session = calendar.previous_session(session)
+    max_safe = session.date().isoformat()
     if DATA_FINAL_OPERACIONAL is None:
-        return ultima
+        return max_safe
     cutoff = str(DATA_FINAL_OPERACIONAL)
-    if cutoff > ultima:
-        raise ValueError(f"Cutoff {cutoff} ainda indisponivel; ultimo seguro: {ultima}.")
-    if calendario.date_to_session(pd.Timestamp(cutoff), direction="previous").date().isoformat() != cutoff:
-        raise ValueError(f"{cutoff} nao e uma sessao XNYS.")
+    if cutoff > max_safe:
+        raise ValueError(f"Cutoff solicitado {cutoff} nao disponivel; maximo {max_safe}")
+    normalized = calendar.date_to_session(pd.Timestamp(cutoff), direction="previous")
+    if normalized.date().isoformat() != cutoff:
+        raise ValueError(f"Cutoff {cutoff} nao corresponde a pregao XNYS")
     return cutoff
 
 
-def _raw_operacional_auditoria(fresco, referencia, historico, universo, base):
+def _raw_operacional_auditoria(fresco, original, extensao, symbols):
+    """Compara RAW anterior e RAW novo, independentemente da origem do CSV legado."""
     from reproducao.preparacao import load_raw_bar_file
-    rows = []
-    for symbol in universo:
-        antigo_path = (
-            referencia.raw_bars if symbol in base else historico.raw_bars
-        ) / f"{symbol}.csv"
-        novo_path = fresco.raw_bars / f"{symbol}.csv"
-        row = {"asset": symbol, "referencia": "TCC_congelado",
-               "status": "ausente", "sessoes_em_comum": 0,
-               "sessoes_alteradas": 0, "primeira_alteracao": None,
-               "sessoes_adicionadas": 0}
-        if antigo_path.exists():
-            old = load_raw_bar_file(antigo_path, float_precision="round_trip")
-            new = load_raw_bar_file(novo_path, float_precision="round_trip")
-            common = old.index.intersection(new.index)
-            row["status"] = "comparado"
-            row["sessoes_em_comum"] = int(len(common))
-            row["sessoes_adicionadas"] = int(len(new.index.difference(old.index)))
-            if len(common):
-                columns = ["open", "high", "low", "close", "volume"]
-                delta = ~np.isclose(
-                    old.loc[common, columns].to_numpy(dtype=float),
-                    new.loc[common, columns].to_numpy(dtype=float),
-                    atol=1e-10, rtol=0, equal_nan=True,
-                )
-                changed = common[delta.any(axis=1)]
-                row["sessoes_alteradas"] = int(len(changed))
-                if len(changed):
-                    row["primeira_alteracao"] = changed.min().date().isoformat()
-        rows.append(row)
-    return pd.DataFrame(rows)
 
-
-def _raw_operacional_comparacao(predictions, cutoff, pasta):
-    import io
-    arquivos = (
-        [Path(ZIP_BACKTEST_OPERACIONAL)] if ZIP_BACKTEST_OPERACIONAL else
-        sorted((ROOT / "output").glob("market_cycle_trader_*.zip"), reverse=True)
-    )
-    for arquivo in arquivos:
-        if not arquivo.exists():
+    records = []
+    for symbol in symbols:
+        historic_file = original.raw_bars / f"{symbol}.csv"
+        if not historic_file.is_file():
+            historic_file = extensao.raw_bars / f"{symbol}.csv"
+        current_file = fresco.raw_bars / f"{symbol}.csv"
+        entry = {
+            "asset": symbol, "status": "sem_referencia",
+            "sessoes_comuns": 0, "sessoes_modificadas": 0,
+            "sessoes_novas": 0, "sessoes_ausentes": 0,
+            "primeira_modificacao": None, "ultima_modificacao": None,
+        }
+        if not historic_file.is_file():
+            records.append(entry)
             continue
-        with ZipFile(arquivo) as z:
+        old = load_raw_bar_file(historic_file, float_precision="round_trip")
+        new = load_raw_bar_file(current_file, float_precision="round_trip")
+        shared = old.index.intersection(new.index)
+        entry.update({
+            "status": "comparado",
+            "sessoes_comuns": int(len(shared)),
+            "sessoes_novas": int(len(new.index.difference(old.index))),
+            "sessoes_ausentes": int(len(old.index.difference(new.index))),
+        })
+        if len(shared):
+            cols = ["open", "high", "low", "close", "volume"]
+            changed = (
+                ~np.isclose(
+                    old.loc[shared, cols].to_numpy(dtype=float),
+                    new.loc[shared, cols].to_numpy(dtype=float),
+                    rtol=0.0, atol=1e-10, equal_nan=True,
+                )
+            ).any(axis=1)
+            sessions = shared[changed]
+            entry["sessoes_modificadas"] = int(len(sessions))
+            if len(sessions):
+                entry["primeira_modificacao"] = sessions.min().date().isoformat()
+                entry["ultima_modificacao"] = sessions.max().date().isoformat()
+        records.append(entry)
+    return pd.DataFrame(records)
+
+
+def _raw_operacional_verificar_universo(assets):
+    """Valida o checkpoint v1.23.0+dynamic-universe.test quando presente."""
+    from zipfile import ZipFile
+
+    if len(assets) != 75 or len(set(assets)) != 75:
+        raise RuntimeError("O TCC deve usar exatamente 75 ativos distintos.")
+    paths = (
+        ROOT / "output" / "reproducao_universo" / "pacote_reproducao_universo.zip",
+        ROOT / "output" / "reproducao_universo" / "reproducao_universo.json",
+    )
+    for path in paths:
+        if not path.is_file():
+            continue
+        if path.suffix.lower() == ".zip":
+            with ZipFile(path) as z:
+                historic = json.loads(z.read("reproducao_universo.json"))
+        else:
+            historic = json.loads(path.read_text(encoding="utf-8"))
+        version = str(historic.get("reproduction_version") or "")
+        requested = tuple((historic.get("universe") or {}).get("requested_assets") or ())
+        effective = tuple((historic.get("universe") or {}).get("effective_assets") or ())
+        trained = tuple((historic.get("universe") or {}).get("trained_assets") or ())
+        if not version.startswith("1.23.0+dynamic-universe") or requested != tuple(assets):
+            raise RuntimeError(
+                f"Checkpoint em {path} nao corresponde aos 75 ativos da versao dinamica."
+            )
+        if effective != requested or set(trained) != set(requested):
+            raise RuntimeError("Checkpoint TCC nao tem os mesmos 75 ativos efetivos/treinados.")
+        return {
+            "status": "checkpoint_validado",
+            "reproduction_version": version,
+            "checkpoint_path": str(path),
+        }
+    return {
+        "status": "universo_de_referencia_versionado_no_script",
+        "reproduction_version": "1.23.0+dynamic-universe.test",
+        "checkpoint_path": None,
+    }
+
+
+def _raw_operacional_comparacao(predictions, cutoff, output):
+    import io
+
+    files = (
+        [Path(ZIP_BACKTEST_OPERACIONAL)]
+        if ZIP_BACKTEST_OPERACIONAL
+        else sorted((ROOT / "output").glob("market_cycle_trader_*.zip"), reverse=True)
+    )
+    for archive in files:
+        if not archive.is_file():
+            continue
+        with ZipFile(archive) as z:
             manifest = json.loads(z.read("strategy_manifest.json"))
-            if manifest.get("configuration", {}).get("analysis_end_date") != cutoff:
+            if str((manifest.get("configuration") or {}).get("analysis_end_date")) != cutoff:
                 continue
-            nomes = [
+            names = [
                 n for n in z.namelist()
                 if n.startswith("PORTFOLIO_") and n.endswith("_predictions.csv")
             ]
-            if len(nomes) != 1:
-                raise RuntimeError("ZIP OPERACIONAL sem uma unica serie PORTFOLIO de previsoes.")
-            other = pd.read_csv(
-                io.BytesIO(z.read(nomes[0])),
-                usecols=["timestamp", "strategy_equity", "selected_asset"],
-            )
-        own = predictions.reset_index()
-        if "timestamp" not in own:
-            own = own.rename(columns={own.columns[0]: "timestamp"})
-        for frame in (own, other):
+            if len(names) != 1:
+                raise RuntimeError("O pacote operacional nao tem serie unica de patrimonio.")
+            other = pd.read_csv(io.BytesIO(z.read(names[0])))
+        first = predictions.reset_index().copy()
+        if "timestamp" not in first:
+            first.rename(columns={first.columns[0]: "timestamp"}, inplace=True)
+        for frame in (first, other):
             frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
-        cols = ["timestamp", "strategy_equity", "selected_asset"]
-        pair = own[cols].merge(
-            other[cols], on="timestamp", how="inner",
+        cols = ["timestamp", "selected_asset", "strategy_equity"]
+        aligned = first[cols].merge(
+            other[cols], how="inner", on="timestamp",
             suffixes=("_tcc", "_operacional"), validate="one_to_one",
         ).sort_values("timestamp")
-        if pair.empty:
-            raise RuntimeError("Nao existem decisoes em comum TCC/OPERACIONAL.")
-        pair["ativo_divergente"] = pair["selected_asset_tcc"] != pair["selected_asset_operacional"]
-        pair["delta_patrimonio"] = pair["strategy_equity_tcc"] - pair["strategy_equity_operacional"]
-        pair.to_csv(pasta / "comparacao_diaria_operacional_tcc.csv", index=False, float_format="%.17g")
-        first = pair.loc[pair["ativo_divergente"], "timestamp"]
+        if aligned.empty:
+            raise RuntimeError("Nenhuma sessao em comum entre os dois backtests.")
+        aligned["ativo_diferente"] = (
+            aligned["selected_asset_tcc"] != aligned["selected_asset_operacional"]
+        )
+        aligned["patrimonio_delta"] = (
+            aligned["strategy_equity_tcc"] - aligned["strategy_equity_operacional"]
+        )
+        aligned.to_csv(
+            output / "comparacao_diaria_ativos_patrimonio.csv",
+            index=False, float_format="%.17g",
+        )
+        divergences = aligned.loc[aligned["ativo_diferente"], "timestamp"]
         return {
-            "status": "comparado", "arquivo_operacional": arquivo.name,
-            "sessoes_comuns": int(len(pair)),
-            "decisoes_divergentes": int(len(first)),
-            "primeira_divergencia": first.iloc[0].date().isoformat() if len(first) else None,
-            "capital_tcc_final_comum": float(pair["strategy_equity_tcc"].iloc[-1]),
-            "capital_operacional_final_comum": float(pair["strategy_equity_operacional"].iloc[-1]),
+            "status": "comparado", "arquivo": archive.name,
+            "sessoes_em_comum": int(len(aligned)),
+            "decisoes_distintas": int(len(divergences)),
+            "primeira_diferenca": (
+                divergences.iloc[0].date().isoformat() if len(divergences) else None
+            ),
+            "capital_final_tcc": float(aligned["strategy_equity_tcc"].iloc[-1]),
+            "capital_final_operacional": float(aligned["strategy_equity_operacional"].iloc[-1]),
         }
     return {
-        "status": "sem_zip_operacional_com_mesmo_cutoff",
-        "observacao": "Para comparacao direta coloque o ZIP OPERACIONAL em output/.",
+        "status": "sem_pacote_operacional_da_mesma_data",
+        "detalhe": "Coloque o ZIP do backtest operacional em output/ para comparar.",
     }
 
 
 def executar_comparacao_operacional_raw() -> None:
-    """TCC Control, novos RAW/SIP/CA ate o mesmo cutoff do OPERACIONAL, sem alterar dados/u67."""
+    """Baixa RAW/SIP e treina de uma so vez os 75 ativos da versao especifica."""
     import pesquisar_expansao_u67_spyder as pesquisa
+    from engine.execucao import calcular_taxas_referencia, aplicar_deslizamento
+    from engine.modelo_lightgbm import (
+        _ajustar_modelos_lightgbm, _construir_contexto_execucao,
+        diagnosticos_fora_amostra, selecionar_switch_margin,
+    )
+    from engine.rotacao import (
+        _crescimento_politica_simples, _politica_agendada, _politica_utilidade,
+        _precalcular_utilidades_modelo, _simular_exato,
+    )
     from reproducao.dados import (
         SnapshotPaths, load_alpaca_credentials, download_raw_bars,
         download_corporate_actions, build_snapshot_manifest, validate_snapshot,
     )
+    from reproducao.experimento import build_control_config, summarize_metrics
     from reproducao.preparacao import prepare_model_frames
-    from reproducao.experimento import build_control_config
 
     global ARQUIVO_ZIP
-    ARQUIVO_ZIP = DESTINO.with_suffix(".zip")  # Mesmo ZIP usado nas pesquisas anteriores.
-    start = time.perf_counter()
+    ARQUIVO_ZIP = DESTINO.with_suffix(".zip")
+    inicio = time.perf_counter()
+    assets = UNIVERSO_TCC_REFERENCIA
+    checkpoint = _raw_operacional_verificar_universo(assets)
     cutoff = _raw_operacional_cutoff()
-    base = tuple(pesquisa.U67_REQUESTED_ASSETS)
-    candidates = tuple(pesquisa.DISCOVERY_SELECTED_CANDIDATES)
-    universe = (*base, *candidates)
-    if len(universe) != 77 or len(set(universe)) != 77:
-        raise RuntimeError("Universo solicitado difere dos 77 ativos do TCC Control.")
-    cache = ROOT / "dados" / ".u67_expansion_cache"
-    cache.mkdir(parents=True, exist_ok=True)
-    active = SnapshotPaths.from_root(cache / "operacional_fresh_raw")
-    stage = SnapshotPaths.from_root(cache / ".operacional_fresh_raw_em_execucao")
+    cache_dir = ROOT / "dados" / ".u67_expansion_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    active = SnapshotPaths.from_root(cache_dir / "operacional_fresh_raw")
+    stage = SnapshotPaths.from_root(cache_dir / ".operacional_fresh_raw_em_execucao")
     if stage.root.exists():
         shutil.rmtree(stage.root)
     stage.ensure()
-    print(f"[TCC RAW] atualizacao integral de {len(universe)} ativos ate {cutoff}", flush=True)
+    print(f"[TCC RAW] ativos=75 treino=conjunto folds=3 cutoff={cutoff}", flush=True)
 
     try:
         credentials = load_alpaca_credentials(ROOT)
         bars = download_raw_bars(
-            credentials, stage, assets=universe,
+            credentials, stage, assets=assets,
             bar_snapshot_as_of_end=cutoff, analysis_end_date=cutoff,
             per_asset_pause_seconds=0.20,
         )
         actions = download_corporate_actions(
-            credentials, stage, assets=universe, query_end=cutoff,
+            credentials, stage, assets=assets, query_end=cutoff,
         )
         build_snapshot_manifest(
             stage, bars, actions, bar_snapshot_as_of_end=cutoff,
-            analysis_end_date=cutoff, assets=universe,
-            snapshot_name="tcc_raw_sip_full_refresh_operacional_comparison",
+            analysis_end_date=cutoff, assets=assets,
+            snapshot_name="tcc_75_raw_sip_full_refresh",
         )
         manifest = validate_snapshot(stage)
-        if tuple(manifest["assets"]) != universe:
-            raise RuntimeError("Snapshot atualizado com ativos ou ordem incorretos.")
+        if tuple(manifest.get("assets") or ()) != assets:
+            raise RuntimeError("Arquivo RAW baixado nao contem exatamente os 75 ativos.")
         raw, exclusions, diagnostics, data_audit = prepare_model_frames(
-            stage, assets=base, csv_float_precision="round_trip",
+            stage, assets=assets, csv_float_precision="round_trip",
         )
-        excluded = frozenset(str(r["symbol"]).upper() for r in exclusions)
-        if excluded != pesquisa.U67_EXPECTED_EXCLUSIONS:
-            raise RuntimeError(f"Exclusoes RAW divergentes: {excluded}")
-        baseline_symbols = tuple(s for s in base if s in raw)
-        if len(baseline_symbols) != 65:
-            raise RuntimeError(f"Esperados 65 ativos base, encontrados {len(baseline_symbols)}.")
-        config = build_control_config(
-            {s: raw[s] for s in baseline_symbols}, pesquisa.CONFIG,
-        ).copiar_modelo(update={"analysis_end_date": cutoff})
-        (baseline_frames, common_dates, calendar_source, symbols,
-         folds, decision_dates, decision_to_fold, decision_metadata) = (
-            pesquisa._construir_contexto_execucao(
-                {s: raw[s] for s in baseline_symbols}, config
+        if exclusions or len(raw) != 75 or set(raw) != set(assets):
+            raise RuntimeError(
+                f"Conjunto TCC incompleto: prontos={len(raw)} excluidos={exclusions}"
             )
-        )
-        if len(folds) != 3:
-            raise RuntimeError(f"Esperados tres folds, encontrados {len(folds)}.")
-        states, base_policies, base_calibration = pesquisa._train_baseline_states(
-            baseline_frames, common_dates, symbols, folds, config,
-        )
-        old_candidate_path = pesquisa.FULL_DATA
-        pesquisa.FULL_DATA = stage
-        try:
-            candidate_frames, continuity, candidate_hashes = (
-                pesquisa._prepare_candidate_frames(
-                    list(candidates), common_dates, decision_dates, config,
-                )
-            )
-        finally:
-            pesquisa.FULL_DATA = old_candidate_path
-        if set(candidate_frames) != set(candidates):
-            raise RuntimeError("Candidatos ausentes apos nova coleta: "
-                               + ", ".join(sorted(set(candidates) - set(candidate_frames))))
-        models = {}
-        for i, symbol in enumerate(candidates, 1):
-            print(f"[TCC RAW] treino {i}/10: {symbol}", flush=True)
-            models[symbol] = pesquisa._train_candidate_caches(
-                symbol, candidate_frames[symbol], states, config,
-            )
-        baseline = pesquisa._simular_exato(
-            "tcc_base_raw_atualizada",
-            pesquisa._politica_agendada(base_policies, decision_to_fold),
-            baseline_frames, symbols, decision_dates, config,
-            pesquisa.calcular_taxas_referencia, pesquisa.aplicar_deslizamento,
-            decision_metadata=decision_metadata,
-            model_label="TCC base RAW atualizado",
-            method_line="- Mesma metodologia e dados RAW atualizados.",
-        )
-        result, metrics, calibration = pesquisa._evaluate_scenario(
-            "TCC_CONTROL_75_RAW_ATUALIZADO", list(candidates),
-            baseline_frames, candidate_frames, symbols, states, models, folds,
-            decision_dates, decision_to_fold, decision_metadata, config,
-        )
-        if len(set([*symbols, *candidate_frames])) != 75:
-            raise RuntimeError("O universo atualizado nao resultou em 75 ativos efetivos.")
-        ending_capital = float(metrics["ending_capital"])
-        if not math.isfinite(ending_capital):
-            raise RuntimeError("Resultado financeiro nao finito.")
 
+        config = build_control_config(
+            {s: raw[s] for s in assets}, pesquisa.CONFIG,
+        ).copiar_modelo(update={"analysis_end_date": cutoff})
+        (frames, common_dates, calendar_source, symbols,
+         folds, decision_dates, decision_to_fold, decision_metadata) = (
+            _construir_contexto_execucao(
+                {s: raw[s] for s in assets}, config
+            )
+        )
+        if len(symbols) != 75 or set(symbols) != set(assets) or len(folds) != 3:
+            raise RuntimeError("Painel unico divergente: 75 modelos / 3 folds obrigatorios.")
+        print("[TCC RAW] treinamento e calibracao conjuntos para todos os ativos", flush=True)
+
+        policies = {}
+        calibration_rows = []
+        fits = []
+        for fold in folds:
+            fid = int(fold["fold_id"])
+            train_dates = common_dates[:int(fold["train_end_index"])]
+            calibration_dates = common_dates[
+                int(fold["calibration_start_index"]):int(fold["calibration_end_index"])
+            ]
+            final_dates = common_dates[:int(fold["final_fit_end_index"])]
+            test_dates = pd.DatetimeIndex(fold["decision_dates"])
+            print(f"[TCC RAW] fold={fid}/3 calibration models={len(symbols)}", flush=True)
+            model_cal = _ajustar_modelos_lightgbm(
+                frames, symbols, train_dates, config,
+                phase=f"tcc75_raw_fold_{fid}_calibration",
+            )
+            if set(model_cal) != set(assets):
+                raise RuntimeError(f"Fold {fid} incompleto na calibracao.")
+            cal_cache, _ = _precalcular_utilidades_modelo(
+                model_cal, frames, symbols, calibration_dates, config,
+            )
+            scored = []
+            for margin in config.rotation_switch_margin_candidates:
+                policy = _politica_utilidade(
+                    {}, frames, symbols, config, float(margin), utility_cache=cal_cache,
+                )
+                growth = _crescimento_politica_simples(
+                    policy, frames, symbols, calibration_dates, config,
+                )
+                scored.append((float(margin), float(growth)))
+            selection = selecionar_switch_margin(scored)
+            chosen = float(selection["selected_candidate_margin"])
+            effective = max(float(config.rotation_switch_margin), chosen)
+            for margin, score in scored:
+                calibration_rows.append({
+                    "fold_id": fid, "asset_count": 75,
+                    "candidate_margin": margin, "calibration_score": score,
+                    "selected": abs(margin-chosen) <= 1e-12,
+                })
+            fits.append({"fold_id": fid, "phase": "calibration", "model_count": len(model_cal)})
+            del model_cal
+            print(f"[TCC RAW] fold={fid}/3 final_fit models={len(symbols)}", flush=True)
+            model_final = _ajustar_modelos_lightgbm(
+                frames, symbols, final_dates, config,
+                phase=f"tcc75_raw_fold_{fid}_final",
+            )
+            if set(model_final) != set(assets):
+                raise RuntimeError(f"Fold {fid} incompleto no treinamento final.")
+            scores, _ = _precalcular_utilidades_modelo(
+                model_final, frames, symbols, test_dates, config,
+            )
+            policies[fid] = _politica_utilidade(
+                {}, frames, symbols, config, effective,
+                fold_id=fid, calibrated_switch_margin=chosen, utility_cache=scores,
+            )
+            fits.append({"fold_id": fid, "phase": "final_fit", "model_count": len(model_final)})
+            del model_final
+        print("[TCC RAW] replay financeiro unico, 75 ativos", flush=True)
+        result = _simular_exato(
+            "tcc75_raw_integral",
+            _politica_agendada(policies, decision_to_fold),
+            frames, symbols, decision_dates, config,
+            calcular_taxas_referencia, aplicar_deslizamento,
+            decision_metadata=decision_metadata,
+            model_label="TCC 75 RAW/1Day Control",
+            method_line="- Universo configurado 75, sem composicoes posteriores.",
+        )
+        metrics = summarize_metrics(result, folds, float(config.initial_capital))
+        metrics["capital_rotations"] = int(result.metrics.get("capital_rotations") or 0)
+        ending = float(metrics["ending_capital"])
+        if not math.isfinite(ending):
+            raise RuntimeError("Capital final invalido.")
+
+        # Nao remove o ultimo resultado ate concluir e conferir o novo ZIP.
         SAIDA_TEMP.parent.mkdir(parents=True, exist_ok=True)
         if SAIDA_TEMP.exists():
             shutil.rmtree(SAIDA_TEMP)
         SAIDA_TEMP.mkdir(parents=True)
         result.predictions.to_csv(SAIDA_TEMP / "predictions.csv", float_format="%.17g")
         result.trades.to_csv(SAIDA_TEMP / "trades.csv", index=False, float_format="%.17g")
-        baseline.predictions.to_csv(
-            SAIDA_TEMP / "predictions_base_65.csv", float_format="%.17g",
+        pd.DataFrame(calibration_rows).to_csv(
+            SAIDA_TEMP / "fold_calibration.csv", index=False,
         )
-        pd.DataFrame(calibration).to_csv(SAIDA_TEMP / "fold_calibration.csv", index=False)
-        pd.DataFrame(base_calibration).to_csv(
-            SAIDA_TEMP / "baseline_fold_calibration.csv", index=False,
-        )
-        continuity.to_csv(SAIDA_TEMP / "candidate_continuity.csv", index=False)
+        pd.DataFrame(fits).to_csv(SAIDA_TEMP / "model_fits.csv", index=False)
         pd.DataFrame(diagnostics).to_csv(
-            SAIDA_TEMP / "base_data_diagnostics.csv", index=False,
+            SAIDA_TEMP / "data_diagnostics.csv", index=False,
         )
-        # Series normalizadas efetivamente fornecidas aos modelos (75 ativos).
-        # Inclui os precos usados pelo replay para auditoria posterior sem Alpaca.
         exportar_cotacoes({
-            "frames_base": baseline_frames,
-            "quadros": candidate_frames,
-            "simbolos": sorted([*symbols, *candidate_frames]),
+            "frames_base": frames, "quadros": {},
+            "simbolos": sorted(symbols),
         }, SAIDA_TEMP)
+
+        historical_base = SnapshotPaths.u67(ROOT)
+        historical_extra = SnapshotPaths.from_root(
+            ROOT / "dados" / ".u67_expansion_cache" / "full_raw_20261006"
+        )
         drift = _raw_operacional_auditoria(
-            stage, SnapshotPaths.u67(ROOT), old_candidate_path, universe, frozenset(base),
+            stage, historical_base, historical_extra, assets,
         )
         drift.to_csv(SAIDA_TEMP / "auditoria_drift_raw.csv", index=False)
-        comparison = _raw_operacional_comparacao(result.predictions, cutoff, SAIDA_TEMP)
+        comparison = _raw_operacional_comparacao(
+            result.predictions, cutoff, SAIDA_TEMP,
+        )
         _salvar_json(SAIDA_TEMP / "manifesto_experimento.json", {
             "status": "completed", "modo": "comparar_raw_operacional",
-            "analysis_end_date": cutoff, "market_data_provider": "alpaca",
-            "alpaca_historical_feed": "sip", "alpaca_adjustment": "raw",
-            "research_market_data_protocol": "raw_total_causal_v1",
-            "research_market_data_refresh_mode": "full",
-            "full_refresh_performed": True,
+            "reproduction_version_reference": "1.23.0+dynamic-universe.test",
+            "reference_validation": checkpoint,
+            "analysis_end_date": cutoff,
+            "source": "alpaca", "feed": "sip", "adjustment": "raw",
+            "timeframe": "1Day", "refresh_mode": "full",
             "snapshot_sha256": manifest["snapshot_sha256"],
-            "snapshot_file_hashes": manifest["file_hashes"],
-            "requested_assets": list(universe),
-            "effective_assets": sorted([*symbols, *candidate_frames]),
-            "exclusions": exclusions, "data_audit": data_audit,
-            "candidate_file_hashes": candidate_hashes,
-            "calendar_source": calendar_source, "folds": len(folds),
-            "ending_capital": ending_capital,
+            "requested_assets": list(assets), "effective_assets": list(assets),
+            "trained_assets": sorted(symbols), "trained_count_per_fold": 75,
+            "folds": len(folds), "model_fits": fits,
+            "excluded_assets": exclusions, "data_audit": data_audit,
+            "calendar_source": calendar_source,
             "initial_capital": float(config.initial_capital),
-            "metrics": metrics, "comparison_with_operacional": comparison,
-            "runtime_seconds": time.perf_counter() - start,
-            "warning": "Pesquisa com nova fonte: checkpoint oficial TCC permanece congelado.",
+            "ending_capital": ending, "metrics": metrics,
+            "comparison": comparison,
+            "runtime_seconds": time.perf_counter()-inicio,
+            "note": "Novo RAW; checkpoint original continua congelado.",
         })
         (SAIDA_TEMP / "LEIA_ME.txt").write_text(
-            "Pesquisa TCC Control x OPERACIONAL, RAW/SIP completo ate " + cutoff + ".\n"
-            "Refresh integral inclui RAW/1Day, corporate actions e normalizacao de splits.\n"
-            "A reproducao oficial e o snapshot em dados/u67 permanecem intactos.\n"
-            "Veja auditoria_drift_raw.csv e comparacao_diaria_operacional_tcc.csv (se existir ZIP OPERACIONAL).\n"
-            "Nao exporta credenciais nem dados de contas Alpaca.\n",
+            "Pesquisa TCC 75 ativos: fonte RAW/SIP atualizada, treino conjunto e replay unico.\n"
+            f"Cutoff: {cutoff}; versao de referencia: 1.23.0+dynamic-universe.test.\n"
+            "Veja auditoria_drift_raw.csv e comparacao_diaria_ativos_patrimonio.csv.\n"
+            "O checkpoint cientifico original nao foi sobrescrito.\n",
             encoding="utf-8",
         )
         shutil.copyfile(Path(__file__), SAIDA_TEMP / "codigo_executado.py")
 
-        # Publica a fonte somente depois da verificacao integral.
-        backup = cache / ".operacional_fresh_raw_transicao_anterior"
-        if backup.exists():
-            shutil.rmtree(backup)
+        # Comita somente snapshots validados e troca o ZIP ao final com staging.
+        previous = cache_dir / ".operacional_fresh_raw_anterior_transicao"
+        if previous.exists():
+            shutil.rmtree(previous)
         if active.root.exists():
-            active.root.replace(backup)
+            active.root.replace(previous)
         try:
             stage.root.replace(active.root)
             validate_snapshot(active)
         except Exception:
             if active.root.exists():
                 shutil.rmtree(active.root)
-            if backup.exists():
-                backup.replace(active.root)
+            if previous.exists():
+                previous.replace(active.root)
             raise
-        if backup.exists():
-            shutil.rmtree(backup)
-        # Nao apagar ZIP existente antes do sucesso da nova execucao.
+        if previous.exists():
+            shutil.rmtree(previous)
         publicar_resultado(SAIDA_TEMP)
-        print(f"[TCC RAW CONCLUIDO] cutoff={cutoff} capital=US$ "
-              f"{ending_capital:,.2f} ZIP={ARQUIVO_ZIP}", flush=True)
+        print(f"[TCC RAW] COMPLETO 75 ativos capital={ending:,.2f} ZIP={ARQUIVO_ZIP}")
     finally:
         if stage.root.exists():
             shutil.rmtree(stage.root)
