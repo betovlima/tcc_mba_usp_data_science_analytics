@@ -954,7 +954,7 @@ def test_sensibilidade_margens_nao_altera_pesquisa_de_deterioracao() -> None:
     assert 'elif MODO == "deterioracao"' in script
     assert 'permitir_cash=True, aplicar_todos_folds=True' in script
     assert "OOS" not in script.split("# %% 12. Sensibilidade")[1].split(
-        'if __name__ == "__main__":'
+        "# %% 13. Auditoria observacional"
     )[0]
 
 
