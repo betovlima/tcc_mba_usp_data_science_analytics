@@ -217,6 +217,7 @@ def download_raw_bars(
     assets: tuple[str, ...],
     bar_snapshot_as_of_end: str,
     analysis_end_date: str,
+    per_asset_pause_seconds: float = 0.0,
 ) -> dict[str, Path]:
     """Baixa SIP/1Day/RAW, um ativo por requisicao, e grava um CSV por ativo."""
     paths.ensure()
@@ -281,6 +282,8 @@ def download_raw_bars(
             raise RuntimeError(f"Fresh Alpaca RAW snapshot returned no bars for {symbol}.")
         frame.to_csv(target, index=False, float_format="%.17g")
         files[symbol] = target
+        if per_asset_pause_seconds > 0 and position < len(assets):
+            time.sleep(float(per_asset_pause_seconds))
         print(
             f"[alpaca-bars] {symbol} rows={len(frame)} "
             f"first={frame['timestamp'].min().date()} "
