@@ -232,14 +232,14 @@ def reproduzir_universo_congelado(
         source_paths=source_paths,
         csv_float_precision="round_trip",
     )
-    if exclusions or set(raw) != set(ASSETS) or len(raw) != 77:
+    if exclusions or set(raw) != set(ASSETS) or len(raw) != configured_count:
         raise RuntimeError(
             "Universo de entrada incompleto: "
-            f"esperados=77 preparados={len(raw)} "
+            f"esperados={configured_count} preparados={len(raw)} "
             f"ausentes={sorted(set(ASSETS) - set(raw))} "
             f"exclusoes={exclusions}"
         )
-    print("[universe] prepared=77/77 excluded=0", flush=True)
+    print(f"[universe] prepared={len(raw)}/{configured_count} excluded={len(exclusions)}", flush=True)
 
     config = build_control_config(
         {symbol: raw[symbol] for symbol in ASSETS}
@@ -258,12 +258,12 @@ def reproduzir_universo_congelado(
         config,
     )
     if (
-        len(frames) != 77
-        or len(symbols) != 77
+        len(frames) != configured_count
+        or len(symbols) != configured_count
         or set(symbols) != set(ASSETS)
     ):
         raise RuntimeError(
-            "Painel unificado nao possui 77 ativos: "
+            "Painel unificado nao corresponde a ASSETS: "
             f"frames={len(frames)} modelos={len(symbols)} "
             f"ausentes={sorted(set(ASSETS) - set(symbols))}"
         )
@@ -300,7 +300,7 @@ def reproduzir_universo_congelado(
     continuity = pd.DataFrame(continuity_rows)
 
     print(
-        f"[universe] context=77/77 folds={len(folds)} "
+        f"[universe] context={len(symbols)}/{configured_count} folds={len(folds)} "
         f"decision_sessions={len(all_decision_dates)-1} "
         "train_calibration_replay=joint",
         flush=True,
@@ -330,7 +330,7 @@ def reproduzir_universo_congelado(
         decision_dates = pd.DatetimeIndex(fold["decision_dates"])
 
         print(
-            f"[fold] {fold_id}/{len(folds)} calibration assets=77",
+            f"[fold] {fold_id}/{len(folds)} calibration assets={configured_count}",
             flush=True,
         )
         calibration_models = _ajustar_modelos_lightgbm(
@@ -344,7 +344,7 @@ def reproduzir_universo_congelado(
         if set(calibration_models) != set(ASSETS):
             raise RuntimeError(
                 f"fold={fold_id}: modelos de calibracao incompletos "
-                f"({len(calibration_models)}/77), "
+                f"({len(calibration_models)}/{configured_count}), "
                 f"ausentes={sorted(set(ASSETS)-set(calibration_models))}"
             )
         calibration_cache, _ = _precalcular_utilidades_modelo(
@@ -370,7 +370,7 @@ def reproduzir_universo_congelado(
         for margin, score in scored_margins:
             calibration_rows.append({
                 "fold_id": fold_id,
-                "asset_count": 77,
+                "asset_count": configured_count,
                 "candidate_margin": margin,
                 "calibration_score": score,
                 "selected": bool(abs(margin - chosen_margin) <= 1e-12),
@@ -381,7 +381,7 @@ def reproduzir_universo_congelado(
         })
         del calibration_models
 
-        print(f"[fold] {fold_id}/{len(folds)} final_fit assets=77", flush=True)
+        print(f"[fold] {fold_id}/{len(folds)} final_fit assets={configured_count}", flush=True)
         final_models = _ajustar_modelos_lightgbm(
             frames,
             symbols,
@@ -393,7 +393,7 @@ def reproduzir_universo_congelado(
         if set(final_models) != set(ASSETS):
             raise RuntimeError(
                 f"fold={fold_id}: modelos finais incompletos "
-                f"({len(final_models)}/77), "
+                f"({len(final_models)}/{configured_count}), "
                 f"ausentes={sorted(set(ASSETS)-set(final_models))}"
             )
         decision_cache, _ = _precalcular_utilidades_modelo(
@@ -424,13 +424,13 @@ def reproduzir_universo_congelado(
         del final_models
         print(
             f"[fold] {fold_id}/{len(folds)} completed "
-            "calibration_models=77 final_models=77",
+            "calibration_models={configured_count} final_models={configured_count}",
             flush=True,
         )
 
-    print("[replay] assets=77 policy=single_joint_rotation", flush=True)
+    print(f"[replay] assets={configured_count} policy=single_joint_rotation", flush=True)
     result = _simular_exato(
-        "tcc_unified_77",
+        "tcc_unified_assets",
         _politica_agendada(policies, decision_to_fold),
         frames,
         symbols,
@@ -439,8 +439,8 @@ def reproduzir_universo_congelado(
         calcular_taxas_referencia,
         aplicar_deslizamento,
         decision_metadata=decision_metadata,
-        model_label="TCC Winner 77 - LightGBM Control",
-        method_line="- Os 77 ativos foram treinados e calibrados conjuntamente por fold.",
+        model_label=f"TCC Winner {configured_count} - LightGBM Control",
+        method_line=f"- Os {configured_count} ativos foram treinados e calibrados conjuntamente por fold.",
     )
     metrics = summarize_metrics(result, folds, float(config.initial_capital))
     metrics.update({
@@ -488,15 +488,15 @@ def reproduzir_universo_congelado(
         "reproduction_version": version,
         "execution_schema": execution_schema,
         "status": "completed",
-        "purpose": "reproducao_conjunta_77_ativos",
+        "purpose": "reproducao_conjunta_universo",
         "reproduced_exact_to_cent": exact,
-        "checkpoint_validation": "awaiting_first_77_asset_baseline",
+        "checkpoint_validation": "awaiting_reference_for_configured_universe",
         "analysis_end_date": contract["analysis_end_date"],
         "checkpoint": {
             "observed_capital": capital,
             "expected_capital": expected_capital,
             "delta": None,
-            "status": "new_77_asset_reference",
+            "status": "new_configured_universe_reference",
         },
         "data": {
             "source": "alpaca",
@@ -505,24 +505,24 @@ def reproduzir_universo_congelado(
             "timeframe": "1Day",
             "full_refresh": False,
             "database_used": False,
-            "snapshot_sha256": snapshot["snapshot_sha256"],
-            "external_source_sha256": external_hashes,
-            "external_snapshot_committed_to_git": False,
+            "snapshot_sha256": frozen_manifest["snapshot_sha256"],
+            "asset_sources": input_provenance,
+            "updated_snapshot_sha256": (updated_manifest or {}).get("snapshot_sha256"),
             "data_audit": data_audit,
             "diagnostics": diagnostics,
         },
         "universe": {
             "requested_assets": list(ASSETS),
-            "requested_count": 77,
+            "requested_count": configured_count,
             "effective_assets": list(ASSETS),
-            "effective_count": 77,
+            "effective_count": len(raw),
             "trained_assets": symbols,
-            "trained_count_each_fold": 77,
+            "trained_count_each_fold": len(symbols),
             "excluded_assets": [],
         },
         "calibration": {
             "folds": len(folds),
-            "asset_count_each_fold": 77,
+            "asset_count_each_fold": len(symbols),
             "fit_counts": model_fits,
         },
         "calendar": {
@@ -551,7 +551,7 @@ def reproduzir_universo_congelado(
         json.dumps(make_json_safe(payload), ensure_ascii=False, indent=2, allow_nan=False),
         encoding="utf-8",
     )
-    gerar_analises_backtest(output, manifest=snapshot, result=result)
+    gerar_analises_backtest(output, manifest=frozen_manifest, result=result, asset_count=configured_count)
     package = criar_pacote_analise(
         output,
         comparison_file="reproducao_universo.json",
@@ -559,7 +559,7 @@ def reproduzir_universo_congelado(
         archive_name="pacote_reproducao_universo.zip",
     )
     print(
-        f"[done] capital=US$ {capital:,.2f} effective_assets=77/77 "
+        f"[done] capital=US$ {capital:,.2f} effective_assets={len(symbols)}/{configured_count} "
         f"folds={len(folds)} zip={package}",
         flush=True,
     )
