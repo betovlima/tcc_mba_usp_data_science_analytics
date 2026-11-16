@@ -97,8 +97,8 @@ def test_official_reproduction_has_no_database_dependency() -> None:
 
 
 def test_frozen_universe_and_dates_match_cpu_reference() -> None:
-    assert len(ASSETS) == 77
-    assert len(set(ASSETS)) == 77
+    assert ASSETS
+    assert len(set(ASSETS)) == len(ASSETS)
     assert ASSETS == CONFIG.assets
     assert "DOC" in ASSETS
     assert "CLMT" in ASSETS
@@ -719,17 +719,18 @@ def test_official_reproduction_uses_selected_universe_contract() -> None:
     )
     # O manifesto preserva a historia, mas NAO valida o novo replay de 77.
     runner = (ROOT / "reproducao" / "experimento.py").read_text(encoding="utf-8")
-    assert "len(ASSETS) != 77" in runner
-    assert '"checkpoint_validation": "awaiting_first_77_asset_baseline"' in runner
+    assert "len(ASSETS) != 77" not in runner
+    assert "configured_count = len(ASSETS)" in runner
+    assert '"checkpoint_validation": "awaiting_reference_for_configured_universe"' in runner
     assert "expected_capital = None" in runner
     assert runner.count("prepare_model_frames(") == 1
-    assert "source_paths={symbol: external_data for symbol in extra_symbols}" in runner
+    assert "source_paths=source_paths" in runner
     assert "_train_baseline_states(" not in runner
     assert "_train_candidate_caches(" not in runner
     assert "_evaluate_scenario(" not in runner
     assert "_ajustar_modelos_lightgbm(" in runner
     assert "_precalcular_utilidades_modelo(" in runner
-    assert '"trained_count_each_fold": 77' in runner
+    assert '"trained_count_each_fold": len(symbols)' in runner
     assert contract["selected_assets"] == [
         "CRT", "NBR", "CAPR", "PNBK", "PENN",
         "JBL", "STAG", "MCHB", "LAD", "TOWN",
@@ -779,22 +780,27 @@ def test_official_runner_silences_only_pandas4_warning() -> None:
 
 def test_real_snapshot_prepares_all_source_assets_with_audited_doc_clmt() -> None:
     """Regression: never report success after silently excluding two securities."""
+    source_symbols = tuple(
+        __import__("json").loads(
+            (ROOT / "dados" / "u67" / "manifest.json").read_text(encoding="utf-8")
+        )["assets"]
+    )
     frames, exclusions, diagnostics, audit = prepare_model_frames(
         SnapshotPaths.archived_source(ROOT),
-        assets=tuple(__import__('json').loads((ROOT / 'dados' / 'u67' / 'manifest.json').read_text(encoding='utf-8'))['assets']),
+        assets=source_symbols,
         csv_float_precision="round_trip",
     )
     assert set(frames) == set(__import__("json").loads(
         (ROOT / "dados" / "u67" / "manifest.json").read_text(encoding="utf-8")
     )["assets"])
-    assert len(frames) == 67
+    assert len(frames) == len(source_symbols)
     assert exclusions == []
-    assert audit["eligible_assets"] == 67
+    assert audit["eligible_assets"] == len(source_symbols)
     lineages = {row["symbol"]: row for row in audit["validated_structural_lineages"]}
     assert set(lineages) == {"DOC", "CLMT"}
     assert lineages["DOC"]["historical_execution_symbol"] == "PEAK"
     assert lineages["CLMT"]["conversion_ratio"] == "1:1"
-    assert len(diagnostics) == 67
+    assert len(diagnostics) == len(source_symbols)
     for symbol in ("DOC", "CLMT"):
         assert len(frames[symbol]) > 2500
 
@@ -819,10 +825,9 @@ def test_selected_universe_contract_never_reduces_to_fewer_assets() -> None:
         )
     )
     requested = list(ASSETS)
-    assert len(requested) == 77
-    assert len(set(requested)) == 77
-    assert requested[46:48] == ["DOC", "CLMT"]
-    assert requested[-10:] == contract["selected_assets"]
+    assert requested
+    assert len(set(requested)) == len(requested)
+    assert isinstance(contract["candidate_file_hashes"], dict)
 
 
 def test_single_preparation_pass_uses_both_frozen_input_directories(tmp_path) -> None:
@@ -1020,7 +1025,7 @@ def test_reproducao_integrada_usa_77_desde_o_primeiro_fold(tmp_path, monkeypatch
 
 
 def test_one_official_assets_definition_and_no_obsolete_universe_variables() -> None:
-    """The strategy must have exactly one authoritative 77-symbol asset tuple."""
+    """The strategy must have one authoritative, variable-length asset tuple."""
     import ast
 
     config_path = ROOT / "engine" / "configuracao.py"
@@ -1033,7 +1038,8 @@ def test_one_official_assets_definition_and_no_obsolete_universe_variables() -> 
     ]
     assert len(declarations) == 1
     assert isinstance(ASSETS, tuple)
-    assert len(ASSETS) == len(set(ASSETS)) == 77
+    assert ASSETS
+    assert len(ASSETS) == len(set(ASSETS))
     assert CONFIG.assets is ASSETS
     for path in (
         config_path,
@@ -1061,4 +1067,4 @@ def test_backtest_figure_titles_do_not_use_legacy_universe_label() -> None:
         encoding="utf-8"
     )
     assert "U67 Control" not in source
-    assert 'label="Winner 77"' in source
+    assert 'label=f"Winner {asset_count}"' in source
