@@ -171,17 +171,35 @@ def reproduzir_universo_congelado(
         else root / "dados" / "universo_77"
     )
 
-    frozen_manifest = validate_snapshot(archived_data)
-    if frozen_manifest.get("snapshot_sha256") != contract["snapshot_sha256"]:
+    # Uma coleta completa nao depende de hashes antigos, U67 ou anexos
+    # historicos. O modo congelado continua disponivel sem alteracoes.
+    frozen_manifest = (
+        {"snapshot_sha256": None}
+        if full_refresh_performed else validate_snapshot(archived_data)
+    )
+    if (not full_refresh_performed
+            and frozen_manifest.get("snapshot_sha256") != contract["snapshot_sha256"]):
         raise RuntimeError("Integridade do snapshot historico divergente.")
-    archived_symbols = set(frozen_manifest.get("assets") or ())
-    frozen_extra = dict(contract.get("candidate_file_hashes") or {})
+    archived_symbols = (
+        set() if full_refresh_performed
+        else set(frozen_manifest.get("assets") or ())
+    )
+    frozen_extra = (
+        {} if full_refresh_performed
+        else dict(contract.get("candidate_file_hashes") or {})
+    )
 
     updated_manifest = (
         validate_snapshot(updated_data) if updated_data.manifest.is_file()
         else None
     )
     updated_symbols = set((updated_manifest or {}).get("assets") or ())
+    if full_refresh_performed and updated_symbols != configured_set:
+        raise RuntimeError(
+            "Snapshot RAW atualizado nao possui exatamente os ativos de ASSETS: "
+            f"faltantes={sorted(configured_set - updated_symbols)} "
+            f"extras={sorted(updated_symbols - configured_set)}"
+        )
 
     def digest(path: Path) -> str:
         sha = hashlib.sha256()
@@ -523,7 +541,7 @@ def reproduzir_universo_congelado(
             "timeframe": "1Day",
             "full_refresh": bool(full_refresh_performed),
             "database_used": False,
-            "snapshot_sha256": frozen_manifest["snapshot_sha256"],
+            "snapshot_sha256": (updated_manifest or frozen_manifest)["snapshot_sha256"],
             "asset_sources": input_provenance,
             "input_universe_sha256": input_universe_sha256,
             "updated_snapshot_sha256": (updated_manifest or {}).get("snapshot_sha256"),
