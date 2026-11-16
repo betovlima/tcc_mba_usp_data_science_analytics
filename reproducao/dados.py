@@ -228,7 +228,7 @@ def download_raw_bars(
     start = pd.Timestamp(START_DATE, tz="UTC").to_pydatetime()
     bar_end = pd.Timestamp(bar_snapshot_as_of_end, tz="UTC")
     api_end = bar_end + pd.Timedelta(days=1)
-    # Mesma janela segura RAW/SIP usada no MCT: candle diario de uma
+    # Mesma janela segura RAW/SIP usada na pesquisa operacional: candle diario de uma
     # sessao recente somente depois de fechamento XNYS + 20 minutos.
     # Para datas antigas, manter a fronteira original (dia seguinte UTC).
     now_utc = pd.Timestamp.now(tz="UTC")
