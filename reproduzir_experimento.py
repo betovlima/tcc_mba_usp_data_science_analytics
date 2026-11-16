@@ -1,9 +1,9 @@
-"""Reproducao oficial do universo de ativos selecionado.
+"""Reproducao do universo configurado na unica lista ASSETS.
 
-O script nao descobre ativos nem atualiza series. Utiliza o mesmo treino por
-ativo, calibracao por fold e replay financeiro da pesquisa historica ja
-validada. Requer o snapshot base e os arquivos locais congelados dos
-candidatos, com verificacao SHA-256 antes de qualquer treinamento.
+O script nao descobre ativos nem baixa series. Treina, calibra e executa o
+backtest conjunto com todos os simbolos da configuracao, independentemente da
+quantidade. Cada ativo precisa ter dados historicos locais validados.
+Os arquivos RAW preservados sao verificados por SHA-256.
 
 Spyder: reinicie o kernel e execute este arquivo com F5.
 """
@@ -23,7 +23,7 @@ if _PANDAS4_WARNING is not None:
 
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "output" / "reproducao_universo"
-REPRODUCTION_VERSION = "1.23.0+universe77.test"
+REPRODUCTION_VERSION = "1.23.0+dynamic-universe.test"
 EXECUTION_SCHEMA = "universe-reproduction-v4"
 
 
