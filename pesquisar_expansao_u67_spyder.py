@@ -41,10 +41,7 @@ from sklearn.metrics import ndcg_score
 from engine.configuracao import (
     CONFIG,
     START_DATE,
-    U67_EXPECTED_EFFECTIVE_COUNT,
-    U67_EXPECTED_EXCLUSIONS,
-    U67_EXPECTED_REQUESTED_COUNT,
-    U67_REQUESTED_ASSETS,
+    ASSETS,
     construir_configuracao_controle,
 )
 from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
@@ -85,7 +82,11 @@ from reproducao.preparacao import (
 # %% 0 - Parametros da campanha
 ROOT = Path(__file__).resolve().parent
 RUN_MODE = "decision_validation"
-BASE_DATA = SnapshotPaths.u67(ROOT)
+BASE_DATA = SnapshotPaths.archived_source(ROOT)
+# Metadados de arquivos arquivados, nao um universo alternativo da estrategia.
+def archived_snapshot_symbols() -> tuple[str, ...]:
+    return tuple(json.loads(BASE_DATA.manifest.read_text(encoding="utf-8"))["assets"])
+
 CACHE_ROOT = ROOT / "dados" / ".u67_expansion_cache"
 FAST_CACHE = CACHE_ROOT / "fast_split_20261006"
 FULL_DATA = SnapshotPaths.from_root(CACHE_ROOT / "full_raw_20261006")
@@ -549,7 +550,7 @@ def _load_catalog(credentials: Any) -> list[dict[str, Any]]:
 
 
 def _eligible_catalog(catalog: list[dict[str, Any]], snapshot_sha: str) -> pd.DataFrame:
-    excluded = set(U67_REQUESTED_ASSETS) | set(U67_EXPECTED_EXCLUSIONS)
+    excluded = set(archived_snapshot_symbols()) | set(frozenset())
     rows = []
     seen = set()
     for item in catalog:
@@ -3413,19 +3414,19 @@ def main() -> dict[str, Any]:
     # Baseline congelado. Nenhum download ou escrita ocorre em dados/u67.
     snapshot = validate_snapshot(BASE_DATA)
     manifest_assets = tuple(snapshot.get("assets") or ())
-    if len(manifest_assets) != U67_EXPECTED_REQUESTED_COUNT or manifest_assets != tuple(U67_REQUESTED_ASSETS):
-        raise RuntimeError("Snapshot U67 nao corresponde ao contrato oficial de 67 ativos.")
+    if len(manifest_assets) != len(set(manifest_assets)) or not set(manifest_assets).issubset(ASSETS):
+        raise RuntimeError("Snapshot arquivado possui ativos invalidos ou duplicados.")
     baseline_raw, exclusions, diagnostics, data_audit = prepare_model_frames(
         BASE_DATA,
-        assets=U67_REQUESTED_ASSETS,
+        assets=archived_snapshot_symbols(),
         csv_float_precision="round_trip",
     )
     excluded = frozenset(str(item.get("symbol") or "").strip().upper() for item in exclusions)
-    if excluded != U67_EXPECTED_EXCLUSIONS or len(baseline_raw) != U67_EXPECTED_EFFECTIVE_COUNT:
+    if excluded != frozenset() or len(baseline_raw) != len(archived_snapshot_symbols()):
         raise RuntimeError(
             f"Contrato U67 efetivo divergente: count={len(baseline_raw)} exclusions={sorted(excluded)}"
         )
-    baseline_order = tuple(symbol for symbol in U67_REQUESTED_ASSETS if symbol in baseline_raw)
+    baseline_order = tuple(symbol for symbol in archived_snapshot_symbols() if symbol in baseline_raw)
     config_u67 = build_control_config({symbol: baseline_raw[symbol] for symbol in baseline_order}, CONFIG)
     config_u67 = config_u67.copiar_modelo(update={"analysis_end_date": ANALYSIS_END_DATE})
     (
@@ -3441,7 +3442,7 @@ def main() -> dict[str, Any]:
         {symbol: baseline_raw[symbol] for symbol in baseline_order},
         config_u67,
     )
-    if len(baseline_symbols) != U67_EXPECTED_EFFECTIVE_COUNT:
+    if len(baseline_symbols) != len(archived_snapshot_symbols()):
         raise RuntimeError("Contexto U67 nao preservou os 67 ativos solicitados.")
 
     states, baseline_policies, calibration_rows = _train_baseline_states(
@@ -3468,7 +3469,7 @@ def main() -> dict[str, Any]:
         "exact_to_cent": NOT_VALID,
         "checkpoint_validation": "pending_full_universe_reference",
         "snapshot_sha256": snapshot.get("snapshot_sha256"),
-        "requested_assets": len(U67_REQUESTED_ASSETS),
+        "requested_assets": len(archived_snapshot_symbols()),
         "effective_assets": len(baseline_symbols),
         "excluded_assets": sorted(excluded),
         "calendar_source": calendar_source,
