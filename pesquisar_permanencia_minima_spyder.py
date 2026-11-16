@@ -6,7 +6,7 @@ Este e o arquivo UNICO para todas as rodadas da pesquisa nesta branch:
 Spyder: abra este arquivo e execute com F5.
 Terminal: python pesquisar_permanencia_minima_spyder.py
 
-Modos: MODO = "comparar_mct_raw" (padrao),
+Modos: MODO = "comparar_raw_operacional" (padrao),
 "saida_antecipada_economica" (anterior; Control + 3 politicas),
 "decisao_economica_sem_prazo" (sem trava por tempo),
 "permanencia_inteligente" (experimento anterior),
@@ -32,7 +32,7 @@ probabilidade de queda em 20 sessoes, treinado apenas em folds anteriores.
 Os modos antigos de pesquisa permanecem disponiveis para reproducao.
 
 Nos modos historicos, nao acessa MongoDB nem baixa cotacoes.
-O modo comparar_mct_raw baixa novamente RAW/SIP e CA para cache paralelo.
+O modo comparar_raw_operacional baixa novamente RAW/SIP e CA para cache paralelo.
 Nao reconstrói ativos
 descontinuados, nao altera a Winner Live nem escreve em dados/u67.
 Os 10 candidatos requerem o cache historico local e seus SHA-256
@@ -64,7 +64,7 @@ import numpy as np
 import pandas as pd
 
 # %% 0. Um arquivo, uma branch; somente este seletor muda entre modos.
-MODO = "comparar_mct_raw"  # Refresh RAW/SIP diario para comparar com MCT.
+MODO = "comparar_raw_operacional"  # Refresh RAW/SIP diario para comparar com OPERACIONAL.
 PERMANENCIAS = (0, 1, 2, 3)
 PERMANENCIA_CONTROLE = 2
 TOLERANCIA_CENTAVO = 0.01
@@ -6713,11 +6713,11 @@ def executar_permanencia_inteligente_v2() -> None:
 
 
 # %% Pesquisa de paridade RAW/SIP: fonte fresca, replay TCC sem alterar o checkpoint.
-DATA_FINAL_MCT = None  # None: ultimo pregao XNYS com candle seguro (D + 20 min).
-ZIP_BACKTEST_MCT = None  # Opcional: caminho do ZIP MCT para comparacao diaria.
+DATA_FINAL_OPERACIONAL = None  # None: ultimo pregao XNYS com candle seguro (D + 20 min).
+ZIP_BACKTEST_OPERACIONAL = None  # Opcional: caminho do ZIP OPERACIONAL para comparacao diaria.
 
 
-def _raw_mct_cutoff() -> str:
+def _raw_operacional_cutoff() -> str:
     import exchange_calendars as xcals
     agora = pd.Timestamp(datetime.now(timezone.utc))
     calendario = xcals.get_calendar("XNYS")
@@ -6726,9 +6726,9 @@ def _raw_mct_cutoff() -> str:
     while agora < calendario.session_close(sessao).tz_convert("UTC") + pd.Timedelta(minutes=20):
         sessao = calendario.previous_session(sessao)
     ultima = sessao.date().isoformat()
-    if DATA_FINAL_MCT is None:
+    if DATA_FINAL_OPERACIONAL is None:
         return ultima
-    cutoff = str(DATA_FINAL_MCT)
+    cutoff = str(DATA_FINAL_OPERACIONAL)
     if cutoff > ultima:
         raise ValueError(f"Cutoff {cutoff} ainda indisponivel; ultimo seguro: {ultima}.")
     if calendario.date_to_session(pd.Timestamp(cutoff), direction="previous").date().isoformat() != cutoff:
@@ -6736,7 +6736,7 @@ def _raw_mct_cutoff() -> str:
     return cutoff
 
 
-def _raw_mct_auditoria(fresco, referencia, historico, universo, base):
+def _raw_operacional_auditoria(fresco, referencia, historico, universo, base):
     from reproducao.preparacao import load_raw_bar_file
     rows = []
     for symbol in universo:
@@ -6770,10 +6770,10 @@ def _raw_mct_auditoria(fresco, referencia, historico, universo, base):
     return pd.DataFrame(rows)
 
 
-def _raw_mct_comparacao(predictions, cutoff, pasta):
+def _raw_operacional_comparacao(predictions, cutoff, pasta):
     import io
     arquivos = (
-        [Path(ZIP_BACKTEST_MCT)] if ZIP_BACKTEST_MCT else
+        [Path(ZIP_BACKTEST_OPERACIONAL)] if ZIP_BACKTEST_OPERACIONAL else
         sorted((ROOT / "output").glob("market_cycle_trader_*.zip"), reverse=True)
     )
     for arquivo in arquivos:
@@ -6788,7 +6788,7 @@ def _raw_mct_comparacao(predictions, cutoff, pasta):
                 if n.startswith("PORTFOLIO_") and n.endswith("_predictions.csv")
             ]
             if len(nomes) != 1:
-                raise RuntimeError("ZIP MCT sem uma unica serie PORTFOLIO de previsoes.")
+                raise RuntimeError("ZIP OPERACIONAL sem uma unica serie PORTFOLIO de previsoes.")
             other = pd.read_csv(
                 io.BytesIO(z.read(nomes[0])),
                 usecols=["timestamp", "strategy_equity", "selected_asset"],
@@ -6801,30 +6801,30 @@ def _raw_mct_comparacao(predictions, cutoff, pasta):
         cols = ["timestamp", "strategy_equity", "selected_asset"]
         pair = own[cols].merge(
             other[cols], on="timestamp", how="inner",
-            suffixes=("_tcc", "_mct"), validate="one_to_one",
+            suffixes=("_tcc", "_operacional"), validate="one_to_one",
         ).sort_values("timestamp")
         if pair.empty:
-            raise RuntimeError("Nao existem decisoes em comum TCC/MCT.")
-        pair["ativo_divergente"] = pair["selected_asset_tcc"] != pair["selected_asset_mct"]
-        pair["delta_patrimonio"] = pair["strategy_equity_tcc"] - pair["strategy_equity_mct"]
-        pair.to_csv(pasta / "comparacao_diaria_mct_tcc.csv", index=False, float_format="%.17g")
+            raise RuntimeError("Nao existem decisoes em comum TCC/OPERACIONAL.")
+        pair["ativo_divergente"] = pair["selected_asset_tcc"] != pair["selected_asset_operacional"]
+        pair["delta_patrimonio"] = pair["strategy_equity_tcc"] - pair["strategy_equity_operacional"]
+        pair.to_csv(pasta / "comparacao_diaria_operacional_tcc.csv", index=False, float_format="%.17g")
         first = pair.loc[pair["ativo_divergente"], "timestamp"]
         return {
-            "status": "comparado", "arquivo_mct": arquivo.name,
+            "status": "comparado", "arquivo_operacional": arquivo.name,
             "sessoes_comuns": int(len(pair)),
             "decisoes_divergentes": int(len(first)),
             "primeira_divergencia": first.iloc[0].date().isoformat() if len(first) else None,
             "capital_tcc_final_comum": float(pair["strategy_equity_tcc"].iloc[-1]),
-            "capital_mct_final_comum": float(pair["strategy_equity_mct"].iloc[-1]),
+            "capital_operacional_final_comum": float(pair["strategy_equity_operacional"].iloc[-1]),
         }
     return {
-        "status": "sem_zip_mct_com_mesmo_cutoff",
-        "observacao": "Para comparacao direta coloque o ZIP MCT em output/.",
+        "status": "sem_zip_operacional_com_mesmo_cutoff",
+        "observacao": "Para comparacao direta coloque o ZIP OPERACIONAL em output/.",
     }
 
 
-def executar_comparacao_mct_raw() -> None:
-    """TCC Control, novos RAW/SIP/CA ate o mesmo cutoff do MCT, sem alterar dados/u67."""
+def executar_comparacao_operacional_raw() -> None:
+    """TCC Control, novos RAW/SIP/CA ate o mesmo cutoff do OPERACIONAL, sem alterar dados/u67."""
     import pesquisar_expansao_u67_spyder as pesquisa
     from reproducao.dados import (
         SnapshotPaths, load_alpaca_credentials, download_raw_bars,
@@ -6833,8 +6833,10 @@ def executar_comparacao_mct_raw() -> None:
     from reproducao.preparacao import prepare_model_frames
     from reproducao.experimento import build_control_config
 
+    global ARQUIVO_ZIP
+    ARQUIVO_ZIP = DESTINO.with_suffix(".zip")  # Mesmo ZIP usado nas pesquisas anteriores.
     start = time.perf_counter()
-    cutoff = _raw_mct_cutoff()
+    cutoff = _raw_operacional_cutoff()
     base = tuple(pesquisa.U67_REQUESTED_ASSETS)
     candidates = tuple(pesquisa.DISCOVERY_SELECTED_CANDIDATES)
     universe = (*base, *candidates)
@@ -6842,8 +6844,8 @@ def executar_comparacao_mct_raw() -> None:
         raise RuntimeError("Universo solicitado difere dos 77 ativos do TCC Control.")
     cache = ROOT / "dados" / ".u67_expansion_cache"
     cache.mkdir(parents=True, exist_ok=True)
-    active = SnapshotPaths.from_root(cache / "mct_fresh_raw")
-    stage = SnapshotPaths.from_root(cache / ".mct_fresh_raw_em_execucao")
+    active = SnapshotPaths.from_root(cache / "operacional_fresh_raw")
+    stage = SnapshotPaths.from_root(cache / ".operacional_fresh_raw_em_execucao")
     if stage.root.exists():
         shutil.rmtree(stage.root)
     stage.ensure()
@@ -6862,7 +6864,7 @@ def executar_comparacao_mct_raw() -> None:
         build_snapshot_manifest(
             stage, bars, actions, bar_snapshot_as_of_end=cutoff,
             analysis_end_date=cutoff, assets=universe,
-            snapshot_name="tcc_raw_sip_full_refresh_mct_comparison",
+            snapshot_name="tcc_raw_sip_full_refresh_operacional_comparison",
         )
         manifest = validate_snapshot(stage)
         if tuple(manifest["assets"]) != universe:
@@ -6946,13 +6948,13 @@ def executar_comparacao_mct_raw() -> None:
         pd.DataFrame(diagnostics).to_csv(
             SAIDA_TEMP / "base_data_diagnostics.csv", index=False,
         )
-        drift = _raw_mct_auditoria(
+        drift = _raw_operacional_auditoria(
             stage, SnapshotPaths.u67(ROOT), old_candidate_path, universe, frozenset(base),
         )
         drift.to_csv(SAIDA_TEMP / "auditoria_drift_raw.csv", index=False)
-        comparison = _raw_mct_comparacao(result.predictions, cutoff, SAIDA_TEMP)
+        comparison = _raw_operacional_comparacao(result.predictions, cutoff, SAIDA_TEMP)
         _salvar_json(SAIDA_TEMP / "manifesto_experimento.json", {
-            "status": "completed", "modo": "comparar_mct_raw",
+            "status": "completed", "modo": "comparar_raw_operacional",
             "analysis_end_date": cutoff, "market_data_provider": "alpaca",
             "alpaca_historical_feed": "sip", "alpaca_adjustment": "raw",
             "research_market_data_protocol": "raw_total_causal_v1",
@@ -6967,22 +6969,22 @@ def executar_comparacao_mct_raw() -> None:
             "calendar_source": calendar_source, "folds": len(folds),
             "ending_capital": ending_capital,
             "initial_capital": float(config.initial_capital),
-            "metrics": metrics, "comparison_with_mct": comparison,
+            "metrics": metrics, "comparison_with_operacional": comparison,
             "runtime_seconds": time.perf_counter() - start,
             "warning": "Pesquisa com nova fonte: checkpoint oficial TCC permanece congelado.",
         })
         (SAIDA_TEMP / "LEIA_ME.txt").write_text(
-            "Pesquisa TCC Control x MCT, RAW/SIP completo ate " + cutoff + ".\n"
+            "Pesquisa TCC Control x OPERACIONAL, RAW/SIP completo ate " + cutoff + ".\n"
             "Refresh integral inclui RAW/1Day, corporate actions e normalizacao de splits.\n"
             "A reproducao oficial e o snapshot em dados/u67 permanecem intactos.\n"
-            "Veja auditoria_drift_raw.csv e comparacao_diaria_mct_tcc.csv (se existir ZIP MCT).\n"
+            "Veja auditoria_drift_raw.csv e comparacao_diaria_operacional_tcc.csv (se existir ZIP OPERACIONAL).\n"
             "Nao exporta credenciais nem dados de contas Alpaca.\n",
             encoding="utf-8",
         )
         shutil.copyfile(Path(__file__), SAIDA_TEMP / "codigo_executado.py")
 
         # Publica a fonte somente depois da verificacao integral.
-        backup = cache / ".mct_fresh_raw_transicao_anterior"
+        backup = cache / ".operacional_fresh_raw_transicao_anterior"
         if backup.exists():
             shutil.rmtree(backup)
         if active.root.exists():
@@ -7007,8 +7009,8 @@ def executar_comparacao_mct_raw() -> None:
             shutil.rmtree(stage.root)
 
 if __name__ == "__main__":
-    if MODO == "comparar_mct_raw":
-        executar_comparacao_mct_raw()
+    if MODO == "comparar_raw_operacional":
+        executar_comparacao_operacional_raw()
     elif MODO == "permanencia_inteligente_v2":
         executar_permanencia_inteligente_v2()
     elif MODO == "saida_antecipada_economica":
