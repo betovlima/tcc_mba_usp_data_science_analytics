@@ -1,4 +1,4 @@
-"""Validacao, exclusoes estruturais e normalizacao local de splits."""
+"""Validacao, linhagens societarias e normalizacao local de splits."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,9 +11,9 @@ from reproducao.dados import SnapshotPaths
 from engine.configuracao import ASSETS
 
 
-# Exclusoes estruturais conhecidas e deliberadas. O snapshot permanece
-# congelado; a exclusao acontece apenas no pipeline de modelagem.
-KNOWN_STRUCTURAL_EXCLUSIONS: dict[str, dict[str, Any]] = {
+# Transicoes societarias auditadas no snapshot congelado.
+# Nenhum ativo configurado pode desaparecer silenciosamente da reproducao.
+KNOWN_STRUCTURAL_TRANSITIONS: dict[str, dict[str, Any]] = {
     "CLMT": {
         "symbol": "CLMT",
         "reason": "structural_identity_change",
@@ -100,7 +100,7 @@ def structural_identity_issue(
 ) -> dict[str, Any] | None:
     normalized = symbol.strip().upper()
 
-    known = KNOWN_STRUCTURAL_EXCLUSIONS.get(normalized)
+    known = KNOWN_STRUCTURAL_TRANSITIONS.get(normalized)
     if known is not None:
         matching = next(
             (
@@ -142,6 +142,67 @@ def structural_identity_issue(
                 "acquirer_symbol": acquirer,
             }
     return None
+
+
+def _validated_structural_lineage(symbol: str, actions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Verify the frozen source's predecessor before allowing a known corporate transition.
+
+    The recorded bars are the economic predecessor's series, NOT necessarily a
+    historically tradable series under the current ticker symbol.
+    """
+    normalized = symbol.strip().upper()
+    if normalized == "DOC":
+        renamed = any(
+            str(action.get("action_type") or "") == "name_change"
+            and str(action.get("old_symbol") or "").strip().upper() == "PEAK"
+            and str(action.get("new_symbol") or "").strip().upper() == "DOC"
+            and str(action.get("process_date") or "") == "2024-03-04"
+            for action in actions
+        )
+        merger = any(
+            str(action.get("action_type") or "") == "stock_merger"
+            and str(action.get("acquiree_symbol") or "").strip().upper() == "DOC"
+            and str(action.get("acquirer_symbol") or "").strip().upper() == "PEAK"
+            and str(action.get("process_date") or "") == "2024-03-01"
+            for action in actions
+        )
+        if not (renamed and merger):
+            raise RuntimeError(
+                "DOC: a sucessao PEAK -> DOC nao foi comprovada pelas "
+                "Corporate Actions do snapshot congelado."
+            )
+        return {
+            "current_symbol": "DOC",
+            "historical_execution_symbol": "PEAK",
+            "historical_symbol_before": "2024-03-04",
+            "predecessor": "Healthpeak Properties (PEAK)",
+            "lineage": "surviving_issuer_rename_after_merger",
+            "note": "A serie anterior ao evento e atribuida a PEAK; nao a Physicians Realty Trust (DOC).",
+        }
+
+    if normalized == "CLMT":
+        converted = any(
+            str(action.get("action_type") or "") == "name_change"
+            and str(action.get("old_symbol") or "").strip().upper() == "CLMT"
+            and str(action.get("new_symbol") or "").strip().upper() == "CLMT"
+            and _normalize_identifier(action.get("old_cusip")) == "131476103"
+            and _normalize_identifier(action.get("new_cusip")) == "131428104"
+            and str(action.get("process_date") or "") == "2024-07-11"
+            for action in actions
+        )
+        if not converted:
+            raise RuntimeError(
+                "CLMT: conversao societaria e CUSIP nao correspondem ao "
+                "snapshot congelado."
+            )
+        return {
+            "current_symbol": "CLMT",
+            "historical_execution_symbol": "CLMT",
+            "historical_symbol_before": "2024-07-11",
+            "lineage": "one_for_one_unit_to_share_conversion",
+            "conversion_ratio": "1:1",
+        }
+    raise RuntimeError(f"{normalized}: transicao societaria nao homologada.")
 
 
 def split_normalize(
@@ -205,7 +266,8 @@ def prepare_model_frames(
     paths: SnapshotPaths,
     *,
     assets: tuple[str, ...] = ASSETS,
-    allow_structural_assets: frozenset[str] = frozenset(),
+    source_paths: dict[str, SnapshotPaths] | None = None,
+    allow_structural_assets: frozenset[str] = frozenset({"DOC", "CLMT"}),
     csv_float_precision: str | None = None,
 ) -> tuple[
     dict[str, pd.DataFrame],
@@ -213,12 +275,12 @@ def prepare_model_frames(
     list[dict[str, Any]],
     dict[str, Any],
 ]:
-    """Carrega o snapshot, exclui identidades quebradas e normaliza splits.
+    """Prepara o universo completo; transicoes societarias conhecidas sao auditadas.
 
-    allow_structural_assets existe apenas para campanhas de sensibilidade:
-    o evento estrutural continua auditado, mas o ativo pode ser mantido no
-    replay de forma explícita e registrada. O comportamento padrao continua
-    sendo excluir.
+    DOC usa a linhagem sobrevivente PEAK -> DOC (nao a antiga emissora DOC).
+    CLMT usa a conversao societaria um-para-um. Sem as Corporate Actions
+    identificadoras exigidas, o processamento interrompe. Outros eventos
+    estruturais permanecem nao homologados.
     """
     paths.ensure()
     allowed_structural = {
@@ -229,9 +291,11 @@ def prepare_model_frames(
     exclusions: list[dict[str, Any]] = []
     diagnostics: list[dict[str, Any]] = []
 
+    sources = dict(source_paths or {})
     for position, symbol in enumerate(assets, start=1):
-        raw_path = paths.raw_bars / f"{symbol}.csv"
-        action_path = paths.corporate_actions / f"{symbol}.csv"
+        asset_paths = sources.get(symbol, paths)
+        raw_path = asset_paths.raw_bars / f"{symbol}.csv"
+        action_path = asset_paths.corporate_actions / f"{symbol}.csv"
         raw = load_raw_bar_file(
             raw_path,
             float_precision=csv_float_precision,
@@ -268,11 +332,13 @@ def prepare_model_frames(
             )
             continue
 
+        lineage = None
         if structural_override:
+            lineage = _validated_structural_lineage(symbol, actions)
             print(
                 f"[data] {position}/{len(assets)} {symbol} "
-                f"structural_override=True reason={issue['reason']} "
-                f"action={issue['action_type']}",
+                f"identity_lineage={lineage['lineage']} "
+                f"historical_symbol={lineage['historical_execution_symbol']}",
                 flush=True,
             )
 
@@ -291,6 +357,7 @@ def prepare_model_frames(
                     dict(issue) if structural_override and issue is not None
                     else None
                 ),
+                "historical_lineage": lineage,
             }
         )
         print(
@@ -314,6 +381,10 @@ def prepare_model_frames(
         "actual_total_eligible_raw_rows": actual_rows,
         "actual_total_splits_applied": actual_splits,
         "excluded_assets": exclusions,
+        "validated_structural_lineages": [
+            {"symbol": item["symbol"], **item["historical_lineage"]}
+            for item in diagnostics if item.get("historical_lineage")
+        ],
     }
     print(
         "[data-audit] "

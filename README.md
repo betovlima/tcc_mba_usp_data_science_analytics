@@ -1,6 +1,6 @@
 # TCC MBA USP — Rotação de Capital com Machine Learning
 
-**Release oficial: `v1.23.0` — universo selecionado reproduzido.** O executor usa o motor Control histórico (`v1.22.1`) e as rotinas de expansão pesquisadas na `v1.4.1`. O encerramento da release está na seção 28 de [MANIFEST.md](MANIFEST.md); as seções anteriores preservam os experimentos históricos.
+**Branch de teste: universo configurável diretamente em `ASSETS`.** A release `v1.23.0` registra a reprodução histórica anterior e não certifica a nova execução. O executor usa a política Control/LightGBM, com uma única lista oficial de ativos definida em `engine/configuracao.py`. O encerramento da release está na seção 28 de [MANIFEST.md](MANIFEST.md); as seções anteriores preservam os experimentos históricos.
 
 ## Requisitos
 
@@ -15,7 +15,7 @@ python -m pip install -r requirements.txt
 
 ## 1. Verifique os dados
 
-A execução oficial usa **duas fontes congeladas**:
+A execução oficial usa **um único `ASSETS` com quantidade livre de símbolos**. Os arquivos RAW permanecem em duas pastas congeladas por compatibilidade de armazenamento. Essas pastas não definem dois universos:
 
 ```text
 dados/u67/                         # snapshot base versionado
@@ -31,8 +31,8 @@ evidencias/manifest_universo_congelado.json     # hashes SHA-256 exigidos
 A release inclui o snapshot congelado em `dados/u67/`. Vá direto para a
 execução; os hashes são conferidos antes do treinamento.
 
-**Não execute `preparar_snapshot_u67.py` para reproduzir o checkpoint:**
-isso substituiria a fonte histórica. Sem os dez CSVs locais e os arquivos de
+**Não execute nenhum script de download para reproduzir os dados congelados:**
+o executor usa os hashes históricos e não baixa novas cotações. Sem os dez CSVs locais e os arquivos de
 eventos corporativos com os hashes do manifesto, o programa aborta antes do treino.
 O snapshot base está no Git, mas o cache dos candidatos precisa ser restaurado
 de uma execução histórica preservada.
@@ -88,7 +88,14 @@ As sete figuras em PNG e SVG, as tabelas derivadas e sua procedência ficam em
 `figuras/`. O comando usa as evidências preservadas da execução dev.10; não
 treina modelos nem executa outro backtest. Ele é separado da reprodução.
 
-O executor oficial reproduz o conjunto fixo de 77 ativos solicitados (75 efetivos), cujo capital histórico esperado é **US$ 587.165.941,13**; não realiza nova busca de ativos ou otimização de universo. A reprodução usa os hiperparâmetros fixados pela campanha histórica e calibra
+O executor oficial em teste consome **exclusivamente `ASSETS`**. A quantidade padrão desta revisão é 77, mas pode aumentar ou diminuir sem mudanças no executor.
+As duas pastas de dados são somente fontes históricas: a preparação percorre
+**1/N até N/N em uma única passagem**, onde `N = len(ASSETS)`. Em cada um dos três folds, todos os
+ativos são treinados, calibrados e avaliados **juntos**, pelo mesmo modelo
+LightGBM Control e pela mesma política de rotação de capital. Não há treinamento
+separado da base seguido de inclusão posterior dos dez ativos.
+O capital da execução anterior não é um checkpoint válido para esse novo universo.
+Não há nova busca de ativos nem otimização do universo. A reprodução usa os hiperparâmetros fixados pela campanha histórica e calibra
 a margem de troca por busca em grade em cada janela temporal. Ela não repete a
 otimização bayesiana que selecionou os hiperparâmetros.
 
@@ -149,7 +156,7 @@ No Spyder, abra esse arquivo e execute com F5.
 
 ## Reproduzir a campanha histórica de US$ 587 milhões
 
-O checkpoint histórico foi novamente confirmado em **21/10/2026**: Control de 65 ativos **US$ 76.927.051,39**; Control com 15 candidatos **US$ 290.727.954,41**; Control com dez selecionados **US$ 587.165.941,13**, para cutoff de **06/10/2026**. Esta é a campanha de pesquisa `u67-asset-expansion-v1.4.1`, não uma alteração do algoritmo ou das configurações do motor `v1.22.1`.
+A campanha antiga confirmou os capitais de **US$ 76.927.051,39** (base anterior), **US$ 290.727.954,41** (expansão ampla) e **US$ 587.165.941,13** (dez selecionados), para cutoff de **06/10/2026**. **Esses números são históricos e não servem como assert de sucesso para o universo efetivo de 77 ativos.** Esta é a campanha de pesquisa `u67-asset-expansion-v1.4.1`, não uma alteração do algoritmo ou das configurações do motor `v1.22.1`.
 
 **Antes de rodar:** leia [CONTEXTO_MESTRE.md](CONTEXTO_MESTRE.md), que contém o contrato dos snapshots, a diferença entre a execução financeira inicial e a assurance de expansão, a preparação offline no Spyder, as verificações de hashes e as limitações científicas. O cache extra dos 15 candidatos não está versionado; não é possível prometer US$ 587 milhões em um clone limpo sem os mesmos arquivos. Evite executar `preparar_snapshot_u67.py` ou o runner de expansão com downloads ativos durante a reprodução.
 
@@ -158,6 +165,53 @@ A integração da pesquisa histórica (commit `13e5ed39ed0e700d2eb8c90bc8bee64ad
 
 ## Executor oficial do universo selecionado (v1.23.0)
 
-`reproduzir_experimento.py` agora executa o **mesmo replay financeiro de dez candidatos** usado na pesquisa de expansão, e não somente a referência base. O arquivo do executor usa nomenclatura genérica; a adaptação preserva a rotina histórica por trás de `reproducao/experimento.py`, sem duplicar a matemática. A saída é `output/reproducao_universo/pacote_reproducao_universo.zip`.
+`reproduzir_experimento.py` executa **um único replay financeiro com todos os símbolos declarados em `ASSETS`**, sem divisão do treinamento entre uma base e ativos acrescentados depois. O executor reutiliza o motor Control/LightGBM, a calibração temporal e a política de rotação. A saída é `output/reproducao_universo/pacote_reproducao_universo.zip`.
 
-O código valida primeiro a identidade do snapshot, a composição do universo e os **20 hashes dos CSVs** (barras e eventos de dez ativos). Depois treina a referência e os candidatos por fold, calibra conjuntamente e compara o capital simulado ao checkpoint congelado. Nenhuma chamada de download é feita pelo executor. O cenário é histórico, não uma previsão de resultado futuro. **A execução completa foi concluída no Spyder em 21/10/2026**, sobre o cache histórico preservado, com `status=completed`, `reproduced_exact_to_cent=true`, capital de **US$ 587.165.941,1330212** e diferença de **US$ 0,00**. O ZIP conferido é `pacote_reproducao_universo.zip`, SHA-256 `0c3518387556f147897baf121cb089f532f8355a8bb074c91fe0a6b5ec4b6ac8`. O pacote contém 29 arquivos, incluindo `predictions.csv` (1.560 sessões), `trades.csv` (710 registros), `reproducao_universo.json` e análises gráficas. O checkpoint foi confirmado também pelos modos de pesquisa `decision_validation` e `assurance_validation` sobre o mesmo recorte congelado. O cache local continua **não versionado**: clones limpos não têm, por si só, os arquivos suficientes para refazer o replay.
+O código valida os hashes dos arquivos efetivamente selecionados em `ASSETS`, e depois treina e calibra **todos os ativos juntos, em cada fold**, sem exigir uma quantidade fixa. O resultado da primeira execução válida com os 77 efetivos será um novo checkpoint, ainda não homologado. Nenhuma chamada de download é feita pelo executor. O cenário é histórico, não uma previsão de resultado futuro. **O resultado publicado em 21/10/2026 pertence à campanha anterior.** A branch de correção mantém o mesmo snapshot e o mesmo cache, mas não afirma que reproduziu aquele capital usando 77 ativos efetivos. O ZIP conferido é `pacote_reproducao_universo.zip`, SHA-256 `0c3518387556f147897baf121cb089f532f8355a8bb074c91fe0a6b5ec4b6ac8`. O pacote contém 29 arquivos, incluindo `predictions.csv` (1.560 sessões), `trades.csv` (710 registros), `reproducao_universo.json` e análises gráficas. O checkpoint foi confirmado também pelos modos de pesquisa `decision_validation` e `assurance_validation` sobre o mesmo recorte congelado. O cache local continua **não versionado**: clones limpos não têm, por si só, os arquivos suficientes para refazer o replay.
+
+
+## Universo configurável pelo único vetor `ASSETS`
+
+A branch `fix/tcc-universo-77-efetivos` usa a única constante `ASSETS` em
+`engine/configuracao.py` e prepara **todos os ativos da lista de uma vez**. Os arquivos
+historicamente guardados em duas pastas são unidos **antes** do treinamento.
+Cada fold ajusta `len(ASSETS)` modelos em uma única rodada e o replay opera com a mesma
+lista completa. Qualquer ausência interrompe a execução.
+
+- **DOC:** o arquivo histórico de `DOC` anterior a 04/03/2024 segue a
+  companhia sucessora Healthpeak, negociada anteriormente como `PEAK`, e
+  não deve ser interpretado como a antiga Physicians Realty Trust. A troca
+  de símbolo é auditada pelo registro de Corporate Actions.
+- **CLMT:** a conversão societária de 11/07/2024 preservou a proporção 1:1,
+  exigindo verificação de CUSIP e Corporate Actions.
+
+O tratamento está **em teste**, sem aprovação para negociação real. A
+simulação histórica ainda precisa ser auditada quanto à correspondência do
+símbolo negociável `PEAK` antes de 04/03/2024. Em caso de ausência ou
+inconsistência de identidade, a execução deve falhar explicitamente.
+
+Execute o mesmo `reproduzir_experimento.py` no Spyder (F5) com o cache
+histórico preservado. A saída permanece em
+`output/reproducao_universo/pacote_reproducao_universo.zip`. O capital novo
+não será comparado automaticamente ao checkpoint da execução anterior.
+
+
+### Como alterar o universo
+
+Edite somente a tupla `ASSETS` de `engine/configuracao.py`. O executor nao
+exige mais um total fixo de simbolos. O tamanho passa automaticamente aos
+logs, aos modelos de cada fold, aos graficos e ao JSON da reproducao.
+
+Para **retirar** um ativo, apague-o da tupla. Os arquivos antigos podem continuar
+no disco: o replay nao tenta inclui-los.
+
+Para **acrescentar** um ativo, inclua o ticker em `ASSETS` e certifique-se de
+que ha cotacoes diarias e Corporate Actions verificaveis no snapshot local.
+Um ativo novo, ainda sem dados, precisa de um snapshot atualizado (o script
+`preparar_snapshot_u67.py` cria um novo snapshot sem modificar os dados
+historicos congelados). Essa falta de dados gera uma mensagem especifica
+com o ticker; nao existe mais excecao por diferenca na **quantidade** de ativos.
+
+O replay continua exigindo tickers distintos, historicos validos e modelos
+para todos os ativos selecionados. Um universo vazio nao e uma estrategia
+executavel. Nao ha downloads automaticos durante o replay.

@@ -50,7 +50,7 @@ from sklearn.metrics import (
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from engine.configuracao import CONFIG, U67_REQUESTED_ASSETS
+from engine.configuracao import CONFIG, ASSETS
 from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 from engine.modelo_lightgbm import (
     _ajustar_modelos_lightgbm,
@@ -69,7 +69,7 @@ from reproducao.preparacao import prepare_model_frames
 
 
 ROOT = Path(__file__).resolve().parent
-U67 = SnapshotPaths.u67(ROOT)
+U67 = SnapshotPaths.archived_source(ROOT)
 FROZEN_DIR = ROOT / "dados" / "cluster_candidate_search"
 CANDIDATE_SNAPSHOT = SnapshotPaths.from_root(
     FROZEN_DIR / "snapshot"
@@ -337,15 +337,13 @@ def _prepare_data(
 
     u67_raw, u67_exclusions, _, _ = prepare_model_frames(
         U67,
-        assets=U67_REQUESTED_ASSETS,
+        assets=tuple(validate_snapshot(U67)["assets"]),
         csv_float_precision="round_trip",
     )
-    if len(u67_raw) != 65 or {
-        str(item.get("symbol"))
-        for item in u67_exclusions
-    } != {"CLMT", "DOC"}:
+    if len(u67_raw) != len(tuple(validate_snapshot(U67)["assets"])) or u67_exclusions:
         raise RuntimeError(
-            "O contrato efetivo U67 precisa continuar em 65 ativos."
+            "O universo de origem esta incompleto: todos os ativos "
+            "configurados devem participar do processamento."
         )
 
     candidate_raw, candidate_exclusions, _, _ = prepare_model_frames(

@@ -1,4 +1,4 @@
-"""Apoio enxuto para a reproducao oficial do U67 Control."""
+"""Apoio da reproducao oficial com universo definido exclusivamente por ASSETS."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -102,46 +102,103 @@ def reproduzir_universo_congelado(
     output: Path,
     version: str,
     execution_schema: str,
+    analysis_end_date: str | None = None,
+    full_refresh_performed: bool = False,
+    updated_snapshot_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Reproduz o universo selecionado pela mesma rotina financeira da pesquisa.
+    """Treina, calibra e simula os ativos de ASSETS juntos em cada fold.
 
-    O modulo historico continua sendo a unica fonte do procedimento de treino,
-    da calibracao, da composicao dos caches e do replay. Nenhum download e
-    permitido neste caminho; os dados dos candidatos precisam corresponder
-    exatamente aos hashes versionados em evidencias/.
+    Os dois diretorios de entrada existem apenas para preservar os snapshots
+    congelados. Nao existem universos de treino separados, acrescentos de
+    modelos a posteriori nem checkpoints de capital da campanha anterior.
     """
-    from datetime import datetime
     import hashlib
     import json
     import math
     import shutil
     import time
 
-    from reproducao.dados import validate_snapshot
-    from reproducao.preparacao import prepare_model_frames
-    from reproducao.artefatos import criar_pacote_analise, sinal_sonoro_conclusao
-    from reproducao.graficos import gerar_analises_backtest
+    import numpy as np
 
-    # Dependencia cientifica legada mantida por identidade de calculo.
-    import pesquisar_expansao_u67_spyder as pesquisa
+    from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
+    from engine.modelo_lightgbm import (
+        _ajustar_modelos_lightgbm,
+        _construir_contexto_execucao,
+        diagnosticos_fora_amostra,
+        selecionar_switch_margin,
+    )
+    from engine.rotacao import (
+        _crescimento_politica_simples,
+        _politica_agendada,
+        _politica_utilidade,
+        _precalcular_utilidades_modelo,
+        _simular_exato,
+    )
+    from reproducao.artefatos import criar_pacote_analise, sinal_sonoro_conclusao
+    from reproducao.dados import SnapshotPaths, validate_snapshot
+    from reproducao.graficos import gerar_analises_backtest
+    from reproducao.preparacao import prepare_model_frames
 
     started = time.perf_counter()
     root = Path(root).resolve()
     output = Path(output).resolve()
 
-    manifest_path = root / "evidencias" / "manifest_universo_congelado.json"
-    contract = json.loads(manifest_path.read_text(encoding="utf-8"))
-    selected = tuple(contract["selected_assets"])
-    if selected != tuple(pesquisa.DISCOVERY_SELECTED_CANDIDATES):
-        raise RuntimeError("Composicao selecionada divergiu da pesquisa congelada.")
-    if len(set(selected)) != len(selected):
-        raise RuntimeError("Ativos duplicados no manifesto do universo.")
+    contract = json.loads(
+        (root / "evidencias" / "manifest_universo_congelado.json")
+        .read_text(encoding="utf-8")
+    )
+    # O corte historico do checkpoint segue intacto; uma reproducao atualizada
+    # utiliza a data solicitada sem modificar o experimento congelado.
+    analysis_cutoff = str(analysis_end_date or contract["analysis_end_date"])
+    from engine.configuracao import ASSETS
 
-    snapshot = validate_snapshot(pesquisa.BASE_DATA)
-    if snapshot.get("snapshot_sha256") != contract["snapshot_sha256"]:
+    configured_count = len(ASSETS)
+    configured_set = set(ASSETS)
+    if not ASSETS or configured_count != len(configured_set):
+        raise ValueError("ASSETS deve conter simbolos distintos e nao pode ser vazio.")
+    print(
+        f"[universe] configured={configured_count} preparation=single_pass "
+        "folds=joint",
+        flush=True,
+    )
+
+    # Arquivos congelados preservados. O vetor ASSETS e a unica autoridade
+    # para decidir quais series entram no treinamento e no replay.
+    archived_data = SnapshotPaths.archived_source(root)
+    extension_data = SnapshotPaths.archived_extension(root)
+    updated_data = SnapshotPaths.from_root(
+        Path(updated_snapshot_path) if updated_snapshot_path is not None
+        else root / "dados" / "universo_77"
+    )
+
+    # Uma coleta completa nao depende de hashes antigos, U67 ou anexos
+    # historicos. O modo congelado continua disponivel sem alteracoes.
+    frozen_manifest = (
+        {"snapshot_sha256": None}
+        if full_refresh_performed else validate_snapshot(archived_data)
+    )
+    if (not full_refresh_performed
+            and frozen_manifest.get("snapshot_sha256") != contract["snapshot_sha256"]):
+        raise RuntimeError("Integridade do snapshot historico divergente.")
+    archived_symbols = (
+        set() if full_refresh_performed
+        else set(frozen_manifest.get("assets") or ())
+    )
+    frozen_extra = (
+        {} if full_refresh_performed
+        else dict(contract.get("candidate_file_hashes") or {})
+    )
+
+    updated_manifest = (
+        validate_snapshot(updated_data) if updated_data.manifest.is_file()
+        else None
+    )
+    updated_symbols = set((updated_manifest or {}).get("assets") or ())
+    if full_refresh_performed and updated_symbols != configured_set:
         raise RuntimeError(
-            "Snapshot diferente do congelado. Preserve o historico; "
-            "nao atualize os dados para ajustar o resultado."
+            "Snapshot RAW atualizado nao possui exatamente os ativos de ASSETS: "
+            f"faltantes={sorted(configured_set - updated_symbols)} "
+            f"extras={sorted(updated_symbols - configured_set)}"
         )
 
     def digest(path: Path) -> str:
@@ -151,210 +208,394 @@ def reproduzir_universo_congelado(
                 sha.update(chunk)
         return sha.hexdigest()
 
-    # Verificar as duas fontes locais de cada candidato ANTES de treinar.
-    file_hashes: dict[str, dict[str, str]] = {}
-    for symbol in selected:
-        expected = contract["candidate_file_hashes"][symbol]
-        paths = {
-            "raw_sha256": pesquisa.FULL_DATA.raw_bars / f"{symbol}.csv",
+    source_paths: dict[str, SnapshotPaths] = {}
+    input_provenance: dict[str, dict[str, str]] = {}
+    for symbol in ASSETS:
+        if symbol in updated_symbols:
+            location = updated_data
+            source_name = "updated_snapshot"
+        elif symbol in archived_symbols:
+            location = archived_data
+            source_name = "historical_snapshot"
+        elif symbol in frozen_extra:
+            location = extension_data
+            source_name = "historical_extension"
+        else:
+            raise FileNotFoundError(
+                f"{symbol}: nao ha CSV historico validado para este ativo. "
+                "Crie ou restaure um snapshot de dados contendo o simbolo."
+            )
+
+        files = {
+            "raw_sha256": location.raw_bars / f"{symbol}.csv",
             "corporate_actions_sha256": (
-                pesquisa.FULL_DATA.corporate_actions / f"{symbol}.csv"
+                location.corporate_actions / f"{symbol}.csv"
             ),
         }
         observed = {}
-        for key, path in paths.items():
-            if not path.is_file():
+        for field, file_path in files.items():
+            if not file_path.is_file():
                 raise FileNotFoundError(
-                    f"Arquivo congelado ausente: {path}. "
-                    "Restaure o cache historico; nao faca download."
+                    f"{symbol}: arquivo historico ausente: {file_path}"
                 )
-            observed[key] = digest(path)
-            if observed[key] != expected[key]:
-                raise RuntimeError(
-                    f"Hash divergente para {symbol} ({key}). "
-                    "O arquivo foi alterado; nenhum download foi realizado."
-                )
-        file_hashes[symbol] = observed
-    print(f"[input] snapshot validado; {len(selected)} candidatos com SHA-256 exato",
-          flush=True)
+            observed[field] = digest(file_path)
+            if source_name == "historical_extension":
+                if observed[field] != frozen_extra[symbol][field]:
+                    raise RuntimeError(
+                        f"{symbol}: SHA-256 divergente em {field}; "
+                        "o arquivo congelado nao pode ser alterado."
+                    )
+        source_paths[symbol] = location
+        input_provenance[symbol] = {"source": source_name, **observed}
 
-    requested = tuple(pesquisa.U67_REQUESTED_ASSETS)
-    if tuple(snapshot.get("assets") or ()) != requested:
-        raise RuntimeError("Ordem/identidade dos ativos base divergente.")
+    # A assinatura composta distingue execucoes com ativos ou CSVs diferentes.
+    input_universe_sha256 = hashlib.sha256(
+        json.dumps(
+            {"assets": list(ASSETS), "sources": input_provenance},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    print(
+        f"[input] symbols={configured_count} verified={len(input_provenance)} "
+        f"sha256={input_universe_sha256}",
+        flush=True,
+    )
 
     raw, exclusions, diagnostics, data_audit = prepare_model_frames(
-        pesquisa.BASE_DATA,
-        assets=requested,
+        archived_data,
+        assets=ASSETS,
+        source_paths=source_paths,
         csv_float_precision="round_trip",
     )
-    excluded = frozenset(str(item.get("symbol") or "").upper() for item in exclusions)
-    if excluded != pesquisa.U67_EXPECTED_EXCLUSIONS:
-        raise RuntimeError("Exclusoes estruturais divergentes.")
-    baseline_order = tuple(symbol for symbol in requested if symbol in raw)
-    if len(baseline_order) != pesquisa.U67_EXPECTED_EFFECTIVE_COUNT:
-        raise RuntimeError("Tamanho do universo base efetivo divergente.")
+    if exclusions or set(raw) != set(ASSETS) or len(raw) != configured_count:
+        raise RuntimeError(
+            "Universo de entrada incompleto: "
+            f"esperados={configured_count} preparados={len(raw)} "
+            f"ausentes={sorted(set(ASSETS) - set(raw))} "
+            f"exclusoes={exclusions}"
+        )
+    print(f"[universe] prepared={len(raw)}/{configured_count} excluded={len(exclusions)}", flush=True)
 
     config = build_control_config(
-        {symbol: raw[symbol] for symbol in baseline_order},
-        pesquisa.CONFIG,
-    ).copiar_modelo(update={"analysis_end_date": contract["analysis_end_date"]})
+        {symbol: raw[symbol] for symbol in ASSETS}
+    ).copiar_modelo(update={"analysis_end_date": analysis_cutoff})
     (
-        baseline_frames, common_dates, calendar_source, baseline_symbols,
-        folds, all_decision_dates, decision_to_fold, decision_metadata,
-    ) = pesquisa._construir_contexto_execucao(
-        {symbol: raw[symbol] for symbol in baseline_order}, config
-    )
-    states, baseline_policies, baseline_calibration = (
-        pesquisa._train_baseline_states(
-            baseline_frames, common_dates, baseline_symbols, folds, config
-        )
-    )
-    baseline_result = pesquisa._simular_exato(
-        "tcc_base_reference",
-        pesquisa._politica_agendada(baseline_policies, decision_to_fold),
-        baseline_frames,
-        baseline_symbols,
-        all_decision_dates,
-        config,
-        pesquisa.calcular_taxas_referencia,
-        pesquisa.aplicar_deslizamento,
-        decision_metadata=decision_metadata,
-        model_label="TCC Control - referencia historica",
-        method_line="- Universo base congelado; nenhuma substituicao.",
-    )
-    baseline_metrics = pesquisa._scenario_metrics(
-        baseline_result, folds, float(config.initial_capital)
-    )
-    expected_base = float(contract["baseline_ending_capital"])
-    if not math.isclose(
-        baseline_metrics["ending_capital"], expected_base, rel_tol=0.0, abs_tol=0.01
-    ):
-        raise RuntimeError(
-            "Referencia historica divergente: "
-            f"{baseline_metrics['ending_capital']:.8f} versus {expected_base:.8f}"
-        )
-    print(f"[base] capital=US$ {baseline_metrics['ending_capital']:,.2f}", flush=True)
-
-    frames, continuity, verified_hashes = pesquisa._prepare_candidate_frames(
-        list(selected), common_dates, all_decision_dates, config
-    )
-    missing = [symbol for symbol in selected if symbol not in frames]
-    if missing:
-        raise RuntimeError(
-            "Candidatos incompativeis com as series congeladas: "
-            + ", ".join(missing)
-        )
-    if verified_hashes != file_hashes:
-        raise RuntimeError("Dados dos candidatos foram alterados durante a leitura.")
-
-    caches = {}
-    for position, symbol in enumerate(selected, start=1):
-        caches[symbol] = pesquisa._train_candidate_caches(
-            symbol, frames[symbol], states, config
-        )
-        print(f"[model] {position}/{len(selected)} {symbol} pronto", flush=True)
-
-    result, metrics, calibration_rows = pesquisa._evaluate_scenario(
-        "TCC_SELECTED_UNIVERSE",
-        list(selected),
-        baseline_frames,
         frames,
-        baseline_symbols,
-        states,
-        caches,
+        common_dates,
+        calendar_source,
+        symbols,
         folds,
         all_decision_dates,
         decision_to_fold,
         decision_metadata,
+    ) = _construir_contexto_execucao(
+        {symbol: raw[symbol] for symbol in ASSETS},
         config,
     )
-    expected_capital = float(contract["expected_ending_capital"])
-    capital = float(metrics["ending_capital"])
-    exact = math.isclose(capital, expected_capital, rel_tol=0.0, abs_tol=0.01)
-    if not exact:
+    if (
+        len(frames) != configured_count
+        or len(symbols) != configured_count
+        or set(symbols) != set(ASSETS)
+    ):
         raise RuntimeError(
-            f"Reproducao divergente: observado=US$ {capital:,.8f}, "
-            f"esperado=US$ {expected_capital:,.8f}. "
-            "Nao altere os dados nem os parametros; audite a diferenca."
+            "Painel unificado nao corresponde a ASSETS: "
+            f"frames={len(frames)} modelos={len(symbols)} "
+            f"ausentes={sorted(set(ASSETS) - set(symbols))}"
+        )
+    if len(folds) != 3:
+        raise RuntimeError(
+            f"Protocolo temporal inesperado: esperados=3 folds, obtidos={len(folds)}"
         )
 
-    effective = sorted([*baseline_symbols, *selected])
-    if len(effective) != len(baseline_symbols) + len(selected):
-        raise RuntimeError("Identidade duplicada no universo expandido.")
+    # Conferencia causal e de precos de execucao ANTES de qualquer modelo.
+    required_dates = pd.DatetimeIndex(common_dates).normalize()
+    execution_dates = pd.DatetimeIndex(all_decision_dates[1:])
+    continuity_rows = []
+    for symbol in ASSETS:
+        available_dates = pd.DatetimeIndex(raw[symbol].index).normalize()
+        missing = required_dates.difference(available_dates)
+        execution = frames[symbol].reindex(execution_dates)
+        bars = execution[["open", "high", "low", "close", "volume"]].to_numpy(
+            dtype=np.float64
+        )
+        valid = bool(np.isfinite(bars).all() and (bars[:, :4] > 0).all())
+        row = {
+            "asset": symbol,
+            "status": "passed" if not len(missing) and valid else "rejected",
+            "missing_required_sessions": int(len(missing)),
+            "execution_prices_valid": valid,
+            "required_session_count": int(len(required_dates)),
+        }
+        continuity_rows.append(row)
+        if row["status"] != "passed":
+            raise RuntimeError(
+                f"{symbol}: historico incompleto para o painel unico. "
+                f"missing_sessions={len(missing)} execution_prices_valid={valid}"
+            )
+    continuity = pd.DataFrame(continuity_rows)
 
-    # So depois da validacao dos inputs e do replay, preparar a saida.
+    print(
+        f"[universe] context={len(symbols)}/{configured_count} folds={len(folds)} "
+        f"decision_sessions={len(all_decision_dates)-1} "
+        "train_calibration_replay=joint",
+        flush=True,
+    )
+    policies = {}
+    calibration_rows = []
+    model_fits = []
+    predictive = []
+
+    def on_fit(fold_id: int, phase: str):
+        def report(done: int, total: int, device: str) -> None:
+            if done % 10 == 0 or done == total:
+                print(
+                    f"[train] fold={fold_id}/{len(folds)} phase={phase} "
+                    f"models={done}/{total} device={device}",
+                    flush=True,
+                )
+        return report
+
+    for fold in folds:
+        fold_id = int(fold["fold_id"])
+        train_dates = common_dates[:int(fold["train_end_index"])]
+        calibration_dates = common_dates[
+            int(fold["calibration_start_index"]):int(fold["calibration_end_index"])
+        ]
+        final_fit_dates = common_dates[:int(fold["final_fit_end_index"])]
+        decision_dates = pd.DatetimeIndex(fold["decision_dates"])
+
+        print(
+            f"[fold] {fold_id}/{len(folds)} calibration assets={configured_count}",
+            flush=True,
+        )
+        calibration_models = _ajustar_modelos_lightgbm(
+            frames,
+            symbols,
+            train_dates,
+            config,
+            phase=f"universe_fold_{fold_id}_calibration",
+            progress_callback=on_fit(fold_id, "calibration"),
+        )
+        if set(calibration_models) != set(ASSETS):
+            raise RuntimeError(
+                f"fold={fold_id}: modelos de calibracao incompletos "
+                f"({len(calibration_models)}/{configured_count}), "
+                f"ausentes={sorted(set(ASSETS)-set(calibration_models))}"
+            )
+        calibration_cache, _ = _precalcular_utilidades_modelo(
+            calibration_models, frames, symbols, calibration_dates, config
+        )
+        scored_margins = []
+        for margin in config.rotation_switch_margin_candidates:
+            policy = _politica_utilidade(
+                {},
+                frames,
+                symbols,
+                config,
+                float(margin),
+                utility_cache=calibration_cache,
+            )
+            score = _crescimento_politica_simples(
+                policy, frames, symbols, calibration_dates, config
+            )
+            scored_margins.append((float(margin), float(score)))
+        choice = selecionar_switch_margin(scored_margins)
+        chosen_margin = float(choice["selected_candidate_margin"])
+        effective_margin = max(float(config.rotation_switch_margin), chosen_margin)
+        for margin, score in scored_margins:
+            calibration_rows.append({
+                "fold_id": fold_id,
+                "asset_count": configured_count,
+                "candidate_margin": margin,
+                "calibration_score": score,
+                "selected": bool(abs(margin - chosen_margin) <= 1e-12),
+            })
+        model_fits.append({
+            "fold_id": fold_id, "phase": "calibration",
+            "model_count": len(calibration_models),
+        })
+        del calibration_models
+
+        print(f"[fold] {fold_id}/{len(folds)} final_fit assets={configured_count}", flush=True)
+        final_models = _ajustar_modelos_lightgbm(
+            frames,
+            symbols,
+            final_fit_dates,
+            config,
+            phase=f"universe_fold_{fold_id}_final",
+            progress_callback=on_fit(fold_id, "final_fit"),
+        )
+        if set(final_models) != set(ASSETS):
+            raise RuntimeError(
+                f"fold={fold_id}: modelos finais incompletos "
+                f"({len(final_models)}/{configured_count}), "
+                f"ausentes={sorted(set(ASSETS)-set(final_models))}"
+            )
+        decision_cache, _ = _precalcular_utilidades_modelo(
+            final_models, frames, symbols, decision_dates, config
+        )
+        predictive.append(diagnosticos_fora_amostra(
+            final_models,
+            frames,
+            symbols,
+            decision_dates,
+            decision_cache,
+            fold_id=fold_id,
+        ))
+        policies[fold_id] = _politica_utilidade(
+            {},
+            frames,
+            symbols,
+            config,
+            effective_margin,
+            fold_id=fold_id,
+            calibrated_switch_margin=chosen_margin,
+            utility_cache=decision_cache,
+        )
+        model_fits.append({
+            "fold_id": fold_id, "phase": "final_fit",
+            "model_count": len(final_models),
+        })
+        del final_models
+        print(
+            f"[fold] {fold_id}/{len(folds)} completed "
+            f"calibration_models={configured_count} final_models={configured_count}",
+            flush=True,
+        )
+
+    print(f"[replay] assets={configured_count} policy=single_joint_rotation", flush=True)
+    result = _simular_exato(
+        "tcc_unified_assets",
+        _politica_agendada(policies, decision_to_fold),
+        frames,
+        symbols,
+        all_decision_dates,
+        config,
+        calcular_taxas_referencia,
+        aplicar_deslizamento,
+        decision_metadata=decision_metadata,
+        model_label=f"TCC Winner {configured_count} - LightGBM Control",
+        method_line=f"- Os {configured_count} ativos foram treinados e calibrados conjuntamente por fold.",
+    )
+    metrics = summarize_metrics(result, folds, float(config.initial_capital))
+    metrics.update({
+        "capital_rotations": int(result.metrics.get("capital_rotations") or 0),
+        "simulated_buys": int(result.metrics.get("simulated_buys") or 0),
+        "simulated_sells": int(result.metrics.get("simulated_sells") or 0),
+        "cash_days": int(result.metrics.get("cash_days") or 0),
+        "market_exposure": float(result.metrics.get("market_exposure") or 0),
+        "predictive_diagnostics": {"folds": predictive},
+    })
+    capital = float(metrics["ending_capital"])
+
+    # Nenhuma comparacao com um capital calculado em outro universo.
+    exact = None
+    expected_capital = None
+
+    # Apenas o replay completo e validado pode substituir o ZIP anterior.
     if output.exists():
-        backup = output.with_name(
-            output.name + "_backup_" + datetime.now().strftime("%Y%m%d_%H%M%S")
-        )
-        shutil.copytree(output, backup)
-        print(f"[output] backup anterior={backup}", flush=True)
         shutil.rmtree(output)
     output.mkdir(parents=True, exist_ok=True)
-
-    pd.DataFrame({"asset": [*requested, *selected]}).to_csv(
+    pd.DataFrame({"asset": ASSETS}).to_csv(
         output / "requested_assets.csv", index=False
     )
-    pd.DataFrame({"asset": effective}).to_csv(
+    pd.DataFrame({"asset": ASSETS}).to_csv(
         output / "effective_assets.csv", index=False
     )
-    pd.DataFrame(exclusions).to_csv(output / "excluded_assets.csv", index=False)
+    pd.DataFrame(columns=["symbol", "reason"]).to_csv(
+        output / "excluded_assets.csv", index=False
+    )
     pd.DataFrame(calibration_rows).to_csv(
         output / "fold_calibration.csv", index=False
     )
-    pd.DataFrame(baseline_calibration).to_csv(
-        output / "baseline_fold_calibration.csv", index=False
+    pd.DataFrame(model_fits).to_csv(
+        output / "model_fits.csv", index=False
     )
-    continuity.to_csv(output / "candidate_continuity.csv", index=False)
+    continuity.to_csv(output / "asset_continuity.csv", index=False)
     result.predictions.to_csv(
         output / "predictions.csv", index=True, float_format="%.17g"
     )
-    if isinstance(getattr(result, "trades", None), pd.DataFrame):
-        result.trades.to_csv(output / "trades.csv", index=False)
+    result.trades.to_csv(
+        output / "trades.csv", index=False
+    )
 
     payload = {
         "reproduction_version": version,
         "execution_schema": execution_schema,
         "status": "completed",
-        "purpose": "reproducao_universo_selecionado",
+        "purpose": "reproducao_conjunta_universo",
         "reproduced_exact_to_cent": exact,
-        "analysis_end_date": contract["analysis_end_date"],
+        "checkpoint_validation": "awaiting_reference_for_configured_universe",
+        "analysis_end_date": analysis_cutoff,
         "checkpoint": {
             "observed_capital": capital,
             "expected_capital": expected_capital,
-            "delta": capital - expected_capital,
+            "delta": None,
+            "status": "new_configured_universe_reference",
         },
         "data": {
             "source": "alpaca",
             "feed": "sip",
             "adjustment": "raw",
             "timeframe": "1Day",
-            "full_refresh": False,
+            "full_refresh": bool(full_refresh_performed),
             "database_used": False,
-            "snapshot_sha256": snapshot["snapshot_sha256"],
-            "candidate_file_hashes": verified_hashes,
-            "candidate_cache_committed_to_git": False,
+            "snapshot_sha256": (updated_manifest or frozen_manifest)["snapshot_sha256"],
+            "asset_sources": input_provenance,
+            "input_universe_sha256": input_universe_sha256,
+            "updated_snapshot_sha256": (updated_manifest or {}).get("snapshot_sha256"),
             "data_audit": data_audit,
             "diagnostics": diagnostics,
         },
         "universe": {
-            "requested_assets": list(requested) + list(selected),
-            "requested_count": len(requested) + len(selected),
-            "effective_assets": effective,
-            "effective_count": len(effective),
-            "excluded_assets": exclusions,
+            "requested_assets": list(ASSETS),
+            "requested_count": configured_count,
+            "effective_assets": list(ASSETS),
+            "effective_count": len(raw),
+            "trained_assets": symbols,
+            "trained_count_each_fold": len(symbols),
+            "excluded_assets": [],
+        },
+        "calibration": {
+            "folds": len(folds),
+            "asset_count_each_fold": len(symbols),
+            "fit_counts": model_fits,
         },
         "calendar": {
             "calendar_source": calendar_source,
             "decision_sessions": len(all_decision_dates) - 1,
         },
         "metrics": metrics,
-        "baseline_reference": baseline_metrics,
+        "baseline_reference": None,
         "runtime_seconds": time.perf_counter() - started,
     }
-    pesquisa._write_json(output / "reproducao_universo.json", payload)
+
+    def make_json_safe(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {str(key): make_json_safe(item) for key, item in value.items()}
+        if isinstance(value, (tuple, list)):
+            return [make_json_safe(item) for item in value]
+        if isinstance(value, np.generic):
+            return make_json_safe(value.item())
+        if isinstance(value, pd.Timestamp):
+            return value.isoformat()
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        return value
+
+    (output / "reproducao_universo.json").write_text(
+        json.dumps(make_json_safe(payload), ensure_ascii=False, indent=2, allow_nan=False),
+        encoding="utf-8",
+    )
     gerar_analises_backtest(
-        output, manifest=snapshot, result=result
+        output,
+        manifest={
+            **(updated_manifest if full_refresh_performed and updated_manifest else frozen_manifest),
+            "snapshot_sha256": input_universe_sha256,
+        },
+        result=result,
+        asset_count=configured_count,
     )
     package = criar_pacote_analise(
         output,
@@ -363,8 +604,8 @@ def reproduzir_universo_congelado(
         archive_name="pacote_reproducao_universo.zip",
     )
     print(
-        f"[done] capital=US$ {capital:,.2f} exact_to_cent={exact} "
-        f"package={package}",
+        f"[done] capital=US$ {capital:,.2f} effective_assets={len(symbols)}/{configured_count} "
+        f"folds={len(folds)} zip={package}",
         flush=True,
     )
     sinal_sonoro_conclusao()

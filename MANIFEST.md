@@ -1,3 +1,5 @@
+> **Correção em teste (15/11/2026):** a branch `fix/tcc-universo-77-efetivos` exige 77 ativos efetivamente processados. Os números das campanhas históricas abaixo são apenas registros anteriores e não certificam este novo universo.
+
 # MANIFEST — TCC MBA USP Data Science & Analytics
 
 ## 1. Finalidade deste documento
@@ -200,12 +202,12 @@ Portanto:
 
 ```text
 ativos solicitados: 67
-ativos efetivos: 65
+ativos efetivos na campanha histórica: conjunto reduzido (não é o universo atual)
 exclusões estruturais esperadas: 2
 ```
 
-Os mesmos 65 ativos efetivos são utilizados pela rotação e por compra e
-manutenção. A referência distribui inicialmente 1/65 do capital por ativo,
+Os ativos efetivos daquela execução histórica são utilizados pela rotação e por compra e
+manutenção. A referência distribui inicialmente frações iguais do capital entre os ativos daquela execução,
 desconta as taxas de compra, mantém as quantidades sem rebalanceamento e
 liquida todas as posições no fechamento final. Um preço ausente, não positivo
 ou não finito interrompe o cálculo, em vez de reduzir silenciosamente seu
@@ -803,7 +805,7 @@ O estado científico descrito por este documento é:
 ```text
 versão científica        = 1.22.1
 universo solicitado      = 67
-universo efetivo         = 65
+universo efetivo         = subconjunto histórico (não corresponde aos 77 atuais)
 modelo                   = LightGBM Control
 cutoff                   = 2026-10-06
 capital inicial          = US$ 10,000.00
@@ -812,7 +814,7 @@ CAGR                     = 322.775261%
 Sharpe                   = 2.56904268
 Max Drawdown             = -30.358970%
 Worst Fold               = 282.589554%
-compra e manutenção      = mesmos 65 ativos efetivos
+compra e manutenção      = mesmo subconjunto histórico
 capital final referência = US$ 33,295.28176973073
 Ruff local               = aprovado
 pytest local             = ver seção 24
@@ -836,7 +838,7 @@ datas da estratégia. O JSON registra `benchmark_assets`,
 ### 20.1 Verificação executada
 
 Utilizaram-se `u67.zip` e `pacote_reproducao_u67.zip` fornecidos pelo autor.
-Conferiram-se a identidade do snapshot e seus 134 hashes. Prepararam-se os 65
+Conferiram-se a identidade do snapshot e seus 134 hashes. Preparou-se o subconjunto histórico dos
 ativos com o parser round-trip e recalculou-se compra e manutenção com as
 funções oficiais de taxas e deslizamento.
 
@@ -850,8 +852,8 @@ a referência e a contabilidade das decisões já registradas.
 ### 20.2 Referência recalculada
 
 ```text
-ativos de compra e manutenção = mesmos 65 ativos efetivos
-peso inicial por ativo       = 1/65, antes das taxas de compra
+ativos de compra e manutenção = mesmo subconjunto histórico
+peso inicial por ativo       = peso igualitário do subconjunto histórico, antes das taxas de compra
 capital inicial              = US$ 10,000.00
 capital final                = US$ 33,295.28176973073
 retorno acumulado            = 232.952818%
@@ -1005,7 +1007,7 @@ foram reproduzidos exatamente: US$ 78.782.538,31270888 em 17 de setembro de
 2026 e US$ 76.927.051,38897176 em 6 de outubro de 2026. As 1.560 sessões,
 as escolhas de ativos, a curva completa e as 674 operações coincidiram com
 o registro dev.8. Os diagnósticos de teste foram efetivamente exportados,
-com 65 modelos por fold e importâncias dos atributos em todos eles.
+com um modelo por ativo efetivo naquela execução por fold e importâncias dos atributos em todos eles.
 
 `evidencias/eligibilidade_v1.22.0-dev.10.json` conserva a configuração,
 o ambiente, as métricas dos controles, os diagnósticos, os checkpoints e as
@@ -1138,7 +1140,7 @@ dividido pelo capital do encerramento anterior, menos um; a primeira
 base é US$ 10.000. Os anos 2020 e 2026 são parciais e não foram
 anualizados. A composição dos fatores anuais reproduz o capital final.
 O ganho de cada grupo é a soma dos ganhos normalizados de seus atributos
-em cada modelo, seguida da média simples entre os 65 modelos finais do
+em cada modelo, seguida da média simples entre os modelos finais daquele universo histórico do
 fold. A soma dos oito grupos é um. Trata-se de ganho no treinamento,
 sem atribuição causal ao retorno ou medição de importância no teste.
 Os grupos têm quantidades diferentes de atributos.
@@ -1560,7 +1562,7 @@ Isso demonstra diretamente que o sinal de pertencimento é temporal e que um
 rótulo estático de ativo bom/ruim é inadequado. A positividade full-window é
 somente evidência de descoberta dentro da janela controlada.
 
-A linha ainda não mediu remoção contrafactual dos 65 ativos efetivos do U67.
+A linha ainda não mediu remoção contrafactual dos ativos da base histórica.
 Logo, não existe evidência para afirmar quais ativos do baseline deveriam sair.
 Também não existe ainda densidade temporal suficiente para calibrar frequência
 diária, histerese ou permanência mínima.
@@ -1585,7 +1587,7 @@ nesta ordem:
 CRT,NBR,CAPR,PNBK,PENN,JBL,STAG,MCHB,LAD,TOWN
 ```
 
-A fonte científica documentada tem 77 ativos solicitados e 75 efetivos
+A fonte científica documentada tem 77 ativos solicitados, mas com reduções indevidas que agora estão sendo corrigidas
 na janela controlada, com exclusões estruturais DOC e CLMT. O checkpoint
 congelado de descoberta é US$ 587.165.941,1330212 para o cutoff 2026-10-06.
 
@@ -1641,7 +1643,7 @@ timeframe        = 1Day
 start            = 2016-01-01
 analysis_end     = 2026-10-06
 requested_base   = 67
-effective_base   = 65
+effective_base   = subconjunto histórico (não válido para a nova reprodução)
 structural_exclusions = DOC, CLMT
 ```
 
@@ -1653,7 +1655,7 @@ A execução concluída foi `u67-asset-expansion-v1.4.1`, `RUN_MODE=assurance_va
 
 | Cenário | Capital final (US$) | Checkpoint |
 |---|---:|---|
-| Control original, 65 ativos efetivos | 76.927.051,38897176 | restaurado e exato |
+| Control original com universo reduzido (histórico) | 76.927.051,38897176 | restaurado e exato |
 | Control + 15 candidatos | 290.727.954,41339606 | `all_15_exact_to_cent=true` |
 | Control + 10 selecionados | 587.165.941,1330212 | `selected_10_exact_to_cent=true` |
 
@@ -1665,7 +1667,7 @@ Os dez selecionados, em ordem, foram:
 CRT,NBR,CAPR,PNBK,PENN,JBL,STAG,MCHB,LAD,TOWN
 ```
 
-Este conjunto amplia os 67 solicitados para **77 solicitados e 75 efetivos**, respeitando a exclusão estrutural de DOC e CLMT. Não implica que 75 ativos estavam igualmente expostos ou operaram em todas as sessões.
+Este conjunto amplia os 67 solicitados para **77 solicitados e universo reduzido na campanha anterior**, respeitando a exclusão estrutural de DOC e CLMT. Não implica que todos os ativos estavam igualmente expostos ou operaram em todas as sessões.
 
 ### 26.4 Limitações e próximo passo científico
 
@@ -1678,18 +1680,18 @@ O roteiro de reprodução **offline**, os arquivos de entrada e as instruções 
 
 ## 27. Executor oficial genérico do universo selecionado (v1.23.0)
 
-A pedido do autor, `reproduzir_experimento.py` deixou de ser um executor limitado ao universo base e passou a reproduzir **o conjunto histórico selecionado de 77 ativos solicitados, 75 efetivos**, com corte em 06/10/2026. A referência base de 65 ativos segue disponível no programa histórico de pesquisa. O novo executor mantém nomes genéricos, enquanto as funções originais da campanha de expansão são reutilizadas pela camada `reproducao/experimento.py` para preservar exatamente o treino, a calibração temporal, os custos, a composição dos caches e o replay.
+A pedido do autor, `reproduzir_experimento.py` deixou de ser um executor limitado ao universo base e passou a reproduzir **o conjunto histórico selecionado de 77 ativos solicitados; execução histórica anterior com exclusões**, com corte em 06/10/2026. A referência da execução reduzida é histórica e não pode certificar o universo atual. O novo executor mantém nomes genéricos, enquanto as funções originais da campanha de expansão são reutilizadas pela camada `reproducao/experimento.py` para preservar exatamente o treino, a calibração temporal, os custos, a composição dos caches e o replay.
 
-**Versão do executor:** `1.23.0`; **checkpoint esperado:** `587165941.1330212`; **manifesto de entrada:** `evidencias/manifest_universo_congelado.json`. O manifesto contém a identidade do snapshot congelado e os 20 hashes SHA-256 extraídos do pacote de assurance de 21/10/2026. Os dez pares de arquivos externos permanecem no cache local e **não são automaticamente baixados ou reconstruídos**. Havendo divergência de dados ou capital, a execução falha explicitamente, sem ajustar matemática ou números para forçar o checkpoint.
+**Versão do executor:** `1.23.0`; **checkpoint histórico da execução anterior:** `587165941.1330212` (não comparável ao novo universo); **manifesto de entrada:** `evidencias/manifest_universo_congelado.json`. O manifesto contém a identidade do snapshot congelado e os 20 hashes SHA-256 extraídos do pacote de assurance de 21/10/2026. Os dez pares de arquivos externos permanecem no cache local e **não são automaticamente baixados ou reconstruídos**. Havendo divergência de hashes ou identidade, a execução falha. A comparação monetária com o checkpoint antigo foi retirada; a primeira execução com 77 efetivos criará uma referência nova a ser homologada.
 
-**Saída:** `output/reproducao_universo/reproducao_universo.json` e `pacote_reproducao_universo.zip`, com série de decisões e resultados; a saída anterior é copiada para backup antes de ser substituída. **Nota de verificabilidade:** o pipeline CI cobre contratos estáticos e testes unitários, mas não dispõe do cache de candidatos. A equivalência financeira foi posteriormente **confirmada no Spyder em 21/10/2026**, conforme o pacote auditado e a seção 28. Isso não torna o cache automaticamente disponível em um novo clone. As referências históricas do Control base permanecem como evidências da pesquisa, não como objetivo do executor atual.
+**Saída:** `output/reproducao_universo/reproducao_universo.json` e `pacote_reproducao_universo.zip`, com série de decisões e resultados; nesta branch de teste a mesma saída é sobrescrita somente depois de o replay concluir, sem pastas versionadas. **Nota de verificabilidade:** o pipeline CI cobre contratos estáticos e testes unitários, mas não dispõe do cache de candidatos. A equivalência financeira foi posteriormente **confirmada no Spyder em 21/10/2026**, conforme o pacote auditado e a seção 28. Isso não torna o cache automaticamente disponível em um novo clone. As referências históricas do Control base permanecem como evidências da pesquisa, não como objetivo do executor atual.
 
 
 ## 28. Release v1.23.0 — reprodução integral do universo selecionado (21/10/2026)
 
 ### 28.1 Entrega, identidade e escopo
 
-A versão **`v1.23.0`** passa a identificar o **executor oficial** `reproduzir_experimento.py` para o universo selecionado: **77 ativos solicitados e 75 efetivos**. O código do executor usa nomenclatura genérica, sem codificar no nome do arquivo o tamanho do universo histórico. A implementação reutiliza `reproducao/experimento.py` e as funções científicas originais de `pesquisar_expansao_u67_spyder.py` para manter o caminho de treinamento, calibração da margem e replay financeiro. Esta não é uma nova estratégia otimizada nem uma nova janela de dados.
+A versão **`v1.23.0`** passa a identificar o **executor oficial** `reproduzir_experimento.py` para o universo selecionado: **77 ativos solicitados, mas com reduções indevidas que agora estão sendo corrigidas**. O código do executor usa nomenclatura genérica, sem codificar no nome do arquivo o tamanho do universo histórico. A implementação reutiliza `reproducao/experimento.py` e as funções científicas originais de `pesquisar_expansao_u67_spyder.py` para manter o caminho de treinamento, calibração da margem e replay financeiro. Esta não é uma nova estratégia otimizada nem uma nova janela de dados.
 
 O código funcional da v1.23.0 já estava integrado à `main` nos commits `2fcba6ddb7676ab54f27b0107a7807be2fe14bcf` e `01b5d13464e224ab49463862221f132e7f5b5355`. Este registro atualiza a **documentação**, ativa a criação da tag anotada `v1.23.0` após a CI aprovada e não executa merge redundante. A tag `research-u67plus10-challenger-v1.4.1` permanece referência histórica independente.
 
@@ -1709,7 +1711,7 @@ O conteúdo do ZIP foi conferido: **29 arquivos**; `reproducao_universo.json`, `
 | Capital final esperado | US$ 587.165.941,1330212 |
 | Capital final observado | **US$ 587.165.941,1330212** |
 | Diferença absoluta | **US$ 0,00** |
-| Ativos solicitados / efetivos | 77 / 75 |
+| Ativos solicitados / efetivos | 77 / subconjunto histórico reduzido |
 | Ativos excluídos por identidade estrutural | DOC, CLMT |
 | Ativos acrescentados à referência | CRT, NBR, CAPR, PNBK, PENN, JBL, STAG, MCHB, LAD, TOWN |
 | Rotações de capital | 354 |

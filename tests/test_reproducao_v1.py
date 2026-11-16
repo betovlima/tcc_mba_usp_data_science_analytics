@@ -4,9 +4,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from reproducao.dados import SnapshotPaths
-from reproducao.preparacao import load_raw_bar_file, structural_identity_issue
+from reproducao.preparacao import (
+    _validated_structural_lineage, load_raw_bar_file,
+    prepare_model_frames, structural_identity_issue,
+)
 from reproducao.graficos import (
     calcular_retornos_mensais,
     construir_rotacoes,
@@ -24,7 +28,6 @@ from engine.configuracao import (
     BAR_SNAPSHOT_AS_OF_END,
     CONFIG,
     EXPERIMENT_VERSION,
-    U67_REQUESTED_ASSETS,
 )
 
 
@@ -95,10 +98,9 @@ def test_official_reproduction_has_no_database_dependency() -> None:
 
 
 def test_frozen_universe_and_dates_match_cpu_reference() -> None:
-    assert len(ASSETS) == 67
-    assert U67_REQUESTED_ASSETS == ASSETS == CONFIG.assets
-    assert "DOC" in ASSETS
-    assert "CLMT" in ASSETS
+    assert ASSETS
+    assert len(set(ASSETS)) == len(ASSETS)
+    assert ASSETS == CONFIG.assets
     assert ANALYSIS_END_DATE == "2026-09-17"
     assert BAR_SNAPSHOT_AS_OF_END == "2026-09-17"
     assert CONFIG.strategy_mode == "COMPOUND_ROTATION_SWING_LIGHTGBM"
@@ -134,7 +136,7 @@ def test_clmt_cusip_transition_accepts_float_parsed_cusip() -> None:
     assert issue["symbol"] == "CLMT"
 
 
-def test_clmt_cusip_transition_is_structurally_excluded() -> None:
+def test_clmt_cusip_transition_is_detected_and_audited() -> None:
     issue = structural_identity_issue(
         "CLMT",
         [
@@ -240,15 +242,15 @@ def test_official_runner_delegates_to_exact_replay() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(encoding="utf-8")
     assert "67" not in source
     assert "reproduzir_universo_congelado(" in source
-    assert "REPRODUCTION_VERSION = \"1.23.0\"" in source
-    assert "EXECUTION_SCHEMA = \"universe-reproduction-v3\"" in source
+    assert 'REPRODUCTION_VERSION = "1.23.0+dynamic-universe.test"' in source
+    assert 'EXECUTION_SCHEMA = "universe-reproduction-v4"' in source
     assert "pesquisar_expansao_u67_spyder" not in source
     assert "download_raw_bars" not in source
     assert "download_corporate_actions" not in source
 
 
 def test_snapshot_layout_is_csv_per_asset() -> None:
-    snapshot = SnapshotPaths.u67(ROOT)
+    snapshot = SnapshotPaths.archived_source(ROOT)
 
     assert snapshot.root == ROOT / "dados" / "u67"
     assert snapshot.raw_bars.name == "raw_bars"
@@ -325,10 +327,13 @@ def test_official_reproduction_uses_exact_input_manifest() -> None:
     helper = (ROOT / "reproducao" / "experimento.py").read_text(encoding="utf-8")
     assert "67" not in source
     assert "manifest_universo_congelado.json" in helper
-    assert "_train_baseline_states(" in helper
-    assert "_train_candidate_caches(" in helper
-    assert "_evaluate_scenario(" in helper
-    assert "digest(path)" in helper
+    assert "_ajustar_modelos_lightgbm(" in helper
+    assert "_precalcular_utilidades_modelo(" in helper
+    assert "assets=ASSETS" in helper
+    assert "_train_baseline_states(" not in helper
+    assert "_train_candidate_caches(" not in helper
+    assert "_evaluate_scenario(" not in helper
+    assert "digest(file_path)" in helper
     assert "download_raw_bars(" not in helper
     assert "download_corporate_actions(" not in helper
 
@@ -341,7 +346,7 @@ def test_u67_snapshot_preparation_is_separate_from_reproduction() -> None:
     assert "download_corporate_actions" in source
     assert "load_alpaca_credentials" in source
     assert "snapshot_end_date = \"2026-10-06\"" in source
-    assert "dados" in source and ".u67_build" in source
+    assert "dados" in source and ".universo_77_build" in source
 
 def test_capital_rotations_follow_backtest_analytics_semantics() -> None:
     trades = pd.DataFrame(
@@ -711,7 +716,20 @@ def test_official_reproduction_uses_selected_universe_contract() -> None:
     assert contract["snapshot_sha256"] == (
         "e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575"
     )
-    assert contract["expected_ending_capital"] == 587_165_941.1330212
+    # O manifesto preserva a historia, mas NAO valida o novo replay de 77.
+    runner = (ROOT / "reproducao" / "experimento.py").read_text(encoding="utf-8")
+    assert "len(ASSETS) != 77" not in runner
+    assert "configured_count = len(ASSETS)" in runner
+    assert '"checkpoint_validation": "awaiting_reference_for_configured_universe"' in runner
+    assert "expected_capital = None" in runner
+    assert runner.count("prepare_model_frames(") == 1
+    assert "source_paths=source_paths" in runner
+    assert "_train_baseline_states(" not in runner
+    assert "_train_candidate_caches(" not in runner
+    assert "_evaluate_scenario(" not in runner
+    assert "_ajustar_modelos_lightgbm(" in runner
+    assert "_precalcular_utilidades_modelo(" in runner
+    assert '"trained_count_each_fold": len(symbols)' in runner
     assert contract["selected_assets"] == [
         "CRT", "NBR", "CAPR", "PNBK", "PENN",
         "JBL", "STAG", "MCHB", "LAD", "TOWN",
@@ -757,3 +775,331 @@ def test_official_runner_silences_only_pandas4_warning() -> None:
     assert 'warnings.filterwarnings(' in source
     assert '"ignore"' in source
     assert 'warnings.filterwarnings("ignore")' not in source
+
+
+def test_real_snapshot_prepares_all_source_assets_with_audited_doc_clmt() -> None:
+    """Regression: never report success after silently excluding two securities."""
+    source_symbols = tuple(
+        __import__("json").loads(
+            (ROOT / "dados" / "u67" / "manifest.json").read_text(encoding="utf-8")
+        )["assets"]
+    )
+    frames, exclusions, diagnostics, audit = prepare_model_frames(
+        SnapshotPaths.archived_source(ROOT),
+        assets=source_symbols,
+        csv_float_precision="round_trip",
+    )
+    assert set(frames) == set(__import__("json").loads(
+        (ROOT / "dados" / "u67" / "manifest.json").read_text(encoding="utf-8")
+    )["assets"])
+    assert len(frames) == len(source_symbols)
+    assert exclusions == []
+    assert audit["eligible_assets"] == len(source_symbols)
+    lineages = {row["symbol"]: row for row in audit["validated_structural_lineages"]}
+    assert set(lineages) == {"DOC", "CLMT"}
+    assert lineages["DOC"]["historical_execution_symbol"] == "PEAK"
+    assert lineages["CLMT"]["conversion_ratio"] == "1:1"
+    assert len(diagnostics) == len(source_symbols)
+    for symbol in ("DOC", "CLMT"):
+        assert len(frames[symbol]) > 2500
+
+
+def test_historical_lineage_refuses_unverified_corporate_actions() -> None:
+    import pytest
+
+    with pytest.raises(RuntimeError, match="DOC"):
+        _validated_structural_lineage("DOC", [])
+    with pytest.raises(RuntimeError, match="CLMT"):
+        _validated_structural_lineage("CLMT", [])
+    with pytest.raises(RuntimeError, match="transicao societaria"):
+        _validated_structural_lineage("UNKNOWN", [])
+
+
+def test_selected_universe_contract_never_reduces_to_fewer_assets() -> None:
+    import json
+
+    contract = json.loads(
+        (ROOT / "evidencias" / "manifest_universo_congelado.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    requested = list(ASSETS)
+    assert requested
+    assert len(set(requested)) == len(requested)
+    assert isinstance(contract["candidate_file_hashes"], dict)
+
+
+def test_single_preparation_pass_uses_both_frozen_input_directories(tmp_path) -> None:
+    from reproducao.dados import SnapshotPaths
+
+    base = SnapshotPaths.from_root(tmp_path / "source")
+    additional = SnapshotPaths.from_root(tmp_path / "additional")
+    base.ensure()
+    additional.ensure()
+    sessions = pd.date_range("2020-01-02", periods=4, freq="B", tz="UTC")
+    for symbol, source in (("AAA", base), ("BBB", additional)):
+        pd.DataFrame({
+            "timestamp": sessions,
+            "open": [10.0, 11.0, 12.0, 13.0],
+            "high": [11.0, 12.0, 13.0, 14.0],
+            "low": [9.0, 10.0, 11.0, 12.0],
+            "close": [10.5, 11.5, 12.5, 13.5],
+            "volume": [1000, 1100, 1200, 1300],
+        }).to_csv(source.raw_bars / f"{symbol}.csv", index=False)
+        pd.DataFrame(columns=["action_type", "symbol"]).to_csv(
+            source.corporate_actions / f"{symbol}.csv", index=False
+        )
+
+    frames, exclusions, diagnostics, audit = prepare_model_frames(
+        base,
+        assets=("AAA", "BBB"),
+        source_paths={"BBB": additional},
+        csv_float_precision="round_trip",
+    )
+    assert list(frames) == ["AAA", "BBB"]
+    assert exclusions == []
+    assert len(diagnostics) == 2
+    assert audit["eligible_assets"] == 2
+
+
+@pytest.mark.parametrize("variation", ["original", "remove", "add"])
+def test_reproducao_integrada_aceita_universo_dinamico(
+    tmp_path, monkeypatch, variation
+) -> None:
+    """Replay with no fixed asset count, including additions and removals."""
+    import hashlib
+    import json
+    import numpy as np
+
+    import engine.configuracao as configuration
+    import engine.modelo_lightgbm as model
+    import engine.rotacao as rotation
+    import reproducao.artefatos as artifacts
+    import reproducao.dados as data
+    import reproducao.experimento as experiment
+    import reproducao.graficos as graphs
+    import reproducao.preparacao as preparation
+
+    original = tuple(ASSETS)
+    if variation == "remove":
+        configured = original[:-1]
+    elif variation == "add":
+        configured = (*original, "TESTX")
+    else:
+        configured = original
+    monkeypatch.setattr(configuration, "ASSETS", configured)
+
+    # Armazenamento separado nao corresponde a estrategias separadas.
+    split = max(1, len(original) // 2)
+    archived_symbols = original[:split]
+    extension_symbols = original[split:]
+    root = tmp_path / "tcc"
+    evidence = root / "evidencias"
+    evidence.mkdir(parents=True)
+    archived = data.SnapshotPaths.archived_source(root)
+    extension = data.SnapshotPaths.archived_extension(root)
+    updated = data.SnapshotPaths.from_root(root / "dados" / "universo_77")
+    archived.ensure()
+    extension.ensure()
+    if variation == "add":
+        updated.ensure()
+        updated.manifest.write_text("{}", encoding="utf-8")
+
+    def write_files(paths, symbol):
+        raw_path = paths.raw_bars / f"{symbol}.csv"
+        action_path = paths.corporate_actions / f"{symbol}.csv"
+        raw_path.write_text("frozen-" + symbol, encoding="utf-8")
+        action_path.write_text("actions-" + symbol, encoding="utf-8")
+        return {
+            "raw_sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest(),
+            "corporate_actions_sha256": hashlib.sha256(
+                action_path.read_bytes()
+            ).hexdigest(),
+        }
+
+    for symbol in archived_symbols:
+        write_files(archived, symbol)
+    hashes = {
+        symbol: write_files(extension, symbol) for symbol in extension_symbols
+    }
+    if variation == "add":
+        write_files(updated, "TESTX")
+    (evidence / "manifest_universo_congelado.json").write_text(
+        json.dumps({
+            "selected_assets": list(extension_symbols),
+            "candidate_file_hashes": hashes,
+            "snapshot_sha256": "test_frozen_snapshot",
+            "analysis_end_date": "2020-01-17",
+        }),
+        encoding="utf-8",
+    )
+
+    def validate(paths):
+        if paths.root == updated.root:
+            return {"snapshot_sha256": "test_updated", "assets": ["TESTX"]}
+        return {
+            "snapshot_sha256": "test_frozen_snapshot",
+            "assets": list(archived_symbols),
+        }
+
+    monkeypatch.setattr(data, "validate_snapshot", validate)
+    dates = pd.date_range("2020-01-02", periods=12, freq="B", tz="UTC")
+    bars = pd.DataFrame({
+        "open": [10.0] * len(dates),
+        "high": [11.0] * len(dates),
+        "low": [9.0] * len(dates),
+        "close": [10.5] * len(dates),
+        "volume": [1000.0] * len(dates),
+    }, index=dates)
+    prepared_calls = []
+
+    def prepare(_paths, *, assets, source_paths, csv_float_precision):
+        prepared_calls.append(tuple(assets))
+        assert tuple(assets) == configured
+        assert set(source_paths) == set(configured)
+        if variation == "add":
+            assert source_paths["TESTX"].root == updated.root
+        return (
+            {symbol: bars.copy() for symbol in assets},
+            [],
+            [],
+            {"eligible_assets": len(configured), "excluded_assets": []},
+        )
+
+    monkeypatch.setattr(preparation, "prepare_model_frames", prepare)
+
+    def context(raw, config):
+        assert len(raw) == len(configured)
+        symbols = sorted(raw)
+        folds = [
+            {
+                "fold_id": index,
+                "train_end_index": 3,
+                "calibration_start_index": 3,
+                "calibration_end_index": 6,
+                "final_fit_end_index": 8,
+                "decision_dates": dates[8:12],
+            }
+            for index in (1, 2, 3)
+        ]
+        return raw, dates, "AAA", symbols, folds, dates[8:12], {}, {}
+
+    monkeypatch.setattr(model, "_construir_contexto_execucao", context)
+    fits = []
+
+    def fit(frames, symbols, train_dates, config, *, phase, progress_callback):
+        assert len(frames) == len(symbols) == len(configured)
+        assert set(symbols) == set(configured)
+        fits.append(phase)
+        progress_callback(len(symbols), len(symbols), "cpu")
+        return {symbol: object() for symbol in symbols}
+
+    monkeypatch.setattr(model, "_ajustar_modelos_lightgbm", fit)
+    monkeypatch.setattr(
+        rotation, "_precalcular_utilidades_modelo",
+        lambda models, frames, symbols, timestamps, config: (
+            {pd.Timestamp(t): np.array([0.0] + [0.5] * len(symbols))
+             for t in timestamps},
+            {},
+        ),
+    )
+    monkeypatch.setattr(
+        model, "diagnosticos_fora_amostra",
+        lambda models, frames, symbols, dates, cache, *, fold_id:
+            {"fold_id": fold_id, "by_asset": {symbol: {} for symbol in symbols}},
+    )
+    monkeypatch.setattr(
+        rotation, "_politica_utilidade",
+        lambda *args, **kwargs: lambda timestamp, current, holding: (1, 0.5),
+    )
+    monkeypatch.setattr(
+        rotation, "_crescimento_politica_simples", lambda *args: 1.0
+    )
+    monkeypatch.setattr(
+        rotation, "_simular_exato",
+        lambda backend, policy, frames, symbols, decision_dates, *args, **kwargs:
+            SimpleNamespace(
+                metrics={"capital_rotations": 2},
+                predictions=pd.DataFrame(
+                    {"strategy_equity": [10000.0, 10500.0, 11000.0]},
+                    index=decision_dates[1:],
+                ),
+                trades=pd.DataFrame({"asset": ["NVDA"], "action": ["BUY"]}),
+            ) if len(frames) == len(symbols) == len(configured) else
+            (_ for _ in ()).throw(AssertionError("Replay incompleto")),
+    )
+    monkeypatch.setattr(
+        experiment, "summarize_metrics",
+        lambda result, folds, initial: {"ending_capital": 11000.0, "folds": []},
+    )
+    monkeypatch.setattr(
+        graphs, "gerar_analises_backtest", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        artifacts, "sinal_sonoro_conclusao", lambda: None
+    )
+
+    result = experiment.reproduzir_universo_congelado(
+        root=root,
+        output=root / "output" / "reproducao_universo",
+        version="universe-dynamic-test",
+        execution_schema="universe-reproduction-v4",
+    )
+    assert prepared_calls == [configured]
+    assert len(fits) == 2 * 3
+    assert all("universe_fold_" in phase for phase in fits)
+    assert result["universe"]["requested_count"] == len(configured)
+    assert result["universe"]["effective_count"] == len(configured)
+    assert set(result["universe"]["trained_assets"]) == set(configured)
+    assert all(
+        row["model_count"] == len(configured)
+        for row in result["calibration"]["fit_counts"]
+    )
+    assert (root / "output" / "reproducao_universo" /
+            "pacote_reproducao_universo.zip").is_file()
+
+
+def test_one_official_assets_definition_and_no_obsolete_universe_variables() -> None:
+    """The strategy must have one authoritative, variable-length asset tuple."""
+    import ast
+
+    config_path = ROOT / "engine" / "configuracao.py"
+    tree = ast.parse(config_path.read_text(encoding="utf-8"))
+    declarations = [
+        node for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "ASSETS"
+                for target in node.targets)
+    ]
+    assert len(declarations) == 1
+    assert isinstance(ASSETS, tuple)
+    assert ASSETS
+    assert len(ASSETS) == len(set(ASSETS))
+    assert CONFIG.assets is ASSETS
+    for path in (
+        config_path,
+        ROOT / "reproducao" / "experimento.py",
+        ROOT / "reproduzir_experimento.py",
+    ):
+        source = path.read_text(encoding="utf-8")
+        for obsolete in (
+            "U67_REQUESTED_ASSETS",
+            "U67_EXPECTED_REQUESTED_COUNT",
+            "U67_EXPECTED_EFFECTIVE_COUNT",
+            "U67_EXPECTED_EXCLUSIONS",
+        ):
+            assert obsolete not in source, (path, obsolete)
+    runner = (ROOT / "reproducao" / "experimento.py").read_text(
+        encoding="utf-8"
+    )
+    assert "assets=ASSETS" in runner
+    assert "set(ASSETS)" in runner
+    assert "from engine.configuracao import ASSETS" in runner
+
+
+def test_backtest_figure_titles_do_not_use_legacy_universe_label() -> None:
+    source = (ROOT / "reproducao" / "graficos.py").read_text(
+        encoding="utf-8"
+    )
+    assert "U67 Control" not in source
+    assert 'label=f"Winner {asset_count}"' in source

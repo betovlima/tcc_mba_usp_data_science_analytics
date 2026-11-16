@@ -23,18 +23,20 @@ ASSETS = (
     "SPY", "AVGO", "NFLX", "CRM", "ORCL", "COST", "LLY", "XOM", "CAT",
     "WMT", "V", "HD", "ADC", "ADEA", "ADI", "ADM", "DDS", "CNQ", "VRTS",
     "XSD", "CXW", "ENS", "CORT", "CCK", "CEF", "GKOS", "RACE", "TX", "UNF",
-    "BXMT", "PXLW", "KKR", "SCSC", "LKFT", "DNN", "VNCE", "UNFI", "DOC",
-    "CLMT", "APD", "MGM", "MAN", "MYE", "YANG", "MKSI", "MCS", "ECC",
+    "BXMT", "PXLW", "KKR", "SCSC", "LKFT", "DNN", "VNCE", "UNFI",
+    "APD", "MGM", "MAN", "MYE", "YANG", "MKSI", "MCS", "ECC",
     "COLB", "AMS", "FOXF", "THO", "WDAY", "EXR", "XEL", "SBFG", "PAYX",
-    "MUX", "SXC",
+    "MUX", "SXC", "CRT", "NBR", "CAPR", "PNBK", "PENN", "JBL",
+    "STAG", "MCHB", "LAD", "TOWN",
 )
 
 
-U67_REQUESTED_ASSETS = ASSETS
-U67_EXPECTED_REQUESTED_COUNT = 67
-U67_EXPECTED_EFFECTIVE_COUNT = 65
-U67_EXPECTED_EXCLUSIONS = frozenset({"CLMT", "DOC"})
-
+# ASSETS e a unica fonte de verdade. A quantidade de ativos e variavel.
+# O executor valida a existencia dos dados dos simbolos configurados.
+if not ASSETS:
+    raise ValueError("ASSETS nao pode ser vazio.")
+if len(ASSETS) != len(set(ASSETS)):
+    raise ValueError("ASSETS contem simbolos duplicados.")
 
 
 def _configuracoes_lightgbm() -> dict[str, Any]:

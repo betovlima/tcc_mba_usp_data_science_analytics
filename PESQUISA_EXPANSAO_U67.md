@@ -1,3 +1,5 @@
+> **Correção em teste (15/11/2026):** a branch `fix/tcc-universo-77-efetivos` exige 77 ativos efetivamente processados. Os números das campanhas históricas abaixo são apenas registros anteriores e não certificam este novo universo.
+
 # Pesquisa de expansão incremental do universo U67
 
 ## Objetivo
@@ -7,7 +9,7 @@ ativos externos.
 
 O U67 permanece como baseline fixo. Nenhum ativo existente é removido,
 substituído ou reordenado. O contrato continua sendo 67 símbolos configurados
-e 65 ativos efetivos no replay atual, em razão das exclusões estruturais já
+e universo efetivo reduzido na campanha histórica, em razão das exclusões estruturais anteriormente
 documentadas de DOC e CLMT.
 
 ## Pergunta de pesquisa
@@ -24,7 +26,7 @@ candidatos antes do teste econômico.
 ```text
 U67 atual
 requested = 67
-effective no replay atual = 65
+effective no replay histórico = conjunto reduzido, não aplicável ao teste atual
 capital de referência oficial em 2026-10-06 ≈ US$ 76.927.051,39
 ```
 
@@ -666,7 +668,7 @@ subconjuntos full-window    = 180
 
 ### Qualidade de ranking
 
-No universo U67+10, considerando 75 ativos e 1.503 sessões OOS:
+No universo U67+10, considerando o universo reduzido da campanha anterior e 1.503 sessões OOS:
 
 ```text
 Spearman IC médio                       = 0,03419
@@ -680,7 +682,7 @@ percentil realizado médio do top-1      = 55,38%
 ```
 
 O sinal cross-sectional global é pequeno, mas há concentração no topo. Como
-referência puramente combinatória, em 75 ativos um top-1 aleatório acertaria o
+referência puramente combinatória, na campanha histórica um top-1 aleatório acertaria o
 melhor ativo em 1,33% das sessões, estaria no top-3 em 4,0% e no top-5 em
 6,67%. Portanto, o modelo mostra sinal útil no topo, mas ainda fraco para uma
 ordenação completa e estável do universo.
@@ -912,7 +914,7 @@ contrafactuais temporais mais densos, produzidos pelo próprio replay controlado
 
 A campanha **v1.4.1**, `RUN_MODE="assurance_validation"`, voltou a reproduzir **US$ 76.927.051,38897176** no Control inicial, **US$ 290.727.954,41339606** no grupo de 15 e **US$ 587.165.941,1330212** com os dez selecionados. O pacote recebido (`pacote_analise_u67_assurance_validation(1).zip`, SHA-256 `0f06561e9685b3e84194580c50a6808e4c84d30a55584b97bd19dae2fafd6c37`) registra `status=completed` e replays com capital, escolhas e curva idênticos (`exact_to_cent=true`, `selected_asset_sequence_identical=true`, `max_equity_absolute_difference=0.0`).
 
-**Condições essenciais:** cutoff 06/10/2026, snapshot `dados/u67` com SHA `e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575`, 67 originais/65 efetivos (excluindo DOC e CLMT), mais 15 caches RAW e Corporate Actions em `dados/.u67_expansion_cache/full_raw_20261006/`. Esses 15 pares de CSV são arquivos locais não versionados no Git. A garantia de reprodução requer preservar os arquivos **e seus hashes** listados no pacote, e não apenas os tickers.
+**Condições essenciais:** cutoff 06/10/2026, snapshot `dados/u67` com SHA `e440f59da5e684f1de59cf447abfedd9aed3f7817b3d5d681058fe631276a575`, 67 originais; o processamento atual inclui DOC e CLMT, mais 15 caches RAW e Corporate Actions em `dados/.u67_expansion_cache/full_raw_20261006/`. Esses 15 pares de CSV são arquivos locais não versionados no Git. A garantia de reprodução requer preservar os arquivos **e seus hashes** listados no pacote, e não apenas os tickers.
 
 O código v1.4.1 possui downloads da Alpaca na preparação dos candidatos. Para não substituir o cache, a execução de confirmação empregou interceptação **somente em memória** das rotinas de download no Spyder; o script versionado, os modelos e a estratégia não foram modificados. Um novo download ou cutoff não é a mesma experiência. Consulte [CONTEXTO_MESTRE.md](CONTEXTO_MESTRE.md) para o procedimento offline completo.
 
@@ -921,6 +923,6 @@ O código v1.4.1 possui downloads da Alpaca na preparação dos candidatos. Para
 
 ## Encerramento do executor oficial v1.23.0 (21/10/2026)
 
-A rotina `reproduzir_experimento.py` passou a reproduzir, sem realizar nova busca ou atualização de dados, o conjunto fixo de dez candidatos já selecionados nesta pesquisa, com 77 ativos solicitados e 75 efetivos. A execução real no Spyder registrou **US$ 587.165.941,1330212**, exatamente o checkpoint de `decision_validation`/`assurance_validation`, e `reproduced_exact_to_cent=true`. O pacote `pacote_reproducao_universo.zip`, SHA-256 `0c3518387556f147897baf121cb089f532f8355a8bb074c91fe0a6b5ec4b6ac8`, inclui 1.560 previsões/sessões e 710 registros de negociação. A saída é `output/reproducao_universo/`.
+A rotina `reproduzir_experimento.py` passou a reproduzir, sem realizar nova busca ou atualização de dados, o conjunto fixo de dez candidatos já selecionados nesta pesquisa, com 77 ativos solicitados, mas com exclusões na campanha histórica anterior. A execução real no Spyder registrou **US$ 587.165.941,1330212**, exatamente o checkpoint de `decision_validation`/`assurance_validation`, e `reproduced_exact_to_cent=true`. O pacote `pacote_reproducao_universo.zip`, SHA-256 `0c3518387556f147897baf121cb089f532f8355a8bb074c91fe0a6b5ec4b6ac8`, inclui 1.560 previsões/sessões e 710 registros de negociação. A saída é `output/reproducao_universo/`.
 
 Essa validação confirma a **reprodução de um cenário selecionado retrospectivamente**, não uma seleção de novos candidatos fora da amostra. A investigação sobre assinatura temporal de pertencimento, o alerta de PBO e a ausência de redescoberta nested prospectiva permanecem assuntos científicos abertos. O manifesto `evidencias/manifest_universo_congelado.json` fixa os hashes dos arquivos históricos adicionais; os respectivos CSVs continuam fora do controle de versão. Ver seção 28 do `MANIFEST.md` e seção 8 de `CONTEXTO_MESTRE.md`.

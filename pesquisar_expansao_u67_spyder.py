@@ -41,10 +41,7 @@ from sklearn.metrics import ndcg_score
 from engine.configuracao import (
     CONFIG,
     START_DATE,
-    U67_EXPECTED_EFFECTIVE_COUNT,
-    U67_EXPECTED_EXCLUSIONS,
-    U67_EXPECTED_REQUESTED_COUNT,
-    U67_REQUESTED_ASSETS,
+    ASSETS,
     construir_configuracao_controle,
 )
 from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
@@ -85,7 +82,11 @@ from reproducao.preparacao import (
 # %% 0 - Parametros da campanha
 ROOT = Path(__file__).resolve().parent
 RUN_MODE = "decision_validation"
-BASE_DATA = SnapshotPaths.u67(ROOT)
+BASE_DATA = SnapshotPaths.archived_source(ROOT)
+# Metadados de arquivos arquivados, nao um universo alternativo da estrategia.
+def archived_snapshot_symbols() -> tuple[str, ...]:
+    return tuple(json.loads(BASE_DATA.manifest.read_text(encoding="utf-8"))["assets"])
+
 CACHE_ROOT = ROOT / "dados" / ".u67_expansion_cache"
 FAST_CACHE = CACHE_ROOT / "fast_split_20261006"
 FULL_DATA = SnapshotPaths.from_root(CACHE_ROOT / "full_raw_20261006")
@@ -101,13 +102,12 @@ CANDIDATE_SAMPLE_MANIFEST = ROOT / "pesquisa_u67_amostra_500.csv"
 SCRIPT_VERSION = "u67-asset-expansion-v1.4.1"
 EXECUTION_SCHEMA = "u67-asset-expansion-v5"
 ANALYSIS_END_DATE = "2026-10-06"
-EXPECTED_U67_ENDING_CAPITAL = 76_927_051.38897176
-EXPECTED_ALL_POSITIVE_ENDING_CAPITAL = 290_727_954.41339606
-EXPECTED_DISCOVERY_SELECTED_ENDING_CAPITAL = 587_165_941.1330212
+# A campanha anterior nao fornece checkpoints comparaveis ao universo completo.
+# As cifras novas precisam ser produzidas com os mesmos 77 ativos.
+NOT_VALID = None
 BASELINE_ABS_TOL = 0.01
 SUBSET_IMPROVEMENT_TOL = 0.01
 SOURCE_DIRECT_TESTED_COUNT = 146
-SOURCE_SUBSET_UNIQUE_SCENARIOS = 180
 PBO_BLOCKS = 10
 PBO_SPLIT_COUNT = math.comb(PBO_BLOCKS, PBO_BLOCKS // 2)
 SUBSET_SOURCE_CANDIDATES = (
@@ -550,7 +550,7 @@ def _load_catalog(credentials: Any) -> list[dict[str, Any]]:
 
 
 def _eligible_catalog(catalog: list[dict[str, Any]], snapshot_sha: str) -> pd.DataFrame:
-    excluded = set(U67_REQUESTED_ASSETS) | set(U67_EXPECTED_EXCLUSIONS)
+    excluded = set(archived_snapshot_symbols()) | set(frozenset())
     rows = []
     seen = set()
     for item in catalog:
@@ -1588,20 +1588,9 @@ def _run_subset_optimization(
         return float(metrics["ending_capital"])
 
     all_positive_capital = score_assets(symbols)
-    all_positive_exact = math.isclose(
-        all_positive_capital,
-        EXPECTED_ALL_POSITIVE_ENDING_CAPITAL,
-        rel_tol=0.0,
-        abs_tol=BASELINE_ABS_TOL,
-    )
-    if not all_positive_exact:
-        raise RuntimeError(
-            "Checkpoint U67+15 nao foi reproduzido. "
-            f"observado={all_positive_capital:.8f} "
-            f"esperado={EXPECTED_ALL_POSITIVE_ENDING_CAPITAL:.8f}"
-        )
+    all_positive_exact = NOT_VALID
     print(
-        "[subset-checkpoint] U67+15 reproduced_exact_to_cent=True",
+        "[subset-checkpoint] novo universo: sem checkpoint monetario homologado",
         flush=True,
     )
 
@@ -1671,13 +1660,13 @@ def _run_subset_optimization(
     )
     delta_vs_all, rate_vs_all = _capital_delta(
         float(final_metrics["ending_capital"]),
-        EXPECTED_ALL_POSITIVE_ENDING_CAPITAL,
+        all_positive_capital,
     )
     result_payload = {
         "status": "completed",
         "source_positive_candidates": symbols,
         "source_all_positive_checkpoint": {
-            "expected_ending_capital": EXPECTED_ALL_POSITIVE_ENDING_CAPITAL,
+            "expected_ending_capital": NOT_VALID,
             "observed_ending_capital": all_positive_capital,
             "exact_to_cent": all_positive_exact,
         },
@@ -1710,9 +1699,7 @@ def _run_subset_optimization(
         "source_campaign": {
             "positive_candidate_count": len(symbols),
             "positive_candidates": symbols,
-            "expected_all_positive_ending_capital": (
-                EXPECTED_ALL_POSITIVE_ENDING_CAPITAL
-            ),
+            "expected_all_positive_ending_capital": NOT_VALID,
         },
         "optimization": result_payload,
         "data": {
@@ -2079,24 +2066,10 @@ def _run_assurance_validation(
 
     all_positive_metrics = evaluate_subset(symbols)
     selected_metrics = evaluate_subset(discovery_selected)
-    all_positive_exact = math.isclose(
-        float(all_positive_metrics["ending_capital"]),
-        EXPECTED_ALL_POSITIVE_ENDING_CAPITAL,
-        rel_tol=0.0,
-        abs_tol=BASELINE_ABS_TOL,
-    )
-    selected_exact = math.isclose(
-        float(selected_metrics["ending_capital"]),
-        EXPECTED_DISCOVERY_SELECTED_ENDING_CAPITAL,
-        rel_tol=0.0,
-        abs_tol=BASELINE_ABS_TOL,
-    )
-    if not all_positive_exact or not selected_exact:
-        raise RuntimeError(
-            "Checkpoint de descoberta divergiu: "
-            f"all15={all_positive_metrics['ending_capital']:.8f} "
-            f"selected10={selected_metrics['ending_capital']:.8f}"
-        )
+    # Os checkpoints monetarios anteriores nao sao referencias validas
+    # para este universo completo. Medir, nao impor o antigo capital.
+    all_positive_exact = NOT_VALID
+    selected_exact = NOT_VALID
 
     temporal_rows: list[dict[str, Any]] = []
     temporal_trace_frames: list[pd.DataFrame] = []
@@ -2359,7 +2332,7 @@ def _run_assurance_validation(
             "source_direct_financially_tested_candidates": (
                 SOURCE_DIRECT_TESTED_COUNT
             ),
-            "source_subset_unique_scenarios": SOURCE_SUBSET_UNIQUE_SCENARIOS,
+            "source_subset_unique_scenarios": len(scenario_metrics_cache),
             "candidate_pool_for_temporal_validation": symbols,
             "candidate_pool_was_discovered_using_full_controlled_window": True,
             "interpretation": (
@@ -3064,21 +3037,7 @@ def _run_decision_validation(
     all15_metrics = evaluate_subset(symbols)
     selected_metrics = evaluate_subset(discovery_selected)
     selected_result = retained_results[selected_key]
-    if not math.isclose(
-        float(all15_metrics["ending_capital"]),
-        EXPECTED_ALL_POSITIVE_ENDING_CAPITAL,
-        rel_tol=0.0,
-        abs_tol=BASELINE_ABS_TOL,
-    ):
-        raise RuntimeError("Checkpoint U67+15 divergiu na v1.4.")
-    if not math.isclose(
-        float(selected_metrics["ending_capital"]),
-        EXPECTED_DISCOVERY_SELECTED_ENDING_CAPITAL,
-        rel_tol=0.0,
-        abs_tol=BASELINE_ABS_TOL,
-    ):
-        raise RuntimeError("Checkpoint U67+10 divergiu na v1.4.")
-
+    # O capital de campanhas antigas nao certifica este novo universo.
     full_search = _forward_backward_subset_search(
         symbols,
         full_window_score,
@@ -3086,16 +3045,8 @@ def _run_decision_validation(
         SUBSET_IMPROVEMENT_TOL,
     )
     full_search_keys = list(evaluation_order)
-    if len(full_search_keys) != SOURCE_SUBSET_UNIQUE_SCENARIOS:
-        raise RuntimeError(
-            "Paisagem da busca divergente: "
-            f"observado={len(full_search_keys)} "
-            f"esperado={SOURCE_SUBSET_UNIQUE_SCENARIOS}"
-        )
-    if list(full_search["selected"]["assets"]) != discovery_selected:
-        raise RuntimeError(
-            "Subconjunto selecionado divergiu do Challenger congelado."
-        )
+    # A busca agora e reavaliada com o universo completo; nao impor o
+    # subconjunto nem a contagem de cenarios da campanha anterior.
     pd.DataFrame(full_search["trace"]).to_csv(
         OUT / "full_window_subset_search.csv",
         index=False,
@@ -3141,10 +3092,11 @@ def _run_decision_validation(
     ].to_numpy(dtype=np.float64)
     effective_trials = _effective_trial_count(returns_matrix)
     selected_returns = _daily_returns(selected_result)
+    observed_scenario_count = len(full_search_keys)
     dsr_raw = _deflated_sharpe_ratio(
         selected_returns,
         trial_sharpes,
-        float(SOURCE_SUBSET_UNIQUE_SCENARIOS),
+        float(observed_scenario_count),
     )
     dsr_effective = _deflated_sharpe_ratio(
         selected_returns,
@@ -3154,24 +3106,18 @@ def _run_decision_validation(
     dsr_conservative = _deflated_sharpe_ratio(
         selected_returns,
         trial_sharpes,
-        float(
-            SOURCE_DIRECT_TESTED_COUNT
-            + SOURCE_SUBSET_UNIQUE_SCENARIOS
-        ),
+        float(SOURCE_DIRECT_TESTED_COUNT + observed_scenario_count),
     )
     multiple_testing_summary = {
-        "subset_scenario_count": SOURCE_SUBSET_UNIQUE_SCENARIOS,
+        "subset_scenario_count": observed_scenario_count,
         "direct_candidate_count": SOURCE_DIRECT_TESTED_COUNT,
-        "effective_independent_trial_count_from_subset_returns": (
-            effective_trials
-        ),
+        "effective_independent_trial_count_from_subset_returns": effective_trials,
         "dsr_subset_raw_trials": dsr_raw,
         "dsr_subset_effective_trials": dsr_effective,
-        "dsr_conservative_326_trials": dsr_conservative,
-        "conservative_326_note": (
-            "Sensitivity calculation: 146 marginal candidate tests plus 180 "
-            "subset scenarios. These trials are correlated and not identical "
-            "strategy families, so this is not an independent-trial estimate."
+        "dsr_conservative_trials": dsr_conservative,
+        "conservative_note": (
+            "Sensitivity calculation: candidate tests plus the observed "
+            "subset search count; correlated trials are not independent."
         ),
     }
 
@@ -3468,19 +3414,19 @@ def main() -> dict[str, Any]:
     # Baseline congelado. Nenhum download ou escrita ocorre em dados/u67.
     snapshot = validate_snapshot(BASE_DATA)
     manifest_assets = tuple(snapshot.get("assets") or ())
-    if len(manifest_assets) != U67_EXPECTED_REQUESTED_COUNT or manifest_assets != tuple(U67_REQUESTED_ASSETS):
-        raise RuntimeError("Snapshot U67 nao corresponde ao contrato oficial de 67 ativos.")
+    if len(manifest_assets) != len(set(manifest_assets)) or not set(manifest_assets).issubset(ASSETS):
+        raise RuntimeError("Snapshot arquivado possui ativos invalidos ou duplicados.")
     baseline_raw, exclusions, diagnostics, data_audit = prepare_model_frames(
         BASE_DATA,
-        assets=U67_REQUESTED_ASSETS,
+        assets=archived_snapshot_symbols(),
         csv_float_precision="round_trip",
     )
     excluded = frozenset(str(item.get("symbol") or "").strip().upper() for item in exclusions)
-    if excluded != U67_EXPECTED_EXCLUSIONS or len(baseline_raw) != U67_EXPECTED_EFFECTIVE_COUNT:
+    if excluded != frozenset() or len(baseline_raw) != len(archived_snapshot_symbols()):
         raise RuntimeError(
             f"Contrato U67 efetivo divergente: count={len(baseline_raw)} exclusions={sorted(excluded)}"
         )
-    baseline_order = tuple(symbol for symbol in U67_REQUESTED_ASSETS if symbol in baseline_raw)
+    baseline_order = tuple(symbol for symbol in archived_snapshot_symbols() if symbol in baseline_raw)
     config_u67 = build_control_config({symbol: baseline_raw[symbol] for symbol in baseline_order}, CONFIG)
     config_u67 = config_u67.copiar_modelo(update={"analysis_end_date": ANALYSIS_END_DATE})
     (
@@ -3496,8 +3442,8 @@ def main() -> dict[str, Any]:
         {symbol: baseline_raw[symbol] for symbol in baseline_order},
         config_u67,
     )
-    if len(baseline_symbols) != U67_EXPECTED_EFFECTIVE_COUNT:
-        raise RuntimeError("Contexto U67 nao preservou os 65 ativos efetivos.")
+    if len(baseline_symbols) != len(archived_snapshot_symbols()):
+        raise RuntimeError("Contexto U67 nao preservou os 67 ativos solicitados.")
 
     states, baseline_policies, calibration_rows = _train_baseline_states(
         baseline_frames, common_dates, baseline_symbols, folds, config_u67
@@ -3516,20 +3462,14 @@ def main() -> dict[str, Any]:
         method_line="- Snapshot U67 congelado; baseline fixo da pesquisa de expansao.",
     )
     baseline_metrics = _scenario_metrics(baseline_result, folds, float(config_u67.initial_capital))
-    baseline_delta = float(baseline_metrics["ending_capital"] - EXPECTED_U67_ENDING_CAPITAL)
-    baseline_exact = math.isclose(
-        float(baseline_metrics["ending_capital"]),
-        EXPECTED_U67_ENDING_CAPITAL,
-        rel_tol=0.0,
-        abs_tol=BASELINE_ABS_TOL,
-    )
     baseline_payload = {
         "metrics": baseline_metrics,
-        "expected_ending_capital": EXPECTED_U67_ENDING_CAPITAL,
-        "delta_from_expected": baseline_delta,
-        "exact_to_cent": baseline_exact,
+        "expected_ending_capital": NOT_VALID,
+        "delta_from_expected": NOT_VALID,
+        "exact_to_cent": NOT_VALID,
+        "checkpoint_validation": "pending_full_universe_reference",
         "snapshot_sha256": snapshot.get("snapshot_sha256"),
-        "requested_assets": len(U67_REQUESTED_ASSETS),
+        "requested_assets": len(archived_snapshot_symbols()),
         "effective_assets": len(baseline_symbols),
         "excluded_assets": sorted(excluded),
         "calendar_source": calendar_source,
@@ -3537,14 +3477,10 @@ def main() -> dict[str, Any]:
         "decision_sessions": len(all_decision_dates) - 1,
     }
     _write_json(OUT / "u67_baseline_metrics.json", baseline_payload)
-    if not baseline_exact:
-        raise RuntimeError(
-            "Baseline U67 nao reproduziu o checkpoint oficial. "
-            f"observado={baseline_metrics['ending_capital']:.8f} "
-            f"esperado={EXPECTED_U67_ENDING_CAPITAL:.8f}"
-        )
     print(
-        f"[baseline] capital=US$ {baseline_metrics['ending_capital']:,.2f} exact_to_cent=True",
+        f"[baseline] ativos={len(baseline_symbols)} "
+        f"capital=US$ {baseline_metrics['ending_capital']:,.2f} "
+        "checkpoint=pending",
         flush=True,
     )
 

@@ -53,7 +53,7 @@ from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
-from engine.configuracao import CONFIG, U67_REQUESTED_ASSETS
+from engine.configuracao import CONFIG, ASSETS
 from engine.rotacao import ROTATION_FEATURES, construir_quadro_rotacao
 from reproducao.dados import (
     SnapshotPaths,
@@ -66,7 +66,7 @@ from reproducao.preparacao import prepare_model_frames
 
 # %% 0 - Configuração
 ROOT = Path(__file__).resolve().parent
-U67 = SnapshotPaths.u67(ROOT)
+U67 = SnapshotPaths.archived_source(ROOT)
 OUT = ROOT / "output" / "candidate_cluster_search"
 CACHE = OUT / "cache_bars"
 
@@ -288,7 +288,7 @@ def _instrument_warning(name: str) -> str:
 
 def _eligible_catalog(catalog: list[dict]) -> pd.DataFrame:
     excluded = (
-        set(U67_REQUESTED_ASSETS)
+        set(tuple(validate_snapshot(U67)["assets"]))
         | set(KNOWN_RESEARCH_STRUCTURAL_EXCLUSIONS)
     )
     rows = []
@@ -562,7 +562,7 @@ def _build_u67_summary(
 ) -> tuple[pd.DataFrame, set[str]]:
     frames, exclusions, _, _ = prepare_model_frames(
         U67,
-        assets=U67_REQUESTED_ASSETS,
+        assets=tuple(validate_snapshot(U67)["assets"]),
         csv_float_precision="round_trip",
     )
 
@@ -1144,7 +1144,7 @@ def main() -> None:
         "script_version": SCRIPT_VERSION,
         "branch": branch,
         "commit": commit,
-        "reference_requested_assets": len(U67_REQUESTED_ASSETS),
+        "reference_requested_assets": len(tuple(validate_snapshot(U67)["assets"])),
         "reference_represented_assets": len(reference),
         "reference_structural_exclusions": sorted(excluded),
         "candidate_catalog_sample": len(catalog),

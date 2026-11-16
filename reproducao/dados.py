@@ -71,8 +71,16 @@ class SnapshotPaths:
         )
 
     @classmethod
-    def u67(cls, project_root: Path) -> "SnapshotPaths":
+    def archived_source(cls, project_root: Path) -> "SnapshotPaths":
+        """Localizacao fisica de arquivos antigos; nao define universo de ativos."""
         return cls.from_root(project_root / "dados" / "u67")
+
+    @classmethod
+    def archived_extension(cls, project_root: Path) -> "SnapshotPaths":
+        """Segunda pasta fisica do mesmo snapshot, sem um universo separado."""
+        return cls.from_root(
+            project_root / "dados" / ".u67_expansion_cache" / "full_raw_20261006"
+        )
 
     def ensure(self) -> None:
         self.raw_bars.mkdir(parents=True, exist_ok=True)
@@ -210,6 +218,20 @@ def _normalize_alpaca_frame(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
     return result.loc[valid].copy()
 
 
+def ultimo_pregao_sip_completo() -> str:
+    """Ultima sessao XNYS com candle diario disponivel apos buffer de 20min."""
+    import exchange_calendars as xcals
+
+    now = pd.Timestamp.now(tz="UTC")
+    calendar = xcals.get_calendar("XNYS")
+    ny_day = now.tz_convert("America/New_York").date()
+    session = calendar.date_to_session(pd.Timestamp(ny_day), direction="previous")
+    while now < calendar.session_close(session).tz_convert("UTC") + pd.Timedelta(minutes=20):
+        session = calendar.previous_session(session)
+    return session.date().isoformat()
+
+
+
 def download_raw_bars(
     credentials: AlpacaCredentials,
     paths: SnapshotPaths,
@@ -217,6 +239,7 @@ def download_raw_bars(
     assets: tuple[str, ...],
     bar_snapshot_as_of_end: str,
     analysis_end_date: str,
+    per_asset_pause_seconds: float = 0.20,
 ) -> dict[str, Path]:
     """Baixa SIP/1Day/RAW, um ativo por requisicao, e grava um CSV por ativo."""
     paths.ensure()
@@ -226,7 +249,27 @@ def download_raw_bars(
     )
     start = pd.Timestamp(START_DATE, tz="UTC").to_pydatetime()
     bar_end = pd.Timestamp(bar_snapshot_as_of_end, tz="UTC")
-    api_end = (bar_end + pd.Timedelta(days=1)).to_pydatetime()
+    # Reproduz a janela SIP historica do motor operacional para candle recente.
+    boundary = bar_end + pd.Timedelta(days=1)
+    now = pd.Timestamp.now(tz="UTC")
+    if boundary > now - pd.Timedelta(minutes=15):
+        import exchange_calendars as xcals
+
+        calendar = xcals.get_calendar("XNYS")
+        session = calendar.date_to_session(
+            pd.Timestamp(bar_snapshot_as_of_end), direction="previous"
+        )
+        if session.date().isoformat() != bar_snapshot_as_of_end:
+            raise ValueError("A data final deve ser um pregao XNYS.")
+        close_at = calendar.session_close(session).tz_convert("UTC")
+        safe_at = close_at + pd.Timedelta(minutes=20)
+        if now < safe_at:
+            raise RuntimeError(
+                f"Candle SIP ainda indisponivel para {bar_snapshot_as_of_end}; "
+                f"janela segura comeca em {safe_at.isoformat()}."
+            )
+        boundary = close_at
+    api_end = boundary.to_pydatetime()
 
     print(
         "[alpaca-bars] loader=alpaca_raw_sip_daily "
@@ -257,6 +300,8 @@ def download_raw_bars(
             raise RuntimeError(f"Fresh Alpaca RAW snapshot returned no bars for {symbol}.")
         frame.to_csv(target, index=False, float_format="%.17g")
         files[symbol] = target
+        if per_asset_pause_seconds > 0 and position < len(assets):
+            time.sleep(float(per_asset_pause_seconds))
         print(
             f"[alpaca-bars] {symbol} rows={len(frame)} "
             f"first={frame['timestamp'].min().date()} "
@@ -477,6 +522,94 @@ def build_snapshot_manifest(
     )
     print(f"[snapshot] id={manifest['snapshot_sha256']}", flush=True)
     return manifest
+
+
+
+
+def preparar_snapshot_raw_atualizado(
+    project_root: Path,
+    paths: SnapshotPaths,
+    assets: tuple[str, ...],
+    analysis_end_date: str,
+) -> dict[str, Any]:
+    """Faz uma coleta integral do universo configurado sem tocar no snapshot anterior."""
+    paths.ensure()
+    credentials = load_alpaca_credentials(project_root)
+    bars = download_raw_bars(
+        credentials, paths, assets=assets,
+        bar_snapshot_as_of_end=analysis_end_date,
+        analysis_end_date=analysis_end_date,
+    )
+    events = download_corporate_actions(
+        credentials, paths, assets=assets, query_end=analysis_end_date,
+    )
+    build_snapshot_manifest(
+        paths, bars, events, bar_snapshot_as_of_end=analysis_end_date,
+        analysis_end_date=analysis_end_date, assets=assets,
+        snapshot_name="tcc_full_raw_sip_replay",
+    )
+    manifest = validate_snapshot(paths)
+    if tuple(manifest["assets"]) != tuple(assets):
+        raise RuntimeError("Snapshot atualizado nao corresponde aos ativos configurados.")
+    return manifest
+
+
+def auditar_revisoes_raw(
+    novo: SnapshotPaths,
+    referencias: tuple[SnapshotPaths, ...],
+    assets: tuple[str, ...],
+) -> pd.DataFrame:
+    """Separa mudancas historicas de novas sessoes incluidas no corte."""
+    import numpy as np
+
+    output: list[dict[str, Any]] = []
+    cols = ("open", "high", "low", "close", "volume")
+    for symbol in assets:
+        prior = next(
+            (src.raw_bars / f"{symbol}.csv" for src in referencias
+             if (src.raw_bars / f"{symbol}.csv").is_file()),
+            None,
+        )
+        entry = {
+            "asset": symbol, "comparado": prior is not None,
+            "sessoes_comuns": 0, "sessoes_historicas_alteradas": 0,
+            "sessoes_novas": 0, "sessoes_antigas_ausentes": 0,
+            "primeira_revisao_historica": None,
+            "ultima_revisao_historica": None,
+        }
+        if prior is None:
+            output.append(entry)
+            continue
+        left = pd.read_csv(prior, float_precision="round_trip")
+        right = pd.read_csv(
+            novo.raw_bars / f"{symbol}.csv", float_precision="round_trip"
+        )
+        for frame in (left, right):
+            frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+            frame.set_index("timestamp", inplace=True)
+            frame.sort_index(inplace=True)
+            if not frame.index.is_unique:
+                raise RuntimeError(f"{symbol}: sessao RAW duplicada na auditoria.")
+        shared = left.index.intersection(right.index)
+        entry.update({
+            "sessoes_comuns": len(shared),
+            "sessoes_novas": len(right.index.difference(left.index)),
+            "sessoes_antigas_ausentes": len(left.index.difference(right.index)),
+        })
+        if len(shared):
+            changed = (~np.isclose(
+                left.loc[shared, list(cols)].to_numpy(dtype=float),
+                right.loc[shared, list(cols)].to_numpy(dtype=float),
+                rtol=0, atol=1e-10, equal_nan=True,
+            )).any(axis=1)
+            dates = shared[changed]
+            entry["sessoes_historicas_alteradas"] = int(len(dates))
+            if len(dates):
+                entry["primeira_revisao_historica"] = dates.min().date().isoformat()
+                entry["ultima_revisao_historica"] = dates.max().date().isoformat()
+        output.append(entry)
+    return pd.DataFrame(output)
+
 
 
 def validate_snapshot(paths: SnapshotPaths) -> dict[str, Any]:

@@ -13,6 +13,7 @@ openpyxl>=3.1,<4
 
 # Snapshot Alpaca -> CSV
 alpaca-py>=0.43,<1
+exchange-calendars>=4.10,<5
 requests>=2.32,<3
 python-dotenv>=1.0,<2
 
