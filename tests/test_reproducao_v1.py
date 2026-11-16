@@ -1054,3 +1054,11 @@ def test_one_official_assets_definition_and_no_obsolete_universe_variables() -> 
     assert "assets=ASSETS" in runner
     assert "set(ASSETS)" in runner
     assert "from engine.configuracao import ASSETS" in runner
+
+
+def test_backtest_figure_titles_do_not_use_legacy_universe_label() -> None:
+    source = (ROOT / "reproducao" / "graficos.py").read_text(
+        encoding="utf-8"
+    )
+    assert "U67 Control" not in source
+    assert 'label="Winner 77"' in source
