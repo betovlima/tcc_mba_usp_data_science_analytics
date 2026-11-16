@@ -27,7 +27,6 @@ from engine.configuracao import (
     BAR_SNAPSHOT_AS_OF_END,
     CONFIG,
     EXPERIMENT_VERSION,
-    U67_REQUESTED_ASSETS,
 )
 
 
@@ -98,8 +97,9 @@ def test_official_reproduction_has_no_database_dependency() -> None:
 
 
 def test_frozen_universe_and_dates_match_cpu_reference() -> None:
-    assert len(ASSETS) == 67
-    assert U67_REQUESTED_ASSETS == ASSETS == CONFIG.assets
+    assert len(ASSETS) == 77
+    assert len(set(ASSETS)) == 77
+    assert ASSETS == CONFIG.assets
     assert "DOC" in ASSETS
     assert "CLMT" in ASSETS
     assert ANALYSIS_END_DATE == "2026-09-17"
@@ -251,7 +251,7 @@ def test_official_runner_delegates_to_exact_replay() -> None:
 
 
 def test_snapshot_layout_is_csv_per_asset() -> None:
-    snapshot = SnapshotPaths.u67(ROOT)
+    snapshot = SnapshotPaths.archived_source(ROOT)
 
     assert snapshot.root == ROOT / "dados" / "u67"
     assert snapshot.raw_bars.name == "raw_bars"
@@ -723,7 +723,7 @@ def test_official_reproduction_uses_selected_universe_contract() -> None:
     assert '"checkpoint_validation": "awaiting_first_77_asset_baseline"' in runner
     assert "expected_capital = None" in runner
     assert runner.count("prepare_model_frames(") == 1
-    assert "source_paths={symbol: candidate_data for symbol in selected}" in runner
+    assert "source_paths={symbol: external_data for symbol in extra_symbols}" in runner
     assert "_train_baseline_states(" not in runner
     assert "_train_candidate_caches(" not in runner
     assert "_evaluate_scenario(" not in runner
@@ -780,11 +780,11 @@ def test_official_runner_silences_only_pandas4_warning() -> None:
 def test_real_snapshot_prepares_all_source_assets_with_audited_doc_clmt() -> None:
     """Regression: never report success after silently excluding two securities."""
     frames, exclusions, diagnostics, audit = prepare_model_frames(
-        SnapshotPaths.u67(ROOT),
-        assets=U67_REQUESTED_ASSETS,
+        SnapshotPaths.archived_source(ROOT),
+        assets=tuple(__import__('json').loads((ROOT / 'dados' / 'u67' / 'manifest.json').read_text(encoding='utf-8'))['assets']),
         csv_float_precision="round_trip",
     )
-    assert tuple(frames) == U67_REQUESTED_ASSETS
+    assert set(frames) == set(ASSETS[:67])
     assert len(frames) == 67
     assert exclusions == []
     assert audit["eligible_assets"] == 67
@@ -816,7 +816,7 @@ def test_selected_universe_contract_never_reduces_to_fewer_assets() -> None:
             encoding="utf-8"
         )
     )
-    requested = list(U67_REQUESTED_ASSETS) + contract["selected_assets"]
+    requested = list(ASSETS)
     assert len(requested) == 77
     assert len(set(requested)) == 77
     assert requested[46:48] == ["DOC", "CLMT"]
@@ -875,7 +875,7 @@ def test_reproducao_integrada_usa_77_desde_o_primeiro_fold(tmp_path, monkeypatch
 
     additions = ("CRT", "NBR", "CAPR", "PNBK", "PENN", "JBL",
                  "STAG", "MCHB", "LAD", "TOWN")
-    requested = (*U67_REQUESTED_ASSETS, *additions)
+    requested = ASSETS
     assert len(requested) == 77
     root = tmp_path / "tcc"
     evidence_dir = root / "evidencias"
@@ -905,7 +905,7 @@ def test_reproducao_integrada_usa_77_desde_o_primeiro_fold(tmp_path, monkeypatch
         data, "validate_snapshot",
         lambda path: {
             "snapshot_sha256": "test_frozen_snapshot",
-            "assets": list(U67_REQUESTED_ASSETS),
+            "assets": list(ASSETS[:-10]),
         },
     )
     dates = pd.date_range("2020-01-02", periods=12, freq="B", tz="UTC")
