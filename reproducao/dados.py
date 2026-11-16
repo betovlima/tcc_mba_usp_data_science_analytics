@@ -218,6 +218,20 @@ def _normalize_alpaca_frame(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
     return result.loc[valid].copy()
 
 
+def ultimo_pregao_sip_completo() -> str:
+    """Ultima sessao XNYS com candle diario disponivel apos buffer de 20min."""
+    import exchange_calendars as xcals
+
+    now = pd.Timestamp.now(tz="UTC")
+    calendar = xcals.get_calendar("XNYS")
+    ny_day = now.tz_convert("America/New_York").date()
+    session = calendar.date_to_session(pd.Timestamp(ny_day), direction="previous")
+    while now < calendar.session_close(session).tz_convert("UTC") + pd.Timedelta(minutes=20):
+        session = calendar.previous_session(session)
+    return session.date().isoformat()
+
+
+
 def download_raw_bars(
     credentials: AlpacaCredentials,
     paths: SnapshotPaths,
@@ -225,6 +239,7 @@ def download_raw_bars(
     assets: tuple[str, ...],
     bar_snapshot_as_of_end: str,
     analysis_end_date: str,
+    per_asset_pause_seconds: float = 0.20,
 ) -> dict[str, Path]:
     """Baixa SIP/1Day/RAW, um ativo por requisicao, e grava um CSV por ativo."""
     paths.ensure()
@@ -234,7 +249,27 @@ def download_raw_bars(
     )
     start = pd.Timestamp(START_DATE, tz="UTC").to_pydatetime()
     bar_end = pd.Timestamp(bar_snapshot_as_of_end, tz="UTC")
-    api_end = (bar_end + pd.Timedelta(days=1)).to_pydatetime()
+    # Reproduz a janela SIP historica do motor operacional para candle recente.
+    boundary = bar_end + pd.Timedelta(days=1)
+    now = pd.Timestamp.now(tz="UTC")
+    if boundary > now - pd.Timedelta(minutes=15):
+        import exchange_calendars as xcals
+
+        calendar = xcals.get_calendar("XNYS")
+        session = calendar.date_to_session(
+            pd.Timestamp(bar_snapshot_as_of_end), direction="previous"
+        )
+        if session.date().isoformat() != bar_snapshot_as_of_end:
+            raise ValueError("A data final deve ser um pregao XNYS.")
+        close_at = calendar.session_close(session).tz_convert("UTC")
+        safe_at = close_at + pd.Timedelta(minutes=20)
+        if now < safe_at:
+            raise RuntimeError(
+                f"Candle SIP ainda indisponivel para {bar_snapshot_as_of_end}; "
+                f"janela segura comeca em {safe_at.isoformat()}."
+            )
+        boundary = close_at
+    api_end = boundary.to_pydatetime()
 
     print(
         "[alpaca-bars] loader=alpaca_raw_sip_daily "
@@ -265,6 +300,8 @@ def download_raw_bars(
             raise RuntimeError(f"Fresh Alpaca RAW snapshot returned no bars for {symbol}.")
         frame.to_csv(target, index=False, float_format="%.17g")
         files[symbol] = target
+        if per_asset_pause_seconds > 0 and position < len(assets):
+            time.sleep(float(per_asset_pause_seconds))
         print(
             f"[alpaca-bars] {symbol} rows={len(frame)} "
             f"first={frame['timestamp'].min().date()} "
