@@ -1,6 +1,6 @@
 # TCC MBA USP — Rotação de Capital com Machine Learning
 
-**Branch de correção em teste: universo efetivo de 77 ativos.** A release `v1.23.0` registra a reprodução histórica anterior e não certifica a nova execução. O executor usa o motor Control histórico (`v1.22.1`) e as rotinas de expansão pesquisadas na `v1.4.1`. O encerramento da release está na seção 28 de [MANIFEST.md](MANIFEST.md); as seções anteriores preservam os experimentos históricos.
+**Branch de correção em teste: universo efetivo de 77 ativos.** A release `v1.23.0` registra a reprodução histórica anterior e não certifica a nova execução. O executor usa a política Control/LightGBM, com uma única lista oficial de 77 ativos definida em `engine/configuracao.py`. O encerramento da release está na seção 28 de [MANIFEST.md](MANIFEST.md); as seções anteriores preservam os experimentos históricos.
 
 ## Requisitos
 
@@ -15,7 +15,7 @@ python -m pip install -r requirements.txt
 
 ## 1. Verifique os dados
 
-A execução oficial usa **duas fontes congeladas**:
+A execução oficial usa **um único `ASSETS` com 77 símbolos**. Os arquivos RAW permanecem em duas pastas congeladas por compatibilidade de armazenamento. Essas pastas não definem dois universos:
 
 ```text
 dados/u67/                         # snapshot base versionado
@@ -31,8 +31,8 @@ evidencias/manifest_universo_congelado.json     # hashes SHA-256 exigidos
 A release inclui o snapshot congelado em `dados/u67/`. Vá direto para a
 execução; os hashes são conferidos antes do treinamento.
 
-**Não execute `preparar_snapshot_u67.py` para reproduzir os dados congelados:**
-isso substituiria a fonte histórica. Sem os dez CSVs locais e os arquivos de
+**Não execute nenhum script de download para reproduzir os dados congelados:**
+o executor usa os hashes históricos e não baixa novas cotações. Sem os dez CSVs locais e os arquivos de
 eventos corporativos com os hashes do manifesto, o programa aborta antes do treino.
 O snapshot base está no Git, mas o cache dos candidatos precisa ser restaurado
 de uma execução histórica preservada.
@@ -88,7 +88,7 @@ As sete figuras em PNG e SVG, as tabelas derivadas e sua procedência ficam em
 `figuras/`. O comando usa as evidências preservadas da execução dev.10; não
 treina modelos nem executa outro backtest. Ele é separado da reprodução.
 
-O executor oficial em teste exige **77 ativos efetivos**, incluindo DOC e CLMT.
+O executor oficial em teste consome **exclusivamente `ASSETS`**, com 77 ativos efetivos, incluindo DOC e CLMT.
 As duas pastas de dados são somente fontes históricas: a preparação percorre
 **1/77 até 77/77 em uma única passagem**. Em cada um dos três folds, os 77
 ativos são treinados, calibrados e avaliados **juntos**, pelo mesmo modelo
@@ -165,15 +165,15 @@ A integração da pesquisa histórica (commit `13e5ed39ed0e700d2eb8c90bc8bee64ad
 
 ## Executor oficial do universo selecionado (v1.23.0)
 
-`reproduzir_experimento.py` agora executa o **mesmo replay financeiro de dez candidatos** usado na pesquisa de expansão, e não somente a referência base. O arquivo do executor usa nomenclatura genérica; a adaptação preserva a rotina histórica por trás de `reproducao/experimento.py`, sem duplicar a matemática. A saída é `output/reproducao_universo/pacote_reproducao_universo.zip`.
+`reproduzir_experimento.py` executa **um único replay financeiro com os 77 ativos declarados em `ASSETS`**, sem divisão do treinamento entre uma base e ativos acrescentados depois. O executor reutiliza o motor Control/LightGBM, a calibração temporal e a política de rotação. A saída é `output/reproducao_universo/pacote_reproducao_universo.zip`.
 
 O código valida primeiro a identidade do snapshot, a composição do universo e os **20 hashes dos CSVs** (barras e eventos de dez ativos). Depois treina e calibra **os 77 ativos juntos, em cada fold**. O resultado da primeira execução válida com os 77 efetivos será um novo checkpoint, ainda não homologado. Nenhuma chamada de download é feita pelo executor. O cenário é histórico, não uma previsão de resultado futuro. **O resultado publicado em 21/10/2026 pertence à campanha anterior.** A branch de correção mantém o mesmo snapshot e o mesmo cache, mas não afirma que reproduziu aquele capital usando 77 ativos efetivos. O ZIP conferido é `pacote_reproducao_universo.zip`, SHA-256 `0c3518387556f147897baf121cb089f532f8355a8bb074c91fe0a6b5ec4b6ac8`. O pacote contém 29 arquivos, incluindo `predictions.csv` (1.560 sessões), `trades.csv` (710 registros), `reproducao_universo.json` e análises gráficas. O checkpoint foi confirmado também pelos modos de pesquisa `decision_validation` e `assurance_validation` sobre o mesmo recorte congelado. O cache local continua **não versionado**: clones limpos não têm, por si só, os arquivos suficientes para refazer o replay.
 
 
 ## Correção do universo efetivo de 77 ativos (branch de teste)
 
-A branch `fix/tcc-universo-77-efetivos` mantém a origem congelada e
-prepara os **77 ativos de uma vez**, incluindo DOC e CLMT. Os arquivos
+A branch `fix/tcc-universo-77-efetivos` usa a única constante `ASSETS` em
+`engine/configuracao.py` e prepara os **77 ativos de uma vez**, incluindo DOC e CLMT. Os arquivos
 historicamente guardados em duas pastas são unidos **antes** do treinamento.
 Cada fold ajusta 77 modelos em uma única rodada e o replay opera com a mesma
 lista completa. Qualquer ausência interrompe a execução.
