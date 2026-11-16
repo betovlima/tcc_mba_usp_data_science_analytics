@@ -217,7 +217,6 @@ def download_raw_bars(
     assets: tuple[str, ...],
     bar_snapshot_as_of_end: str,
     analysis_end_date: str,
-    per_asset_pause_seconds: float = 0.0,
 ) -> dict[str, Path]:
     """Baixa SIP/1Day/RAW, um ativo por requisicao, e grava um CSV por ativo."""
     paths.ensure()
@@ -227,31 +226,7 @@ def download_raw_bars(
     )
     start = pd.Timestamp(START_DATE, tz="UTC").to_pydatetime()
     bar_end = pd.Timestamp(bar_snapshot_as_of_end, tz="UTC")
-    api_end = bar_end + pd.Timedelta(days=1)
-    # Mesma janela segura RAW/SIP usada na pesquisa operacional: candle diario de uma
-    # sessao recente somente depois de fechamento XNYS + 20 minutos.
-    # Para datas antigas, manter a fronteira original (dia seguinte UTC).
-    now_utc = pd.Timestamp.now(tz="UTC")
-    if api_end > now_utc - pd.Timedelta(minutes=15):
-        import exchange_calendars as xcals
-
-        calendar = xcals.get_calendar("XNYS")
-        session = calendar.date_to_session(
-            pd.Timestamp(bar_snapshot_as_of_end), direction="previous"
-        )
-        if session.date().isoformat() != bar_snapshot_as_of_end:
-            raise RuntimeError(
-                f"Data final {bar_snapshot_as_of_end} nao e um pregao XNYS."
-            )
-        close_at = calendar.session_close(session).tz_convert("UTC")
-        safe_at = close_at + pd.Timedelta(minutes=20)
-        if now_utc < safe_at:
-            raise RuntimeError(
-                f"RecentSIPDailyBarNotYetSafe: aguardar {safe_at.isoformat()} "
-                f"para baixar o candle completo de {bar_snapshot_as_of_end}."
-            )
-        api_end = close_at
-    api_end = api_end.to_pydatetime()
+    api_end = (bar_end + pd.Timedelta(days=1)).to_pydatetime()
 
     print(
         "[alpaca-bars] loader=alpaca_raw_sip_daily "
@@ -282,8 +257,6 @@ def download_raw_bars(
             raise RuntimeError(f"Fresh Alpaca RAW snapshot returned no bars for {symbol}.")
         frame.to_csv(target, index=False, float_format="%.17g")
         files[symbol] = target
-        if per_asset_pause_seconds > 0 and position < len(assets):
-            time.sleep(float(per_asset_pause_seconds))
         print(
             f"[alpaca-bars] {symbol} rows={len(frame)} "
             f"first={frame['timestamp'].min().date()} "
