@@ -69,6 +69,17 @@ def main() -> dict:
 
     cutoff_safe = ultimo_pregao_sip_completo()
     cutoff = str(DATA_FINAL or cutoff_safe)
+    if DATA_FINAL is not None:
+        import exchange_calendars as xcals
+
+        try:
+            session = xcals.get_calendar("XNYS").date_to_session(
+                pd.Timestamp(cutoff), direction="previous"
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"DATA_FINAL invalida: {cutoff}") from exc
+        if session.date().isoformat() != cutoff:
+            raise ValueError(f"DATA_FINAL={cutoff} nao e um pregao XNYS.")
     if cutoff > cutoff_safe:
         raise ValueError(
             f"Data {cutoff} sem candle SIP completo; ultima segura={cutoff_safe}"
