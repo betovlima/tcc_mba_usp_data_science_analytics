@@ -784,7 +784,9 @@ def test_real_snapshot_prepares_all_source_assets_with_audited_doc_clmt() -> Non
         assets=tuple(__import__('json').loads((ROOT / 'dados' / 'u67' / 'manifest.json').read_text(encoding='utf-8'))['assets']),
         csv_float_precision="round_trip",
     )
-    assert set(frames) == set(ASSETS[:67])
+    assert set(frames) == set(__import__("json").loads(
+        (ROOT / "dados" / "u67" / "manifest.json").read_text(encoding="utf-8")
+    )["assets"])
     assert len(frames) == 67
     assert exclusions == []
     assert audit["eligible_assets"] == 67
@@ -1015,3 +1017,40 @@ def test_reproducao_integrada_usa_77_desde_o_primeiro_fold(tmp_path, monkeypatch
                result["calibration"]["fit_counts"])
     assert (root / "output" / "reproducao_universo" /
             "pacote_reproducao_universo.zip").is_file()
+
+
+def test_one_official_assets_definition_and_no_obsolete_universe_variables() -> None:
+    """The strategy must have exactly one authoritative 77-symbol asset tuple."""
+    import ast
+
+    config_path = ROOT / "engine" / "configuracao.py"
+    tree = ast.parse(config_path.read_text(encoding="utf-8"))
+    declarations = [
+        node for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "ASSETS"
+                for target in node.targets)
+    ]
+    assert len(declarations) == 1
+    assert isinstance(ASSETS, tuple)
+    assert len(ASSETS) == len(set(ASSETS)) == 77
+    assert CONFIG.assets is ASSETS
+    for path in (
+        config_path,
+        ROOT / "reproducao" / "experimento.py",
+        ROOT / "reproduzir_experimento.py",
+    ):
+        source = path.read_text(encoding="utf-8")
+        for obsolete in (
+            "U67_REQUESTED_ASSETS",
+            "U67_EXPECTED_REQUESTED_COUNT",
+            "U67_EXPECTED_EFFECTIVE_COUNT",
+            "U67_EXPECTED_EXCLUSIONS",
+        ):
+            assert obsolete not in source, (path, obsolete)
+    runner = (ROOT / "reproducao" / "experimento.py").read_text(
+        encoding="utf-8"
+    )
+    assert "assets=ASSETS" in runner
+    assert "set(ASSETS)" in runner
+    assert "from engine.configuracao import ASSETS" in runner
