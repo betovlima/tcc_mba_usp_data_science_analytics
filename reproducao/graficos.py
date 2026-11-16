@@ -660,7 +660,7 @@ def _salvar_excel(
     analytics: dict[str, pd.DataFrame],
     summary: dict[str, Any],
 ) -> None:
-    """Persiste a analise do Winner 77 em uma unica planilha."""
+    """Persiste a analise do universo configurado em uma unica planilha."""
     resumo = pd.DataFrame(
         [
             {"metric": key, "control": summary.get(key)}
@@ -824,8 +824,9 @@ def gerar_analises_backtest(
     *,
     manifest: dict[str, Any],
     result: Any,
+    asset_count: int | None = None,
 ) -> dict[str, Path]:
-    """Gera dados, graficos e planilha do backtest oficial Winner 77."""
+    """Gera dados, graficos e planilha do backtest oficial."""
     graficos_dir = output_dir / "graficos"
     if graficos_dir.exists():
         shutil.rmtree(graficos_dir)
@@ -834,7 +835,7 @@ def gerar_analises_backtest(
     analytics, paths, summary = _gerar_variante(
         graficos_dir,
         slug="control",
-        label="Winner 77",
+        label=f"Winner {asset_count}" if asset_count is not None else "Winner",
         result=result,
     )
 
