@@ -47,7 +47,7 @@ FROZEN_DIR = ROOT / "dados" / "cluster_candidate_search"
 FREEZE_JSON = FROZEN_DIR / "cluster_shortlist_freeze.json"
 FREEZE_CSV = FROZEN_DIR / "cluster_shortlist_frozen.csv"
 
-U67 = SnapshotPaths.u67(ROOT)
+U67 = SnapshotPaths.archived_source(ROOT)
 CANDIDATES = SnapshotPaths.from_root(
     FROZEN_DIR / "snapshot"
 )
