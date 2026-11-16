@@ -338,7 +338,7 @@ def reproduzir_universo_congelado(
             symbols,
             train_dates,
             config,
-            phase=f"universe77_fold_{fold_id}_calibration",
+            phase=f"universe_fold_{fold_id}_calibration",
             progress_callback=on_fit(fold_id, "calibration"),
         )
         if set(calibration_models) != set(ASSETS):
@@ -387,7 +387,7 @@ def reproduzir_universo_congelado(
             symbols,
             final_fit_dates,
             config,
-            phase=f"universe77_fold_{fold_id}_final",
+            phase=f"universe_fold_{fold_id}_final",
             progress_callback=on_fit(fold_id, "final_fit"),
         )
         if set(final_models) != set(ASSETS):
@@ -424,7 +424,7 @@ def reproduzir_universo_congelado(
         del final_models
         print(
             f"[fold] {fold_id}/{len(folds)} completed "
-            "calibration_models={configured_count} final_models={configured_count}",
+            f"calibration_models={configured_count} final_models={configured_count}",
             flush=True,
         )
 
