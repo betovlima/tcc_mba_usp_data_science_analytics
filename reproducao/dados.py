@@ -598,8 +598,8 @@ def auditar_revisoes_raw(
         })
         if len(shared):
             changed = (~np.isclose(
-                left.loc[shared, cols].to_numpy(dtype=float),
-                right.loc[shared, cols].to_numpy(dtype=float),
+                left.loc[shared, list(cols)].to_numpy(dtype=float),
+                right.loc[shared, list(cols)].to_numpy(dtype=float),
                 rtol=0, atol=1e-10, equal_nan=True,
             )).any(axis=1)
             dates = shared[changed]
