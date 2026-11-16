@@ -75,6 +75,13 @@ class SnapshotPaths:
         """Localizacao fisica de arquivos antigos; nao define universo de ativos."""
         return cls.from_root(project_root / "dados" / "u67")
 
+    @classmethod
+    def archived_extension(cls, project_root: Path) -> "SnapshotPaths":
+        """Segunda pasta fisica do mesmo snapshot, sem um universo separado."""
+        return cls.from_root(
+            project_root / "dados" / ".u67_expansion_cache" / "full_raw_20261006"
+        )
+
     def ensure(self) -> None:
         self.raw_bars.mkdir(parents=True, exist_ok=True)
         self.corporate_actions.mkdir(parents=True, exist_ok=True)
