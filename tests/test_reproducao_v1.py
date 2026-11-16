@@ -101,8 +101,6 @@ def test_frozen_universe_and_dates_match_cpu_reference() -> None:
     assert ASSETS
     assert len(set(ASSETS)) == len(ASSETS)
     assert ASSETS == CONFIG.assets
-    assert "DOC" in ASSETS
-    assert "CLMT" in ASSETS
     assert ANALYSIS_END_DATE == "2026-09-17"
     assert BAR_SNAPSHOT_AS_OF_END == "2026-09-17"
     assert CONFIG.strategy_mode == "COMPOUND_ROTATION_SWING_LIGHTGBM"
@@ -244,7 +242,7 @@ def test_official_runner_delegates_to_exact_replay() -> None:
     source = (ROOT / "reproduzir_experimento.py").read_text(encoding="utf-8")
     assert "67" not in source
     assert "reproduzir_universo_congelado(" in source
-    assert 'REPRODUCTION_VERSION = "1.23.0+universe77.test"' in source
+    assert 'REPRODUCTION_VERSION = "1.23.0+dynamic-universe.test"' in source
     assert 'EXECUTION_SCHEMA = "universe-reproduction-v4"' in source
     assert "pesquisar_expansao_u67_spyder" not in source
     assert "download_raw_bars" not in source
