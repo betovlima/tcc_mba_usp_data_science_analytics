@@ -1,6 +1,6 @@
 # TCC MBA USP — Rotação de Capital com Machine Learning
 
-**Branch de correção em teste: universo efetivo de 77 ativos.** A release `v1.23.0` registra a reprodução histórica anterior e não certifica a nova execução. O executor usa a política Control/LightGBM, com uma única lista oficial de 77 ativos definida em `engine/configuracao.py`. O encerramento da release está na seção 28 de [MANIFEST.md](MANIFEST.md); as seções anteriores preservam os experimentos históricos.
+**Branch de teste: universo configurável diretamente em `ASSETS`.** A release `v1.23.0` registra a reprodução histórica anterior e não certifica a nova execução. O executor usa a política Control/LightGBM, com uma única lista oficial de ativos definida em `engine/configuracao.py`. O encerramento da release está na seção 28 de [MANIFEST.md](MANIFEST.md); as seções anteriores preservam os experimentos históricos.
 
 ## Requisitos
 
@@ -15,7 +15,7 @@ python -m pip install -r requirements.txt
 
 ## 1. Verifique os dados
 
-A execução oficial usa **um único `ASSETS` com 77 símbolos**. Os arquivos RAW permanecem em duas pastas congeladas por compatibilidade de armazenamento. Essas pastas não definem dois universos:
+A execução oficial usa **um único `ASSETS` com quantidade livre de símbolos**. Os arquivos RAW permanecem em duas pastas congeladas por compatibilidade de armazenamento. Essas pastas não definem dois universos:
 
 ```text
 dados/u67/                         # snapshot base versionado
@@ -88,9 +88,9 @@ As sete figuras em PNG e SVG, as tabelas derivadas e sua procedência ficam em
 `figuras/`. O comando usa as evidências preservadas da execução dev.10; não
 treina modelos nem executa outro backtest. Ele é separado da reprodução.
 
-O executor oficial em teste consome **exclusivamente `ASSETS`**, com 77 ativos efetivos, incluindo DOC e CLMT.
+O executor oficial em teste consome **exclusivamente `ASSETS`**. A quantidade padrão desta revisão é 77, mas pode aumentar ou diminuir sem mudanças no executor.
 As duas pastas de dados são somente fontes históricas: a preparação percorre
-**1/77 até 77/77 em uma única passagem**. Em cada um dos três folds, os 77
+**1/N até N/N em uma única passagem**, onde `N = len(ASSETS)`. Em cada um dos três folds, todos os
 ativos são treinados, calibrados e avaliados **juntos**, pelo mesmo modelo
 LightGBM Control e pela mesma política de rotação de capital. Não há treinamento
 separado da base seguido de inclusão posterior dos dez ativos.
@@ -165,17 +165,17 @@ A integração da pesquisa histórica (commit `13e5ed39ed0e700d2eb8c90bc8bee64ad
 
 ## Executor oficial do universo selecionado (v1.23.0)
 
-`reproduzir_experimento.py` executa **um único replay financeiro com os 77 ativos declarados em `ASSETS`**, sem divisão do treinamento entre uma base e ativos acrescentados depois. O executor reutiliza o motor Control/LightGBM, a calibração temporal e a política de rotação. A saída é `output/reproducao_universo/pacote_reproducao_universo.zip`.
+`reproduzir_experimento.py` executa **um único replay financeiro com todos os símbolos declarados em `ASSETS`**, sem divisão do treinamento entre uma base e ativos acrescentados depois. O executor reutiliza o motor Control/LightGBM, a calibração temporal e a política de rotação. A saída é `output/reproducao_universo/pacote_reproducao_universo.zip`.
 
-O código valida primeiro a identidade do snapshot, a composição do universo e os **20 hashes dos CSVs** (barras e eventos de dez ativos). Depois treina e calibra **os 77 ativos juntos, em cada fold**. O resultado da primeira execução válida com os 77 efetivos será um novo checkpoint, ainda não homologado. Nenhuma chamada de download é feita pelo executor. O cenário é histórico, não uma previsão de resultado futuro. **O resultado publicado em 21/10/2026 pertence à campanha anterior.** A branch de correção mantém o mesmo snapshot e o mesmo cache, mas não afirma que reproduziu aquele capital usando 77 ativos efetivos. O ZIP conferido é `pacote_reproducao_universo.zip`, SHA-256 `0c3518387556f147897baf121cb089f532f8355a8bb074c91fe0a6b5ec4b6ac8`. O pacote contém 29 arquivos, incluindo `predictions.csv` (1.560 sessões), `trades.csv` (710 registros), `reproducao_universo.json` e análises gráficas. O checkpoint foi confirmado também pelos modos de pesquisa `decision_validation` e `assurance_validation` sobre o mesmo recorte congelado. O cache local continua **não versionado**: clones limpos não têm, por si só, os arquivos suficientes para refazer o replay.
+O código valida os hashes dos arquivos efetivamente selecionados em `ASSETS`, e depois treina e calibra **todos os ativos juntos, em cada fold**, sem exigir uma quantidade fixa. O resultado da primeira execução válida com os 77 efetivos será um novo checkpoint, ainda não homologado. Nenhuma chamada de download é feita pelo executor. O cenário é histórico, não uma previsão de resultado futuro. **O resultado publicado em 21/10/2026 pertence à campanha anterior.** A branch de correção mantém o mesmo snapshot e o mesmo cache, mas não afirma que reproduziu aquele capital usando 77 ativos efetivos. O ZIP conferido é `pacote_reproducao_universo.zip`, SHA-256 `0c3518387556f147897baf121cb089f532f8355a8bb074c91fe0a6b5ec4b6ac8`. O pacote contém 29 arquivos, incluindo `predictions.csv` (1.560 sessões), `trades.csv` (710 registros), `reproducao_universo.json` e análises gráficas. O checkpoint foi confirmado também pelos modos de pesquisa `decision_validation` e `assurance_validation` sobre o mesmo recorte congelado. O cache local continua **não versionado**: clones limpos não têm, por si só, os arquivos suficientes para refazer o replay.
 
 
-## Correção do universo efetivo de 77 ativos (branch de teste)
+## Universo configurável pelo único vetor `ASSETS`
 
 A branch `fix/tcc-universo-77-efetivos` usa a única constante `ASSETS` em
-`engine/configuracao.py` e prepara os **77 ativos de uma vez**, incluindo DOC e CLMT. Os arquivos
+`engine/configuracao.py` e prepara **todos os ativos da lista de uma vez**. Os arquivos
 historicamente guardados em duas pastas são unidos **antes** do treinamento.
-Cada fold ajusta 77 modelos em uma única rodada e o replay opera com a mesma
+Cada fold ajusta `len(ASSETS)` modelos em uma única rodada e o replay opera com a mesma
 lista completa. Qualquer ausência interrompe a execução.
 
 - **DOC:** o arquivo histórico de `DOC` anterior a 04/03/2024 segue a
@@ -194,3 +194,24 @@ Execute o mesmo `reproduzir_experimento.py` no Spyder (F5) com o cache
 histórico preservado. A saída permanece em
 `output/reproducao_universo/pacote_reproducao_universo.zip`. O capital novo
 não será comparado automaticamente ao checkpoint da execução anterior.
+
+
+### Como alterar o universo
+
+Edite somente a tupla `ASSETS` de `engine/configuracao.py`. O executor nao
+exige mais um total fixo de simbolos. O tamanho passa automaticamente aos
+logs, aos modelos de cada fold, aos graficos e ao JSON da reproducao.
+
+Para **retirar** um ativo, apague-o da tupla. Os arquivos antigos podem continuar
+no disco: o replay nao tenta inclui-los.
+
+Para **acrescentar** um ativo, inclua o ticker em `ASSETS` e certifique-se de
+que ha cotacoes diarias e Corporate Actions verificaveis no snapshot local.
+Um ativo novo, ainda sem dados, precisa de um snapshot atualizado (o script
+`preparar_snapshot_u67.py` cria um novo snapshot sem modificar os dados
+historicos congelados). Essa falta de dados gera uma mensagem especifica
+com o ticker; nao existe mais excecao por diferenca na **quantidade** de ativos.
+
+O replay continua exigindo tickers distintos, historicos validos e modelos
+para todos os ativos selecionados. Um universo vazio nao e uma estrategia
+executavel. Nao ha downloads automaticos durante o replay.
