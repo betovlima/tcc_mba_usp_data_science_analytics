@@ -104,6 +104,7 @@ def reproduzir_universo_congelado(
     execution_schema: str,
     analysis_end_date: str | None = None,
     full_refresh_performed: bool = False,
+    updated_snapshot_path: Path | None = None,
 ) -> dict[str, Any]:
     """Treina, calibra e simula os ativos de ASSETS juntos em cada fold.
 
@@ -165,7 +166,10 @@ def reproduzir_universo_congelado(
     # para decidir quais series entram no treinamento e no replay.
     archived_data = SnapshotPaths.archived_source(root)
     extension_data = SnapshotPaths.archived_extension(root)
-    updated_data = SnapshotPaths.from_root(root / "dados" / "universo_77")
+    updated_data = SnapshotPaths.from_root(
+        Path(updated_snapshot_path) if updated_snapshot_path is not None
+        else root / "dados" / "universo_77"
+    )
 
     frozen_manifest = validate_snapshot(archived_data)
     if frozen_manifest.get("snapshot_sha256") != contract["snapshot_sha256"]:
