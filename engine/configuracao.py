@@ -31,9 +31,12 @@ ASSETS = (
 )
 
 
-# Contrato unico da estrategia. Nenhum subconjunto entra nesta configuracao.
-if len(ASSETS) != 77 or len(set(ASSETS)) != 77:
-    raise RuntimeError("O universo oficial deve ter exatamente 77 ativos distintos.")
+# ASSETS e a unica fonte de verdade. A quantidade de ativos e variavel.
+# O executor valida a existencia dos dados dos simbolos configurados.
+if not ASSETS:
+    raise ValueError("ASSETS nao pode ser vazio.")
+if len(ASSETS) != len(set(ASSETS)):
+    raise ValueError("ASSETS contem simbolos duplicados.")
 
 
 def _configuracoes_lightgbm() -> dict[str, Any]:
