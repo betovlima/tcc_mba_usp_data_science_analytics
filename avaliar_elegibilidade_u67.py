@@ -20,8 +20,7 @@ import pandas as pd
 from threadpoolctl import threadpool_info
 
 from engine.configuracao import (
-    CONFIG, EXPERIMENT_VERSION, U67_REQUESTED_ASSETS,
-    U67_EXPECTED_EFFECTIVE_COUNT, U67_EXPECTED_EXCLUSIONS,
+    CONFIG, EXPERIMENT_VERSION, ASSETS,
 )
 from engine.execucao import aplicar_deslizamento, calcular_taxas_referencia
 from engine.modelo_lightgbm import (
@@ -79,14 +78,14 @@ def avaliar(data_root=None, output=None, historical=None):
     started = time.perf_counter()
     out = Path(output) if output else ROOT / "output" / "elegibilidade"
     out.mkdir(parents=True, exist_ok=True)
-    paths = SnapshotPaths.from_root(Path(data_root)) if data_root else SnapshotPaths.u67(ROOT)
+    paths = SnapshotPaths.from_root(Path(data_root)) if data_root else SnapshotPaths.archived_source(ROOT)
     snapshot = validate_snapshot(paths)
     if snapshot["snapshot_sha256"] != SNAPSHOT_SHA256:
         raise ValueError("Esta comparação exige o mesmo snapshot do experimento registrado.")
     raw, exclusions, _, audit = prepare_model_frames(
-        paths, assets=U67_REQUESTED_ASSETS, csv_float_precision="round_trip"
+        paths, assets=tuple(snapshot["assets"]), csv_float_precision="round_trip"
     )
-    if len(raw) != U67_EXPECTED_EFFECTIVE_COUNT or frozenset(e["symbol"] for e in exclusions) != U67_EXPECTED_EXCLUSIONS:
+    if len(raw) != len(snapshot["assets"]) or exclusions or not set(raw).issubset(ASSETS):
         raise ValueError("O processamento não preservou o contrato do universo fixo.")
     config = build_control_config(raw, CONFIG).copiar_modelo(update={"analysis_end_date": "2026-10-06"})
     frames, common_dates, calendar, symbols, folds, dates, mapping, metadata = _construir_contexto_execucao(raw, config)
