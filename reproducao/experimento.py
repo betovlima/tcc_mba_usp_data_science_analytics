@@ -149,9 +149,7 @@ def reproduzir_universo_congelado(
         raise RuntimeError("Contrato oficial exige 77 ativos distintos.")
     print("[universe] requested=77 preparation=single_pass folds=joint", flush=True)
     source_data = SnapshotPaths.archived_source(root)
-    external_data = SnapshotPaths.from_root(
-        root / "dados" / ".u67_expansion_cache" / "full_raw_20261006"
-    )
+    external_data = SnapshotPaths.archived_extension(root)
     snapshot = validate_snapshot(source_data)
     if snapshot.get("snapshot_sha256") != contract["snapshot_sha256"]:
         raise RuntimeError("Identidade do snapshot congelado divergente.")
