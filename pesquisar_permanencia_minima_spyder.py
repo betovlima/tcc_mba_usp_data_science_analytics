@@ -6948,6 +6948,13 @@ def executar_comparacao_operacional_raw() -> None:
         pd.DataFrame(diagnostics).to_csv(
             SAIDA_TEMP / "base_data_diagnostics.csv", index=False,
         )
+        # Series normalizadas efetivamente fornecidas aos modelos (75 ativos).
+        # Inclui os precos usados pelo replay para auditoria posterior sem Alpaca.
+        exportar_cotacoes({
+            "frames_base": baseline_frames,
+            "quadros": candidate_frames,
+            "simbolos": sorted([*symbols, *candidate_frames]),
+        }, SAIDA_TEMP)
         drift = _raw_operacional_auditoria(
             stage, SnapshotPaths.u67(ROOT), old_candidate_path, universe, frozenset(base),
         )
