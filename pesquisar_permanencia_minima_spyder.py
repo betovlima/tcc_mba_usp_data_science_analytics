@@ -6899,7 +6899,7 @@ def _raw_operacional_comparacao(predictions, cutoff, output):
 
 def executar_comparacao_operacional_raw() -> None:
     """Baixa RAW/SIP e treina de uma so vez os 75 ativos da versao especifica."""
-    import pesquisar_expansao_u67_spyder as pesquisa
+    from engine.configuracao import CONFIG
     from engine.execucao import calcular_taxas_referencia, aplicar_deslizamento
     from engine.modelo_lightgbm import (
         _ajustar_modelos_lightgbm, _construir_contexto_execucao,
@@ -6958,7 +6958,7 @@ def executar_comparacao_operacional_raw() -> None:
             )
 
         config = build_control_config(
-            {s: raw[s] for s in assets}, pesquisa.CONFIG,
+            {s: raw[s] for s in assets}, CONFIG,
         ).copiar_modelo(update={"analysis_end_date": cutoff})
         (frames, common_dates, calendar_source, symbols,
          folds, decision_dates, decision_to_fold, decision_metadata) = (
