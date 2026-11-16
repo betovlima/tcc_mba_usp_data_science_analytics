@@ -102,6 +102,8 @@ def reproduzir_universo_congelado(
     output: Path,
     version: str,
     execution_schema: str,
+    analysis_end_date: str | None = None,
+    full_refresh_performed: bool = False,
 ) -> dict[str, Any]:
     """Treina, calibra e simula os ativos de ASSETS juntos em cada fold.
 
@@ -144,6 +146,9 @@ def reproduzir_universo_congelado(
         (root / "evidencias" / "manifest_universo_congelado.json")
         .read_text(encoding="utf-8")
     )
+    # O corte historico do checkpoint segue intacto; uma reproducao atualizada
+    # utiliza a data solicitada sem modificar o experimento congelado.
+    analysis_cutoff = str(analysis_end_date or contract["analysis_end_date"])
     from engine.configuracao import ASSETS
 
     configured_count = len(ASSETS)
@@ -252,7 +257,7 @@ def reproduzir_universo_congelado(
 
     config = build_control_config(
         {symbol: raw[symbol] for symbol in ASSETS}
-    ).copiar_modelo(update={"analysis_end_date": contract["analysis_end_date"]})
+    ).copiar_modelo(update={"analysis_end_date": analysis_cutoff})
     (
         frames,
         common_dates,
@@ -500,7 +505,7 @@ def reproduzir_universo_congelado(
         "purpose": "reproducao_conjunta_universo",
         "reproduced_exact_to_cent": exact,
         "checkpoint_validation": "awaiting_reference_for_configured_universe",
-        "analysis_end_date": contract["analysis_end_date"],
+        "analysis_end_date": analysis_cutoff,
         "checkpoint": {
             "observed_capital": capital,
             "expected_capital": expected_capital,
@@ -512,7 +517,7 @@ def reproduzir_universo_congelado(
             "feed": "sip",
             "adjustment": "raw",
             "timeframe": "1Day",
-            "full_refresh": False,
+            "full_refresh": bool(full_refresh_performed),
             "database_used": False,
             "snapshot_sha256": frozen_manifest["snapshot_sha256"],
             "asset_sources": input_provenance,
@@ -564,7 +569,7 @@ def reproduzir_universo_congelado(
     gerar_analises_backtest(
         output,
         manifest={
-            **frozen_manifest,
+            **(updated_manifest if full_refresh_performed and updated_manifest else frozen_manifest),
             "snapshot_sha256": input_universe_sha256,
         },
         result=result,
