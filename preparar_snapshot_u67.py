@@ -1,4 +1,4 @@
-"""Prepara um NOVO snapshot de 77 ativos sem sobrescrever arquivos congelados.
+"""Prepara um NOVO snapshot para os ativos configurados sem sobrescrever arquivos congelados.
 
 Este arquivo e executado somente quando for necessario criar ou substituir o
 snapshot de pesquisa. A reproducao oficial nao acessa a Alpaca.
@@ -24,15 +24,11 @@ BUILD = SnapshotPaths.from_root(ROOT / "dados" / ".universo_77_build")
 TARGET = SnapshotPaths.from_root(ROOT / "dados" / "universo_77")
 
 SNAPSHOT_END_DATE = "2026-10-06"
-SNAPSHOT_NAME = "tcc-universo-77-20261006"
+SNAPSHOT_NAME = "tcc-universo-configurado-20261006"
 
 
-if len(ASSETS) != 77:
-    raise RuntimeError(
-        "Contrato unico invalido antes da coleta: "
-        f"esperado={77} "
-        f"observado={len(ASSETS)}"
-    )
+if not ASSETS or len(ASSETS) != len(set(ASSETS)):
+    raise ValueError("ASSETS deve conter simbolos unicos e nao pode ser vazio.")
 
 
 # %% 1 - Coleta completa em area temporaria
@@ -73,14 +69,14 @@ shutil.move(str(BUILD.root), str(TARGET.root))
 
 validated = validate_snapshot(TARGET)
 print(
-    "[snapshot-77] ready "
+    "[snapshot] ready "
     f"assets={len(validated.get('assets') or [])} "
     f"sha256={validated.get('snapshot_sha256')} "
     f"path={TARGET.root}",
     flush=True,
 )
 print(
-    "[snapshot-77] revise os arquivos e versione o novo snapshot de 77 no Git "
+    "[snapshot] revise os arquivos e versione o novo snapshot de 77 no Git "
     "antes de usar a reproducao oficial.",
     flush=True,
 )
