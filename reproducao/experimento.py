@@ -1,4 +1,4 @@
-"""Apoio da reproducao oficial do universo completo de 77 ativos."""
+"""Apoio da reproducao oficial com universo definido exclusivamente por ASSETS."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -103,7 +103,7 @@ def reproduzir_universo_congelado(
     version: str,
     execution_schema: str,
 ) -> dict[str, Any]:
-    """Treina, calibra e simula os 77 ativos conjuntamente em cada fold.
+    """Treina, calibra e simula os ativos de ASSETS juntos em cada fold.
 
     Os dois diretorios de entrada existem apenas para preservar os snapshots
     congelados. Nao existem universos de treino separados, acrescentos de
@@ -145,22 +145,34 @@ def reproduzir_universo_congelado(
         .read_text(encoding="utf-8")
     )
     from engine.configuracao import ASSETS
-    if len(ASSETS) != 77 or len(set(ASSETS)) != 77:
-        raise RuntimeError("Contrato oficial exige 77 ativos distintos.")
-    print("[universe] requested=77 preparation=single_pass folds=joint", flush=True)
-    source_data = SnapshotPaths.archived_source(root)
-    external_data = SnapshotPaths.archived_extension(root)
-    snapshot = validate_snapshot(source_data)
-    if snapshot.get("snapshot_sha256") != contract["snapshot_sha256"]:
-        raise RuntimeError("Identidade do snapshot congelado divergente.")
-    source_symbols = set(snapshot.get("assets") or ())
-    extra_symbols = set(contract["candidate_file_hashes"])
-    if (
-        len(source_symbols) != len(snapshot.get("assets") or ())
-        or source_symbols & extra_symbols
-        or source_symbols | extra_symbols != set(ASSETS)
-    ):
-        raise RuntimeError("Arquivos congelados nao cobrem todos os ASSETS.")
+
+    configured_count = len(ASSETS)
+    configured_set = set(ASSETS)
+    if not ASSETS or configured_count != len(configured_set):
+        raise ValueError("ASSETS deve conter simbolos distintos e nao pode ser vazio.")
+    print(
+        f"[universe] configured={configured_count} preparation=single_pass "
+        "folds=joint",
+        flush=True,
+    )
+
+    # Arquivos congelados preservados. O vetor ASSETS e a unica autoridade
+    # para decidir quais series entram no treinamento e no replay.
+    archived_data = SnapshotPaths.archived_source(root)
+    extension_data = SnapshotPaths.archived_extension(root)
+    updated_data = SnapshotPaths.from_root(root / "dados" / "universo_77")
+
+    frozen_manifest = validate_snapshot(archived_data)
+    if frozen_manifest.get("snapshot_sha256") != contract["snapshot_sha256"]:
+        raise RuntimeError("Integridade do snapshot historico divergente.")
+    archived_symbols = set(frozen_manifest.get("assets") or ())
+    frozen_extra = dict(contract.get("candidate_file_hashes") or {})
+
+    updated_manifest = (
+        validate_snapshot(updated_data) if updated_data.manifest.is_file()
+        else None
+    )
+    updated_symbols = set((updated_manifest or {}).get("assets") or ())
 
     def digest(path: Path) -> str:
         sha = hashlib.sha256()
@@ -169,36 +181,55 @@ def reproduzir_universo_congelado(
                 sha.update(chunk)
         return sha.hexdigest()
 
-    # A origem dos arquivos e dupla por razoes historicas, mas o painel de
-    # dados, o treino, a calibracao e o replay sao UNICOS para os 77.
-    external_hashes: dict[str, dict[str, str]] = {}
-    for symbol in extra_symbols:
-        expected = contract["candidate_file_hashes"][symbol]
-        paths = {
-            "raw_sha256": external_data.raw_bars / f"{symbol}.csv",
+    source_paths: dict[str, SnapshotPaths] = {}
+    input_provenance: dict[str, dict[str, str]] = {}
+    for symbol in ASSETS:
+        if symbol in updated_symbols:
+            location = updated_data
+            source_name = "updated_snapshot"
+        elif symbol in archived_symbols:
+            location = archived_data
+            source_name = "historical_snapshot"
+        elif symbol in frozen_extra:
+            location = extension_data
+            source_name = "historical_extension"
+        else:
+            raise FileNotFoundError(
+                f"{symbol}: nao ha CSV historico validado para este ativo. "
+                "Crie ou restaure um snapshot de dados contendo o simbolo."
+            )
+
+        files = {
+            "raw_sha256": location.raw_bars / f"{symbol}.csv",
             "corporate_actions_sha256": (
-                external_data.corporate_actions / f"{symbol}.csv"
+                location.corporate_actions / f"{symbol}.csv"
             ),
         }
         observed = {}
-        for name, file_path in paths.items():
+        for field, file_path in files.items():
             if not file_path.is_file():
                 raise FileNotFoundError(
-                    f"Arquivo congelado ausente: {file_path}. "
-                    "Restaure o cache historico; nao execute downloads."
+                    f"{symbol}: arquivo historico ausente: {file_path}"
                 )
-            observed[name] = digest(file_path)
-            if observed[name] != expected[name]:
-                raise RuntimeError(
-                    f"{symbol}: SHA-256 divergente em {name}; "
-                    "nao modificar o historico para obter um resultado."
-                )
-        external_hashes[symbol] = observed
+            observed[field] = digest(file_path)
+            if source_name == "historical_extension":
+                if observed[field] != frozen_extra[symbol][field]:
+                    raise RuntimeError(
+                        f"{symbol}: SHA-256 divergente em {field}; "
+                        "o arquivo congelado nao pode ser alterado."
+                    )
+        source_paths[symbol] = location
+        input_provenance[symbol] = {"source": source_name, **observed}
+
+    print(
+        f"[input] symbols={configured_count} verified={len(input_provenance)}",
+        flush=True,
+    )
 
     raw, exclusions, diagnostics, data_audit = prepare_model_frames(
-        source_data,
+        archived_data,
         assets=ASSETS,
-        source_paths={symbol: external_data for symbol in extra_symbols},
+        source_paths=source_paths,
         csv_float_precision="round_trip",
     )
     if exclusions or set(raw) != set(ASSETS) or len(raw) != 77:
