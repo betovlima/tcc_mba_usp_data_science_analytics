@@ -330,7 +330,7 @@ def test_official_reproduction_uses_exact_input_manifest() -> None:
     assert "manifest_universo_congelado.json" in helper
     assert "_ajustar_modelos_lightgbm(" in helper
     assert "_precalcular_utilidades_modelo(" in helper
-    assert "assets=requested" in helper
+    assert "assets=ASSETS" in helper
     assert "_train_baseline_states(" not in helper
     assert "_train_candidate_caches(" not in helper
     assert "_evaluate_scenario(" not in helper
@@ -719,7 +719,7 @@ def test_official_reproduction_uses_selected_universe_contract() -> None:
     )
     # O manifesto preserva a historia, mas NAO valida o novo replay de 77.
     runner = (ROOT / "reproducao" / "experimento.py").read_text(encoding="utf-8")
-    assert "len(requested) != 77" in runner
+    assert "len(ASSETS) != 77" in runner
     assert '"checkpoint_validation": "awaiting_first_77_asset_baseline"' in runner
     assert "expected_capital = None" in runner
     assert runner.count("prepare_model_frames(") == 1
