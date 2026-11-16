@@ -347,7 +347,7 @@ def test_u67_snapshot_preparation_is_separate_from_reproduction() -> None:
     assert "download_corporate_actions" in source
     assert "load_alpaca_credentials" in source
     assert "snapshot_end_date = \"2026-10-06\"" in source
-    assert "dados" in source and ".u67_build" in source
+    assert "dados" in source and ".universo_77_build" in source
 
 def test_capital_rotations_follow_backtest_analytics_semantics() -> None:
     trades = pd.DataFrame(
