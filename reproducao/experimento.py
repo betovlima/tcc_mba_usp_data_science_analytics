@@ -221,8 +221,17 @@ def reproduzir_universo_congelado(
         source_paths[symbol] = location
         input_provenance[symbol] = {"source": source_name, **observed}
 
+    # A assinatura composta distingue execucoes com ativos ou CSVs diferentes.
+    input_universe_sha256 = hashlib.sha256(
+        json.dumps(
+            {"assets": list(ASSETS), "sources": input_provenance},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     print(
-        f"[input] symbols={configured_count} verified={len(input_provenance)}",
+        f"[input] symbols={configured_count} verified={len(input_provenance)} "
+        f"sha256={input_universe_sha256}",
         flush=True,
     )
 
@@ -507,6 +516,7 @@ def reproduzir_universo_congelado(
             "database_used": False,
             "snapshot_sha256": frozen_manifest["snapshot_sha256"],
             "asset_sources": input_provenance,
+            "input_universe_sha256": input_universe_sha256,
             "updated_snapshot_sha256": (updated_manifest or {}).get("snapshot_sha256"),
             "data_audit": data_audit,
             "diagnostics": diagnostics,
@@ -551,7 +561,15 @@ def reproduzir_universo_congelado(
         json.dumps(make_json_safe(payload), ensure_ascii=False, indent=2, allow_nan=False),
         encoding="utf-8",
     )
-    gerar_analises_backtest(output, manifest=frozen_manifest, result=result, asset_count=configured_count)
+    gerar_analises_backtest(
+        output,
+        manifest={
+            **frozen_manifest,
+            "snapshot_sha256": input_universe_sha256,
+        },
+        result=result,
+        asset_count=configured_count,
+    )
     package = criar_pacote_analise(
         output,
         comparison_file="reproducao_universo.json",
