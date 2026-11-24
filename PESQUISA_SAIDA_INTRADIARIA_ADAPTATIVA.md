@@ -1,33 +1,31 @@
 # Pesquisa: saída intradiária adaptativa
 
-Experimento isolado, sem alteração do MCT ou da Winner. Base: research/intraday-second-layer-comparison-v1. Reutiliza o histórico congelado de posições Control (não confundir com a estratégia corrente em produção), cache local de candles RAW/SIP de 5 minutos e leitor histórico da API local. Consulta adicional do ticker anterior em dias de rotação. Nenhum endpoint de ordens.
+Mesma branch, mesmo script, mesmo ZIP. Nenhuma alteração na main ou no MCT em produção.
 
-## Execução
+## Entrada e execução
+
+Coloque o ZIP original exportado pelo MCT `market_cycle_trader_20261124T005959-1a1fa2f1.zip` na raiz do TCC. Não precisa descompactar. Alternativamente indique `--mct-zip CAMINHO`. Não há fallback para o histórico congelado antigo. A leitura valida identificação, curva oficial, seleção, trades e datas da decisão. Strategy #33 revisão 4: 75 ativos elegíveis, 1594 sessões, patrimônio final US$ 173.441.204,20; 51 ativos efetivamente selecionados.
 
 ```bash
-python -m pip install -r requirements.txt
 python pesquisar_saida_intradiaria_adaptativa_spyder.py --self-test
 python pesquisar_saida_intradiaria_adaptativa_spyder.py
 ```
 
-No Spyder, reinicie o kernel, abra o script e execute F5. As dependências e o cache precisam estar no ambiente local. O arquivo ZIP é sobrescrito atomicamente somente após conclusão; em caso de falha, preserve o resultado anterior e leia o log (verifique a data do ZIP).
+No Spyder, reinicie o kernel e execute F5. Dependência adicional: exchange-calendars>=4.8,<5 (já em requirements.txt).
 
-## Desenho
+## Experimento
 
-- Control intradiário: carteira contínua sem saída antecipada, mesmas cotações, regras e custos.
-- Kalman local linear, multirrolling e BOCPD: estimadores estatísticos de estado, seguidos de regressão Ridge do retorno restante e magnitude esperada de perda.
-- LightGBM com indicadores tradicionais; variante híbrida com Kalman, multirrolling e BOCPD.
-- Checkpoints horários, candles concluídos. Label: retorno logarítmico do open do próximo candle ao fechamento regular da sessão. Não existe preço futuro nas features.
-- Escore: retorno esperado menos penalização de risco mais custo evitado de vender. A saída é acionada quando o escore é negativo. A penalização (0, 0.25, 0.5 ou 1) ou a ausência de saída é escolhida exclusivamente na validação (log do patrimônio + 0.5 MaxDD). Teste temporal intocado, divisão 60/20/20 com embargo de uma sessão entre partições.
-- A camada 2 não recompra no mesmo dia. Alocação da primeira camada apenas na abertura seguinte, em janela de 09:35 a 10:25 NY; não inventar fill ao fechamento nem comprar retrospectivamente. O snapshot não certifica timestamps das decisões ou disponibiliza um sinal independente de fechamento. A hipótese de disponibilidade pré-abertura precisa ser auditada antes de uma conclusão de produção.
-- Preço proxy: open posterior ao sinal, limitado a 1% do volume anterior; custos padrão 10 bps por lado, sensibilidade 5/10/25/50 bps mantendo política congelada. Liquidação parcial pode ocorrer.
-- Capital inicial US$ 10 mil no início do teste. Sem equivalência ao patrimônio original do TCC ou à Winner atual. RAW não incorpora dividendos e splits à carteira: eventos societários precisam ser reconciliados antes de qualquer validação de patrimônio. Sem confirmação de fills reais; não promover resultado parcial.
-- Não existe trava de permanência mínima ou stop-loss de preço fixo na segunda camada. O alvo da Winner é mantido congelado, sem buscar novos ativos.
+- Treino: fold 1 e primeira metade do fold 2, 755 sessões. Validação: segunda metade do fold 2, 251 sessões. Duas sessões de embargo, teste: fold 3 inteiro, 586 sessões. A primeira camada usa somente seleção exportada, cuja decisão antecede a sessão.
+- Control principal: retornos oficiais diários, reescalados para US$ 10 mil no início do teste. A identidade matemática sobre toda a curva é verificada, não constitui reprodução independente do motor. Valor final do Control reescalado no fold 3: US$ 308.899,33.
+- Comparação proporcional: saída no primeiro open real posterior ao sinal, permanece cash até a abertura da sessão seguinte. Ajusta retorno restante do pregão e exposição overnight, mantém taxas originais da referência e cobra custo extra de 10 bps por lado. Não simula fill ilimitado como execução comprovada.
+- Replay com liquidez separado: até 1% do volume anterior, novas compras na janela inicial, liquidações residuais podem continuar ao longo do dia. Se faltar preço do ativo mantido, resultados financeiros são marcados inválidos; não comparar patrimônio artificialmente congelado.
+- Cache anterior é reutilizado. Para sessão ausente (inclusive ativo residual), consulta mês completo RAW/SIP de cinco minutos em dados_intraday/raw_sip_5min_full_month. Não envia ordens reais.
+- Kalman, multirrolling, BOCPD, LightGBM, híbrido e LightGBM com MFE/MAE. Novos alvos futuros são usados somente no treinamento e auditoria. Eficiência da tendência e drawdown observado são features causais. Escolha de penalização de risco exclusivamente na validação; opção sem saídas permitida.
+- Sem gatilho de preço fixo, sem rotação nova durante o intraday, sem recompra no mesmo dia. Não existe sinal de fechamento independente no ZIP; o modelo usa a abertura seguinte.
+- Comparar fechamento RAW com preço implícito no Control. Divergências e dados faltantes são auditados. Eventos societários não foram reconciliados independentemente; resultados com divergências não são certificação. Custos e capacidade de mercado limitam a interpretação do contrafactual.
 
 ## Saída
 
-`output/pesquisa_saida_intradiaria_adaptativa.zip` e `output/pesquisa_saida_intradiaria_adaptativa.log`.
+Sempre `output/pesquisa_saida_intradiaria_adaptativa.zip` e `output/pesquisa_saida_intradiaria_adaptativa.log`. ZIP sobrescrito atomicamente após execução; falha preserva o anterior, consulte data e log.
 
-ZIP: comparação de estratégias, seleção em validação, curva diária, PNG, ordens simuladas, previsões fora da amostra, sensibilidade a custos, auditoria de cobertura, manifesto, log, código e hashes. Resultados com dados incompletos ou rotações bloqueadas são explicitamente marcados. O teste sintético verifica execução após sinal, ausência de recompra no dia e invariância do passado do Kalman. Não é evidência de retorno real.
-
-A decisão de adotar uma camada exige evidência fora da amostra de proteção relevante, custos e liquidez viáveis, e ausência de degradação material da estratégia principal. Nenhuma estratégia é escolhida com base no desempenho do teste para nova otimização no mesmo período.
+Inclui comparação ancorada, comparação com liquidez, referência MCT diária, cobertura e cotações ausentes, ordens e curvas dos dois replays, previsões, seleção de validação, sensibilidade de custos, figura, manifesto, hashes, código e log. Teste sintético verifica causalidade, ausência de recompra e aritmética overnight. A execução real depende do ambiente local e do acesso histórico Alpaca.
