@@ -52,6 +52,7 @@ def pack(files):
 
 def load_data():
     import exchange_calendars as xc
+    base.registrar = lambda etapa, mensagem, nivel="INFO": LOGGER.log(getattr(logging,nivel,logging.INFO), f"[{etapa}] {mensagem}")
     pos, origin = base.preparar_posicoes_control()
     pos = pos[["session","symbol"]].sort_values("session").reset_index(drop=True)
     if pos.empty or pos.session.duplicated().any():
@@ -131,6 +132,9 @@ def kalman_features(g):
             x = np.array([price,0.])
             P = np.eye(2)*.001
         if not np.isfinite(vol) or vol<=0:
+            x = np.array([price,0.])
+            P = np.eye(2)*.001
+            prev = np.nan
             result.append((np.nan,np.nan,np.nan))
             continue
         R = max(float(vol)**2,1e-10)
@@ -358,9 +362,13 @@ def smoke():
     b,_,_=replay(p,m,{("2026-07-28","DEMO",ts[11]):1.})
     assert a==b
     # Prefix invariance: future modification cannot change Kalman history.
-    full=g.copy();full.loc[40:,"close"]*=2
-    np.testing.assert_allclose(kalman_features(g).iloc[:40],
-                               kalman_features(full).iloc[:40],equal_nan=True)
+    noisy=g.copy()
+    rng=np.random.default_rng(SEED)
+    noisy["close"]=100*np.exp(np.cumsum(rng.normal(0,.003,len(g))))
+    full=noisy.copy();full.loc[40:,"close"]*=2
+    past=kalman_features(noisy).iloc[:40]
+    assert past.k_slope.notna().any()
+    np.testing.assert_allclose(past,kalman_features(full).iloc[:40],equal_nan=True)
     return "synthetic_passed_not_market_result"
 
 
@@ -417,6 +425,18 @@ def run():
                   "ordens_simuladas.csv":csv(pd.concat(events,ignore_index=True) if events else pd.DataFrame()),
                   "previsoes_teste.csv":csv(pd.concat(forecasts,ignore_index=True)),
                   "sensibilidade_custos.csv":csv(pd.DataFrame(stress))})
+    import io
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig,ax=plt.subplots(figsize=(11,6))
+    for d in curves:
+        ax.plot(pd.to_datetime(d.session),d.equity,label=d.method.iloc[0])
+    ax.set_title("Patrimonio simulado fora da amostra (proxy intradiario)")
+    ax.set_ylabel("USD");ax.legend();ax.grid(alpha=.2)
+    fig.tight_layout()
+    buffer=io.BytesIO();fig.savefig(buffer,format="png",dpi=150);plt.close(fig)
+    files["comparacao_patrimonio.png"]=buffer.getvalue()
     cov=coverage[coverage.session.isin(te)]
     status={"status":"completed_proxy" if cov.final_bar.all() and cov.rotation_quote.all()
             and not result.stale_marks.any() and not result.blocked_rotations.any() else "partial_data_or_execution_proxy",
@@ -445,6 +465,10 @@ if __name__=="__main__":
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
         LOGGER.addHandler(handler)
     try:
+        import sys
+        if "--self-test" in sys.argv:
+            print(smoke())
+            sys.exit(0)
         files=run()
         log("Pesquisa concluida. Gravando ZIP.")
         files["execucao.log"]=LOG.read_bytes()
