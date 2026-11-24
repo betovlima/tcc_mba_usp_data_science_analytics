@@ -35,3 +35,20 @@ Inclui qualidade preditiva em suporte comum contra previsão constante zero, Bri
 O teste sintético adicional verifica invariância de escala multiplicando toda a série intradiária por 40. A primeira execução do cache SPLIT exige nova coleta. O ZIP anterior não é alterado se houver erro.
 
 Novos arquivos: oracle_comparacao.csv, oracle_oportunidades_diarias.csv, oracle_patrimonio.csv, patrimonio_continuo.csv. A comparação principal inclui retorno e risco de todo o período, além das métricas do fold 3. Reutilize o cache SPLIT da rodada anterior.
+
+## Diagnóstico gratuito IEX × SIP
+
+Execute no mesmo script:
+
+```bash
+python pesquisar_saida_intradiaria_adaptativa_spyder.py --feed-test
+```
+
+No Spyder: `%run pesquisar_saida_intradiaria_adaptativa_spyder.py --feed-test`.
+O modo usa o leitor histórico e as credenciais Alpaca já configuradas na API local. Nenhuma ordem, alteração de plano, conexão Mongo ou mudança na Winner. Compara DNN, CAPR, MKSI e NVDA nos últimos dez pregões completos, baixando 1Min SPLIT de IEX e SIP (SIP com fim pelo menos 20 minutos no passado). Agrega janelas de 1, 5, 15, 30 e 60 min alinhadas à abertura. Mede cobertura, preço, extremos, participação do volume, idade da última observação e concordância da direção de retorno. Não preenche preços faltantes.
+
+Oracle diagnóstico: mesmo fill SIP observado 1 minuto depois do checkpoint, mesma recompra SIP cinco minutos antes do fechamento, custo de 10 bps de cada lado. Compara todos os checkpoints SIP com os checkpoints também observáveis no IEX. Conhece o futuro e não é modelo de execução. O retorno negativo de janela é uma referência diagnóstica simples, não sinal da Winner. Este piloto não revalida os modelos ML em IEX.
+
+Se executado durante o pregão regular, após os primeiros dez minutos, testa também consultas REST 1Min dos últimos dez minutos nos feeds IEX e SIP, registra a idade da última barra completa e eventuais restrições de assinatura. Fora desse período, realiza apenas a comparação histórica. REST recente não certifica latência contínua de WebSocket; histórico pode conter correções posteriores.
+
+Mesmo ZIP de saída: acrescenta `feed_test_resumo.csv`, `feed_test_diario.csv`, `feed_test_checkpoints.csv`, `feed_test_barras_1min.csv`, `feed_test_requisicoes.csv`, `feed_test_recente.csv`, `feed_test_manifesto.json`, código e log do diagnóstico. Se o ZIP anterior existir e seus hashes estiverem válidos, preserva os demais resultados e substitui somente os arquivos feed_test_. A execução normal sem o argumento continua realizando a pesquisa original. Nenhuma credencial é gravada no ZIP.
