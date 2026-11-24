@@ -981,6 +981,9 @@ def feed_aggregate(g, frequency):
         open=("open","first"),high=("high","max"),low=("low","min"),
         close=("close","last"),volume=("volume",lambda x:x.sum(min_count=1)),
         observed_minutes=("close","count"))
+    last=pd.Series(g.index,index=g.index).where(g.close.notna()).resample(
+        f"{frequency}min",origin=g.index[0],label="right",closed="left").max()
+    out["last_observed_minute_age"]=(out.index-last-pd.Timedelta(minutes=1)).dt.total_seconds()/60
     return out[out.index<=g.index[-1]+pd.Timedelta(minutes=1)]
 
 
@@ -1025,6 +1028,7 @@ def feed_day_compare(sip,iex,day,symbol,frequency):
         p95_abs_close_error_bps=float(j.loc[common,"close_error_bps"].abs().quantile(.95)),
         mean_abs_high_error_bps=float(j.loc[common,"high_error_bps"].abs().mean()),
         mean_abs_low_error_bps=float(j.loc[common,"low_error_bps"].abs().mean()),
+        iex_p95_last_observed_minute_age=float(j.iex_last_observed_minute_age.quantile(.95)),
         paired_returns=int(paired.sum()),direction_agreement=float(j.direction_agrees.mean()),
         negative_return_agreement=float(j.negative_return_agrees.mean()),
         oracle_sip_checkpoints=int(valid.sum()),
@@ -1113,6 +1117,7 @@ def run_feed_test():
             iex_volume_share_pct=100*g.iex_volume.sum(min_count=1)/g.sip_volume.sum(min_count=1),
             mean_abs_close_error_bps=float(q.close_error_bps.abs().mean()),
             p95_abs_close_error_bps=float(q.close_error_bps.abs().quantile(.95)),
+            iex_p95_last_observed_minute_age=float(q.iex_last_observed_minute_age.quantile(.95)),
             paired_returns=int(g.paired_returns.sum()),direction_agreement_pct=100*float(q.direction_agrees.mean()),
             negative_return_agreement_pct=100*float(q.negative_return_agrees.mean()),
             oracle_comparable_sessions=int(good.sum()),oracle_sip_covered_sessions=int(g.oracle_sip_factor.notna().sum()),
@@ -1131,7 +1136,8 @@ def run_feed_test():
                 t=pd.Timestamp.now(tz="UTC").floor("min")
                 if t>=cal.session_close(label):break
                 data,status=query(sym,feed,t-pd.Timedelta(minutes=10),t,"recent",adjustment="raw")
-                last=pd.NaT if data is None or data.empty else pd.to_datetime(data.index,utc=True).max()
+                idx=pd.DatetimeIndex([]) if data is None or data.empty else pd.to_datetime(data.index,utc=True)
+                last=idx[idx<t].max() if len(idx) else pd.NaT
                 age=(pd.Timestamp.now(tz="UTC")-last-pd.Timedelta(minutes=1)).total_seconds() if pd.notna(last) else np.nan
                 live.append(dict(symbol=sym,feed=feed,status=status,last_bar_start=last,
                     last_completed_bar_age_seconds=age,query_end=t))
