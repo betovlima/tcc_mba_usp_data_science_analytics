@@ -188,7 +188,7 @@ class SessionStore(dict):
                 continue
             end=self.calendar.session_close(label)
             g=g[g.timestamp<end].sort_values("timestamp").reset_index(drop=True)
-            if not g.empty:
+            if not g.empty and (day,symbol) not in self:
                 self[(day,symbol)]=g
 
 
@@ -199,6 +199,30 @@ def load_data():
     cal=xc.get_calendar("XNYS",start=pd.Timestamp(pos.session.min())-pd.Timedelta(days=35),
                         end=pd.Timestamp(pos.session.max())+pd.Timedelta(days=35))
     sessions=SessionStore(cal)
+    # Reaproveitar os caches da pesquisa anterior como fonte por sessao.
+    # A consulta mensal integral entra apenas quando a sessao nao esta presente.
+    legacy=sorted((base.INPUT/"cotacoes_5min").glob("*.csv"))
+    legacy+=sorted((base.INPUT/"rotacoes_adaptativas"/"cotacoes_5min").glob("*.csv"))
+    if legacy:
+        log(f"Reutilizando {len(legacy)} arquivos de cache anterior")
+        frames=[]
+        for path in legacy:
+            raw=pd.read_csv(path)
+            if raw.empty:continue
+            sessions.hashes[str(path.relative_to(ROOT))]=hashlib.sha256(path.read_bytes()).hexdigest()
+            frames.append(raw)
+        if frames:
+            raw=pd.concat(frames,ignore_index=True)
+            raw["timestamp"]=pd.to_datetime(raw.timestamp,utc=True)
+            raw["symbol"]=raw.symbol.astype(str).str.upper()
+            raw=raw.drop_duplicates()
+            if raw.duplicated(["symbol","timestamp"]).any():
+                raise ValueError("Caches anteriores com barras conflitantes")
+            for (day,symbol),g in base.preparar(raw).groupby(["session","symbol"],sort=False):
+                label=pd.Timestamp(day)
+                if cal.first_session.date()<=label.date()<=cal.last_session.date() and cal.is_session(label):
+                    g=g[g.timestamp<cal.session_close(label)].sort_values("timestamp").reset_index(drop=True)
+                    if not g.empty:sessions[(day,symbol)]=g
     coverage=[];parts=[]
     for row in pos.itertuples(index=False):
         label=pd.Timestamp(row.session)
@@ -281,10 +305,11 @@ def frame_features(bars,pos):
     # Futuro apenas nos alvos, requer barras completas ate o fechamento.
     for _,g in f.groupby(["symbol","session"],sort=False):
         hi=g.high.to_numpy(float);lo=g.low.to_numpy(float);op=g.open.to_numpy(float)
-        for i in range(len(g)-1):
-            if np.isfinite(op[i+1]) and np.isfinite(hi[i+1:]).all() and np.isfinite(lo[i+1:]).all():
-                f.loc[g.index[i],"mfe"]=max(0.,np.log(hi[i+1:].max()/op[i+1]))
-                f.loc[g.index[i],"mae"]=max(0.,np.log(op[i+1]/lo[i+1:].min()))
+        future_hi=np.maximum.accumulate(hi[::-1])[::-1][1:]
+        future_lo=np.minimum.accumulate(lo[::-1])[::-1][1:]
+        with np.errstate(invalid="ignore",divide="ignore"):
+            f.loc[g.index[:-1],"mfe"]=np.maximum(0.,np.log(future_hi/op[1:]))
+            f.loc[g.index[:-1],"mae"]=np.maximum(0.,np.log(op[1:]/future_lo))
     f["horario"] &= grouped.timestamp.shift(-1).notna()
     return f
 
@@ -399,8 +424,8 @@ def replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
                 volume = g.loc[prior,"volume"] if prior in g.index else np.nan
                 return (float(p) if valid(p) else None,
                         PARTICIPATION*float(volume) if valid(volume) else 0.)
-            # Rotacao somente na janela de abertura, vender ticker antigo antes de comprar.
-            if qty>1e-10 and held!=target and opening:
+            # Concluir venda residual durante todo o pregao; novas compras so na abertura.
+            if qty>1e-10 and held!=target:
                 px,capacity = quote(held)
                 if px is not None:
                     mark = px
@@ -578,6 +603,20 @@ def smoke():
     past=kalman_features(noisy).iloc[:40]
     assert past.k_slope.notna().any()
     np.testing.assert_allclose(past,kalman_features(full).iloc[:40],equal_nan=True)
+    # Ancora: sem saida, fatores oficiais. Com saida, retirar overnight.
+    nextday="2026-07-29"
+    g2=g.copy()
+    g2["timestamp"]=g2.timestamp+pd.Timedelta(days=1)
+    g2[["open","close"]]=99.
+    m[(nextday,"DEMO")]=g2
+    ref=pd.DataFrame(dict(session=["2026-07-28",nextday],symbol=["DEMO","DEMO"],
+        previous=[None,"DEMO"],ref_factor=[.9,1.1],ref_close=[90.,99.],
+        ref_previous_close=[np.nan,90.],ref_sell_open=[np.nan,np.nan]))
+    a,_,_=anchored_replay(ref,m,{},cost=0.)
+    assert np.isclose(a["capital_final"],9900.)
+    b,_,e=anchored_replay(ref,m,{("2026-07-28","DEMO",ts[11]):-1.},cost=0.)
+    assert np.isclose(b["capital_final"],9000.)
+    assert e.side.tolist()==["sell_protection","reentry_open"]
     return "synthetic_passed_not_market_result"
 
 
