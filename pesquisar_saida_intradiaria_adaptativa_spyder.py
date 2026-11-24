@@ -1430,6 +1430,12 @@ def yahoo_pair(sip,other,day,symbol,frequency,feed):
                    "oracle_iex_observable_factor":"oracle_source_observable_factor"})
     r={rename.get(k,k):v for k,v in r.items()}
     r["source"]=feed
+    paired=sip.close.notna() & other.close.notna() & sip.close.gt(0) & other.close.gt(0)
+    ratio=(other.loc[paired,"close"]/sip.loc[paired,"close"]).median()
+    r["median_price_ratio"]=float(ratio)
+    r["scale_ok"]=bool(pd.notna(ratio) and abs(ratio-1)<=PRICE_TOLERANCE)
+    if not r["scale_ok"]:
+        r["oracle_source_observable_factor"]=np.nan
     j=j.rename(columns={k:k.replace("iex_","source_",1) for k in j.columns if k.startswith("iex_")})
     j["source"]=feed
     # Extremos diarios observados: comparar preco e horario, nao provar
@@ -1554,6 +1560,7 @@ def run_yahoo_test():
         num=float(np.log(g.loc[good,"oracle_source_observable_factor"]).sum())
         summary.append(dict(symbol=symbol,frequency=frequency,source=source,sessions=len(g),
             sip_coverage_pct=100*g.sip_bars.sum()/g.expected_bars.sum(),
+            scale_ok_sessions=int(g.scale_ok.sum()),
             source_coverage_pct=100*g.source_bars.sum()/g.expected_bars.sum(),
             volume_ratio_pct=100*g.source_volume.sum(min_count=1)/g.sip_volume.sum(min_count=1) if g.sip_volume.sum()>0 else np.nan,
             mean_abs_close_error_bps=float(q.close_error_bps.abs().mean()),
