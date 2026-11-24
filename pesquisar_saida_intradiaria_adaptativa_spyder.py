@@ -310,6 +310,8 @@ def frame_features(bars,pos):
     # Futuro apenas nos alvos, requer barras completas ate o fechamento.
     for _,g in f.groupby(["symbol","session"],sort=False):
         hi=g.high.to_numpy(float);lo=g.low.to_numpy(float);op=g.open.to_numpy(float)
+        # Extremos ate o instante da recompra (open da ultima barra).
+        hi=hi.copy();lo=lo.copy();hi[-1]=op[-1];lo[-1]=op[-1]
         future_hi=np.maximum.accumulate(hi[::-1])[::-1][1:]
         future_lo=np.minimum.accumulate(lo[::-1])[::-1][1:]
         with np.errstate(invalid="ignore",divide="ignore"):
@@ -339,7 +341,8 @@ def frame_features(bars,pos):
             down=max(0.,down-float(v)-.5)
             cp.append(up);cn.append(down)
         f.loc[g.index,"cusum_pos"]=cp;f.loc[g.index,"cusum_neg"]=cn
-        highs=g.high.to_numpy(float);closes=g.close.to_numpy(float)
+        highs=g.high.to_numpy(float).copy();closes=g.close.to_numpy(float)
+        highs[-1]=g.open.iloc[-1]
         peak=g.high.cummax().to_numpy(float)
         # Tempo ate recuperar maximo conhecido no momento da decisao.
         # Censura administrativa no fechamento; lacunas nao viram recuperacao.
@@ -629,7 +632,7 @@ def replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
     return stat,d,pd.DataFrame(events)
 
 
-def anchored_replay(pos,sessions,signals,capital=CAPITAL,cost=COST,opportunities=None):
+def anchored_replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
     """Overlay proporcional ancorado nos fatores diarios oficiais.
     A segunda camada pode emitir apenas uma venda. Recompra programada
     do MESMO alvo da Winner no open da ultima barra da sessao regular.
@@ -707,7 +710,7 @@ def oracle_candidates(frame,sessions):
         last=raw.iloc[-1]
         if pd.isna(last.open) or last.open<=0:continue
         valid=raw[(raw.timestamp<last.timestamp)&raw.open.notna()&raw.open.gt(0)]
-        times=valid.timestamp.astype("int64").to_numpy()
+        times=np.array([t.value for t in valid.timestamp],dtype=np.int64)
         for row in g[g.horario].itertuples(index=False):
             i=np.searchsorted(times,row.timestamp.value,side="right")
             if i>=len(valid):continue
@@ -881,6 +884,15 @@ def run():
     pre=official_curve[~official_curve.session.isin(te)]
     full_curves=pd.concat([pd.concat([pre.assign(method=d.method.iloc[0]),d],ignore_index=True) for d in curves],ignore_index=True)
     files["patrimonio_continuo.csv"]=csv(full_curves)
+    full_stats=[]
+    for name,d in full_curves.groupby("method",sort=False):
+        eq=d.equity.to_numpy(float);rr=d.ret.to_numpy(float)
+        valid=np.isfinite(eq).all() and np.isfinite(rr).all()
+        peaks=np.maximum.accumulate(np.r_[source["initial"],eq])[1:]
+        full_stats.append(dict(method=name,full_max_drawdown=float((eq/peaks-1).min()) if valid else np.nan,
+            full_sharpe=float(rr.mean()/rr.std(ddof=1)*np.sqrt(252)) if valid and rr.std(ddof=1)>0 else np.nan,
+            full_return_pct=100*(eq[-1]/source["initial"]-1) if valid else np.nan))
+    result=result.merge(pd.DataFrame(full_stats),on="method",how="left")
     files.update({"comparacao_estrategias.csv":csv(result),
                   "comparacao_com_liquidez.csv":csv(pd.DataFrame(restricted)),
                   "patrimonio_com_liquidez.csv":csv(pd.concat(restricted_curves,ignore_index=True)),
