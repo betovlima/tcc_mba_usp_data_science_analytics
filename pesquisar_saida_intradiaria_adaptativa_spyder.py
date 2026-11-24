@@ -354,6 +354,9 @@ def signal_map(preds, risk):
         return {}
     # Permanecer vs vender: vender custa COST; sem stop por % de preco.
     score = preds["mean"] - risk*preds["risk"] - np.log(1-COST)
+    if "expected_mfe" in preds:
+        # Potencial favoravel estimado nao e lucro realizavel; peso fixo moderado.
+        score += .25*preds.expected_mfe.clip(lower=0)
     return {(r.session,r.symbol,r.timestamp):float(v)
             for r,v in zip(preds.itertuples(index=False),score) if np.isfinite(v)}
 
@@ -470,7 +473,86 @@ def replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
               premature_exits=int(d.exit_cash_advantage_vs_close.lt(0).sum()),
               blocked_rotations=int(d.blocked_rotation.sum()),stale_marks=missing_marks,
               sessions=len(d))
+    # Nunca apresentar patrimonio congelado como resultado financeiro valido.
+    stat["valid_valuation"]=not bool(missing_marks)
+    if missing_marks:
+        stat.update(capital_final=np.nan,return_pct=np.nan,max_drawdown_daily=np.nan,sharpe=np.nan)
+        d["equity_unverified_proxy"]=d.equity
+        d.loc[d.stale_mark,["equity","ret","drawdown"]]=np.nan
     return stat,d,pd.DataFrame(events)
+
+
+def anchored_replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
+    """Contrafactual proporcional, ancorado nos retornos diarios oficiais.
+    Sem overlay, reproduz a curva oficial reescalada EXATAMENTE por definicao.
+    Nao e uma reproducao independente do motor de primeira camada.
+    A saida altera apenas exposicao restante do dia + overnight.
+    Reentrada no open da proxima sessao, alvo Winner congelado.
+    Custos extras proporcionais; taxas oficiais ja estao no retorno de base.
+    """
+    eq=float(capital);cash_prev=False;daily=[];events=[];invalid=False
+    for r in pos.itertuples(index=False):
+        previous_eq=eq
+        factor=float(r.ref_factor)
+        exit_px=None;entry_px=None;entry_gap=1.;adjust=1.;status="hold"
+        g=sessions.get((r.session,r.symbol)) if signals or cash_prev else None
+        if cash_prev:
+            # Control manteve a exposicao ao ticker anterior ate a abertura.
+            # Na rotacao, usar preco de venda exportado, nao preco de outro ativo.
+            if pd.notna(r.ref_sell_open):
+                entry_px=float(r.ref_sell_open)
+            elif g is not None and pd.notna(g.open.iloc[0]):
+                entry_px=float(g.open.iloc[0])
+            if entry_px is None or not np.isfinite(r.ref_previous_close) or r.ref_previous_close<=0:
+                invalid=True;status="missing_reentry_open"
+            else:
+                entry_gap=entry_px/r.ref_previous_close
+                factor/=entry_gap
+                factor*=1-cost
+                events.append(dict(session=r.session,symbol=r.symbol,side="reentry_open",
+                                   price=entry_px,overnight_gap=entry_gap,
+                                   price_symbol=r.previous))
+        cash_prev=False
+        if g is not None:
+            # Sinal no close da barra; fill no primeiro open observado posterior.
+            for i,b in enumerate(g.itertuples(index=False)):
+                score=signals.get((r.session,r.symbol,b.timestamp))
+                if score is None or score>=0:continue
+                after=g.iloc[i+1:]
+                after=after[after.open.notna() & after.open.gt(0)]
+                if after.empty:
+                    status="signal_without_fill"
+                    break
+                fill=after.iloc[0]
+                exit_px=float(fill.open)
+                adjust=exit_px/r.ref_close*(1-cost)
+                factor*=adjust;cash_prev=True;status="cash"
+                events.append(dict(session=r.session,symbol=r.symbol,side="sell_protection",
+                  signal_timestamp=b.timestamp+pd.Timedelta(minutes=5),
+                  timestamp=fill.timestamp,price=exit_px,reference_close=r.ref_close,
+                  score=score,exit_factor=adjust))
+                break
+        eq=eq*factor if not invalid else np.nan
+        daily.append(dict(session=r.session,target=r.symbol,equity=eq,
+                          ret=factor-1 if not invalid else np.nan,
+                          reference_factor=r.ref_factor,overnight_gap=entry_gap,
+                          exit_factor=adjust,cash_at_close=cash_prev,
+                          exit_price=exit_px,status=status,valid_valuation=not invalid,
+                          exit_advantage=adjust-1 if cash_prev else np.nan))
+    d=pd.DataFrame(daily)
+    r=d.ret
+    final=float(d.equity.iloc[-1])
+    peak=np.maximum.accumulate(np.r_[capital,d.equity])[1:]
+    d["drawdown"]=d.equity/peak-1
+    return dict(capital_initial=capital,capital_final=final,
+                return_pct=100*(final/capital-1),
+                max_drawdown_daily=float(d.drawdown.min()) if not invalid else np.nan,
+                sharpe=float(r.mean()/r.std()*np.sqrt(252)) if not invalid and r.std()>0 else np.nan,
+                signals=int(d.status.isin(["cash","signal_without_fill"]).sum()),
+                sessions_with_exit=int(d.cash_at_close.sum()),
+                positive_exits=int(d.exit_advantage.gt(0).sum()),
+                premature_exits=int(d.exit_advantage.lt(0).sum()),
+                valid_valuation=not invalid,sessions=len(d)),d,pd.DataFrame(events)
 
 
 def smoke():
@@ -505,81 +587,104 @@ def run():
     log(f"Testes sinteticos: {smoke_result}")
     pos,bars,sessions,coverage,source=load_data()
     files["auditoria_cobertura.csv"]=csv(coverage)
+    files["control_oficial_mct.csv"]=csv(pos[["session","decision_session","symbol","previous",
+        "walk_forward_fold","strategy_equity","ref_close","ref_factor","ref_buy_open","ref_sell_open"]])
+    # Verificar identidade matematica da ancora, nao certificar motor independente.
+    official,official_curve,_=anchored_replay(pos,sessions,{},capital=source["initial"])
+    np.testing.assert_allclose(official_curve.equity,pos.strategy_equity,rtol=1e-10)
     f=frame_features(bars,pos)
     tr,va,te=split(pos)
-    log(f"Treino {len(tr)}; validacao {len(va)}; teste {len(te)}")
+    log(f"Treino {len(tr)}; validacao {len(va)}; teste fold3 {len(te)}")
     pred=make_scores(f,tr,va,te)
     select=pos[pos.session.isin(va)]
     test=pos[pos.session.isin(te)]
     grid=[];summary=[];curves=[];events=[];forecasts=[]
-    baseline,bd,be=replay(test,sessions,{})
-    summary.append(dict(method="Control_intraday_replay",risk=None,**baseline))
-    curves.append(bd.assign(method="Control_intraday_replay"))
-    if not be.empty:events.append(be.assign(method="Control_intraday_replay"))
-    selected={}
+    restricted=[];restricted_curves=[];restricted_events=[]
+    baseline,bd,be=anchored_replay(test,sessions,{})
+    summary.append(dict(method="Control_MCT_anchored",risk=None,**baseline))
+    curves.append(bd.assign(method="Control_MCT_anchored"))
+    selected={};maps={"Control_MCT_anchored":{}}
     for name,p in pred.items():
         v=p[p.session.isin(va)];t=p[p.session.isin(te)]
         candidates=[]
         for risk in (None,*RISKS):
-            stat,_,_=replay(select,sessions,signal_map(v,risk))
-            objective=np.log(stat["capital_final"]/CAPITAL)+.5*stat["max_drawdown_daily"]
+            stat,_,_=anchored_replay(select,sessions,signal_map(v,risk))
+            objective=np.log(stat["capital_final"]/CAPITAL)+.5*stat["max_drawdown_daily"] if stat["valid_valuation"] else -np.inf
             candidates.append((objective,risk))
             grid.append(dict(method=name,risk=risk,objective=objective,**stat))
-        # None = sem saida, primeiro candidato; empate favorece nao operar.
         best=max(candidates,key=lambda x:x[0])[1]
         selected[name]=best
-        stat,d,e=replay(test,sessions,signal_map(t,best))
+        maps[name]=signal_map(t,best)
+        stat,d,e=anchored_replay(test,sessions,maps[name])
         actual=t.target.notna()
         stat["prediction_mae"]=float((t.loc[actual,"mean"]-t.loc[actual,"target"]).abs().mean()) if actual.any() else None
+        if "expected_mfe" in t:
+            stat["mfe_prediction_mae"]=float((t.expected_mfe-t.actual_mfe).abs().mean())
+            stat["mae_prediction_mae"]=float((t.risk-t.actual_mae).abs().mean())
         summary.append(dict(method=name,risk=best,**stat))
         curves.append(d.assign(method=name))
         if not e.empty:events.append(e.assign(method=name))
         forecasts.append(t.assign(method=name))
-        log(f"{name}: validacao risco={best}; teste capital={stat['capital_final']:.2f}; saidas={stat['sessions_with_exit']}")
+        log(f"{name}: risco validado={best}; fold3 capital={stat['capital_final']:.2f}; saidas={stat['sessions_with_exit']}")
     result=pd.DataFrame(summary)
     result["delta_control_usd"]=result.capital_final-baseline["capital_final"]
     result["delta_control_pct"]=100*(result.capital_final/baseline["capital_final"]-1)
-    # Sensibilidade de custos: politica congelada, jamais reotimizar no teste.
+    # Replay separado com liquidez, a MESMA politica congelada. Pode ficar
+    # residual, mas sempre busca cotacoes do ticker realmente mantido.
+    for name,sig in maps.items():
+        log(f"Replay com liquidez: {name}")
+        stat,d,e=replay(test,sessions,sig)
+        restricted.append(dict(method=name,**stat))
+        restricted_curves.append(d.assign(method=name))
+        if not e.empty:restricted_events.append(e.assign(method=name))
     stress=[]
     for bps in (5,10,25,50):
-        for name in ("Control_intraday_replay",*METHODS):
-            sig={} if name=="Control_intraday_replay" else signal_map(pred[name][pred[name].session.isin(te)],selected[name])
-            st,_,_=replay(test,sessions,sig,cost=bps/10000)
-            stress.append(dict(method=name,cost_bps=bps,**st))
+        for name,sig in maps.items():
+            st,_,_=anchored_replay(test,sessions,sig,cost=bps/10000)
+            stress.append(dict(method=name,extra_cost_bps=bps,**st))
     files.update({"comparacao_estrategias.csv":csv(result),
+                  "comparacao_com_liquidez.csv":csv(pd.DataFrame(restricted)),
+                  "patrimonio_com_liquidez.csv":csv(pd.concat(restricted_curves,ignore_index=True)),
+                  "ordens_com_liquidez.csv":csv(pd.concat(restricted_events,ignore_index=True) if restricted_events else pd.DataFrame()),
                   "selecao_validacao.csv":csv(pd.DataFrame(grid)),
                   "patrimonio_diario.csv":csv(pd.concat(curves,ignore_index=True)),
                   "ordens_simuladas.csv":csv(pd.concat(events,ignore_index=True) if events else pd.DataFrame()),
                   "previsoes_teste.csv":csv(pd.concat(forecasts,ignore_index=True)),
-                  "sensibilidade_custos.csv":csv(pd.DataFrame(stress))})
-    import io
+                  "sensibilidade_custos.csv":csv(pd.DataFrame(stress)),
+                  "cotacoes_ausentes.csv":csv(pd.DataFrame(sorted(sessions.missing),columns=["session","symbol"]))})
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     fig,ax=plt.subplots(figsize=(11,6))
     for d in curves:
         ax.plot(pd.to_datetime(d.session),d.equity,label=d.method.iloc[0])
-    ax.set_title("Patrimonio simulado fora da amostra (proxy intradiario)")
+    ax.set_title("Fold 3: contrafactual proporcional ancorado no Control MCT")
     ax.set_ylabel("USD");ax.legend();ax.grid(alpha=.2)
     fig.tight_layout()
     buffer=io.BytesIO();fig.savefig(buffer,format="png",dpi=150);plt.close(fig)
     files["comparacao_patrimonio.png"]=buffer.getvalue()
     cov=coverage[coverage.session.isin(te)]
-    status={"status":"completed_proxy" if cov.final_bar.all() and cov.rotation_quote.all()
-            and not result.stale_marks.any() and not result.blocked_rotations.any() else "partial_data_or_execution_proxy",
+    mismatches=int(cov.close_difference_pct.abs().gt(.1).sum())
+    status={"status":"completed_research_proxy" if cov.final_bar.all() and cov.rotation_quote.all()
+            and result.valid_valuation.all() and not sessions.missing and mismatches==0
+            and all(x["valid_valuation"] for x in restricted) else "partial_data_or_unreconciled_prices",
             "smoke":smoke_result,"source":source,
+            "cache_hashes":sessions.hashes,"cache_errors":sessions.errors,
             "split":{"train":tr,"validation":va,"test":te},
-            "capital_initial":CAPITAL,"cost_per_side":COST,"volume_participation_proxy":PARTICIPATION,
-            "selected_risk":selected,"first_layer":"frozen historical target assumed known before open; timestamps not certified",
-            "cash_rule":"no reentry same day; next session opening Winner target; no close fill",
-            "control":"same continuous replay, no exit overlay; NOT original daily Control wealth",
-            "limitations":["research proxy, no real orders", "next-open prices and previous bar volume do not guarantee fills",
-                           "no dividends/corporate actions in RAW intraday replay; gaps across splits may distort wealth",
-                           "opening-only model; no independent closing Winner signal in position snapshot",
-                           "historical target pre-open availability not independently verified",
-                           "stale marks and failed rotations reported; do not promote partial results"],
+            "official_full_control_identity":official["capital_final"],
+            "capital_initial_test":CAPITAL,"extra_cost_per_side":COST,
+            "volume_participation_proxy":PARTICIPATION,"selected_risk":selected,
+            "first_layer":"MCT decision_session earlier than execution session, frozen selection",
+            "cash_rule":"no same-day reentry, next session opening only",
+            "control":"official daily factors re-scaled; not independent replication",
+            "limitations":["anchored overlay assumes proportional full fills; base fees retained conservatively even when cash avoids a sale",
+                           "restricted replay separate; next-open/previous volume are execution proxies",
+                           "RAW close discrepancies audited; corporate actions not independently reconciled; no certification",
+                           "no independent closing Winner signal in daily export; no closing auction reentry",
+                           "all models selected on validation, fold3 only for final comparison"],
             "test_sessions_missing_final":int((~cov.final_bar).sum()),
-            "test_missing_rotation_quote":int((~cov.rotation_quote).sum())}
+            "test_missing_rotation_quote":int((~cov.rotation_quote).sum()),
+            "test_close_discrepancies_over_0_1pct":mismatches}
     files["manifesto.json"]=json.dumps(status,ensure_ascii=False,indent=2,default=str).encode()
     return files
 
