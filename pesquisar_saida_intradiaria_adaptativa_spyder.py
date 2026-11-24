@@ -2317,6 +2317,352 @@ def run_optimal_stopping():
     return files
 
 
+# Aprendizado supervisionado do Oracle, com meta-labeling cronologico.
+ORACLE_DAILY=["decision_score","best_score","second_score","best_vs_second_gap",
+    "best_vs_cash_gap","best_vs_current_gap","current_asset_rank","universe_score_mean",
+    "universe_score_std","best_score_zscore","positive_score_count","finite_score_count",
+    "top_1_score","top_2_score","top_3_score","top_4_score","top_5_score"]
+ORACLE_MARKET=["spy_return_5","spy_return_20","spy_realized_volatility_20",
+               "universe_breadth_5","universe_breadth_20"]
+ORACLE_META=["p_logistic","p_gain","p_day","ev","p_rank","hold_es"]
+ORACLE_POLICIES=("logistic","classifier","ranker","expected_value","conditional_es","meta_labeling")
+
+
+def oracle_daily_context(pos):
+    if not (pos.decision_session<pos.session).all():raise ValueError("Decisao diaria nao anterior")
+    d=pos[["session","symbol","decision_session"]].copy()
+    for c in ORACLE_DAILY:
+        if c in pos:d["daily_"+c]=pd.to_numeric(pos[c],errors="coerce")
+    for c in ORACLE_MARKET:
+        if c in pos:d["daily_lag_"+c]=pd.to_numeric(pos[c],errors="coerce").shift(1)
+    return d
+
+
+def oracle_features(d):
+    return list(dict.fromkeys(STOP_FEATURES+[c for c in d if c.startswith(("ctx_","daily_"))]))
+
+
+def oracle_labels(o,frequency):
+    a=o[o.minutes_elapsed.mod(frequency).eq(0)&o.reward.notna()].copy()
+    a=a.sort_values(["session","timestamp"]).reset_index(drop=True)
+    g=a.groupby("session",sort=False)
+    a["good"]=(a.reward>0).astype(int)
+    a["day_good"]=g.good.transform("max")
+    a["best_reward"]=g.reward.transform("max").clip(lower=0)
+    a["regret"]=a.best_reward-a.reward
+    # Graded relevance: nonpositive=0; profitable=1; top quartile=2;
+    # best executable checkpoint=3. Ranking never uses these at inference.
+    pct=g.reward.rank(pct=True,method="average")
+    a["relevance"]=np.where(a.good.eq(0),0,np.where(a.regret.abs().lt(1e-12),3,np.where(pct.ge(.75),2,1))).astype(int)
+    return a
+
+
+def oracle_classifier(kind):
+    from sklearn.pipeline import make_pipeline
+    from sklearn.impute import SimpleImputer
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import LogisticRegression
+    from lightgbm import LGBMClassifier
+    if kind=="logistic":
+        return make_pipeline(SimpleImputer(strategy="median"),StandardScaler(),LogisticRegression(C=.2,max_iter=500,random_state=SEED))
+    return LGBMClassifier(n_estimators=75,num_leaves=7,max_depth=3,learning_rate=.04,
+                          min_child_samples=60,n_jobs=1,random_state=SEED,verbosity=-1)
+
+
+def oracle_prob(x,y,z,kind="tree"):
+    if y.nunique()<2:return np.full(len(z),float(y.mean()))
+    m=oracle_classifier(kind);m.fit(x,y)
+    return m.predict_proba(z)[:,1]
+
+
+def oracle_primary(tr,ev,features):
+    from lightgbm import LGBMRanker
+    tr=tr.sort_values(["session","timestamp"]).reset_index(drop=True)
+    x=tr[features].replace([np.inf,-np.inf],np.nan)
+    z=ev[features].replace([np.inf,-np.inf],np.nan)
+    # Drop only columns entirely absent in this training prefix.
+    keep=x.columns[x.notna().any()]
+    x=x[keep];z=z[keep]
+    if len(tr)<100 or len(keep)==0 or ev.empty:raise ValueError("Amostra supervisionada insuficiente")
+    p=ev[["session","symbol","timestamp","minutes_elapsed"]].copy().reset_index(drop=True)
+    p["p_logistic"]=oracle_prob(x,tr.good,z,"logistic")
+    p["p_gain"]=oracle_prob(x,tr.good,z)
+    p["p_day"]=oracle_prob(x,tr.day_good,z)
+    # Estimate positive and negative magnitudes separately, with the
+    # probability of a profitable exit. Conditional expectation in log units.
+    for mask,col,sign in ((tr.good.eq(1),"gain",1),(tr.good.eq(0),"loss",-1)):
+        y=tr.loc[mask,"reward"]*sign
+        if len(y)<50:p[col]=float(y.mean()) if len(y) else 0.
+        else:
+            m=stop_regressor("tree");m.fit(x.loc[mask],y)
+            p[col]=np.maximum(0.,m.predict(z))
+    p["ev"]=p.p_gain*p.gain-(1-p.p_gain)*p.loss
+    rank=LGBMRanker(n_estimators=75,num_leaves=7,max_depth=3,learning_rate=.04,
+                   min_child_samples=60,n_jobs=1,random_state=SEED,verbosity=-1)
+    rank.fit(x,tr.relevance,group=tr.groupby("session",sort=False).size().tolist())
+    reference=np.sort(rank.predict(x))
+    p["p_rank"]=np.searchsorted(reference,rank.predict(z),side="right")/len(reference)
+    # Conditional ES: lower 10% tail of HOLD relative to SELL; chronological
+    # quantile fit then conditional excess fit. Purge the last fit session.
+    days=sorted(tr.session.unique());cut=int(len(days)*.65)
+    a=tr.session.isin(days[:max(1,cut-1)]);b=tr.session.isin(days[cut:])
+    if a.sum()<100 or b.sum()<100:raise ValueError("Treino ES insuficiente")
+    q=stop_regressor("quantile",.1);q.fit(x.loc[a],-tr.loc[a,"reward"])
+    excess=np.maximum(0.,q.predict(x.loc[b])+tr.loc[b,"reward"].to_numpy(float))
+    tail=stop_regressor("tree");tail.fit(x.loc[b],excess)
+    p["hold_es"]=q.predict(z)-np.maximum(0.,tail.predict(z))/.1
+    return p
+
+
+def oracle_meta_fit(oof,ev):
+    # Only primary proposals from strictly earlier out-of-fold predictions.
+    # Each session has total weight 1; avoid dominating by long intraday paths.
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import LogisticRegression
+    a=oof[(oof.p_gain>.5)&(oof.ev>0)&oof.good.notna()].copy()
+    if len(a)<100 or a.good.nunique()<2:return np.full(len(ev),np.nan)
+    weights=1/a.groupby("session").good.transform("size")
+    m=make_pipeline(StandardScaler(),LogisticRegression(C=.2,max_iter=500,random_state=SEED))
+    m.fit(a[ORACLE_META],a.good.astype(int),logisticregression__sample_weight=weights*len(a)/weights.sum())
+    return m.predict_proba(ev[ORACLE_META])[:,1]
+
+
+def oracle_policy(p,name,param):
+    if param is None:return {}
+    if name=="logistic":score=p.p_logistic-param
+    elif name=="classifier":score=p.p_gain-param
+    elif name=="ranker":score=np.minimum(p.p_rank-param,p.ev)
+    elif name=="expected_value":score=np.minimum(np.minimum(p.p_gain-param,p.p_day-.5),p.ev)
+    elif name=="conditional_es":score=np.minimum(p.p_gain-.5,p.ev+param*(-p.hold_es).clip(lower=0))
+    else:score=np.minimum(np.minimum(p.p_meta-param,p.p_gain-.5),p.ev)
+    return {(r.session,r.symbol,r.timestamp):-float(v) for r,v in zip(p.itertuples(index=False),score)
+            if np.isfinite(v) and v>0}
+
+
+def oracle_params(name):
+    if name=="conditional_es":return (0.,.1,.25,.5)
+    if name=="ranker":return (.7,.8,.9,.95)
+    return (.5,.6,.7,.8)
+
+
+def oracle_walk_plan(pos,tr,va):
+    # Four ordered OOF blocks after initial 400 sessions. First OOF block
+    # warms up meta model; last three blocks compare all policies fairly.
+    dev=sorted(set(tr+va));cut=400
+    if len(dev)<600:raise ValueError("Historico de desenvolvimento insuficiente")
+    blocks=[list(a) for a in np.array_split(dev[cut:],4)]
+    ordered=pos.session.tolist();plan=[]
+    for i,block in enumerate(blocks):
+        boundary=ordered.index(block[0])
+        available=set(ordered[:boundary-1])
+        fit=[d for d in dev if d in available]
+        plan.append(dict(block=i+1,train=fit,evaluate=block))
+    return dev,plan
+
+
+def oracle_labeled_frame(wf,labels,days,fit_days=None):
+    a=wf[wf.session.isin(days)].copy()
+    if fit_days is None:return a
+    b=labels[labels.next_session.isin(fit_days)]
+    return a.merge(b[["session","symbol","timestamp","reward","good","day_good","relevance"]],
+        on=["session","symbol","timestamp"],how="inner",validate="one_to_one")
+
+
+def oracle_attach(p,labels):
+    return p.merge(labels[["session","symbol","timestamp","next_session","reward","good","day_good","relevance","regret"]],
+        on=["session","symbol","timestamp"],how="left",validate="one_to_one")
+
+
+def oracle_eval(scope,sessions,ctx,p,labels,name,param,capital,frequency):
+    sig=oracle_policy(p,name,param)
+    stat,d,e=overnight_replay(scope,sessions,sig,ctx,capital=capital)
+    osig,best=overnight_oracle_map(labels,frequency,scope)
+    ost,_,_=overnight_replay(scope,sessions,osig,ctx,capital=capital)
+    brier={}
+    for c in ("p_logistic","p_gain","p_meta","p_day"):
+        target="day_good" if c=="p_day" else "good"
+        a=p[p[c].notna()&p[target].notna()]
+        brier["brier_"+c]=float(((a[c]-a[target])**2).mean()) if len(a) else np.nan
+    valid=d[d.exit_advantage.notna()]
+    hits=int(valid.exit_advantage.gt(0).sum());losses=int(valid.exit_advantage.lt(0).sum())
+    opp=int(best.opportunity.sum())
+    stat.update(precision=hits/len(valid) if len(valid) else np.nan,
+                recall_oracle_days=hits/opp if opp else np.nan,
+                oracle_opportunities=opp,oracle_covered_sessions=len(best),
+                oracle_final=ost["capital_final"],
+                regret_log=float(np.log(ost["capital_final"]/stat["capital_final"]))
+                    if ost["valid_valuation"] and stat["valid_valuation"] else np.nan,
+                mean_positive_exit=float(valid.loc[valid.exit_advantage.gt(0),"exit_advantage"].mean()),
+                mean_negative_exit=float(valid.loc[valid.exit_advantage.lt(0),"exit_advantage"].mean()),
+                **brier)
+    return stat,d,e
+
+
+def oracle_learning_smoke():
+    t=pd.Timestamp("2026-11-23T14:30:00Z")
+    o=pd.DataFrame(dict(session=["a"]*3+["b"]*2,symbol=["D"]*5,
+        timestamp=[t+pd.Timedelta(minutes=i*5) for i in range(5)],
+        minutes_elapsed=[5,10,15,5,10],reward=[-.1,.1,.2,-.1,-.2],
+        next_session=["b"]*3+["c"]*2))
+    a=oracle_labels(o,5)
+    assert a.good.tolist()==[0,1,1,0,0]
+    assert a.day_good.tolist()==[1,1,1,0,0]
+    assert a.relevance.tolist()==[0,1,3,0,0]
+    p=a.assign(p_logistic=.7,p_gain=.7,ev=.01,p_meta=.8,p_rank=.9,hold_es=-.02)
+    assert len(oracle_policy(p,"meta_labeling",.6))==5
+    assert not oracle_policy(p.assign(p_meta=np.nan),"meta_labeling",.6)
+    assert not oracle_policy(p,"meta_labeling",None)
+    # Only label outcomes ending within fit prefix; the last day cannot leak.
+    x=oracle_labeled_frame(a[["session","symbol","timestamp"]],a,["a","b"],["a","b"])
+    assert set(x.session)=={"a"}
+    return "oracle_supervised_smoke_passed"
+
+
+def run_oracle_learning():
+    import time
+    start=time.monotonic()
+    smoke_results=[stop_smoke(),overnight_smoke(),window_smoke(),oracle_learning_smoke()]
+    log("Oracle supervisionado: historico SIP, sem aguardar mercado")
+    pos,bars,sessions,coverage,source=load_data()
+    log("Calculando indicadores causais")
+    f=frame_features(bars,pos)
+    contexts=prior_context(pos,sessions)
+    ctx=overnight_context(pos,sessions)
+    daily=oracle_daily_context(pos)
+    tr,va,te=split(pos)
+    dev,plan=oracle_walk_plan(pos,tr,va)
+    test=pos[pos.session.isin(te)]
+    prior=float(test.iloc[0].ref_previous_equity)
+    base_stat,base_curve,_=overnight_replay(test,sessions,{},ctx,capital=prior)
+    _,official,_=overnight_replay(pos,sessions,{},ctx,capital=source["initial"])
+    np.testing.assert_allclose(official.equity,pos.strategy_equity,rtol=1e-10)
+    # Each block measured separately at $10k. Selection uses only blocks 2-4.
+    val_refs={}
+    for b in plan[1:]:
+        scope=pos[pos.session.isin(b["evaluate"])]
+        st,_,_=overnight_replay(scope,sessions,{},ctx)
+        val_refs[b["block"]]=st
+    grid=[];all_oof=[];all_test=[];all_oracle=[];models={};labelsets={};audits=[]
+    for window in STOP_WINDOWS:
+        wf=window_frame(f,window,contexts).merge(daily,on=["session","symbol"],how="left",validate="many_to_one")
+        log(f"Oracle supervisionado {window}: gerando alvos")
+        oracle=overnight_oracle_candidates(wf,sessions,ctx)
+        for freq in FREQUENCIES:
+            log(f"{window}/{freq}min: walk-forward; decorrido {time.monotonic()-start:.1f}s")
+            labels=oracle_labels(oracle,freq)
+            # Keep full Oracle candidates including terminal for retrospective comparisons.
+            labelsets[window,freq]=oracle[oracle.minutes_elapsed.mod(freq).eq(0)].copy()
+            eligible=wf[wf.stop_eligible&wf.minutes_elapsed.mod(freq).eq(0)].copy()
+            features=oracle_features(eligible)
+            oof=[]
+            for b in plan:
+                log(f"  {window}/{freq}min bloco {b['block']}: treino {len(b['train'])} pregoes")
+                a=oracle_labeled_frame(eligible,labels,b["train"],b["train"])
+                z=oracle_labeled_frame(eligible,labels,b["evaluate"])
+                p=oracle_primary(a,z,features)
+                history=pd.concat(oof,ignore_index=True) if oof else pd.DataFrame()
+                if len(history):
+                    history=history[history.next_session.isin(b["train"])]
+                    p["p_meta"]=oracle_meta_fit(history,p)
+                else:p["p_meta"]=np.nan
+                p=oracle_attach(p,labels).assign(block=b["block"],window=window,frequency=freq)
+                oof.append(p)
+                audits.append(dict(window=window,frequency=freq,block=b["block"],train_rows=len(a),
+                    evaluation_rows=len(z),meta_training_rows=len(history),first_evaluation=b["evaluate"][0],
+                    last_training=b["train"][-1]))
+            oof=pd.concat(oof,ignore_index=True)
+            all_oof.append(oof)
+            for name in ORACLE_POLICIES:
+                for param in oracle_params(name):
+                    rows=[]
+                    for b in plan[1:]:
+                        scope=pos[pos.session.isin(b["evaluate"])]
+                        p=oof[oof.block.eq(b["block"])]
+                        st,_,_=oracle_eval(scope,sessions,ctx,p,labelsets[window,freq],name,param,CAPITAL,freq)
+                        ref=val_refs[b["block"]]
+                        obj=(np.log(st["capital_final"]/ref["capital_final"])+.5*(st["max_drawdown_daily"]-ref["max_drawdown_daily"])) if st["valid_valuation"] else -np.inf
+                        rows.append(obj)
+                        grid.append(dict(window=window,frequency=freq,method=name,parameter=param,
+                            block=b["block"],relative_objective=obj,**st))
+                    # Require positive net benefit in at least two of three
+                    # blocks AND positive mean risk-adjusted relative objective.
+                    objective=float(np.mean(rows))
+                    robust=sum(r>0 for r in rows)>=2 and objective>0 and np.isfinite(objective)
+                    models[window,freq,name,param]=dict(objective=objective,robust=robust,positive_blocks=sum(r>0 for r in rows))
+            # Final base model fit on development only; meta on OOF development
+            # outcomes matured inside development. No fold3 outcome in fitting.
+            a=oracle_labeled_frame(eligible,labels,dev,dev)
+            z=oracle_labeled_frame(eligible,labels,te)
+            p=oracle_primary(a,z,features)
+            p["p_meta"]=oracle_meta_fit(oof[oof.next_session.isin(dev)],p)
+            p=oracle_attach(p,labels).assign(window=window,frequency=freq)
+            all_test.append(p)
+            sig,best=overnight_oracle_map(labelsets[window,freq],freq,test)
+            st,_,_=overnight_replay(test,sessions,sig,ctx,capital=prior)
+            all_oracle.append(dict(window=window,frequency=freq,covered_sessions=len(best),opportunities=int(best.opportunity.sum()),**st))
+    selection=pd.DataFrame([dict(window=w,frequency=f,method=n,parameter=p,**v) for (w,f,n,p),v in models.items()])
+    # Ranking/selection exclusively from OOF validation. HOLD wins if none passes.
+    selected={};summary=[dict(method="Control_MCT_anchored",**base_stat)]
+    curves=[base_curve.assign(method="Control_MCT_anchored")];events=[];stress=[];liquidity=[]
+    preds=pd.concat(all_test,ignore_index=True)
+    maps={"Control_MCT_anchored":{}}
+    for name in ORACLE_POLICIES:
+        a=selection[(selection.method==name)&selection.robust].sort_values("objective",ascending=False)
+        if a.empty:
+            selected[name]=None;summary.append(dict(method=name,**base_stat))
+            curves.append(base_curve.assign(method=name));maps[name]={};continue
+        r=a.iloc[0];w=r.window;freq=int(r.frequency);param=float(r.parameter)
+        selected[name]=dict(window=w,frequency=freq,parameter=param,objective=float(r.objective))
+        p=preds[(preds.window==w)&(preds.frequency==freq)]
+        st,d,e=oracle_eval(test,sessions,ctx,p,labelsets[w,freq],name,param,prior,freq)
+        summary.append(dict(method=name,window=w,frequency=freq,parameter=param,**st))
+        curves.append(d.assign(method=name));maps[name]=oracle_policy(p,name,param)
+        if not e.empty:events.append(e.assign(method=name))
+        log(f"{name}: {w}/{freq}min; final={st['capital_final']}; vendas={st['sessions_with_exit']}")
+    for name,sig in maps.items():
+        log(f"Replay liquidez e custos: {name}")
+        st,_,_=replay(test,sessions,sig,overnight=True);liquidity.append(dict(method=name,**st))
+        for bps in (5,10,25,50):
+            st,_,_=overnight_replay(test,sessions,sig,ctx,capital=prior,cost=bps/10000)
+            stress.append(dict(method=name,bps=bps,**st))
+    result=pd.DataFrame(summary)
+    result["delta_control_pct"]=100*(result.capital_final/base_stat["capital_final"]-1)
+    result["fold3_rebased_10000"]=result.capital_final/prior*CAPITAL
+    pre=official[~official.session.isin(te)]
+    full=pd.concat([pd.concat([pre.assign(method=d.method.iloc[0]),d],ignore_index=True) for d in curves],ignore_index=True)
+    files={"oracle_learning_comparacao.csv":csv(result),"oracle_learning_walk_forward.csv":csv(pd.DataFrame(grid)),
+        "oracle_learning_selecao.csv":csv(selection),"oracle_learning_oof.csv":csv(pd.concat(all_oof,ignore_index=True)),
+        "oracle_learning_previsoes.csv":csv(preds),"oracle_learning_oracle.csv":csv(pd.DataFrame(all_oracle)),
+        "oracle_learning_auditoria.csv":csv(pd.DataFrame(audits)),"oracle_learning_patrimonio.csv":csv(full),
+        "oracle_learning_ordens.csv":csv(pd.concat(events,ignore_index=True) if events else pd.DataFrame()),
+        "oracle_learning_liquidez.csv":csv(pd.DataFrame(liquidity)),"oracle_learning_custos.csv":csv(pd.DataFrame(stress)),
+        "oracle_learning_cobertura.csv":csv(coverage)}
+    manifest=dict(source=source,smoke=smoke_results,selected=selected,walk_forward=plan,development=dev,test=te,
+        windows=STOP_WINDOWS,frequencies=FREQUENCIES,daily_columns=list(daily.columns),features=oracle_features(wf),
+        cash_policy="overnight_until_next_winner_open",cache_errors=sessions.errors,cache_hashes=sessions.hashes,
+        elapsed_seconds=time.monotonic()-start,limitations=[
+        "fold3 exploratory; independent prospective test required",
+        "daily decision scores assumed available on decision_session from export; market fields lagged one extra session; upstream point-in-time generation not independently audited",
+        "Oracle outcomes retrospective only; training labels mature within prefix; missing outcomes excluded only from fitting and diagnostics, not inference",
+        "ranker predicts score percentile relative to training, never ranks future checkpoints online",
+        "meta logistic trained only on earlier OOF primary proposals; no independent calibration guarantee",
+        "conditional ES uses chronological train subsplit; no HMM or survival refit in this mode",
+        "three validation blocks select positive mean objective and at least two positive blocks; multiple comparisons still possible",
+        "same frozen Winner next target; no cash-state reranking; no Yahoo live transfer validation",
+        "proportional next-open proxy, liquidity replay separate; missing marks invalidate financial results"])
+    files["oracle_learning_manifesto.json"]=json.dumps(manifest,indent=2,default=str).encode()
+    if OUT.exists():
+        with ZipFile(OUT) as z:
+            if z.testzip() is not None:raise ValueError("ZIP anterior corrompido")
+            hashes=json.loads(z.read("sha256.json"))
+            if any(hashlib.sha256(z.read(n)).hexdigest()!=h for n,h in hashes.items()):raise ValueError("Hash anterior invalido")
+            old={n:z.read(n) for n in z.namelist() if n!="sha256.json" and not n.startswith("oracle_learning_")}
+        old.update(files);files=old
+    return files
+
+
+
 if __name__=="__main__":
     OUT.parent.mkdir(parents=True,exist_ok=True)
     LOGGER.handlers.clear()
@@ -2326,6 +2672,12 @@ if __name__=="__main__":
         LOGGER.addHandler(handler)
     try:
         import sys
+        if "--oracle-learning-self-test" in sys.argv:
+            print(stop_smoke())
+            print(overnight_smoke())
+            print(window_smoke())
+            print(oracle_learning_smoke())
+            sys.exit(0)
         if "--optimal-stop-self-test" in sys.argv:
             print(stop_smoke())
             print(overnight_smoke())
@@ -2349,9 +2701,10 @@ if __name__=="__main__":
         feed_only="--feed-test" in sys.argv
         yahoo_only="--yahoo-test" in sys.argv
         stop_only="--optimal-stop" in sys.argv
-        files=run_optimal_stopping() if stop_only else (run_yahoo_test() if yahoo_only else (run_feed_test() if feed_only else run()))
+        learn_only="--oracle-learning" in sys.argv
+        files=run_oracle_learning() if learn_only else (run_optimal_stopping() if stop_only else (run_yahoo_test() if yahoo_only else (run_feed_test() if feed_only else run())))
         log("Pesquisa concluida. Gravando ZIP.")
-        prefix="optimal_stop_" if stop_only else ("yahoo_test_" if yahoo_only else ("feed_test_" if feed_only else ""))
+        prefix="oracle_learning_" if learn_only else ("optimal_stop_" if stop_only else ("yahoo_test_" if yahoo_only else ("feed_test_" if feed_only else "")))
         files[prefix+"execucao.log"]=LOG.read_bytes()
         files[prefix+"codigo_executado.py"]=Path(__file__).read_bytes()
         pack(files)
