@@ -2474,15 +2474,17 @@ def oracle_attach(p,labels):
         on=["session","symbol","timestamp"],how="left",validate="one_to_one")
 
 
-def oracle_eval(scope,sessions,ctx,p,labels,name,param,capital,frequency):
+def oracle_eval(scope,sessions,ctx,p,labels,name,param,capital,frequency,oracle_reference=None):
     sig=oracle_policy(p,name,param)
     stat,d,e=overnight_replay(scope,sessions,sig,ctx,capital=capital)
-    osig,best=overnight_oracle_map(labels,frequency,scope)
-    ost,_,_=overnight_replay(scope,sessions,osig,ctx,capital=capital)
+    if oracle_reference is None:
+        osig,best=overnight_oracle_map(labels,frequency,scope)
+        ost,_,_=overnight_replay(scope,sessions,osig,ctx,capital=capital)
+    else:ost,best=oracle_reference
     brier={}
     for c in ("p_logistic","p_gain","p_meta","p_day"):
         target="day_good" if c=="p_day" else "good"
-        a=p[p[c].notna()&p[target].notna()]
+        a=p[p[c].notna()&p[target].notna()&p.next_session.isin(scope.session)]
         brier["brier_"+c]=float(((a[c]-a[target])**2).mean()) if len(a) else np.nan
     valid=d[d.exit_advantage.notna()]
     hits=int(valid.exit_advantage.gt(0).sum());losses=int(valid.exit_advantage.lt(0).sum())
@@ -2543,7 +2545,7 @@ def run_oracle_learning():
         scope=pos[pos.session.isin(b["evaluate"])]
         st,_,_=overnight_replay(scope,sessions,{},ctx)
         val_refs[b["block"]]=st
-    grid=[];all_oof=[];all_test=[];all_oracle=[];models={};labelsets={};audits=[]
+    grid=[];all_oof=[];all_test=[];all_oracle=[];models={};labelsets={};audits=[];feature_audit=[]
     for window in STOP_WINDOWS:
         wf=window_frame(f,window,contexts).merge(daily,on=["session","symbol"],how="left",validate="many_to_one")
         log(f"Oracle supervisionado {window}: gerando alvos")
@@ -2555,6 +2557,8 @@ def run_oracle_learning():
             labelsets[window,freq]=oracle[oracle.minutes_elapsed.mod(freq).eq(0)].copy()
             eligible=wf[wf.stop_eligible&wf.minutes_elapsed.mod(freq).eq(0)].copy()
             features=oracle_features(eligible)
+            for c in features:
+                feature_audit.append(dict(window=window,frequency=freq,feature=c,development_available=float(eligible.loc[eligible.session.isin(dev),c].notna().mean()),test_available=float(eligible.loc[eligible.session.isin(te),c].notna().mean())))
             oof=[]
             for b in plan:
                 log(f"  {window}/{freq}min bloco {b['block']}: treino {len(b['train'])} pregoes")
@@ -2573,23 +2577,32 @@ def run_oracle_learning():
                     last_training=b["train"][-1]))
             oof=pd.concat(oof,ignore_index=True)
             all_oof.append(oof)
+            refs={}
+            for b in plan[1:]:
+                scope=pos[pos.session.isin(b["evaluate"])]
+                osig,best=overnight_oracle_map(labelsets[window,freq],freq,scope)
+                ost,_,_=overnight_replay(scope,sessions,osig,ctx)
+                refs[b["block"]]=(ost,best)
             for name in ORACLE_POLICIES:
                 for param in oracle_params(name):
-                    rows=[]
+                    rows=[];gains=[]
                     for b in plan[1:]:
                         scope=pos[pos.session.isin(b["evaluate"])]
                         p=oof[oof.block.eq(b["block"])]
-                        st,_,_=oracle_eval(scope,sessions,ctx,p,labelsets[window,freq],name,param,CAPITAL,freq)
+                        st,_,_=oracle_eval(scope,sessions,ctx,p,labelsets[window,freq],name,param,CAPITAL,freq,refs[b["block"]])
                         ref=val_refs[b["block"]]
                         obj=(np.log(st["capital_final"]/ref["capital_final"])+.5*(st["max_drawdown_daily"]-ref["max_drawdown_daily"])) if st["valid_valuation"] else -np.inf
                         rows.append(obj)
+                        gain=float(np.log(st["capital_final"]/ref["capital_final"])) if st["valid_valuation"] else -np.inf
+                        gains.append(gain)
                         grid.append(dict(window=window,frequency=freq,method=name,parameter=param,
-                            block=b["block"],relative_objective=obj,**st))
+                            block=b["block"],relative_objective=obj,relative_log_gain=gain,**st))
                     # Require positive net benefit in at least two of three
                     # blocks AND positive mean risk-adjusted relative objective.
                     objective=float(np.mean(rows))
-                    robust=sum(r>0 for r in rows)>=2 and objective>0 and np.isfinite(objective)
-                    models[window,freq,name,param]=dict(objective=objective,robust=robust,positive_blocks=sum(r>0 for r in rows))
+                    mean_gain=float(np.mean(gains))
+                    robust=sum(r>0 for r in gains)>=2 and mean_gain>0 and objective>0 and np.isfinite(objective)
+                    models[window,freq,name,param]=dict(objective=objective,mean_log_gain=mean_gain,robust=robust,positive_blocks=sum(r>0 for r in gains))
             # Final base model fit on development only; meta on OOF development
             # outcomes matured inside development. No fold3 outcome in fitting.
             a=oracle_labeled_frame(eligible,labels,dev,dev)
@@ -2631,9 +2644,16 @@ def run_oracle_learning():
     result["fold3_rebased_10000"]=result.capital_final/prior*CAPITAL
     pre=official[~official.session.isin(te)]
     full=pd.concat([pd.concat([pre.assign(method=d.method.iloc[0]),d],ignore_index=True) for d in curves],ignore_index=True)
+    for name,g in full.groupby("method",sort=False):
+        eq=g.equity.to_numpy(float);rr=g.ret.to_numpy(float)
+        valid=np.isfinite(eq).all() and np.isfinite(rr).all()
+        peaks=np.maximum.accumulate(np.r_[source["initial"],eq])[1:]
+        result.loc[result.method.eq(name),"full_max_drawdown"]=float((eq/peaks-1).min()) if valid else np.nan
+        result.loc[result.method.eq(name),"full_sharpe"]=float(rr.mean()/rr.std(ddof=1)*np.sqrt(252)) if valid and rr.std(ddof=1)>0 else np.nan
     files={"oracle_learning_comparacao.csv":csv(result),"oracle_learning_walk_forward.csv":csv(pd.DataFrame(grid)),
         "oracle_learning_selecao.csv":csv(selection),"oracle_learning_oof.csv":csv(pd.concat(all_oof,ignore_index=True)),
         "oracle_learning_previsoes.csv":csv(preds),"oracle_learning_oracle.csv":csv(pd.DataFrame(all_oracle)),
+        "oracle_learning_features.csv":csv(pd.DataFrame(feature_audit)),
         "oracle_learning_auditoria.csv":csv(pd.DataFrame(audits)),"oracle_learning_patrimonio.csv":csv(full),
         "oracle_learning_ordens.csv":csv(pd.concat(events,ignore_index=True) if events else pd.DataFrame()),
         "oracle_learning_liquidez.csv":csv(pd.DataFrame(liquidity)),"oracle_learning_custos.csv":csv(pd.DataFrame(stress)),
@@ -2648,7 +2668,7 @@ def run_oracle_learning():
         "ranker predicts score percentile relative to training, never ranks future checkpoints online",
         "meta logistic trained only on earlier OOF primary proposals; no independent calibration guarantee",
         "conditional ES uses chronological train subsplit; no HMM or survival refit in this mode",
-        "three validation blocks select positive mean objective and at least two positive blocks; multiple comparisons still possible",
+        "three validation blocks require positive mean log gain, positive mean risk-adjusted objective and positive financial gain in at least two blocks; multiple comparisons still possible",
         "same frozen Winner next target; no cash-state reranking; no Yahoo live transfer validation",
         "proportional next-open proxy, liquidity replay separate; missing marks invalidate financial results"])
     files["oracle_learning_manifesto.json"]=json.dumps(manifest,indent=2,default=str).encode()
