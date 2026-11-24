@@ -1405,6 +1405,215 @@ def run_feed_monitor():
     print("ZIP:",OUT)
     return status
 
+# Comparacao Yahoo / Alpaca. Yahoo e uma fonte externa nao oficial.
+# A coleta automatizada depende de permissao do provedor. Alternativa:
+# CSV autorizado, com timestamp ISO com fuso, symbol, open/high/low/close/volume.
+def yahoo_normalize(raw):
+    if raw is None or raw.empty:return pd.DataFrame(columns=["open","high","low","close","volume"])
+    data=raw.copy()
+    data.columns=[str(c).strip().lower() for c in data.columns]
+    if "timestamp" in data.columns:data=data.set_index("timestamp")
+    idx=pd.DatetimeIndex(pd.to_datetime(data.index,errors="raise"))
+    if idx.tz is None:raise ValueError("Yahoo: timestamps sem fuso")
+    data.index=idx.tz_convert("UTC")
+    data.index.name="timestamp"
+    data=data[["open","high","low","close","volume"]].apply(pd.to_numeric,errors="coerce")
+    if data.index.duplicated().any():raise ValueError("Yahoo: timestamps duplicados")
+    return data.sort_index()
+
+
+def yahoo_pair(sip,other,day,symbol,frequency,feed):
+    r,j=feed_day_compare(sip,other,day,symbol,frequency)
+    rename={"iex_"+k:"source_"+k for k in (
+        "bars","minutes","volume","volume_share","p95_last_observed_minute_age")}
+    rename.update({"oracle_iex_checkpoints":"oracle_source_checkpoints",
+                   "oracle_iex_observable_factor":"oracle_source_observable_factor"})
+    r={rename.get(k,k):v for k,v in r.items()}
+    r["source"]=feed
+    j=j.rename(columns={k:k.replace("iex_","source_",1) for k in j.columns if k.startswith("iex_")})
+    j["source"]=feed
+    # Extremos diarios observados: comparar preco e horario, nao provar
+    # que um algoritmo causal teria identificado a reversao naquele momento.
+    for label,operation in (("high","max"),("low","min")):
+        a=sip[label].dropna();b=other[label].dropna()
+        aa=getattr(a,operation)() if len(a) else np.nan
+        bb=getattr(b,operation)() if len(b) else np.nan
+        ta=(a.idxmax() if label=="high" else a.idxmin()) if len(a) else pd.NaT
+        tb=(b.idxmax() if label=="high" else b.idxmin()) if len(b) else pd.NaT
+        r["daily_"+label+"_error_bps"]=10000*(bb/aa-1) if pd.notna(aa) and aa>0 else np.nan
+        r["daily_"+label+"_time_error_minutes"]=(tb-ta).total_seconds()/60 if pd.notna(ta) and pd.notna(tb) else np.nan
+    return r,j
+
+
+def yahoo_test_smoke():
+    start=pd.Timestamp("2026-11-24T14:30:00Z");end=start+pd.Timedelta(minutes=390)
+    idx=pd.date_range(start,end,freq="min",inclusive="left")
+    raw=pd.DataFrame(dict(Open=100.,High=101.,Low=99.,Close=100.,Volume=1000.),index=idx)
+    a=feed_grid(yahoo_normalize(raw),start,end)
+    b=feed_grid(yahoo_normalize(raw.iloc[::2]),start,end)
+    r,j=yahoo_pair(a,b,"2026-11-24","DEMO",1,"yahoo")
+    assert r["source_bars"]==195 and r["sip_bars"]==390
+    assert r["mean_abs_close_error_bps"]==0 and r["daily_high_error_bps"]==0
+    assert r["oracle_source_observable_factor"]==1
+    assert j.source.eq("yahoo").all()
+    assert not b.close.iloc[1:2].notna().any()
+    return "yahoo_comparison_synthetic_passed"
+
+
+def run_yahoo_test():
+    import exchange_calendars as xc
+    import time
+    authorized="--yahoo-authorized" in sys.argv
+    imported=None
+    if "--yahoo-csv" in sys.argv:
+        p=Path(sys.argv[sys.argv.index("--yahoo-csv")+1]).expanduser()
+        imported=pd.read_csv(p)
+        imported.columns=[str(c).strip().lower() for c in imported.columns]
+        imported["symbol"]=imported.symbol.astype(str).str.upper().str.strip()
+    elif not authorized:
+        raise ValueError("Use --yahoo-authorized somente com permissao do provedor, ou --yahoo-csv CAMINHO")
+    else:
+        import yfinance as yf
+    now=pd.Timestamp.now(tz="UTC")
+    day=now.tz_convert("America/New_York").date()
+    cal=xc.get_calendar("XNYS",start=pd.Timestamp(day)-pd.Timedelta(days=15),
+                       end=pd.Timestamp(day)+pd.Timedelta(days=7))
+    # Janela curta: candles Yahoo 1m tem retencao/limite por requisicao.
+    dates=[d for d in cal.sessions if cal.session_close(d)<=now-pd.Timedelta(minutes=20)
+           and cal.session_open(d)>=now-pd.Timedelta(days=7)][-5:]
+    if not dates:raise ValueError("Nenhum pregao completo no recorte recente")
+    start=cal.session_open(dates[0]);end=cal.session_close(dates[-1])
+    symbols=MONITOR_SYMBOLS
+    download,creds=base._market_reader_local()
+    requests=[];grids={};recent=[]
+    def query(symbol,source,a,b,phase):
+        tic=time.monotonic();status="ok";error="";raw=None
+        try:
+            if source=="yahoo":
+                if imported is not None:
+                    raw=yahoo_normalize(imported[imported.symbol.eq(symbol)])
+                else:
+                    raw=yahoo_normalize(yf.Ticker(symbol).history(start=a.to_pydatetime(),
+                        end=b.to_pydatetime(),interval="1m",prepost=False,
+                        auto_adjust=False,actions=False,repair=False,timeout=10,raise_errors=True))
+            else:
+                raw=download(**creds,symbol=symbol,timeframe="1Min",start=a,end=b,
+                             feed=source,adjustment="raw")
+            if raw is None or raw.empty:status="empty"
+            else:
+                raw=raw.copy()
+                raw.index=pd.to_datetime(raw.index,utc=True)
+                raw=raw[(raw.index>=a)&(raw.index<b)]
+                if raw.empty:status="empty"
+        except Exception as exc:
+            status="error";error=monitor_error(exc);raw=None
+        received=pd.Timestamp.now(tz="UTC")
+        requests.append(dict(symbol=symbol,source=source,phase=phase,status=status,error=error,
+            query_start=a,query_end=b,received_at=received,rows=0 if raw is None else len(raw),
+            response_seconds=time.monotonic()-tic))
+        log(f"Yahoo comparison {phase} {symbol} {source}: {status}, {requests[-1]['rows']} barras")
+        return raw,status,received
+    for symbol in symbols:
+        for source in ("sip","iex","yahoo"):
+            raw,status,_=query(symbol,source,start,end,"historical")
+            for d in dates:
+                grids[symbol,source,str(d.date())]=feed_grid(raw,cal.session_open(d),cal.session_close(d))
+    rows=[];details=[];minutes=[];support=[]
+    for symbol in symbols:
+        for d in dates:
+            date=str(d.date())
+            sip=grids[symbol,"sip",date];iex=grids[symbol,"iex",date];yahoo=grids[symbol,"yahoo",date]
+            for source,g in (("sip",sip),("iex",iex),("yahoo",yahoo)):
+                minutes.append(g.reset_index().assign(symbol=symbol,session=date,source=source))
+            for frequency in FEED_FREQUENCIES:
+                a,ja=yahoo_pair(sip,iex,date,symbol,frequency,"iex")
+                b,jb=yahoo_pair(sip,yahoo,date,symbol,frequency,"yahoo")
+                rows.extend([a,b]);details.extend([ja,jb])
+                # Comparacao de erros nos MESMOS checkpoints dos tres feeds.
+                m=ja[["timestamp","sip_close","source_close","sip_return","source_return"]].merge(
+                    jb[["timestamp","source_close","source_return"]],on="timestamp",
+                    suffixes=("_iex","_yahoo"),validate="one_to_one")
+                good=m[["sip_close","source_close_iex","source_close_yahoo"]].notna().all(axis=1)
+                ret=m[["sip_return","source_return_iex","source_return_yahoo"]].notna().all(axis=1)
+                for source in ("iex","yahoo"):
+                    support.append(dict(symbol=symbol,session=date,frequency=frequency,source=source,
+                        common_bars=int(good.sum()),common_returns=int(ret.sum()),
+                        absolute_error_sum_bps=float((10000*(m.loc[good,"source_close_"+source]/m.loc[good,"sip_close"]-1)).abs().sum()),
+                        direction_matches=int((np.sign(m.loc[ret,"source_return_"+source])==np.sign(m.loc[ret,"sip_return"])).sum())))
+    report=pd.DataFrame(rows);detail=pd.concat(details,ignore_index=True);common=pd.DataFrame(support)
+    summary=[]
+    for (symbol,frequency,source),g in report.groupby(["symbol","frequency","source"]):
+        q=detail[(detail.symbol==symbol)&(detail.frequency==frequency)&(detail.source==source)]
+        c=common[(common.symbol==symbol)&(common.frequency==frequency)&(common.source==source)]
+        good=g.oracle_sip_factor.notna() & g.oracle_source_observable_factor.notna()
+        # Oracle entre fontes no mesmo conjunto de sessoes (tres feeds).
+        other=report[(report.symbol==symbol)&(report.frequency==frequency)&(report.source!=source)]
+        common_days=set(other.loc[other.oracle_source_observable_factor.notna()&other.oracle_sip_factor.notna(),"session"])
+        good &= g.session.isin(common_days)
+        denom=float(np.log(g.loc[good,"oracle_sip_factor"]).sum())
+        num=float(np.log(g.loc[good,"oracle_source_observable_factor"]).sum())
+        summary.append(dict(symbol=symbol,frequency=frequency,source=source,sessions=len(g),
+            sip_coverage_pct=100*g.sip_bars.sum()/g.expected_bars.sum(),
+            source_coverage_pct=100*g.source_bars.sum()/g.expected_bars.sum(),
+            volume_ratio_pct=100*g.source_volume.sum(min_count=1)/g.sip_volume.sum(min_count=1) if g.sip_volume.sum()>0 else np.nan,
+            mean_abs_close_error_bps=float(q.close_error_bps.abs().mean()),
+            p95_abs_close_error_bps=float(q.close_error_bps.abs().quantile(.95)),
+            p95_last_observed_minute_age=float(q.source_last_observed_minute_age.quantile(.95)),
+            daily_high_mae_bps=float(g.daily_high_error_bps.abs().mean()),
+            daily_low_mae_bps=float(g.daily_low_error_bps.abs().mean()),
+            daily_high_time_mae_min=float(g.daily_high_time_error_minutes.abs().mean()),
+            daily_low_time_mae_min=float(g.daily_low_time_error_minutes.abs().mean()),
+            direction_agreement_pct=100*float(q.direction_agrees.mean()),
+            common_bars=int(c.common_bars.sum()),
+            common_mae_bps=c.absolute_error_sum_bps.sum()/c.common_bars.sum() if c.common_bars.sum() else np.nan,
+            common_direction_agreement_pct=100*c.direction_matches.sum()/c.common_returns.sum() if c.common_returns.sum() else np.nan,
+            oracle_comparable_sessions=int(good.sum()),oracle_sip_log_gain=denom if good.any() else np.nan,
+            oracle_source_log_gain=num if good.any() else np.nan,
+            oracle_fraction=num/denom if denom>0 else np.nan))
+    # Snapshot recente: nao confundir dados historicos com acesso live.
+    t=pd.Timestamp.now(tz="UTC");label=pd.Timestamp(t.tz_convert("America/New_York").date())
+    regular=cal.is_session(label) and cal.session_open(label)+pd.Timedelta(minutes=30)<=t<cal.session_close(label)
+    if regular:
+        for symbol in symbols:
+            for source,delay in (("iex",0),("sip",20),("yahoo",0)):
+                if source=="yahoo" and imported is not None:continue
+                now2=pd.Timestamp.now(tz="UTC")
+                if now2>=cal.session_close(label):break
+                end2=now2.floor("min")-pd.Timedelta(minutes=delay)
+                start2=max(cal.session_open(label),end2-pd.Timedelta(minutes=10))
+                raw,status,received=query(symbol,source,start2,end2,"recent")
+                obs,_=monitor_observation(raw,start2,end2,received)
+                recent.append(dict(symbol=symbol,source=source,status=status,
+                    requested_delay_minutes=delay,received_at=received,query_end=end2,**obs))
+    if not recent:recent.append(dict(status="outside_regular_session_or_first_30_minutes",checked_at=t))
+    manifest=dict(test="yahoo_vs_alpaca",created_at=now,symbols=symbols,
+        sessions=[str(d.date()) for d in dates],frequencies=FEED_FREQUENCIES,
+        yahoo_mode="authorized_csv" if imported is not None else "authorized_yfinance",
+        yfinance_version=None if imported is not None else yf.__version__,
+        recent_probe=bool(regular),synthetic=yahoo_test_smoke(),
+        limitations=["Yahoo unofficial; permission and data license required",
+        "Alpaca RAW and Yahoo auto_adjust=False; split handling may differ, audit price scale",
+        "historical data may include later corrections; recent snapshot does not prove continuous latency",
+        "volume ratio is not market share for Yahoo; feed definitions may differ",
+        "oracle uses future SIP prices; not realized returns or a trained signal",
+        "no orders or production changes"])
+    files={"yahoo_test_manifesto.json":json.dumps(manifest,indent=2,default=str).encode(),
+        "yahoo_test_resumo.csv":csv(pd.DataFrame(summary)),
+        "yahoo_test_diario.csv":csv(report),"yahoo_test_checkpoints.csv":csv(detail),
+        "yahoo_test_suporte_comum.csv":csv(common),
+        "yahoo_test_barras_1min.csv":csv(pd.concat(minutes,ignore_index=True)),
+        "yahoo_test_requisicoes.csv":csv(pd.DataFrame(requests)),
+        "yahoo_test_recente.csv":csv(pd.DataFrame(recent))}
+    if OUT.exists():
+        with ZipFile(OUT) as z:
+            if z.testzip() is not None:raise ValueError("ZIP anterior corrompido")
+            hashes=json.loads(z.read("sha256.json"))
+            if any(hashlib.sha256(z.read(n)).hexdigest()!=h for n,h in hashes.items()):
+                raise ValueError("Hash anterior invalido")
+            prior={n:z.read(n) for n in z.namelist() if n!="sha256.json" and not n.startswith("yahoo_test_")}
+        prior.update(files);files=prior
+    return files
+
 
 if __name__=="__main__":
     OUT.parent.mkdir(parents=True,exist_ok=True)
@@ -1415,6 +1624,9 @@ if __name__=="__main__":
         LOGGER.addHandler(handler)
     try:
         import sys
+        if "--yahoo-self-test" in sys.argv:
+            print(yahoo_test_smoke())
+            sys.exit(0)
         if "--feed-monitor-self-test" in sys.argv:
             print(feed_test_smoke())
             print(monitor_smoke())
@@ -1428,9 +1640,10 @@ if __name__=="__main__":
             run_feed_monitor()
             sys.exit(0)
         feed_only="--feed-test" in sys.argv
-        files=run_feed_test() if feed_only else run()
+        yahoo_only="--yahoo-test" in sys.argv
+        files=run_yahoo_test() if yahoo_only else (run_feed_test() if feed_only else run())
         log("Pesquisa concluida. Gravando ZIP.")
-        prefix="feed_test_" if feed_only else ""
+        prefix="yahoo_test_" if yahoo_only else ("feed_test_" if feed_only else "")
         files[prefix+"execucao.log"]=LOG.read_bytes()
         files[prefix+"codigo_executado.py"]=Path(__file__).read_bytes()
         pack(files)
