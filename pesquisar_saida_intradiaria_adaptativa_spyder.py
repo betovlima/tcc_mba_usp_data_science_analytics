@@ -1693,6 +1693,297 @@ def run_yahoo_test():
         prior.update(files);files=prior
     return files
 
+# Rodada de optimal stopping: recompensa relativa ao HOLD oficial, liquida
+# dos dois lados. Sem volume/VWAP para manter compatibilidade potencial Yahoo.
+STOP_FEATURES=[x for x in FEATURES if x not in ("volume_rel","vwap_gap")]+KFEATURES+[
+    "rolling","peak_drawdown","efficiency","cusum_pos","cusum_neg","remaining_minutes"]
+STOP_METHODS=("optimal_stopping","lsmc","fitted_q_iteration","decision_focused","expected_shortfall",
+              "fixed_time")
+
+
+def stop_regressor(kind="ridge",alpha=.1):
+    from sklearn.pipeline import make_pipeline
+    from sklearn.impute import SimpleImputer
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import Ridge
+    from lightgbm import LGBMRegressor
+    if kind=="ridge":
+        return make_pipeline(SimpleImputer(strategy="median"),StandardScaler(),Ridge(alpha=30.))
+    params=dict(n_estimators=80,num_leaves=7,max_depth=3,min_child_samples=60,
+                learning_rate=.04,n_jobs=1,random_state=SEED,verbosity=-1)
+    if kind=="quantile":params.update(objective="quantile",alpha=alpha)
+    return LGBMRegressor(**params)
+
+
+def stop_x(d):
+    return d[STOP_FEATURES].replace([np.inf,-np.inf],np.nan)
+
+
+def stop_first_reward(day_codes,reward,score,n_days):
+    # Ordem cronologica: primeira venda ou nenhuma. Nunca maximiza futuro no replay.
+    first=np.full(n_days,len(reward),dtype=int)
+    selected=np.flatnonzero(np.isfinite(score)&(score>0))
+    np.minimum.at(first,day_codes[selected],selected)
+    actual=np.zeros(n_days)
+    mask=first<len(reward)
+    actual[mask]=reward[first[mask]]
+    return actual
+
+
+def stop_lsmc(tr,ev):
+    # Backward induction: payoff REALIZADO da politica futura de treino,
+    # regressao do valor de vender e de continuar por checkpoint.
+    result=pd.DataFrame(index=ev.index,columns=["sell","wait"],dtype=float)
+    continuation=pd.Series(0.,index=tr.session.unique())
+    for step in sorted(tr.minutes_elapsed.unique(),reverse=True):
+        a=tr[tr.minutes_elapsed.eq(step)];b=ev[ev.minutes_elapsed.eq(step)]
+        if len(a)<30:continue
+        realized_wait=a.session.map(continuation).to_numpy(float)
+        ms=stop_regressor();mw=stop_regressor()
+        x=stop_x(a)
+        ms.fit(x,a.reward);mw.fit(x,realized_wait)
+        ps=ms.predict(x);pw=np.maximum(0.,mw.predict(x))
+        chosen=np.where(ps>pw,a.reward.to_numpy(float),realized_wait)
+        continuation.loc[a.session.to_numpy()]=chosen
+        if len(b):
+            z=stop_x(b)
+            result.loc[b.index,"sell"]=ms.predict(z)
+            result.loc[b.index,"wait"]=np.maximum(0.,mw.predict(z))
+    return result
+
+
+def stop_fqi(tr,ev):
+    # FQI pooled: Q(vender) = recompensa terminal; Q(esperar) = valor
+    # da proxima oportunidade observada. Terminal = manter ate recompra, ganho 0.
+    x=stop_x(tr);z=stop_x(ev)
+    sell=stop_regressor("tree");sell.fit(x,tr.reward)
+    qs=sell.predict(x)
+    nxt=tr.groupby("session",sort=False).position.shift(-1).fillna(-1).astype(int).to_numpy()
+    active=nxt>=0
+    value=np.maximum(0.,qs)
+    wait=None
+    for _ in range(12):
+        y=np.zeros(len(tr));y[active]=value[nxt[active]]
+        wait=stop_regressor("tree");wait.fit(x,y)
+        qw=np.maximum(0.,wait.predict(x))
+        value=np.maximum(0.,np.maximum(qs,qw))
+    return pd.DataFrame(dict(sell=sell.predict(z),wait=np.maximum(0.,wait.predict(z))),index=ev.index)
+
+
+def stop_direct(tr,ev):
+    # Decision-focused policy search: otimiza diretamente o ganho log
+    # diario da PRIMEIRA venda, com regularizacao, sem ajustar no teste.
+    from scipy.optimize import differential_evolution
+    cols=["r6","vol12","peak_drawdown","k_slope","accel","remaining_minutes"]
+    a=tr[cols].replace([np.inf,-np.inf],np.nan)
+    b=ev[cols].replace([np.inf,-np.inf],np.nan)
+    median=a.median().fillna(0.)
+    scale=a.fillna(median).std().replace(0,1.).fillna(1.)
+    x=((a.fillna(median)-median)/scale).clip(-6,6).to_numpy()
+    z=((b.fillna(median)-median)/scale).clip(-6,6).to_numpy()
+    day_codes,days=pd.factorize(tr.session,sort=False)
+    reward=tr.reward.to_numpy(float)
+    def objective(w):
+        realized=stop_first_reward(day_codes,reward,x@w[1:]+w[0],len(days))
+        return -realized.mean()+.00005*np.mean(w[1:]**2)
+    opt=differential_evolution(objective,[(-3.,3.)]*(len(cols)+1),
+                               maxiter=25,popsize=6,seed=SEED,polish=False,workers=1)
+    zero=np.r_[-1.,np.zeros(len(cols))]
+    w=opt.x if objective(opt.x)<objective(zero) else zero
+    return z@w[1:]+w[0],dict(weights=dict(zip(["intercept"]+cols,map(float,w))),
+                             train_objective=float(objective(w)),search_evaluations=int(opt.nfev))
+
+
+def stop_es(tr,ev):
+    # Expected Shortfall condicional inferior de MANTER relativamente a venda.
+    # q estimado no primeiro bloco; excesso de perda no bloco posterior.
+    # ES_alpha = q - E[(q-Y)+|X]/alpha, alpha=10%.
+    days=sorted(tr.session.unique());mid=max(1,int(len(days)*.65))
+    a=tr[tr.session.isin(days[:mid])];b=tr[tr.session.isin(days[mid:])]
+    if len(a)<100 or len(b)<100:raise ValueError("Treino insuficiente para ES")
+    alpha=.1
+    quant=stop_regressor("quantile",alpha);quant.fit(stop_x(a),-a.reward)
+    q=quant.predict(stop_x(b));excess=np.maximum(0.,q+b.reward.to_numpy(float))
+    tail=stop_regressor("tree");tail.fit(stop_x(b),excess)
+    mean=stop_regressor("tree");mean.fit(stop_x(tr),-tr.reward)
+    z=stop_x(ev)
+    es=quant.predict(z)-np.maximum(0.,tail.predict(z))/alpha
+    return mean.predict(z),es
+
+
+def stop_predictions(f,oracle,tr_days,va_days,te_days,frequency):
+    # X de avaliacao depende exclusivamente das barras ate o checkpoint.
+    # Nao filtrar validacao/teste por cotacao de recompra futura ou escala de fechamento.
+    cols=["session","symbol","timestamp","minutes_elapsed"]
+    eligible=f[f.horario & f.r6.notna() & f.minutes_elapsed.mod(frequency).eq(0)].copy()
+    train=eligible[eligible.session.isin(tr_days)].merge(
+        oracle[["session","symbol","timestamp","ratio"]],on=["session","symbol","timestamp"],
+        how="inner",validate="one_to_one").sort_values(["session","timestamp"]).reset_index(drop=True)
+    train["reward"]=np.log(train.ratio)+np.log((1-COST)/(1+COST))
+    train=train[np.isfinite(train.reward)].reset_index(drop=True)
+    train["position"]=np.arange(len(train))
+    ev=eligible[eligible.session.isin(va_days+te_days)].sort_values(["session","timestamp"]).reset_index(drop=True)
+    if len(train)<100 or ev.empty:raise ValueError(f"Checkpoints insuficientes {frequency}")
+    out=ev[cols].copy()
+    # Regra de uma etapa: valor esperado de sair agora versus manter ate recompra.
+    model=stop_regressor("tree");model.fit(stop_x(train),train.reward)
+    out["optimal_stopping"]=model.predict(stop_x(ev))
+    lsmc=stop_lsmc(train,ev);out["lsmc"]=lsmc.sell-lsmc.wait
+    q=stop_fqi(train,ev);out["fitted_q_iteration"]=q.sell-q.wait
+    out["decision_focused"],direct=stop_direct(train,ev)
+    out["hold_mean"],out["hold_es"]=stop_es(train,ev)
+    out["lsmc_sell"]=lsmc.sell;out["lsmc_wait"]=lsmc.wait
+    out["fqi_sell"]=q.sell;out["fqi_wait"]=q.wait
+    # Recompensa retrospectiva somente para auditoria, depois das previsoes.
+    out=out.merge(oracle[["session","symbol","timestamp","ratio"]],on=["session","symbol","timestamp"],
+                  how="left",validate="one_to_one")
+    out["actual_reward"]=np.log(out.ratio)+np.log((1-COST)/(1+COST))
+    out["frequency"]=frequency
+    return out,dict(frequency=frequency,train_checkpoints=len(train),train_sessions=int(train.session.nunique()),
+                    evaluation_checkpoints=len(ev),direct=direct,fqi_iterations=12)
+
+
+def stop_signal(pred,name,parameter):
+    if parameter is None:return {}
+    if name=="fixed_time":
+        # Baseline simples: somente o checkpoint exato, sem procurar futuro.
+        score=np.where(pred.minutes_elapsed.eq(parameter),1.,-1.)
+    elif name=="expected_shortfall":
+        score=-pred.hold_mean+float(parameter)*(-pred.hold_es).clip(lower=0)
+    else:
+        score=pred[name]
+    return {(r.session,r.symbol,r.timestamp):-float(v) for r,v in zip(pred.itertuples(index=False),score)
+            if np.isfinite(v) and v>0}
+
+
+def stop_smoke():
+    day=np.array([0,0,1,1,2]);reward=np.array([-.01,.2,.03,.08,.05])
+    score=np.array([1.,1.,-1.,1.,-1.])
+    np.testing.assert_allclose(stop_first_reward(day,reward,score,3),[-.01,.08,0.])
+    t=pd.Timestamp("2026-07-28T14:00:00Z")
+    p=pd.DataFrame(dict(session=["x","x"],symbol=["D","D"],timestamp=[t,t+pd.Timedelta(minutes=5)],
+        minutes_elapsed=[30,35],optimal_stopping=[-.1,.02],hold_mean=[.01,-.01],hold_es=[-.02,-.03]))
+    assert len(stop_signal(p,"optimal_stopping",0))==1
+    assert not stop_signal(p,"optimal_stopping",None)
+    assert len(stop_signal(p,"fixed_time",30))==1
+    assert len(stop_signal(p,"expected_shortfall",0))==1
+    return "optimal_stopping_policy_smoke_passed"
+
+
+def run_optimal_stopping():
+    smoke_result=stop_smoke()
+    pos,bars,sessions,coverage,source=load_data()
+    f=frame_features(bars,pos)
+    tr,va,te=split(pos)
+    validation=pos[pos.session.isin(va)];test=pos[pos.session.isin(te)]
+    prior=float(test.iloc[0].ref_previous_equity)
+    official,full,_=anchored_replay(pos,sessions,{},capital=source["initial"])
+    np.testing.assert_allclose(full.equity,pos.strategy_equity,rtol=1e-10)
+    baseline,bd,_=anchored_replay(test,sessions,{},capital=prior)
+    vb,_,_=anchored_replay(validation,sessions,{})
+    oracle=oracle_candidates(f,sessions)
+    oracle_rows=[];oracle_curves=[];forecasts={};train_audit=[]
+    for frequency in FREQUENCIES:
+        for period,scope,capital in (("validation",validation,CAPITAL),("fold3",test,prior),("full_hindsight",pos,source["initial"])):
+            sig,best=oracle_map(oracle[oracle.session.isin(scope.session)],frequency,COST)
+            stat,d,_=anchored_replay(scope,sessions,sig,capital=capital)
+            oracle_rows.append(dict(period=period,frequency=frequency,covered_sessions=len(best),
+                opportunities=int(best.opportunity.sum()),**stat))
+            oracle_curves.append(d.assign(period=period,frequency=frequency))
+        log(f"Optimal stopping: treinamento frequencia {frequency} minutos")
+        forecasts[frequency],audit=stop_predictions(f,oracle,tr,va,te,frequency)
+        train_audit.append(audit)
+    grid=[];selected={};maps={"Control_MCT_anchored":{}}
+    summary=[dict(method="Control_MCT_anchored",frequency=None,parameter=None,**baseline)]
+    curves=[bd.assign(method="Control_MCT_anchored")];events=[]
+    for name in STOP_METHODS:
+        # HOLD concorre na validacao; empate favorece nenhuma intervencao.
+        def objective(st):
+            return np.log(st["capital_final"]/CAPITAL)+.5*st["max_drawdown_daily"] if st["valid_valuation"] else -np.inf
+        best=(objective(vb),None,None)
+        grid.append(dict(method=name,frequency=None,parameter=None,objective=best[0],**vb))
+        for frequency,p in forecasts.items():
+            v=p[p.session.isin(va)]
+            parameters=(0.,.25,.5,1.) if name=="expected_shortfall" else (
+                tuple(x for x in (30,60,90,120,180,240,300) if x%frequency==0) if name=="fixed_time" else (0.,))
+            for param in parameters:
+                sig=stop_signal(v,name,param)
+                stat,_,_=anchored_replay(validation,sessions,sig)
+                obj=objective(stat)
+                grid.append(dict(method=name,frequency=frequency,parameter=param,objective=obj,**stat))
+                if obj>best[0]+1e-12:best=(obj,frequency,param)
+        _,frequency,param=best
+        selected[name]=dict(frequency=frequency,parameter=param)
+        sig={} if frequency is None else stop_signal(forecasts[frequency][forecasts[frequency].session.isin(te)],name,param)
+        maps[name]=sig
+        stat,d,e=anchored_replay(test,sessions,sig,capital=prior)
+        summary.append(dict(method=name,frequency=frequency,parameter=param,**stat))
+        curves.append(d.assign(method=name))
+        if not e.empty:events.append(e.assign(method=name))
+        log(f"{name}: frequencia={frequency}, parametro={param}, final={stat['capital_final']:.2f}, vendas={stat['sessions_with_exit']}")
+    result=pd.DataFrame(summary)
+    result["fold3_rebased_10000"]=result.capital_final/prior*CAPITAL
+    result["delta_control_usd"]=result.capital_final-baseline["capital_final"]
+    result["delta_control_pct"]=100*(result.capital_final/baseline["capital_final"]-1)
+    ceilings={r["frequency"]:r["capital_final"] for r in oracle_rows if r["period"]=="fold3"}
+    result["oracle_final"]=result.frequency.map(ceilings)
+    denom=np.log(result.oracle_final/baseline["capital_final"])
+    result["fraction_oracle_log_gain"]=np.log(result.capital_final/baseline["capital_final"])/denom.where(denom>0)
+    pre=full[~full.session.isin(te)]
+    full_curves=pd.concat([pd.concat([pre.assign(method=d.method.iloc[0]),d],ignore_index=True) for d in curves],ignore_index=True)
+    full_stats=[]
+    for name,d in full_curves.groupby("method",sort=False):
+        eq=d.equity.to_numpy(float);rr=d.ret.to_numpy(float)
+        valid=np.isfinite(eq).all() and np.isfinite(rr).all()
+        peaks=np.maximum.accumulate(np.r_[source["initial"],eq])[1:]
+        full_stats.append(dict(method=name,full_max_drawdown=float((eq/peaks-1).min()) if valid else np.nan,
+            full_sharpe=float(rr.mean()/rr.std(ddof=1)*np.sqrt(252)) if valid and rr.std(ddof=1)>0 else np.nan))
+    result=result.merge(pd.DataFrame(full_stats),on="method",how="left")
+    restricted=[];stress=[];restricted_curves=[];restricted_events=[]
+    for name,sig in maps.items():
+        log(f"Optimal stopping: replay liquidez {name}")
+        stat,d,e=replay(test,sessions,sig)
+        restricted.append(dict(method=name,**stat));restricted_curves.append(d.assign(method=name))
+        if not e.empty:restricted_events.append(e.assign(method=name))
+        for bps in (5,10,25,50):
+            st,_,_=anchored_replay(test,sessions,sig,capital=prior,cost=bps/10000)
+            stress.append(dict(method=name,extra_cost_bps=bps,**st))
+    manifest=dict(status="exploratory_completed",source=source,smoke=smoke_result,
+        train=tr,validation=va,test=te,selected=selected,training_audit=train_audit,
+        features=STOP_FEATURES,capital_before_fold3=prior,cost_per_side=COST,
+        cache_errors=sessions.errors,cache_hashes=sessions.hashes,
+        limitations=["fold3 repeatedly inspected; independent future evaluation required",
+         "SIP historical features only, no Yahoo transfer validation or live availability proof",
+         "optimal_stopping is one-step hold-to-reentry regression baseline; LSMC and FQI approximate dynamic policies",
+         "LSMC train continuation fitted in-sample; FQI bootstrapped 12 iterations, no convergence guarantee",
+         "decision-focused direct search regularized in train; ES uses chronological train subsplit",
+         "no independent closing Winner signal; same asset reentry at final 5min bar open",
+         "next observed open fill proxy; no quote/spread or processing latency guarantee",
+         "training reward only on reconciled observable oracle checkpoints; evaluation signals not filtered by future scale",
+         "one exit per day; no intraday rotations; no fixed price stop; fixed time comparator only",
+         "all models may select HOLD in validation; no selection on fold3"])
+    files={"optimal_stop_manifesto.json":json.dumps(manifest,indent=2,default=str).encode(),
+        "optimal_stop_comparacao.csv":csv(result),"optimal_stop_validacao.csv":csv(pd.DataFrame(grid)),
+        "optimal_stop_oracle.csv":csv(pd.DataFrame(oracle_rows)),
+        "optimal_stop_oracle_curvas.csv":csv(pd.concat(oracle_curves,ignore_index=True)),
+        "optimal_stop_previsoes.csv":csv(pd.concat(forecasts.values(),ignore_index=True)),
+        "optimal_stop_patrimonio.csv":csv(full_curves),
+        "optimal_stop_ordens.csv":csv(pd.concat(events,ignore_index=True) if events else pd.DataFrame()),
+        "optimal_stop_cobertura.csv":csv(coverage),
+        "optimal_stop_liquidez.csv":csv(pd.DataFrame(restricted)),
+        "optimal_stop_liquidez_curvas.csv":csv(pd.concat(restricted_curves,ignore_index=True)),
+        "optimal_stop_liquidez_ordens.csv":csv(pd.concat(restricted_events,ignore_index=True) if restricted_events else pd.DataFrame()),
+        "optimal_stop_custos.csv":csv(pd.DataFrame(stress))}
+    if OUT.exists():
+        with ZipFile(OUT) as z:
+            if z.testzip() is not None:raise ValueError("ZIP anterior corrompido")
+            hashes=json.loads(z.read("sha256.json"))
+            if any(hashlib.sha256(z.read(n)).hexdigest()!=h for n,h in hashes.items()):
+                raise ValueError("Hash anterior invalido")
+            prior_files={n:z.read(n) for n in z.namelist() if n!="sha256.json" and not n.startswith("optimal_stop_")}
+        prior_files.update(files);files=prior_files
+    return files
+
 
 if __name__=="__main__":
     OUT.parent.mkdir(parents=True,exist_ok=True)
@@ -1703,6 +1994,9 @@ if __name__=="__main__":
         LOGGER.addHandler(handler)
     try:
         import sys
+        if "--optimal-stop-self-test" in sys.argv:
+            print(stop_smoke())
+            sys.exit(0)
         if "--yahoo-self-test" in sys.argv:
             print(yahoo_test_smoke())
             sys.exit(0)
@@ -1720,9 +2014,10 @@ if __name__=="__main__":
             sys.exit(0)
         feed_only="--feed-test" in sys.argv
         yahoo_only="--yahoo-test" in sys.argv
-        files=run_yahoo_test() if yahoo_only else (run_feed_test() if feed_only else run())
+        stop_only="--optimal-stop" in sys.argv
+        files=run_optimal_stopping() if stop_only else (run_yahoo_test() if yahoo_only else (run_feed_test() if feed_only else run()))
         log("Pesquisa concluida. Gravando ZIP.")
-        prefix="yahoo_test_" if yahoo_only else ("feed_test_" if feed_only else "")
+        prefix="optimal_stop_" if stop_only else ("yahoo_test_" if yahoo_only else ("feed_test_" if feed_only else ""))
         files[prefix+"execucao.log"]=LOG.read_bytes()
         files[prefix+"codigo_executado.py"]=Path(__file__).read_bytes()
         pack(files)
