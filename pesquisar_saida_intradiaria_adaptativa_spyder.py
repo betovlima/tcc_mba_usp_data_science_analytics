@@ -2683,6 +2683,79 @@ def run_oracle_learning():
 
 
 
+def run_oracle_export():
+    """Freeze the exact experimental J2/60-minute logistic candidate.
+    Train only on the original development prefix; never fit on fold3.
+    JSON numeric parameters, no pickle. Export in the existing ZIP.
+    """
+    log("Exportando candidato Oracle J2/60min; sem treinamento no fold3")
+    pos,bars,sessions,coverage,source=load_data()
+    f=frame_features(bars,pos)
+    contexts=prior_context(pos,sessions)
+    ctx=overnight_context(pos,sessions)
+    wf=window_frame(f,"J2",contexts).merge(oracle_daily_context(pos),on=["session","symbol"],how="left",validate="many_to_one")
+    tr,va,te=split(pos)
+    dev,_=oracle_walk_plan(pos,tr,va)
+    labels=oracle_labels(overnight_oracle_candidates(wf,sessions,ctx),60)
+    eligible=wf[wf.stop_eligible&wf.minutes_elapsed.mod(60).eq(0)].copy()
+    a=oracle_labeled_frame(eligible,labels,dev,dev).sort_values(["session","timestamp"]).reset_index(drop=True)
+    cols=oracle_features(eligible)
+    x=a[cols].replace([np.inf,-np.inf],np.nan)
+    keep=x.columns[x.notna().any()].tolist()
+    x=x[keep]
+    if a.good.nunique()!=2:raise ValueError("Treino sem as duas classes")
+    model=oracle_classifier("logistic")
+    model.fit(x,a.good)
+    imputer=model.named_steps["simpleimputer"]
+    scaler=model.named_steps["standardscaler"]
+    classifier=model.named_steps["logisticregression"]
+    artifact=dict(schema="oracle_j2_logistic_v1",window="J2",prior_minutes=60,decision_minutes=60,
+        bar_minutes=5,probability_threshold=.8,strict_greater_than=True,source_feed="sip",
+        adjustment="split",cash_policy="overnight_until_next_winner_open",
+        features=keep,imputer_median=imputer.statistics_.tolist(),
+        scaler_mean=scaler.mean_.tolist(),scaler_scale=scaler.scale_.tolist(),
+        coefficients=classifier.coef_[0].tolist(),intercept=float(classifier.intercept_[0]),
+        classes=classifier.classes_.tolist(),training_rows=len(a),training_first=dev[0],
+        training_last=dev[-1],source=source,experimental=True,
+        limitations=["candidate identified after fold3 inspection","probabilities uncalibrated","no live feed transfer validation"])
+    z=eligible[eligible.session.isin(te)].sort_values(["session","timestamp"]).reset_index(drop=True)
+    raw=z[keep].replace([np.inf,-np.inf],np.nan).to_numpy(float)
+    imputed=np.where(np.isfinite(raw),raw,np.asarray(artifact["imputer_median"]))
+    scaled=(imputed-np.asarray(artifact["scaler_mean"]))/np.asarray(artifact["scaler_scale"])
+    logits=scaled@np.asarray(artifact["coefficients"])+artifact["intercept"]
+    from scipy.special import expit
+    expected=model.predict_proba(z[keep].replace([np.inf,-np.inf],np.nan))[:,1]
+    np.testing.assert_allclose(expit(logits),expected,rtol=1e-10,atol=1e-12)
+    # Compare against previously exported J2/60m test probabilities if present.
+    files={}
+    if OUT.exists():
+        with ZipFile(OUT) as old:
+            if old.testzip() is not None:raise ValueError("ZIP anterior corrompido")
+            hashes=json.loads(old.read("sha256.json"))
+            if any(hashlib.sha256(old.read(n)).hexdigest()!=h for n,h in hashes.items()):
+                raise ValueError("Hash anterior invalido")
+            files={n:old.read(n) for n in old.namelist() if n!="sha256.json" and not n.startswith("oracle_export_")}
+            if "oracle_learning_previsoes.csv" in old.namelist():
+                prev=pd.read_csv(io.BytesIO(old.read("oracle_learning_previsoes.csv")))
+                prev=prev[(prev.window=="J2")&(prev.frequency==60)].copy()
+                prev["timestamp"]=pd.to_datetime(prev.timestamp,utc=True)
+                check=z[["session","symbol","timestamp"]].assign(probability=expected).merge(
+                    prev[["session","symbol","timestamp","p_logistic"]],on=["session","symbol","timestamp"],validate="one_to_one")
+                if len(check)!=len(z) or len(check)!=len(prev):
+                    raise ValueError("Suporte do candidato mudou; nao publicar modelo diferente silenciosamente")
+                np.testing.assert_allclose(check.probability,check.p_logistic,rtol=1e-8,atol=1e-10)
+                artifact["previous_prediction_parity_rows"]=len(check)
+    # Fixtures contain only normalized price/strategy features, no credentials.
+    sample=z[keep].replace([np.inf,-np.inf],np.nan).head(12)
+    fixtures=[dict(features={c:(float(v) if pd.notna(v) else None) for c,v in row.items()},
+                   probability=float(expected[i])) for i,(_,row) in enumerate(sample.iterrows())]
+    artifact["fixtures"]=fixtures
+    files["oracle_export_model.json"]=json.dumps(artifact,ensure_ascii=False,indent=2,allow_nan=False).encode()
+    log(f"Exportacao JSON concluida: {len(keep)} indicadores, {len(a)} amostras; paridade numerica OK")
+    return files
+
+
+
 if __name__=="__main__":
     OUT.parent.mkdir(parents=True,exist_ok=True)
     LOGGER.handlers.clear()
@@ -2722,9 +2795,10 @@ if __name__=="__main__":
         yahoo_only="--yahoo-test" in sys.argv
         stop_only="--optimal-stop" in sys.argv
         learn_only="--oracle-learning" in sys.argv
-        files=run_oracle_learning() if learn_only else (run_optimal_stopping() if stop_only else (run_yahoo_test() if yahoo_only else (run_feed_test() if feed_only else run())))
+        export_only="--oracle-export" in sys.argv
+        files=run_oracle_export() if export_only else (run_oracle_learning() if learn_only else (run_optimal_stopping() if stop_only else (run_yahoo_test() if yahoo_only else (run_feed_test() if feed_only else run()))))
         log("Pesquisa concluida. Gravando ZIP.")
-        prefix="oracle_learning_" if learn_only else ("optimal_stop_" if stop_only else ("yahoo_test_" if yahoo_only else ("feed_test_" if feed_only else "")))
+        prefix="oracle_export_" if export_only else ("oracle_learning_" if learn_only else ("optimal_stop_" if stop_only else ("yahoo_test_" if yahoo_only else ("feed_test_" if feed_only else ""))))
         files[prefix+"execucao.log"]=LOG.read_bytes()
         files[prefix+"codigo_executado.py"]=Path(__file__).read_bytes()
         pack(files)
