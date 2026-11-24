@@ -1,7 +1,7 @@
 """TCC - camada 2 HOLD/CASH adaptativa. Spyder F5, somente dados historicos.
-Reutiliza a coleta e o snapshot da pesquisa anterior; nao altera Winner.
-Execucao modelada na abertura seguinte (primeiro fill possivel 09:35 NY),
-sem recompra no dia da saida, sem fill retroativo no fechamento.
+Reutiliza cache SPLIT/SIP e exportacao oficial do MCT; nao altera Winner.
+Uma venda de protecao e recompra programada no open da ultima barra.
+Nao presume sinal Winner independente antes do fechamento.
 """
 from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
@@ -501,7 +501,7 @@ def signal_map(preds, risk, frequency=60):
     preds=preds[preds.minutes_elapsed.mod(frequency).eq(0)] if "minutes_elapsed" in preds else preds
     # Permanecer vs vender: vender custa COST; sem stop por % de preco.
     # Vender e recomprar tem custo dos dois lados.
-    score = preds["mean"] - risk*preds["risk"] - 2*np.log(1-COST)
+    score = preds["mean"] - risk*preds["risk"] + np.log((1+COST)/(1-COST))
     if "expected_mfe" in preds:
         # Potencial favoravel estimado nao e lucro realizavel; peso fixo moderado.
         score += .25*preds.expected_mfe.clip(lower=0)*preds.get("p_recovery",1.)
@@ -778,6 +778,13 @@ def smoke():
     scaled={key:g.assign(open=g.open*40,close=g.close*40) for key,g in m.items()}
     c,_,_=anchored_replay(ref,scaled,{("2026-07-28","DEMO",ts[11]):-1.},cost=0.)
     assert np.isclose(b["capital_final"],c["capital_final"])
+    # Oracle nunca escolhe fill na propria barra do sinal nem no open de recompra.
+    demo=g.assign(session="2026-07-28",symbol="DEMO",horario=False,minutes_elapsed=np.arange(1,79)*5)
+    demo.loc[[11,76],"horario"]=True
+    oc=oracle_candidates(demo,m)
+    assert len(oc)==1 and oc.fill_timestamp.iloc[0]==ts[12]
+    om,od=oracle_map(oc,60,0.)
+    assert len(om)==1 and od.opportunity.iloc[0]
     return "synthetic_passed_not_market_result"
 
 
@@ -867,6 +874,10 @@ def run():
     result["overlay_applied_only_fold3"]=True
     result["delta_control_usd"]=result.capital_final-baseline["capital_final"]
     result["delta_control_pct"]=100*(result.capital_final/baseline["capital_final"]-1)
+    ceiling={r["frequency"]:r["capital_final"] for r in oracle_summaries if r["period"]=="fold3_hindsight"}
+    result["oracle_covered_final"]=result.frequency.map(ceiling)
+    oracle_gain=np.log(result.oracle_covered_final/baseline["capital_final"])
+    result["fraction_oracle_log_gain"]=np.log(result.capital_final/baseline["capital_final"])/oracle_gain.where(oracle_gain>0)
     # Replay separado com liquidez, a MESMA politica congelada. Pode ficar
     # residual, mas sempre busca cotacoes do ticker realmente mantido.
     for name,sig in maps.items():
