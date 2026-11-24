@@ -86,6 +86,19 @@ python pesquisar_saida_intradiaria_adaptativa_spyder.py --yahoo-test --yahoo-aut
 python pesquisar_saida_intradiaria_adaptativa_spyder.py --yahoo-test --yahoo-csv cotacoes_yahoo.csv
 ```
 
-No Spyder use %run com os mesmos argumentos. Usa ate cinco pregoes completos dentro dos ultimos sete dias corridos, DNN/CAPR/MKSI/NVDA/AMS, candles de 1 minuto agregados em 1/5/15/30/60 minutos. Alpaca RAW IEX/SIP e Yahoo auto_adjust=False; auditoria de escala (nao e stop) exclui sessoes sem conciliacao do Oracle. Mede cobertura, diferencas de preco/volume/extremos/horarios, idade da ultima observacao, concordancia direcional e erros em suporte comum dos tres feeds. Oracle retrospectivo usa fills SIP e mesmos dias comparaveis, nao constitui modelo operacional. Se mercado aberto apos 30 minutos, modo direto testa tambem snapshots recentes Yahoo e IEX e SIP atrasado 20 minutos. CSV nao testa disponibilidade Yahoo recente. Snapshot unico nao mede latencia continua.
+No Spyder use %run com os mesmos argumentos. Usa ate cinco pregoes completos dentro dos ultimos sete dias corridos, por padrao todos os ativos elegiveis do _metrics.json da exportacao MCT indicada por --mct-zip ou pela referencia padrao. A exportacao atual possui 75 ativos. Candles de 1 minuto agregados em 1/5/15/30/60 minutos. --yahoo-pilot restringe aos cinco ativos do piloto. Alpaca RAW IEX/SIP e Yahoo auto_adjust=False; auditoria de escala (nao e stop) exclui sessoes sem conciliacao do Oracle. Mede cobertura, diferencas de preco/volume/extremos/horarios, idade da ultima observacao, concordancia direcional e erros em suporte comum dos tres feeds. Oracle retrospectivo usa fills SIP e mesmos dias comparaveis, nao constitui modelo operacional. Se mercado aberto apos 30 minutos, modo direto testa tambem snapshots recentes Yahoo e IEX e SIP atrasado 20 minutos para os cinco ativos do piloto e o ultimo ativo selecionado no backtest. --yahoo-recent-all amplia para todos, em consultas sequenciais, nao simultaneas. --yahoo-historical-only desabilita snapshots recentes. CSV nao testa disponibilidade Yahoo recente. Snapshot unico nao mede latencia continua.
 
 Arquivos yahoo_test_* sao adicionados ao mesmo ZIP preservando resultados anteriores validos. Nao altera MCT, nao envia ordens, nao contrata planos. Nao redistribua dados de terceiros sem permissao aplicavel. A execucao normal e o monitor Alpaca nao mudam.
+
+### Diagnostico do universo completo
+
+```bash
+# Somente se a coleta direta for autorizada pelo provedor:
+python pesquisar_saida_intradiaria_adaptativa_spyder.py --yahoo-test --yahoo-authorized --yahoo-historical-only
+# Ou dados Yahoo autorizados em CSV:
+python pesquisar_saida_intradiaria_adaptativa_spyder.py --yahoo-test --yahoo-csv cotacoes_yahoo.csv --yahoo-historical-only
+```
+
+A referencia MCT original deve estar na raiz do TCC (ou indicar --mct-zip CAMINHO). O manifesto inclui hash, lista completa e quantidade de ativos, bem como contadores de consultas historicas. Com 75 ativos, 225 consultas logicas previstas (75 por fonte; retentativas internas podem aumentar chamadas). Se Yahoo sinalizar rate limit, as consultas Yahoo restantes sao marcadas como skipped; nao tentar contornar restricao. Nenhum resultado parcial significa cobertura zero real do mercado. 
+
+Novos arquivos: yahoo_test_universo.csv (uma linha por ativo, status das tres consultas, cobertura por frequencia, comparacao em suporte comum, escala, Oracle, ocorrencias historicas na carteira e anomalias de volume); yahoo_test_auditoria_volume.csv (por ativo, sessao e fonte, razoes de volume no mesmo minuto, mediana, p95, maximo, contagens acima de 10x e 100x, horario do maximo). Razoes extremas sao flags de auditoria e nao prova de volume acumulado; nao corrigir ou imputar automaticamente. Nenhum ativo e excluido silenciosamente. Dados historicos nao certificam disponibilidade ao vivo. Mesmo ZIP, sem alterar a estrategia ou criar novas versoes.
