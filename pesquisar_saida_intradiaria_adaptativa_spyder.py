@@ -109,6 +109,8 @@ def load_reference():
     p["ref_close"] = p.session.map(final.execution_price).combine_first(p.ref_close)
     p["ref_buy_open"] = p.session.map(buys.execution_price)
     p["ref_sell_open"] = p.session.map(sells.execution_price)
+    p["ref_sell_fee"] = p.session.map(sells.total_fee)
+    p["ref_sell_asset"] = p.session.map(sells.asset)
     p["ref_previous_equity"] = p.strategy_equity.shift(fill_value=initial)
     p["ref_factor"] = p.strategy_equity/p.ref_previous_equity
     p["ref_previous_close"] = p.ref_close.shift()
@@ -510,7 +512,7 @@ def signal_map(preds, risk, frequency=60):
             for r,v in zip(preds.itertuples(index=False),score) if np.isfinite(v)}
 
 
-def replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
+def replay(pos,sessions,signals,capital=CAPITAL,cost=COST,overnight=False):
     cash,qty,held,mark = float(capital),0.,None,None
     equity0 = float(capital)
     peak = equity0
@@ -550,7 +552,7 @@ def replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
                 return (float(p) if valid(p) else None,
                         PARTICIPATION*float(volume) if valid(volume) else 0.)
             # Concluir venda residual durante todo o pregao; novas compras so na abertura.
-            if qty>1e-10 and held!=target:
+            if qty>1e-10 and held!=target and (opening or not overnight):
                 px,capacity = quote(held)
                 if px is not None:
                     mark = px
@@ -562,7 +564,7 @@ def replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
                     if qty<=1e-10:
                         qty=0.;held=None;mark=None
             # Saida da camada 2: ordem posterior ao sinal; fills parciais.
-            if pending and not preclose and qty>1e-10 and held==target:
+            if pending and (overnight or not preclose) and qty>1e-10 and held==target:
                 px,capacity = quote(held)
                 if px is not None:
                     mark=px
@@ -576,7 +578,7 @@ def replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
                         qty=0.;held=None;mark=None
             # Recompra programada do alvo conhecido no inicio do dia.
             # A capacidade do candle anterior limita o fill, inclusive na recompra.
-            if ((opening and not triggered) or (preclose and triggered)) and held in (None,target) and cash>1e-8:
+            if ((opening and not triggered) or (not overnight and preclose and triggered)) and held in (None,target) and cash>1e-8:
                 px,capacity=quote(target)
                 if px is not None:
                     q=min(cash/(px*(1+cost)),capacity)
@@ -592,7 +594,7 @@ def replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
                 value=cash+qty*(mark or 0.)
                 peak=max(peak,value)
                 s=signals.get((day,held,t))
-                if held==target and not triggered and s is not None and s<0 and tg is not None and t+pd.Timedelta(minutes=5)<tg.timestamp.iloc[-1]:
+                if held==target and not triggered and s is not None and s<0 and tg is not None and (t<tg.timestamp.iloc[-1] if overnight else t+pd.Timedelta(minutes=5)<tg.timestamp.iloc[-1]):
                     triggered=True;pending=True
                     events.append(dict(session=day,symbol=held,timestamp=t+pd.Timedelta(minutes=5),
                                        side="signal_exit",qty=0.,price=np.nan,fee=0.,score=s))
@@ -1701,6 +1703,180 @@ STOP_METHODS=("optimal_stopping","lsmc","fitted_q_iteration","decision_focused",
               "fixed_time")
 
 
+
+def overnight_context(pos,sessions):
+    """Referencias conhecidas apenas retrospectivamente. Nenhum filtro de
+    sinal usa o preco da abertura seguinte, fechamento ou ticker futuro."""
+    ctx={}
+    records=list(pos.itertuples(index=False))
+    for i,r in enumerate(records):
+        key=(r.session,r.symbol)
+        info=dict(session=r.session,symbol=r.symbol,ref_equity=float(r.strategy_equity),
+                  close=float(r.ref_close),qty=float(r.ref_qty),cash=float(r.ref_cash),
+                  next_session=None,next_symbol=None,next_open=np.nan,
+                  next_sell_fee=np.nan,next_mode="terminal")
+        if i+1<len(records):
+            n=records[i+1]
+            info.update(next_session=n.session,next_symbol=n.symbol)
+            if n.symbol!=r.symbol:
+                valid=(str(n.ref_sell_asset).upper()==r.symbol and pd.notna(n.ref_sell_open)
+                       and n.ref_sell_open>0 and pd.notna(n.ref_sell_fee))
+                info.update(next_mode="official_rotation",next_open=float(n.ref_sell_open) if valid else np.nan,
+                            next_sell_fee=float(n.ref_sell_fee) if valid else np.nan)
+            else:
+                g=sessions.get((n.session,r.symbol))
+                # Exigir open da primeira barra regular; nao substituir por
+                # uma cotacao posterior se a abertura estiver ausente.
+                opening=np.nan
+                if g is not None and not g.empty:
+                    ts=g.timestamp.iloc[0].tz_convert("America/New_York")
+                    if ts.hour==9 and ts.minute==30 and getattr(sessions,"scale_ok",{}).get((n.session,r.symbol),True):
+                        opening=float(g.open.iloc[0])
+                info.update(next_mode="same_asset",next_open=opening,next_sell_fee=0.)
+        ctx[key]=info
+    return ctx
+
+
+def overnight_factors(info,sale,cost,terminal=False):
+    # Dia da saida: patrimonio efetivamente em caixa comparado a marca
+    # oficial ao fechamento. No proximo dia: retirar a exposicao overnight
+    # da referencia e cobrar compra adicional APENAS quando Control mantinha.
+    # Em rotacao, compra oficial ja esta no fator Control; venda oficial
+    # e substituida pela venda intradiaria, com taxa original conhecida.
+    cash,qty,equity=info["cash"],info["qty"],info["ref_equity"]
+    if not all(np.isfinite(x) for x in (cash,qty,equity,sale)) or min(qty,equity,sale)<=0:
+        return np.nan,np.nan
+    close_factor=(cash+qty*sale*(1-cost))/equity
+    if terminal or info["next_mode"]=="terminal":return close_factor,1.
+    morning=cash+qty*info["next_open"]
+    if not np.isfinite(morning) or morning<=0:return close_factor,np.nan
+    if info["next_mode"]=="official_rotation":
+        morning-=info["next_sell_fee"]
+        next_factor=equity/morning if morning>0 else np.nan
+    else:
+        next_factor=equity/morning/(1+cost)
+    return close_factor,next_factor
+
+
+def overnight_replay(pos,sessions,signals,ctx,capital=CAPITAL,cost=COST):
+    eq=float(capital);daily=[];events=[];invalid=False;pending=None
+    by_day={}
+    for (day,symbol,ts),score in signals.items():
+        if score<0 and np.isfinite(score):by_day.setdefault((day,symbol),[]).append((ts,score))
+    records=list(pos.itertuples(index=False))
+    for i,r in enumerate(records):
+        key=(r.session,r.symbol);factor=float(r.ref_factor);prev=eq
+        status="hold";sale=None;adv=np.nan;cash_close=False;opening_factor=1.;sale_factor=1.
+        if pending is not None:
+            info,opening_factor=pending
+            if info["next_session"]!=r.session or not np.isfinite(opening_factor):
+                invalid=True;status="missing_next_open"
+            else:
+                factor*=opening_factor
+                events.append(dict(session=r.session,symbol=r.symbol,side="buy_winner_next_open",
+                    previous_symbol=info["symbol"],timestamp=pd.Timestamp(r.session+" 09:30",tz="America/New_York").tz_convert("UTC"),
+                    opening_factor=opening_factor))
+            pending=None
+        candidates=by_day.get(key,[])
+        if candidates and not invalid:
+            ts,score=min(candidates,key=lambda p:p[0]);g=sessions.get(key)
+            if g is None or g.empty:invalid=True;status="missing_signal_session"
+            else:
+                after=g[(g.timestamp>ts)&g.open.notna()&g.open.gt(0)]
+                if after.empty:status="signal_without_fill"
+                elif not getattr(sessions,"scale_ok",{}).get(key,True):
+                    invalid=True;status="unreconciled_session"
+                else:
+                    fill=after.iloc[0];sale=float(fill.open)
+                    info=ctx[key];terminal=i==len(records)-1
+                    sale_factor,nf=overnight_factors(info,sale,cost,terminal)
+                    if not np.isfinite(sale_factor):invalid=True;status="invalid_sale_value"
+                    else:
+                        factor*=sale_factor;cash_close=True;status="sold_to_cash"
+                        adv=sale_factor*nf-1 if np.isfinite(nf) else np.nan
+                        if not terminal:pending=(info,nf)
+                        events.append(dict(session=r.session,symbol=r.symbol,side="sell_protection",
+                            signal_timestamp=ts+pd.Timedelta(minutes=5),timestamp=fill.timestamp,
+                            price=sale,score=score,sale_factor=sale_factor,
+                            next_open_reference=info["next_open"],next_mode=info["next_mode"],
+                            roundtrip_advantage=adv))
+        eq=eq*factor if not invalid else np.nan
+        daily.append(dict(session=r.session,target=r.symbol,equity=eq,
+            ret=factor-1 if not invalid else np.nan,reference_factor=r.ref_factor,
+            exit_factor=sale_factor,opening_factor=opening_factor,exit_price=sale,status=status,
+            cash_at_close=cash_close,valid_valuation=not invalid,exit_advantage=adv))
+    d=pd.DataFrame(daily);r=d.ret;final=float(d.equity.iloc[-1])
+    d["drawdown"]=d.equity/np.maximum.accumulate(np.r_[capital,d.equity])[1:]-1
+    return dict(capital_initial=capital,capital_final=final,return_pct=100*(final/capital-1),
+        max_drawdown_daily=float(d.drawdown.min()) if not invalid else np.nan,
+        sharpe=float(r.mean()/r.std()*np.sqrt(252)) if not invalid and r.std()>0 else np.nan,
+        signals=sum(bool(by_day.get((r.session,r.symbol))) for r in records),
+        sessions_with_exit=int(d.cash_at_close.sum()),positive_exits=int(d.exit_advantage.gt(0).sum()),
+        premature_exits=int(d.exit_advantage.lt(0).sum()),valid_valuation=not invalid,sessions=len(d)),d,pd.DataFrame(events)
+
+
+def overnight_oracle_candidates(frame,sessions,ctx):
+    rows=[]
+    for (day,symbol),g in frame.groupby(["session","symbol"],sort=False):
+        key=(day,symbol);raw=sessions.get(key);info=ctx[key]
+        if raw is None or raw.empty or not getattr(sessions,"scale_ok",{}).get(key,True):continue
+        valid=raw[raw.open.notna()&raw.open.gt(0)]
+        times=np.array([t.value for t in valid.timestamp],dtype=np.int64)
+        for r in g[g.stop_eligible].itertuples(index=False):
+            i=np.searchsorted(times,r.timestamp.value,side="right")
+            if i>=len(valid):continue
+            fill=valid.iloc[i];price=float(fill.open)
+            cf,nf=overnight_factors(info,price,COST)
+            if not np.isfinite(cf):continue
+            rows.append(dict(session=day,symbol=symbol,timestamp=r.timestamp,
+                fill_timestamp=fill.timestamp,minutes_elapsed=r.minutes_elapsed,sell_price=price,
+                next_session=info["next_session"],next_symbol=info["next_symbol"],
+                next_open=info["next_open"],next_mode=info["next_mode"],
+                close_factor=cf,opening_factor=nf,reward=np.log(cf*nf) if np.isfinite(nf) and nf>0 else np.nan))
+    if not rows:raise ValueError("Sem checkpoints overnight conciliados")
+    return pd.DataFrame(rows)
+
+
+def overnight_oracle_map(candidates,frequency,scope):
+    d=candidates[candidates.session.isin(scope.session)&candidates.minutes_elapsed.mod(frequency).eq(0)].copy()
+    # Avaliacao termina no fechamento do ultimo dia do recorte; nao usar
+    # abertura fora do recorte. O Oracle e sempre hindsight, nao modelo.
+    d["net_factor"]=d.close_factor*d.opening_factor
+    terminal=scope.session.iloc[-1]
+    d.loc[d.session.eq(terminal),"net_factor"]=d.loc[d.session.eq(terminal),"close_factor"]
+    d=d[d.net_factor.notna()&d.net_factor.gt(0)]
+    best=d.sort_values(["session","net_factor","timestamp"],ascending=[True,False,True]).drop_duplicates("session").copy()
+    best["opportunity"]=best.net_factor.gt(1)
+    signals={(r.session,r.symbol,r.timestamp):-1. for r in best[best.opportunity].itertuples(index=False)}
+    return signals,best
+
+
+def overnight_smoke():
+    info=dict(cash=0.,qty=10.,ref_equity=1000.,next_open=95.,next_sell_fee=0.,next_mode="same_asset")
+    a,b=overnight_factors(info,110.,0.)
+    np.testing.assert_allclose([a,b,a*b],[1.1,100/95,110/95])
+    a,b=overnight_factors(info,110.,.001)
+    np.testing.assert_allclose(a*b,110/95*.999/1.001)
+    info.update(next_mode="official_rotation",next_sell_fee=1.)
+    a,b=overnight_factors(info,110.,.001)
+    np.testing.assert_allclose(a*b,1098.9/949.)
+    a,b=overnight_factors(info,110.,.001,terminal=True)
+    np.testing.assert_allclose([a,b],[1.0989,1.])
+    # Provar que nenhuma compra acontece no dia da venda e que o gap
+    # overnight entra apenas na abertura seguinte, inclusive troca de ticker.
+    day="2026-11-23";nxt="2026-11-24"
+    t=pd.Timestamp(day+" 15:00",tz="UTC")
+    pos=pd.DataFrame(dict(session=[day,nxt],symbol=["D","X"],ref_factor=[1.,1.2]))
+    raw=pd.DataFrame(dict(timestamp=[t,t+pd.Timedelta(minutes=5)],open=[100.,110.]))
+    ctx={(day,"D"):dict(info,session=day,symbol="D",next_session=nxt,next_symbol="X")}
+    st,d,e=overnight_replay(pos,{(day,"D"):raw},{(day,"D",t):-1.},ctx,capital=1000.,cost=0.)
+    assert d.cash_at_close.tolist()==[True,False]
+    assert e.side.tolist()==["sell_protection","buy_winner_next_open"]
+    assert e.session.tolist()==[day,nxt] and e.symbol.tolist()==["D","X"]
+    np.testing.assert_allclose(d.equity,[1100.,1100.*1.2*1000/949.])
+    return "overnight_cash_smoke_passed"
+
+
 def stop_regressor(kind="ridge",alpha=.1):
     from sklearn.pipeline import make_pipeline
     from sklearn.impute import SimpleImputer
@@ -1815,11 +1991,11 @@ def stop_predictions(f,oracle,tr_days,va_days,te_days,frequency):
     # X de avaliacao depende exclusivamente das barras ate o checkpoint.
     # Nao filtrar validacao/teste por cotacao de recompra futura ou escala de fechamento.
     cols=["session","symbol","timestamp","minutes_elapsed"]
-    eligible=f[f.horario & f.r6.notna() & f.minutes_elapsed.mod(frequency).eq(0)].copy()
+    eligible=f[f.stop_eligible & f.minutes_elapsed.mod(frequency).eq(0)].copy()
+    labels=oracle[oracle.next_session.isin(tr_days)][["session","symbol","timestamp","reward"]]
     train=eligible[eligible.session.isin(tr_days)].merge(
-        oracle[["session","symbol","timestamp","ratio"]],on=["session","symbol","timestamp"],
+        labels,on=["session","symbol","timestamp"],
         how="inner",validate="one_to_one").sort_values(["session","timestamp"]).reset_index(drop=True)
-    train["reward"]=np.log(train.ratio)+np.log((1-COST)/(1+COST))
     train=train[np.isfinite(train.reward)].reset_index(drop=True)
     train["position"]=np.arange(len(train))
     ev=eligible[eligible.session.isin(va_days+te_days)].sort_values(["session","timestamp"]).reset_index(drop=True)
@@ -1835,9 +2011,8 @@ def stop_predictions(f,oracle,tr_days,va_days,te_days,frequency):
     out["lsmc_sell"]=lsmc.sell;out["lsmc_wait"]=lsmc.wait
     out["fqi_sell"]=q.sell;out["fqi_wait"]=q.wait
     # Recompensa retrospectiva somente para auditoria, depois das previsoes.
-    out=out.merge(oracle[["session","symbol","timestamp","ratio"]],on=["session","symbol","timestamp"],
-                  how="left",validate="one_to_one")
-    out["actual_reward"]=np.log(out.ratio)+np.log((1-COST)/(1+COST))
+    out=out.merge(oracle[["session","symbol","timestamp","reward"]].rename(columns={"reward":"actual_reward"}),
+                  on=["session","symbol","timestamp"],how="left",validate="one_to_one")
     out["frequency"]=frequency
     return out,dict(frequency=frequency,train_checkpoints=len(train),train_sessions=int(train.session.nunique()),
                     evaluation_checkpoints=len(ev),direct=direct,fqi_iterations=12)
@@ -1871,23 +2046,26 @@ def stop_smoke():
 
 
 def run_optimal_stopping():
-    smoke_result=stop_smoke()
+    smoke_result=[stop_smoke(),overnight_smoke()]
     pos,bars,sessions,coverage,source=load_data()
     f=frame_features(bars,pos)
+    recent=f.groupby(["symbol","session"],sort=False).close.transform(lambda c:c.rolling(6,min_periods=6).count())
+    f["stop_eligible"]=f.close.notna() & recent.eq(6) & f.r6.notna() & f.remaining_minutes.gt(0)
+    ctx=overnight_context(pos,sessions)
     tr,va,te=split(pos)
     validation=pos[pos.session.isin(va)];test=pos[pos.session.isin(te)]
     prior=float(test.iloc[0].ref_previous_equity)
-    official,full,_=anchored_replay(pos,sessions,{},capital=source["initial"])
+    official,full,_=overnight_replay(pos,sessions,{},ctx,capital=source["initial"])
     np.testing.assert_allclose(full.equity,pos.strategy_equity,rtol=1e-10)
-    baseline,bd,_=anchored_replay(test,sessions,{},capital=prior)
-    vb,_,_=anchored_replay(validation,sessions,{})
+    baseline,bd,_=overnight_replay(test,sessions,{},ctx,capital=prior)
+    vb,_,_=overnight_replay(validation,sessions,{},ctx)
     # Mesmo requisito causal de contexto dos modelos no Oracle desta rodada.
-    oracle=oracle_candidates(f.assign(horario=f.horario & f.r6.notna()),sessions)
+    oracle=overnight_oracle_candidates(f,sessions,ctx)
     oracle_rows=[];oracle_curves=[];forecasts={};train_audit=[]
     for frequency in FREQUENCIES:
         for period,scope,capital in (("validation",validation,CAPITAL),("fold3",test,prior),("full_hindsight",pos,source["initial"])):
-            sig,best=oracle_map(oracle[oracle.session.isin(scope.session)],frequency,COST)
-            stat,d,_=anchored_replay(scope,sessions,sig,capital=capital)
+            sig,best=overnight_oracle_map(oracle,frequency,scope)
+            stat,d,_=overnight_replay(scope,sessions,sig,ctx,capital=capital)
             oracle_rows.append(dict(period=period,frequency=frequency,covered_sessions=len(best),
                 opportunities=int(best.opportunity.sum()),**stat))
             oracle_curves.append(d.assign(period=period,frequency=frequency))
@@ -1909,7 +2087,7 @@ def run_optimal_stopping():
                 tuple(x for x in (30,60,90,120,180,240,300) if x%frequency==0) if name=="fixed_time" else (0.,))
             for param in parameters:
                 sig=stop_signal(v,name,param)
-                stat,_,_=anchored_replay(validation,sessions,sig)
+                stat,_,_=overnight_replay(validation,sessions,sig,ctx)
                 obj=objective(stat)
                 grid.append(dict(method=name,frequency=frequency,parameter=param,objective=obj,**stat))
                 if obj>best[0]+1e-12:best=(obj,frequency,param)
@@ -1917,7 +2095,7 @@ def run_optimal_stopping():
         selected[name]=dict(frequency=frequency,parameter=param)
         sig={} if frequency is None else stop_signal(forecasts[frequency][forecasts[frequency].session.isin(te)],name,param)
         maps[name]=sig
-        stat,d,e=anchored_replay(test,sessions,sig,capital=prior)
+        stat,d,e=overnight_replay(test,sessions,sig,ctx,capital=prior)
         summary.append(dict(method=name,frequency=frequency,parameter=param,**stat))
         curves.append(d.assign(method=name))
         if not e.empty:events.append(e.assign(method=name))
@@ -1943,13 +2121,13 @@ def run_optimal_stopping():
     restricted=[];stress=[];restricted_curves=[];restricted_events=[]
     for name,sig in maps.items():
         log(f"Optimal stopping: replay liquidez {name}")
-        stat,d,e=replay(test,sessions,sig)
+        stat,d,e=replay(test,sessions,sig,overnight=True)
         restricted.append(dict(method=name,**stat));restricted_curves.append(d.assign(method=name))
         if not e.empty:restricted_events.append(e.assign(method=name))
         for bps in (5,10,25,50):
-            st,_,_=anchored_replay(test,sessions,sig,capital=prior,cost=bps/10000)
+            st,_,_=overnight_replay(test,sessions,sig,ctx,capital=prior,cost=bps/10000)
             stress.append(dict(method=name,extra_cost_bps=bps,**st))
-    manifest=dict(status="exploratory_completed",source=source,smoke=smoke_result,
+    manifest=dict(status="exploratory_completed",cash_policy="overnight_until_next_winner_open",source=source,smoke=smoke_result,
         train=tr,validation=va,test=te,selected=selected,training_audit=train_audit,
         features=STOP_FEATURES,capital_before_fold3=prior,cost_per_side=COST,
         cache_errors=sessions.errors,cache_hashes=sessions.hashes,
@@ -1960,10 +2138,12 @@ def run_optimal_stopping():
         restricted_valid=bool(all(r["valid_valuation"] for r in restricted)),
         limitations=["fold3 repeatedly inspected; independent future evaluation required",
          "SIP historical features only, no Yahoo transfer validation or live availability proof",
-         "optimal_stopping is one-step hold-to-reentry regression baseline; LSMC and FQI approximate dynamic policies",
+         "optimal_stopping is one-step sell versus hold until next opening; LSMC and FQI approximate dynamic policies",
          "LSMC train continuation fitted in-sample; FQI bootstrapped 12 iterations, no convergence guarantee",
          "decision-focused direct search regularized in train; ES uses chronological train subsplit",
-         "no independent closing Winner signal; same asset reentry at final 5min bar open",
+         "no intraday or closing reentry; cash until next session opening; frozen official selected target, not cash-state reranking",
+         "overnight reference uses official rotation sell price/fee, otherwise same asset SIP regular open; extra buy fee only if official held",
+         "anchored morning adjustment proportional; not full independent portfolio reconstruction; restricted replay separate",
          "next observed open fill proxy; no quote/spread or processing latency guarantee",
          "training reward only on reconciled observable oracle checkpoints; evaluation signals not filtered by future scale",
          "one exit per day; no intraday rotations; no fixed price stop; fixed time comparator only",
@@ -1973,6 +2153,8 @@ def run_optimal_stopping():
         "optimal_stop_comparacao.csv":csv(result),"optimal_stop_validacao.csv":csv(pd.DataFrame(grid)),
         "optimal_stop_oracle.csv":csv(pd.DataFrame(oracle_rows)),
         "optimal_stop_oracle_curvas.csv":csv(pd.concat(oracle_curves,ignore_index=True)),
+        "optimal_stop_oracle_oportunidades.csv":csv(oracle),
+        "optimal_stop_referencia_overnight.csv":csv(pd.DataFrame(ctx.values())),
         "optimal_stop_previsoes.csv":csv(pd.concat(forecasts.values(),ignore_index=True)),
         "optimal_stop_patrimonio.csv":csv(full_curves),
         "optimal_stop_ordens.csv":csv(pd.concat(events,ignore_index=True) if events else pd.DataFrame()),
@@ -2003,6 +2185,7 @@ if __name__=="__main__":
         import sys
         if "--optimal-stop-self-test" in sys.argv:
             print(stop_smoke())
+            print(overnight_smoke())
             sys.exit(0)
         if "--yahoo-self-test" in sys.argv:
             print(yahoo_test_smoke())
