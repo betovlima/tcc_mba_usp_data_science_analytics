@@ -10,6 +10,8 @@ import json
 import os
 import traceback
 import logging
+import io
+import sys
 
 import numpy as np
 import pandas as pd
@@ -22,7 +24,7 @@ SEED = 20261123
 CAPITAL = 10000.
 COST = .001  # custo por lado, nao gatilho de stop
 PARTICIPATION = .01  # proxy de capacidade usando volume ja conhecido
-METHODS = ("kalman", "multirrolling", "bocpd", "lightgbm", "kalman_lightgbm")
+METHODS = ("kalman", "multirrolling", "bocpd", "lightgbm", "kalman_lightgbm", "lightgbm_excursions")
 RISKS = (0., .25, .5, 1.)
 FEATURES = list(base.FEATURES)
 KFEATURES = ["k_slope", "k_accel", "k_gap"]
@@ -50,65 +52,171 @@ def pack(files):
     os.replace(tmp, OUT)
 
 
+# Arquivo exportado pelo MCT: coloque na raiz, ou informe --mct-zip CAMINHO.
+# Nunca usar silenciosamente as posicoes congeladas antigas.
+MCT_ZIP = ROOT / "market_cycle_trader_20261124T005959-1a1fa2f1.zip"
+CACHE = ROOT / "dados_intraday" / "raw_sip_5min_full_month"
+
+
+def load_reference():
+    arg = sys.argv.index("--mct-zip") if "--mct-zip" in sys.argv else None
+    path = Path(sys.argv[arg+1]).expanduser() if arg is not None else MCT_ZIP
+    if not path.is_file():
+        candidates = sorted(ROOT.glob("market_cycle_trader_*.zip"))
+        if arg is None and len(candidates)==1:
+            path = candidates[0]
+        else:
+            raise FileNotFoundError(f"Coloque o ZIP MCT na raiz do TCC: {path}")
+    with ZipFile(path) as z:
+        def read(suffix):
+            names = [n for n in z.namelist() if n.endswith(suffix)]
+            if len(names)!=1:
+                raise ValueError(f"Esperado exatamente um arquivo {suffix}")
+            return z.read(names[0])
+        manifest = json.loads(read("strategy_manifest.json"))
+        metrics = json.loads(read("_metrics.json"))
+        p = pd.read_csv(io.BytesIO(read("_predictions.csv")))
+        t = pd.read_csv(io.BytesIO(read("_trades.csv")))
+    if manifest["status"]!="completed" or not metrics["portfolio_rotation"]:
+        raise ValueError("Exportacao nao concluida ou nao e portfolio")
+    def session(x):
+        return pd.to_datetime(x,utc=True,errors="raise").dt.tz_convert("America/New_York").dt.date.astype(str)
+    p["session"] = session(p.timestamp)
+    p["decision_session"] = session(p.decision_date)
+    p = p.sort_values("session").reset_index(drop=True)
+    p["symbol"] = p.selected_asset.astype(str).str.upper()
+    p["previous"] = p.symbol.shift()
+    if p.session.duplicated().any() or not (p.decision_session<p.session).all():
+        raise ValueError("Sessoes duplicadas ou decisao nao anterior ao pregao")
+    if not p.symbol.isin(metrics["assets"]).all():
+        raise ValueError("Este replay requer Control sem CASH no historico exportado")
+    if not np.isfinite(p.strategy_equity).all() or (p.strategy_equity<=0).any():
+        raise ValueError("Patrimonio Control invalido")
+    initial = float(metrics["initial_capital"])
+    if not np.isclose(p.strategy_equity.iloc[-1],metrics["strategy_ending_capital"],rtol=1e-10):
+        raise ValueError("Curva oficial diverge das metricas")
+    t["session"] = session(t.timestamp)
+    buys = t[t.action.eq("BUY")].set_index("session")
+    sells = t[t.action.eq("SELL")].set_index("session")
+    final = t[t.action.eq("FINAL_SELL")].set_index("session")
+    if buys.index.duplicated().any() or sells.index.duplicated().any() or final.index.duplicated().any():
+        raise ValueError("Mais de uma operacao da mesma natureza no pregao")
+    p["ref_qty"] = p.session.map(buys.quantity).ffill()
+    p["ref_cash"] = p.session.map(buys.cash_after_trade).ffill()
+    p["ref_close"] = (p.strategy_equity-p.ref_cash)/p.ref_qty
+    p["ref_close"] = p.session.map(final.execution_price).combine_first(p.ref_close)
+    p["ref_buy_open"] = p.session.map(buys.execution_price)
+    p["ref_sell_open"] = p.session.map(sells.execution_price)
+    p["ref_previous_equity"] = p.strategy_equity.shift(fill_value=initial)
+    p["ref_factor"] = p.strategy_equity/p.ref_previous_equity
+    p["ref_previous_close"] = p.ref_close.shift()
+    if not np.isfinite(p.ref_close).all() or (p.ref_close<=0).any():
+        raise ValueError("Nao foi possivel reconstruir marca diaria Control")
+    source = {"file":path.name,"sha256":hashlib.sha256(path.read_bytes()).hexdigest(),
+              "job_id":manifest["job_id"],"strategy":manifest["strategy_profile_name"],
+              "revision":manifest["strategy_profile_revision"],"assets":len(metrics["assets"]),
+              "sessions":len(p),"initial":initial,"official_final":float(p.strategy_equity.iloc[-1]),
+              "official_max_dd":metrics["strategy_maximum_drawdown"],
+              "decision_precedes_session":True}
+    log(f"Referencia MCT: {source}")
+    return p, source
+
+
+class SessionStore(dict):
+    """Cache mensal INTEGRAL. Busca tardia para qualquer posicao residual.
+    Nunca limita a coleta aos dias em que o ticker e o alvo Winner.
+    """
+    def __init__(self, calendar):
+        super().__init__()
+        self.calendar=calendar
+        self.months=set()
+        self.missing=set()
+        self.hashes={}
+        self.errors=[]
+        self.reader=None
+
+    def get(self,key,default=None):
+        day,symbol=key
+        if not symbol or pd.isna(symbol):
+            return default
+        if key in self:
+            return super().get(key,default)
+        month=day[:7]
+        pair=(symbol,month)
+        if pair not in self.months:
+            self.months.add(pair)
+            try:
+                self.load_month(symbol,month)
+            except Exception as exc:
+                self.errors.append({"symbol":symbol,"month":month,"error":type(exc).__name__})
+                log(f"Falha de dados {symbol}/{month}: {type(exc).__name__}")
+        if key not in self:
+            self.missing.add(key)
+        return super().get(key,default)
+
+    def load_month(self,symbol,month):
+        CACHE.mkdir(parents=True,exist_ok=True)
+        path=CACHE/f"{symbol}_{month}.csv"
+        if not path.exists():
+            if self.reader is None:
+                self.reader=base._market_reader_local()
+            download,creds=self.reader
+            start=pd.Timestamp(month+"-01",tz="America/New_York")
+            end=start+pd.offsets.MonthBegin(1)
+            log(f"Alpaca RAW SIP 5Min: {symbol}/{month} (mes completo)")
+            raw=download(**creds,symbol=symbol,timeframe="5Min",
+                         start=start.tz_convert("UTC"),end=end.tz_convert("UTC"),
+                         feed="sip",adjustment="raw")
+            if raw is None or raw.empty:
+                raise ValueError("Sem cotacoes")
+            raw=raw.reset_index()
+            raw["symbol"]=symbol
+            raw=raw[["timestamp","symbol","open","high","low","close","volume"]]
+            tmp=path.with_suffix(".tmp")
+            raw.to_csv(tmp,index=False)
+            os.replace(tmp,path)
+        self.hashes[str(path.relative_to(ROOT))]=hashlib.sha256(path.read_bytes()).hexdigest()
+        raw=pd.read_csv(path)
+        if raw.empty:
+            raise ValueError("Cache mensal vazio")
+        bars=base.preparar(raw)
+        if bars.empty:
+            return
+        for day,g in bars.groupby("session",sort=False):
+            label=pd.Timestamp(day)
+            if not self.calendar.is_session(label):
+                continue
+            end=self.calendar.session_close(label)
+            g=g[g.timestamp<end].sort_values("timestamp").reset_index(drop=True)
+            if not g.empty:
+                self[(day,symbol)]=g
+
+
 def load_data():
     import exchange_calendars as xc
-    base.registrar = lambda etapa, mensagem, nivel="INFO": LOGGER.log(getattr(logging,nivel,logging.INFO), f"[{etapa}] {mensagem}")
-    pos, origin = base.preparar_posicoes_control()
-    pos = pos[["session","symbol"]].sort_values("session").reset_index(drop=True)
-    if pos.empty or pos.session.duplicated().any():
-        raise ValueError("Calendario Control invalido")
-    pos["previous"] = pos.symbol.shift()
-    log(f"Control: {len(pos)} sessoes; {pos.symbol.nunique()} ativos")
-    main_report = base.preencher_cache_control(pos)
-    # O ticker anterior precisa de cotacao REAL no dia da rotacao.
-    # Cache separado: os CSVs antigos foram filtrados pelas sessoes do target.
-    swaps = pos[pos.previous.notna() & pos.previous.ne(pos.symbol)][["session","previous"]]
-    swaps = swaps.rename(columns={"previous":"symbol"})
-    original = base.INPUT
-    try:
-        base.INPUT = original / "rotacoes_adaptativas"
-        rotation_report = base.preencher_cache_control(swaps)
-    finally:
-        base.INPUT = original
-    paths = sorted((original/"cotacoes_5min").glob("*.csv"))
-    paths += sorted((original/"rotacoes_adaptativas"/"cotacoes_5min").glob("*.csv"))
-    if not paths:
-        raise FileNotFoundError("Sem candles reais; confira cache e leitor Alpaca local")
-    raw = pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
-    raw["timestamp"] = pd.to_datetime(raw.timestamp, utc=True)
-    raw["symbol"] = raw.symbol.astype(str).str.strip().str.upper()
-    raw = raw.drop_duplicates()
-    if raw.duplicated(["symbol","timestamp"]).any():
-        raise ValueError("Candles conflitantes nas fontes")
-    bars = base.preparar(raw, informar_lacunas=True)
-    if bars.empty:
-        raise ValueError("Sem barras validas")
-    cal = xc.get_calendar("XNYS", start=pos.session.min(), end=pos.session.max())
-    closes = {}
-    for day in pos.session:
-        label = pd.Timestamp(day)
-        if not cal.is_session(label):
-            raise ValueError(f"Control contem dia sem sessao XNYS: {day}")
-        closes[day] = cal.session_close(label)
-    bars["end"] = bars.session.map(closes)
-    bars = bars[bars.end.notna() & (bars.timestamp < bars.end)].copy()
-    # Uma grade por ticker/sessao; nenhuma interpolacao.
-    sessions = {(str(s),str(a)): g.sort_values("timestamp").reset_index(drop=True)
-                for (s,a),g in bars.groupby(["session","symbol"],sort=False)}
-    coverage = []
+    pos, source = load_reference()
+    # Margem de um mes para os arquivos mensais completos nas duas pontas.
+    cal=xc.get_calendar("XNYS",start=pd.Timestamp(pos.session.min())-pd.Timedelta(days=35),
+                        end=pd.Timestamp(pos.session.max())+pd.Timedelta(days=35))
+    sessions=SessionStore(cal)
+    coverage=[];parts=[]
     for row in pos.itertuples(index=False):
-        g = sessions.get((row.session,row.symbol))
-        old = sessions.get((row.session,row.previous)) if pd.notna(row.previous) else None
-        switch = pd.notna(row.previous) and row.previous!=row.symbol
-        n = int(g.close.notna().sum()) if g is not None else 0
+        label=pd.Timestamp(row.session)
+        if not cal.is_session(label):
+            raise ValueError(f"Data Control fora do calendario XNYS: {row.session}")
+        g=sessions.get((row.session,row.symbol))
+        old=sessions.get((row.session,row.previous)) if pd.notna(row.previous) and row.previous!=row.symbol else g
+        if g is not None:parts.append(g)
+        close=float(g.close.iloc[-1]) if g is not None and pd.notna(g.close.iloc[-1]) else np.nan
         coverage.append(dict(session=row.session,symbol=row.symbol,
-            expected_bars=int((closes[row.session]-cal.session_open(pd.Timestamp(row.session))).total_seconds()/300),
-            observed_bars=n,
-            final_bar=bool(g is not None and pd.notna(g.close.iloc[-1])),
-            rotation_quote=bool(not switch or (old is not None and old.open.notna().any()))))
-    source = dict(origin=origin, target_download=main_report, rotation_download=rotation_report,
-                  source_files={str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths})
-    return pos, bars, sessions, pd.DataFrame(coverage), source
+          expected_bars=int((cal.session_close(label)-cal.session_open(label)).total_seconds()/300),
+          observed_bars=int(g.close.notna().sum()) if g is not None else 0,
+          final_bar=bool(np.isfinite(close)),
+          reference_close=row.ref_close,observed_close=close,
+          close_difference_pct=100*(close/row.ref_close-1) if np.isfinite(close) else np.nan,
+          rotation_quote=bool(old is not None and old.open.notna().any())))
+    if not parts:raise FileNotFoundError("Sem candles intradiarios; confira credenciais e cache")
+    return pos,pd.concat(parts,ignore_index=True),sessions,pd.DataFrame(coverage),source
 
 
 def kalman_features(g):
@@ -165,17 +273,30 @@ def frame_features(bars,pos):
     final_close = grouped.close.transform(lambda s:s.iloc[-1])
     f["target"] = np.log(final_close/next_open)
     f["downside"] = (-f.target).clip(lower=0)
+    f["peak_drawdown"] = f.close/grouped.high.cummax()-1
+    f["efficiency"] = grouped.close.transform(lambda c:
+        (c-c.shift(12)).abs()/c.diff().abs().rolling(12,min_periods=12).sum().replace(0,np.nan))
+    f["mfe"] = np.nan
+    f["mae"] = np.nan
+    # Futuro apenas nos alvos, requer barras completas ate o fechamento.
+    for _,g in f.groupby(["symbol","session"],sort=False):
+        hi=g.high.to_numpy(float);lo=g.low.to_numpy(float);op=g.open.to_numpy(float)
+        for i in range(len(g)-1):
+            if np.isfinite(op[i+1]) and np.isfinite(hi[i+1:]).all() and np.isfinite(lo[i+1:]).all():
+                f.loc[g.index[i],"mfe"]=max(0.,np.log(hi[i+1:].max()/op[i+1]))
+                f.loc[g.index[i],"mae"]=max(0.,np.log(op[i+1]/lo[i+1:].min()))
     f["horario"] &= grouped.timestamp.shift(-1).notna()
     return f
 
 
 def split(pos):
-    days = pos.session.tolist()
-    a,b = int(.60*len(days)),int(.80*len(days))
-    if a<20 or b-a<10 or len(days)-b<10:
-        raise ValueError("Amostra insuficiente")
-    # Uma sessao de embargo entre treino, validacao e teste.
-    return days[:a-1], days[a:b-1], days[b:]
+    f1=pos.loc[pos.walk_forward_fold.eq(1),"session"].tolist()
+    f2=pos.loc[pos.walk_forward_fold.eq(2),"session"].tolist()
+    f3=pos.loc[pos.walk_forward_fold.eq(3),"session"].tolist()
+    if min(len(f1),len(f2),len(f3))<20:
+        raise ValueError("Esperados os tres folds da exportacao MCT")
+    mid=len(f2)//2
+    return f1+f2[:mid-1], f2[mid:-1], f3
 
 
 def make_scores(f, train_days, val_days, test_days):
@@ -199,24 +320,30 @@ def make_scores(f, train_days, val_days, test_days):
             "multirrolling":["rolling","accel","vol12","time_frac"],
             "bocpd":["bocpd","vol12","time_frac"],
             "lightgbm":FEATURES,
-            "kalman_lightgbm":FEATURES+KFEATURES+["rolling","bocpd"]}
+            "kalman_lightgbm":FEATURES+KFEATURES+["rolling","bocpd"],
+            "lightgbm_excursions":FEATURES+KFEATURES+["rolling","bocpd","peak_drawdown","efficiency"]}
     out = {}
     for name in METHODS:
         log(f"Treinando {name}: {len(tr)} checkpoints")
         x = tr[cols[name]].replace([np.inf,-np.inf],np.nan)
         z = ev[cols[name]].replace([np.inf,-np.inf],np.nan)
         preds = ev[["session","symbol","timestamp","target"]].copy()
-        for label in ("target","downside"):
+        labels=("target","mae","mfe") if name=="lightgbm_excursions" else ("target","downside")
+        for label in labels:
             model = (LGBMRegressor(n_estimators=100,num_leaves=7,max_depth=3,
                      learning_rate=.04,min_child_samples=35,random_state=SEED,
                      n_jobs=1,verbosity=-1) if "lightgbm" in name else
                      make_pipeline(SimpleImputer(strategy="median"),StandardScaler(),Ridge(alpha=20.)))
-            model.fit(x,tr[label])
-            preds["mean" if label=="target" else "risk"] = model.predict(z)
+            valid=tr[label].notna()
+            if valid.sum()<100:raise ValueError(f"Amostra insuficiente {name}/{label}")
+            model.fit(x.loc[valid],tr.loc[valid,label])
+            preds[{"target":"mean","downside":"risk","mae":"risk","mfe":"expected_mfe"}[label]]=model.predict(z)
+        preds["actual_mae"]=ev.mae
+        preds["actual_mfe"]=ev.mfe
         preds["risk"] = preds.risk.clip(lower=0)
         # Nao autorizar ordem com estado de tendencia completamente ausente.
         essential = {"kalman":"k_slope","multirrolling":"rolling","bocpd":"bocpd",
-                     "lightgbm":"r6","kalman_lightgbm":"k_slope"}[name]
+                     "lightgbm":"r6","kalman_lightgbm":"k_slope","lightgbm_excursions":"k_slope"}[name]
         preds = preds[z[essential].notna()] if essential in z else preds
         out[name] = preds
     return out
