@@ -225,7 +225,8 @@ def load_data():
     # Nao misturar caches RAW e SPLIT. O cache RAW anterior fica intacto.
     sessions=SessionStore(cal,pos.session.max())
     coverage=[];parts=[]
-    for row in pos.itertuples(index=False):
+    for i,row in enumerate(pos.itertuples(index=False),1):
+        if i==1 or i%100==0 or i==len(pos):log(f"Cache base: {i}/{len(pos)} pregoes")
         label=pd.Timestamp(row.session)
         if not cal.is_session(label):
             raise ValueError(f"Data Control fora do calendario XNYS: {row.session}")
@@ -1892,7 +1893,8 @@ def stop_regressor(kind="ridge",alpha=.1):
 
 
 def stop_x(d):
-    return d[STOP_FEATURES].replace([np.inf,-np.inf],np.nan)
+    cols=STOP_FEATURES+[c for c in d.columns if c.startswith("ctx_")]
+    return d[cols].replace([np.inf,-np.inf],np.nan)
 
 
 def stop_first_reward(day_codes,reward,score,n_days):
@@ -1951,6 +1953,7 @@ def stop_direct(tr,ev):
     # diario da PRIMEIRA venda, com regularizacao, sem ajustar no teste.
     from scipy.optimize import differential_evolution
     cols=["r6","vol12","peak_drawdown","k_slope","accel","remaining_minutes"]
+    cols += [c for c in ("ctx_gap","ctx_prior_return","ctx_prior_vol","ctx_current_return","ctx_first_return") if c in tr]
     a=tr[cols].replace([np.inf,-np.inf],np.nan)
     b=ev[cols].replace([np.inf,-np.inf],np.nan)
     median=a.median().fillna(0.)
@@ -2002,11 +2005,16 @@ def stop_predictions(f,oracle,tr_days,va_days,te_days,frequency):
     if len(train)<100 or ev.empty:raise ValueError(f"Checkpoints insuficientes {frequency}")
     out=ev[cols].copy()
     # Regra de uma etapa: valor esperado de sair agora versus manter ate recompra.
+    log(f"  {frequency}min: optimal stopping ({len(train)} treino, {len(ev)} avaliacao)")
     model=stop_regressor("tree");model.fit(stop_x(train),train.reward)
     out["optimal_stopping"]=model.predict(stop_x(ev))
+    log(f"  {frequency}min: LSMC")
     lsmc=stop_lsmc(train,ev);out["lsmc"]=lsmc.sell-lsmc.wait
+    log(f"  {frequency}min: FQI")
     q=stop_fqi(train,ev);out["fitted_q_iteration"]=q.sell-q.wait
+    log(f"  {frequency}min: decision-focused")
     out["decision_focused"],direct=stop_direct(train,ev)
+    log(f"  {frequency}min: expected shortfall")
     out["hold_mean"],out["hold_es"]=stop_es(train,ev)
     out["lsmc_sell"]=lsmc.sell;out["lsmc_wait"]=lsmc.wait
     out["fqi_sell"]=q.sell;out["fqi_wait"]=q.wait
@@ -2045,12 +2053,126 @@ def stop_smoke():
     return "optimal_stopping_policy_smoke_passed"
 
 
+
+STOP_WINDOWS={"J1":(0,0),"J2":(1,12),"J3":(1,24),"J4":(1,0),"J5":(2,0),"J6":(5,0)}
+CTX_PRIOR=["ctx_prior_return","ctx_prior_vol","ctx_prior_last_return","ctx_prior_range",
+           "ctx_prior_drawdown","ctx_prior_coverage","ctx_prior_gap_mean","ctx_prior_gap_vol","ctx_prior_close"]
+
+
+def prior_snapshot(groups,tail=0):
+    # Each session is a separate return segment. Overnight gaps are never
+    # treated as five-minute returns. No forward fill or synthetic price.
+    if not groups or any(g is None or g.empty for g in groups):return None
+    groups=[g.sort_values("timestamp") for g in groups]
+    if tail:groups=[groups[-1].tail(tail)]
+    last=groups[-1];previous_close=float(last.close.iloc[-1])
+    if not np.isfinite(previous_close) or previous_close<=0:return None
+    returns=[];gaps=[];starts=[];ends=[];closes=[];highs=[];lows=[]
+    for g in groups:
+        c=g.close.where(g.close.gt(0))
+        o=g.open.where(g.open.gt(0))
+        if not c.notna().any():return None
+        returns.extend(np.log(c).diff().dropna().tolist())
+        starts.append(float(o.iloc[0]));ends.append(float(c.iloc[-1]))
+        closes.extend(c.dropna().tolist())
+        highs.extend(g.high.where(g.high.gt(0)).dropna().tolist())
+        lows.extend(g.low.where(g.low.gt(0)).dropna().tolist())
+    if len(returns)<6 or not highs or not lows:return None
+    for i in range(1,len(groups)):
+        if np.isfinite(starts[i]) and np.isfinite(ends[i-1]) and ends[i-1]>0:
+            gaps.append(np.log(starts[i]/ends[i-1]))
+    # Sum of observed within-session log returns, not a return across gaps.
+    return dict(ctx_prior_return=float(np.sum(returns)),ctx_prior_vol=float(np.std(returns,ddof=1)),
+        ctx_prior_last_return=float(np.sum(returns[-6:])),
+        ctx_prior_range=float(np.log(max(highs)/min(lows))),
+        ctx_prior_drawdown=float(np.log(previous_close/max(highs))),
+        ctx_prior_coverage=len(closes)/sum(len(g) for g in groups),
+        ctx_prior_gap_mean=float(np.mean(gaps)) if gaps else np.nan,
+        ctx_prior_gap_vol=float(np.std(gaps,ddof=1)) if len(gaps)>1 else np.nan,
+        ctx_prior_close=previous_close)
+
+
+def prior_context(pos,sessions):
+    records={w:[] for w in STOP_WINDOWS if w!="J1"}
+    cal=sessions.calendar
+    for i,r in enumerate(pos.itertuples(index=False),1):
+        if i==1 or i%100==0 or i==len(pos):log(f"Contexto D-1..D-5: {i}/{len(pos)} {r.session} {r.symbol}")
+        label=pd.Timestamp(r.session)
+        days=[]
+        for _ in range(5):
+            label=cal.previous_session(label)
+            days.append(str(label.date()))
+        groups=[]
+        for day in reversed(days):
+            g=sessions.get((day,r.symbol))
+            # Require calendar's last regular bar, not latest trade of day.
+            close=cal.session_close(pd.Timestamp(day))
+            if g is not None and (g.empty or g.timestamp.iloc[-1]!=close-pd.Timedelta(minutes=5)):
+                g=None
+            groups.append(g)
+        for w,(n,tail) in STOP_WINDOWS.items():
+            if w=="J1":continue
+            info=prior_snapshot(groups[-n:],tail)
+            records[w].append(dict(session=r.session,symbol=r.symbol,history_ok=info is not None,
+               prior_first_session=days[n-1],prior_last_session=days[0],
+               **(info if info is not None else {c:np.nan for c in CTX_PRIOR})))
+    return {w:pd.DataFrame(rows) for w,rows in records.items()}
+
+
+def window_frame(f,w,contexts):
+    if w=="J1":
+        d=f.copy()
+        recent=d.groupby(["symbol","session"],sort=False).close.transform(lambda c:c.rolling(6,min_periods=6).count())
+        d["stop_eligible"]=d.close.notna() & recent.eq(6) & d.r6.notna() & d.remaining_minutes.gt(0)
+        return d
+    d=f.merge(contexts[w],on=["session","symbol"],how="left",validate="many_to_one")
+    g=d.groupby(["symbol","session"],sort=False)
+    first_open=g.open.transform(lambda x:x.iloc[0])
+    first_close=g.close.transform(lambda x:x.iloc[0])
+    d["ctx_gap"]=np.log(first_open.where(first_open.gt(0))/d.ctx_prior_close)
+    d["ctx_current_return"]=np.log(d.close.where(d.close.gt(0))/first_open.where(first_open.gt(0)))
+    d["ctx_first_return"]=np.log(first_close.where(first_close.gt(0))/first_open.where(first_open.gt(0)))
+    # Never feed nominal historical price; normalized gap/current return instead.
+    d=d.drop(columns=["ctx_prior_close"])
+    d["stop_eligible"]=d.history_ok.fillna(False)&d.close.gt(0)&d.ctx_gap.notna()&d.ctx_current_return.notna()&d.remaining_minutes.gt(0)
+    # In particular, first completed 5min bar can trigger sale at next open.
+    return d
+
+
+def window_smoke():
+    t=pd.Timestamp("2026-11-20T20:00:00Z")
+    a=pd.DataFrame(dict(timestamp=pd.date_range(t,periods=12,freq="5min"),
+        open=np.full(12,100.),close=np.arange(100.,112.),high=np.arange(101.,113.),low=np.full(12,99.)))
+    b=a.copy();b.timestamp+=pd.Timedelta(days=3)
+    b[["open","close","high","low"]]*=2
+    p=prior_snapshot([a,b])
+    np.testing.assert_allclose(p["ctx_prior_return"],2*np.log(111/100))
+    np.testing.assert_allclose(p["ctx_prior_gap_mean"],np.log(200/111))
+    assert prior_snapshot([None,b]) is None
+    assert prior_snapshot([a],12)["ctx_prior_close"]==111
+    c=b.copy();c.loc[c.index[-1],"close"]=np.nan
+    assert prior_snapshot([c]) is None
+    f=pd.DataFrame(dict(session=["2026-11-23"]*2,symbol=["D"]*2,
+        timestamp=[t+pd.Timedelta(days=3),t+pd.Timedelta(days=3,minutes=5)],
+        open=[120.,121.],close=[121.,119.],remaining_minutes=[5,0],r6=[np.nan,np.nan]))
+    context=pd.DataFrame([dict(session="2026-11-23",symbol="D",history_ok=True,**prior_snapshot([a]))])
+    z=window_frame(f,"J2",{"J2":context})
+    assert z.stop_eligible.tolist()==[True,False] and "ctx_prior_close" not in z
+    np.testing.assert_allclose(z.ctx_gap,np.log(120/111))
+    return "prior_window_causal_smoke_passed"
+
+
 def run_optimal_stopping():
-    smoke_result=[stop_smoke(),overnight_smoke()]
+    import time
+    started=time.monotonic()
+    smoke_result=[stop_smoke(),overnight_smoke(),window_smoke()]
+    log("Optimal stopping: carregando cache e referencia MCT; nao aguarda mercado")
     pos,bars,sessions,coverage,source=load_data()
+    log(f"Indicadores do pregao atual: {len(bars)} barras")
     f=frame_features(bars,pos)
-    recent=f.groupby(["symbol","session"],sort=False).close.transform(lambda c:c.rolling(6,min_periods=6).count())
-    f["stop_eligible"]=f.close.notna() & recent.eq(6) & f.r6.notna() & f.remaining_minutes.gt(0)
+    log("Indicadores atuais prontos; construindo contexto do mesmo ativo nos cinco pregoes anteriores")
+    contexts=prior_context(pos,sessions)
+    log("Contexto pronto; calculando referencias overnight")
     ctx=overnight_context(pos,sessions)
     tr,va,te=split(pos)
     validation=pos[pos.session.isin(va)];test=pos[pos.session.isin(te)]
@@ -2059,53 +2181,70 @@ def run_optimal_stopping():
     np.testing.assert_allclose(full.equity,pos.strategy_equity,rtol=1e-10)
     baseline,bd,_=overnight_replay(test,sessions,{},ctx,capital=prior)
     vb,_,_=overnight_replay(validation,sessions,{},ctx)
-    # Mesmo requisito causal de contexto dos modelos no Oracle desta rodada.
-    oracle=overnight_oracle_candidates(f,sessions,ctx)
-    oracle_rows=[];oracle_curves=[];forecasts={};train_audit=[]
-    for frequency in FREQUENCIES:
-        for period,scope,capital in (("validation",validation,CAPITAL),("fold3",test,prior),("full_hindsight",pos,source["initial"])):
-            sig,best=overnight_oracle_map(oracle,frequency,scope)
-            stat,d,_=overnight_replay(scope,sessions,sig,ctx,capital=capital)
-            oracle_rows.append(dict(period=period,frequency=frequency,covered_sessions=len(best),
-                opportunities=int(best.opportunity.sum()),**stat))
-            oracle_curves.append(d.assign(period=period,frequency=frequency))
-        log(f"Optimal stopping: treinamento frequencia {frequency} minutos")
-        forecasts[frequency],audit=stop_predictions(f,oracle,tr,va,te,frequency)
-        train_audit.append(audit)
+    oracle_rows=[];oracle_curves=[];oracle_details=[];forecasts={};train_audit=[];context_audit=[]
+    for window in STOP_WINDOWS:
+        log(f"Janela {window}: preparando checkpoints e Oracle")
+        wf=window_frame(f,window,contexts)
+        audit=wf.groupby(["session","symbol"],sort=False).agg(eligible_checkpoints=("stop_eligible","sum")).reset_index()
+        first=wf[wf.stop_eligible].groupby(["session","symbol"]).minutes_elapsed.min().rename("first_eligible_minute").reset_index()
+        audit=audit.merge(first,on=["session","symbol"],how="left").assign(window=window)
+        if window!="J1":audit=audit.merge(contexts[window][["session","symbol","history_ok","ctx_prior_coverage","prior_first_session","prior_last_session"]],on=["session","symbol"],how="left")
+        context_audit.append(audit)
+        oracle=overnight_oracle_candidates(wf,sessions,ctx)
+        oracle_details.append(oracle.assign(window=window))
+        for frequency in FREQUENCIES:
+            for period,scope,capital in (("validation",validation,CAPITAL),("fold3",test,prior),("full_hindsight",pos,source["initial"])):
+                sig,best=overnight_oracle_map(oracle,frequency,scope)
+                stat,d,_=overnight_replay(scope,sessions,sig,ctx,capital=capital)
+                oracle_rows.append(dict(window=window,period=period,frequency=frequency,covered_sessions=len(best),
+                    opportunities=int(best.opportunity.sum()),**stat))
+                oracle_curves.append(d.assign(window=window,period=period,frequency=frequency))
+            log(f"Janela {window}, frequencia {frequency}: treino; decorrido={time.monotonic()-started:.1f}s")
+            pred,audit=stop_predictions(wf,oracle,tr,va,te,frequency)
+            forecasts[window,frequency]=pred.assign(window=window)
+            train_audit.append(dict(window=window,**audit))
+        del wf
     grid=[];selected={};maps={"Control_MCT_anchored":{}}
-    summary=[dict(method="Control_MCT_anchored",frequency=None,parameter=None,**baseline)]
-    curves=[bd.assign(method="Control_MCT_anchored")];events=[]
+    summary=[dict(method="Control_MCT_anchored",window=None,frequency=None,parameter=None,**baseline)]
+    curves=[bd.assign(method="Control_MCT_anchored")];events=[];by_window=[]
+    def objective(st):
+        return np.log(st["capital_final"]/CAPITAL)+.5*st["max_drawdown_daily"] if st["valid_valuation"] else -np.inf
     for name in STOP_METHODS:
-        # HOLD concorre na validacao; empate favorece nenhuma intervencao.
-        def objective(st):
-            return np.log(st["capital_final"]/CAPITAL)+.5*st["max_drawdown_daily"] if st["valid_valuation"] else -np.inf
-        best=(objective(vb),None,None)
-        grid.append(dict(method=name,frequency=None,parameter=None,objective=best[0],**vb))
-        for frequency,p in forecasts.items():
-            v=p[p.session.isin(va)]
-            parameters=(0.,.25,.5,1.) if name=="expected_shortfall" else (
-                tuple(x for x in (30,60,90,120,180,240,300) if x%frequency==0) if name=="fixed_time" else (0.,))
-            for param in parameters:
-                sig=stop_signal(v,name,param)
-                stat,_,_=overnight_replay(validation,sessions,sig,ctx)
-                obj=objective(stat)
-                grid.append(dict(method=name,frequency=frequency,parameter=param,objective=obj,**stat))
-                if obj>best[0]+1e-12:best=(obj,frequency,param)
-        _,frequency,param=best
-        selected[name]=dict(frequency=frequency,parameter=param)
-        sig={} if frequency is None else stop_signal(forecasts[frequency][forecasts[frequency].session.isin(te)],name,param)
+        best=(objective(vb),None,None,None)
+        grid.append(dict(method=name,window=None,frequency=None,parameter=None,objective=best[0],**vb))
+        for window in STOP_WINDOWS:
+            local=(objective(vb),None,None,None)
+            for frequency in FREQUENCIES:
+                p=forecasts[window,frequency];v=p[p.session.isin(va)]
+                parameters=(0.,.25,.5,1.) if name=="expected_shortfall" else (
+                    tuple(x for x in (5,15,30,60,90,120,180,240,300) if x%frequency==0) if name=="fixed_time" else (0.,))
+                for param in parameters:
+                    sig=stop_signal(v,name,param)
+                    stat,_,_=overnight_replay(validation,sessions,sig,ctx)
+                    obj=objective(stat)
+                    grid.append(dict(method=name,window=window,frequency=frequency,parameter=param,objective=obj,**stat))
+                    if obj>local[0]+1e-12:local=(obj,window,frequency,param)
+                    if obj>best[0]+1e-12:best=(obj,window,frequency,param)
+            _,lw,lf,lp=local
+            sig={} if lf is None else stop_signal(forecasts[lw,lf][forecasts[lw,lf].session.isin(te)],name,lp)
+            stat,_,_=overnight_replay(test,sessions,sig,ctx,capital=prior)
+            by_window.append(dict(method=name,window=window,frequency=lf,parameter=lp,
+                validation_objective=local[0],**stat))
+        _,window,frequency,param=best
+        selected[name]=dict(window=window,frequency=frequency,parameter=param)
+        sig={} if frequency is None else stop_signal(forecasts[window,frequency][forecasts[window,frequency].session.isin(te)],name,param)
         maps[name]=sig
         stat,d,e=overnight_replay(test,sessions,sig,ctx,capital=prior)
-        summary.append(dict(method=name,frequency=frequency,parameter=param,**stat))
+        summary.append(dict(method=name,window=window,frequency=frequency,parameter=param,**stat))
         curves.append(d.assign(method=name))
         if not e.empty:events.append(e.assign(method=name))
-        log(f"{name}: frequencia={frequency}, parametro={param}, final={stat['capital_final']:.2f}, vendas={stat['sessions_with_exit']}")
+        log(f"{name}: janela={window}, frequencia={frequency}, parametro={param}, final={stat['capital_final']:.2f}, vendas={stat['sessions_with_exit']}")
     result=pd.DataFrame(summary)
     result["fold3_rebased_10000"]=result.capital_final/prior*CAPITAL
     result["delta_control_usd"]=result.capital_final-baseline["capital_final"]
     result["delta_control_pct"]=100*(result.capital_final/baseline["capital_final"]-1)
-    ceilings={r["frequency"]:r["capital_final"] for r in oracle_rows if r["period"]=="fold3"}
-    result["oracle_final"]=result.frequency.map(ceilings)
+    ceilings={(r["window"],r["frequency"]):r["capital_final"] for r in oracle_rows if r["period"]=="fold3"}
+    result["oracle_final"]=[ceilings.get((w,f),np.nan) for w,f in zip(result.window,result.frequency)]
     denom=np.log(result.oracle_final/baseline["capital_final"])
     result["fraction_oracle_log_gain"]=np.log(result.capital_final/baseline["capital_final"])/denom.where(denom>0)
     pre=full[~full.session.isin(te)]
@@ -2129,7 +2268,7 @@ def run_optimal_stopping():
             stress.append(dict(method=name,extra_cost_bps=bps,**st))
     manifest=dict(status="exploratory_completed",cash_policy="overnight_until_next_winner_open",source=source,smoke=smoke_result,
         train=tr,validation=va,test=te,selected=selected,training_audit=train_audit,
-        features=STOP_FEATURES,capital_before_fold3=prior,cost_per_side=COST,
+        features=STOP_FEATURES,windows=STOP_WINDOWS,context_features=[c for c in CTX_PRIOR if c!="ctx_prior_close"]+["ctx_gap","ctx_current_return","ctx_first_return"],capital_before_fold3=prior,cost_per_side=COST,
         cache_errors=sessions.errors,cache_hashes=sessions.hashes,
         missing_sessions=sorted(sessions.missing),
         test_missing_final_bars=int((~coverage.loc[coverage.session.isin(te),"final_bar"]).sum()),
@@ -2148,12 +2287,16 @@ def run_optimal_stopping():
          "training reward only on reconciled observable oracle checkpoints; evaluation signals not filtered by future scale",
          "one exit per day; no intraday rotations; no fixed price stop; fixed time comparator only",
          "all models may select HOLD in validation; no selection on fold3",
-         "Oracle in this round uses matching causal r6 availability; earlier Oracle may have wider support"])
+         "J1 uses original r6 eligibility; J2-J6 require prior history and current first open; window-specific oracle support",
+         "prior windows use summaries of observed within-session returns and separate overnight gaps; no fill across missing bars",
+         "six windows add validation search complexity; per-window fold3 comparisons are exploratory"])
     files={"optimal_stop_manifesto.json":json.dumps(manifest,indent=2,default=str).encode(),
         "optimal_stop_comparacao.csv":csv(result),"optimal_stop_validacao.csv":csv(pd.DataFrame(grid)),
         "optimal_stop_oracle.csv":csv(pd.DataFrame(oracle_rows)),
         "optimal_stop_oracle_curvas.csv":csv(pd.concat(oracle_curves,ignore_index=True)),
-        "optimal_stop_oracle_oportunidades.csv":csv(oracle),
+        "optimal_stop_oracle_oportunidades.csv":csv(pd.concat(oracle_details,ignore_index=True)),
+        "optimal_stop_janelas.csv":csv(pd.DataFrame(by_window)),
+        "optimal_stop_contexto_cobertura.csv":csv(pd.concat(context_audit,ignore_index=True)),
         "optimal_stop_referencia_overnight.csv":csv(pd.DataFrame(ctx.values())),
         "optimal_stop_previsoes.csv":csv(pd.concat(forecasts.values(),ignore_index=True)),
         "optimal_stop_patrimonio.csv":csv(full_curves),
@@ -2186,6 +2329,7 @@ if __name__=="__main__":
         if "--optimal-stop-self-test" in sys.argv:
             print(stop_smoke())
             print(overnight_smoke())
+            print(window_smoke())
             sys.exit(0)
         if "--yahoo-self-test" in sys.argv:
             print(yahoo_test_smoke())
