@@ -293,8 +293,8 @@ def frame_features(bars,pos):
     k = pd.concat([kalman_features(g) for _,g in f.groupby(["symbol","session"],sort=False)])
     f = f.join(k)
     f["rolling"] = base.rolling_scores(f)
-    # Label: retorno de MANTER desde o primeiro open posterior ate o close
-    # regular da sessao. Ultima barra ausente => label ausente, jamais ffill.
+    # Label: retorno de MANTER desde o primeiro open posterior ate a recompra programada.
+    # Open da ultima barra ausente => label ausente, jamais ffill.
     grouped = f.groupby(["symbol","session"],sort=False)
     next_open = grouped.open.shift(-1)
     # Reentrada programada no open da ultima barra (15:55 NY em dia normal).
@@ -740,7 +740,8 @@ def smoke():
     sell=e[e.side=="sell_protection"]
     assert len(sell)>0 and sell.timestamp.min()>=ts[12]
     assert not (e[(e.timestamp>=ts[12])].side=="buy_winner").any()
-    assert d.cash.iloc[-1]>0 and d.shares.iloc[-1]<1e-8
+    assert d.cash.iloc[-1]<1e-8 and d.shares.iloc[-1]>0
+    assert e.loc[e.side.eq("buy_scheduled_preclose"),"timestamp"].tolist()==[ts[-1]]
     a,_,_=replay(p,m,{})
     b,_,_=replay(p,m,{("2026-07-28","DEMO",ts[11]):1.})
     assert a==b
@@ -796,7 +797,26 @@ def run():
     test=pos[pos.session.isin(te)]
     grid=[];summary=[];curves=[];events=[];forecasts=[]
     restricted=[];restricted_curves=[];restricted_events=[]
-    baseline,bd,be=anchored_replay(test,sessions,{})
+    # Capital acumulado antes do fold 3; sem overlay durante treino/validacao.
+    prior_capital=float(test.iloc[0].ref_previous_equity)
+    baseline,bd,be=anchored_replay(test,sessions,{},capital=prior_capital)
+    np.testing.assert_allclose(bd.equity,test.strategy_equity,rtol=1e-10)
+    oracle=oracle_candidates(f,sessions)
+    oracle_summaries=[];oracle_days=[];oracle_curves=[]
+    for frequency in FREQUENCIES:
+        for label,scope,capital in (("full_hindsight",pos,source["initial"]),("fold3_hindsight",test,prior_capital),("validation_hindsight",select,CAPITAL)):
+            sig,best=oracle_map(oracle[oracle.session.isin(scope.session)],frequency,COST)
+            stat,curve,_=anchored_replay(scope,sessions,sig,capital=capital)
+            ref_stat,_,_=anchored_replay(scope,sessions,{},capital=capital)
+            oracle_summaries.append(dict(period=label,frequency=frequency,covered_sessions=len(best),
+                missing_sessions=len(scope)-len(best),opportunities=int(best.opportunity.sum()),
+                control_final=ref_stat["capital_final"],delta_control_pct=100*(stat["capital_final"]/ref_stat["capital_final"]-1),**stat))
+            oracle_days.append(best.assign(period=label,frequency=frequency))
+            oracle_curves.append(curve.assign(period=label,frequency=frequency))
+    files["oracle_comparacao.csv"]=csv(pd.DataFrame(oracle_summaries))
+    files["oracle_oportunidades_diarias.csv"]=csv(pd.concat(oracle_days,ignore_index=True))
+    files["oracle_patrimonio.csv"]=csv(pd.concat(oracle_curves,ignore_index=True))
+    log("Oracle retrospectivo concluido; nunca usado para escolher parametros.")
     summary.append(dict(method="Control_MCT_anchored",risk=None,**baseline))
     curves.append(bd.assign(method="Control_MCT_anchored"))
     selected={};maps={"Control_MCT_anchored":{}}
@@ -811,7 +831,7 @@ def run():
         _,best,frequency=max(candidates,key=lambda x:x[0])
         selected[name]={"risk":best,"frequency":frequency}
         maps[name]=signal_map(t,best,frequency)
-        stat,d,e=anchored_replay(test,sessions,maps[name])
+        stat,d,e=anchored_replay(test,sessions,maps[name],capital=prior_capital)
         actual=t.target.notna()
         stat["prediction_mae"]=float((t.loc[actual,"mean"]-t.loc[actual,"target"]).abs().mean()) if actual.any() else None
         if "expected_mfe" in t:
@@ -839,6 +859,9 @@ def run():
             recovery_brier=float(((q.p_recovery-q.actual_recovery)**2).mean()) if "p_recovery" in q else np.nan,
             quantile_80pct_coverage=float(((q.target>=q.q10)&(q.target<=q.q90)).mean()) if "q10" in q else np.nan))
     files["qualidade_preditiva_suporte_comum.csv"]=csv(pd.DataFrame(predictive))
+    result["fold3_rebased_10000"]=result.capital_final/prior_capital*CAPITAL
+    result["full_initial_capital"]=source["initial"]
+    result["overlay_applied_only_fold3"]=True
     result["delta_control_usd"]=result.capital_final-baseline["capital_final"]
     result["delta_control_pct"]=100*(result.capital_final/baseline["capital_final"]-1)
     # Replay separado com liquidez, a MESMA politica congelada. Pode ficar
@@ -852,8 +875,12 @@ def run():
     stress=[]
     for bps in (5,10,25,50):
         for name,sig in maps.items():
-            st,_,_=anchored_replay(test,sessions,sig,cost=bps/10000)
+            st,_,_=anchored_replay(test,sessions,sig,capital=prior_capital,cost=bps/10000)
             stress.append(dict(method=name,extra_cost_bps=bps,**st))
+    # Curva continua: antes do fold 3, referencia oficial sem overlay.
+    pre=official_curve[~official_curve.session.isin(te)]
+    full_curves=pd.concat([pd.concat([pre.assign(method=d.method.iloc[0]),d],ignore_index=True) for d in curves],ignore_index=True)
+    files["patrimonio_continuo.csv"]=csv(full_curves)
     files.update({"comparacao_estrategias.csv":csv(result),
                   "comparacao_com_liquidez.csv":csv(pd.DataFrame(restricted)),
                   "patrimonio_com_liquidez.csv":csv(pd.concat(restricted_curves,ignore_index=True)),
@@ -868,9 +895,10 @@ def run():
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     fig,ax=plt.subplots(figsize=(11,6))
-    for d in curves:
-        ax.plot(pd.to_datetime(d.session),d.equity,label=d.method.iloc[0])
-    ax.set_title("Fold 3: contrafactual proporcional ancorado no Control MCT")
+    for name,d in full_curves.groupby("method",sort=False):
+        ax.plot(pd.to_datetime(d.session),d.equity,label=name)
+    ax.set_title("Patrimonio continuo: overlay apenas no fold 3")
+    ax.set_yscale("log")
     ax.set_ylabel("USD");ax.legend();ax.grid(alpha=.2)
     fig.tight_layout()
     buffer=io.BytesIO();fig.savefig(buffer,format="png",dpi=150);plt.close(fig)
@@ -884,11 +912,13 @@ def run():
             "cache_hashes":sessions.hashes,"cache_errors":sessions.errors,
             "split":{"train":tr,"validation":va,"test":te},
             "official_full_control_identity":official["capital_final"],
-            "capital_initial_test":CAPITAL,"extra_cost_per_side":COST,
+            "capital_initial_test":prior_capital,"capital_initial_full":source["initial"],
+            "restricted_initial_capital":CAPITAL,"extra_cost_per_side":COST,
+            "oracle":"hindsight only; best next observed open before scheduled same-symbol reentry; missing sessions left unchanged; no liquidity limit",
             "volume_participation_proxy":PARTICIPATION,"selected_risk":selected,
             "first_layer":"MCT decision_session earlier than execution session, frozen selection",
             "cash_rule":"one protection exit, scheduled reentry of known Winner target at final bar open, next official opening selection",
-            "control":"official daily factors re-scaled; not independent replication",
+            "control":"official continuous daily factors; no overlay in training/validation; fold3 uses accumulated capital; not independent replication",
             "limitations":["anchored overlay assumes proportional full fills; base fees retained conservatively even when cash avoids a sale",
                            "restricted replay separate; next-open/previous volume are execution proxies",
                            "SPLIT adjusted SIP; closing auction differences remain; dividends not independently reconciled; no certification",
