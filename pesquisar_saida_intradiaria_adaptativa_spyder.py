@@ -1256,6 +1256,7 @@ def monitor_report(rows,skipped,expected_slots,opening,closing):
             longest=max(longest,streak);prev=r.slot
         expected=sum(1 for t in expected_slots if opening<t-pd.Timedelta(minutes=MONITOR_DELAY if feed=="sip" else 0)<=closing)
         summary.append(dict(symbol=symbol,feed=feed,expected_polls=expected,polls=len(g),
+            first_poll=g.slot.min(),last_poll=g.slot.max(),
             successful_requests=int(g.status.isin(["ok","empty"]).sum()),
             errors=int(g.status.eq("error").sum()),empty_responses=int(g.status.eq("empty").sum()),
             exact_target_bars=int(fresh.sum()),target_availability_pct=100*fresh.mean(),
@@ -1264,7 +1265,8 @@ def monitor_report(rows,skipped,expected_slots,opening,closing):
             median_age_seconds=float(g.age_seconds.median()),p95_age_seconds=float(g.age_seconds.quantile(.95)),
             p95_excess_age_seconds=float(g.lag_from_requested_end_seconds.quantile(.95)),
             p95_response_seconds=float(g.response_seconds.quantile(.95)),
-            p95_dispatch_lateness_seconds=float(g.dispatch_lateness_seconds.quantile(.95))))
+            p95_dispatch_lateness_seconds=float(g.dispatch_lateness_seconds.quantile(.95)),
+            responses_after_next_poll=int((g.received_at>=g.slot+pd.Timedelta(seconds=MONITOR_GRACE+60)).sum())))
     # Mesmo minuto de mercado, observado em tempos DIFERENTES. Diagnostico
     # retrospectivo, nao uma feature disponivel no instante IEX original.
     cols=["symbol","target_bar_start","target_close","received_at","slot"]
@@ -1350,7 +1352,10 @@ def run_feed_monitor():
             started_at=now,updated_at=pd.Timestamp.now(tz="UTC"),opening=opening,closing=closing,
             symbols=MONITOR_SYMBOLS,cadence_seconds=60,grace_seconds=MONITOR_GRACE,
             sip_delay_minutes=MONITOR_DELAY,scheduled_slots=len(expected),finished_slots=len(done),
-            skipped_slots=len(skipped),request_count=len(rows),synthetic=smoke_result,
+            skipped_slots=len(skipped),request_count=len(rows),
+            request_errors=sum(r["status"]=="error" for r in rows),
+            expected_request_count=sum(len(monitor_jobs(t,opening,closing)) for t in expected),
+            synthetic=smoke_result,
             limitations=["REST polls not websocket or exchange latency; age is based on completed minute bar",
                          "IEX and SIP are separate sources; same-minute price comparison is retrospective",
                          "no backfill of missed live observations; skipped slots counted separately",
@@ -1410,6 +1415,10 @@ if __name__=="__main__":
         LOGGER.addHandler(handler)
     try:
         import sys
+        if "--feed-monitor-self-test" in sys.argv:
+            print(feed_test_smoke())
+            print(monitor_smoke())
+            sys.exit(0)
         if "--self-test" in sys.argv:
             print(smoke())
             print(feed_test_smoke())
