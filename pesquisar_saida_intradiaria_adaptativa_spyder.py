@@ -297,8 +297,10 @@ def frame_features(bars,pos):
     # regular da sessao. Ultima barra ausente => label ausente, jamais ffill.
     grouped = f.groupby(["symbol","session"],sort=False)
     next_open = grouped.open.shift(-1)
-    final_close = grouped.close.transform(lambda s:s.iloc[-1])
-    f["target"] = np.log(final_close/next_open)
+    # Reentrada programada no open da ultima barra (15:55 NY em dia normal).
+    # Alvo economico da permanencia ate a reentrada, NAO ate o ultimo close.
+    reentry_open = grouped.open.transform(lambda s:s.iloc[-1])
+    f["target"] = np.log(reentry_open/next_open)
     f["downside"] = (-f.target).clip(lower=0)
     f["peak_drawdown"] = f.close/grouped.high.cummax()-1
     f["efficiency"] = grouped.close.transform(lambda c:
@@ -319,7 +321,7 @@ def frame_features(bars,pos):
     # base.preparar cria grade ate fechamento; load_data corta pelo calendario.
     f["remaining_minutes"]=(grouped.timestamp.transform("max")-f.timestamp).dt.total_seconds()/60
     recent=grouped.close.transform(lambda c:c.rolling(6,min_periods=6).count())
-    f["horario"]=f.close.notna() & recent.eq(6) & grouped.timestamp.shift(-1).notna()
+    f["horario"]=f.close.notna() & recent.eq(6) & f.remaining_minutes.gt(5)
     f["cusum_pos"]=np.nan;f["cusum_neg"]=np.nan
     f["recovery_steps"]=np.nan
     f["recovery_observed"]=np.nan
@@ -495,7 +497,8 @@ def signal_map(preds, risk, frequency=60):
         return {}
     preds=preds[preds.minutes_elapsed.mod(frequency).eq(0)] if "minutes_elapsed" in preds else preds
     # Permanecer vs vender: vender custa COST; sem stop por % de preco.
-    score = preds["mean"] - risk*preds["risk"] - np.log(1-COST)
+    # Vender e recomprar tem custo dos dois lados.
+    score = preds["mean"] - risk*preds["risk"] - 2*np.log(1-COST)
     if "expected_mfe" in preds:
         # Potencial favoravel estimado nao e lucro realizavel; peso fixo moderado.
         score += .25*preds.expected_mfe.clip(lower=0)*preds.get("p_recovery",1.)
@@ -532,6 +535,7 @@ def replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
         for t in stamps:
             ny = t.tz_convert("America/New_York")
             opening = ny.hour*60+ny.minute < 630
+            preclose = tg is not None and not tg.empty and t==tg.timestamp.iloc[-1]
             def quote(sym):
                 g = by_symbol.get(sym)
                 prior = t-pd.Timedelta(minutes=5)
@@ -554,7 +558,7 @@ def replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
                     if qty<=1e-10:
                         qty=0.;held=None;mark=None
             # Saida da camada 2: ordem posterior ao sinal; fills parciais.
-            if pending and qty>1e-10 and held==target:
+            if pending and not preclose and qty>1e-10 and held==target:
                 px,capacity = quote(held)
                 if px is not None:
                     mark=px
@@ -566,15 +570,16 @@ def replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
                         events.append(dict(session=day,symbol=held,timestamp=t,side="sell_protection",qty=q,price=px,fee=fee))
                     if qty<=1e-10:
                         qty=0.;held=None;mark=None
-            # A camada 1 pode alocar apenas na abertura; nunca recomprar apos sinal.
-            if opening and not triggered and held in (None,target) and cash>1e-8:
+            # Recompra programada do alvo conhecido no inicio do dia.
+            # A capacidade do candle anterior limita o fill, inclusive na recompra.
+            if ((opening and not triggered) or (preclose and triggered)) and held in (None,target) and cash>1e-8:
                 px,capacity=quote(target)
                 if px is not None:
                     q=min(cash/(px*(1+cost)),capacity)
                     if q>0:
                         fee=q*px*cost
                         cash-=q*px+fee;qty+=q;held=target;mark=px;fees+=fee
-                        events.append(dict(session=day,symbol=target,timestamp=t,side="buy_winner",qty=q,price=px,fee=fee))
+                        events.append(dict(session=day,symbol=target,timestamp=t,side="buy_scheduled_preclose" if preclose else "buy_winner",qty=q,price=px,fee=fee))
             # Barra atual encerrou. O score nunca executa no seu proprio open.
             if qty>1e-10 and held is not None:
                 g=by_symbol.get(held)
@@ -583,7 +588,7 @@ def replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
                 value=cash+qty*(mark or 0.)
                 peak=max(peak,value)
                 s=signals.get((day,held,t))
-                if held==target and not triggered and s is not None and s<0:
+                if held==target and not triggered and s is not None and s<0 and tg is not None and t+pd.Timedelta(minutes=5)<tg.timestamp.iloc[-1]:
                     triggered=True;pending=True
                     events.append(dict(session=day,symbol=held,timestamp=t+pd.Timedelta(minutes=5),
                                        side="signal_exit",qty=0.,price=np.nan,fee=0.,score=s))
@@ -624,95 +629,104 @@ def replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
     return stat,d,pd.DataFrame(events)
 
 
-def anchored_replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
-    """Contrafactual proporcional, ancorado nos retornos diarios oficiais.
-    Sem overlay, reproduz a curva oficial reescalada EXATAMENTE por definicao.
-    Nao e uma reproducao independente do motor de primeira camada.
-    A saida altera apenas exposicao restante do dia + overnight.
-    Reentrada no open da proxima sessao, alvo Winner congelado.
-    Custos extras proporcionais; taxas oficiais ja estao no retorno de base.
+def anchored_replay(pos,sessions,signals,capital=CAPITAL,cost=COST,opportunities=None):
+    """Overlay proporcional ancorado nos fatores diarios oficiais.
+    A segunda camada pode emitir apenas uma venda. Recompra programada
+    do MESMO alvo da Winner no open da ultima barra da sessao regular.
+    A Winner congelada continua soberana na abertura seguinte.
+    Nao e decisao independente no fechamento, nem fill real garantido.
+    Sem venda, fator diario oficial permanece identico.
     """
-    eq=float(capital);cash_prev=False;daily=[];events=[];invalid=False
-    previous_observed_close=None
+    eq=float(capital);daily=[];events=[];invalid=False
+    by_day={}
+    for (day,symbol,ts),score in signals.items():
+        if score<0 and np.isfinite(score):
+            by_day.setdefault((day,symbol),[]).append((ts,score))
     for r in pos.itertuples(index=False):
-        previous_eq=eq
-        factor=float(r.ref_factor)
-        exit_px=None;entry_px=None;entry_gap=1.;adjust=1.;status="hold"
-        g=sessions.get((r.session,r.symbol)) if signals or cash_prev else None
-        if cash_prev:
-            # Control manteve a exposicao ao ticker anterior ate a abertura.
-            # Na rotacao, usar preco de venda exportado, nao preco de outro ativo.
-            if pd.notna(r.ref_sell_open):
-                entry_px=float(r.ref_sell_open)
-                prior_close=r.ref_previous_close
-                gap_source="official_sell_and_previous_close"
-            elif g is not None and pd.notna(g.open.iloc[0]):
-                entry_px=float(g.open.iloc[0])
-                prior_close=previous_observed_close
-                gap_source="split_sip_open_and_previous_close"
+        previous_eq=eq;factor=float(r.ref_factor)
+        adjust=1.;status="hold";exit_px=None;entry_px=None
+        key=(r.session,r.symbol)
+        candidates=by_day.get(key,[])
+        if candidates:
+            ts,score=min(candidates,key=lambda p:p[0])
+            g=sessions.get(key)
+            if g is None or g.empty:
+                invalid=True;status="missing_signal_session"
             else:
-                prior_close=None
-                gap_source="missing"
-            if entry_px is None or prior_close is None or not np.isfinite(prior_close) or prior_close<=0:
-                invalid=True;status="missing_reentry_open"
-            else:
-                entry_gap=entry_px/prior_close
-                factor/=entry_gap
-                factor*=1-cost
-                events.append(dict(session=r.session,symbol=r.symbol,side="reentry_open",
-                                   price=entry_px,overnight_gap=entry_gap,
-                                   price_symbol=r.previous,gap_source=gap_source))
-        cash_prev=False
-        if g is not None:
-            # Sinal no close da barra; fill no primeiro open observado posterior.
-            for i,b in enumerate(g.itertuples(index=False)):
-                score=signals.get((r.session,r.symbol,b.timestamp))
-                if score is None or score>=0:continue
-                after=g.iloc[i+1:]
-                after=after[after.open.notna() & after.open.gt(0)]
-                if after.empty:
-                    status="signal_without_fill"
-                    break
-                fill=after.iloc[0]
-                exit_px=float(fill.open)
-                # Preco de saida e fechamento da mesma fonte, mesma escala.
-                # Nao ajustar retrospectivamente features ou aceitar ganho de split.
-                close=g.close.iloc[-1]
-                if not np.isfinite(close) or close<=0:
-                    invalid=True;status="missing_exit_session_close"
-                    break
-                if not getattr(sessions,"scale_ok",{}).get((r.session,r.symbol),True):
-                    invalid=True;status="unreconciled_exit_scale"
-                    break
-                adjust=exit_px/float(close)*(1-cost)
-                factor*=adjust;cash_prev=True;status="cash"
-                events.append(dict(session=r.session,symbol=r.symbol,side="sell_protection",
-                  signal_timestamp=b.timestamp+pd.Timedelta(minutes=5),
-                  timestamp=fill.timestamp,price=exit_px,reference_close=r.ref_close,observed_close=close,
-                  score=score,exit_factor=adjust))
-                break
-        previous_observed_close=float(g.close.iloc[-1]) if g is not None and pd.notna(g.close.iloc[-1]) else None
+                last=g.iloc[-1]
+                # A ultima barra e definida pelo calendario, inclusive sessoes curtas.
+                cutoff=last.timestamp
+                if ts+pd.Timedelta(minutes=5)<cutoff:
+                    after=g[(g.timestamp>ts)&(g.timestamp<cutoff)&g.open.notna()&g.open.gt(0)]
+                    if after.empty:
+                        status="signal_without_fill"
+                    else:
+                        fill=after.iloc[0];exit_px=float(fill.open)
+                        if pd.isna(last.open) or last.open<=0:
+                            invalid=True;status="missing_reentry_price"
+                        elif not getattr(sessions,"scale_ok",{}).get(key,True):
+                            invalid=True;status="unreconciled_session"
+                        else:
+                            entry_px=float(last.open)
+                            # Mesma serie ajustada, sem comparar RAW e SPLIT.
+                            # Compra: cash/(preco*(1+custo)); venda: preco*(1-custo).
+                            adjust=exit_px/entry_px*(1-cost)/(1+cost)
+                            factor*=adjust;status="reentered"
+                            events.extend([
+                                dict(session=r.session,symbol=r.symbol,side="sell_protection",
+                                     signal_timestamp=ts+pd.Timedelta(minutes=5),timestamp=fill.timestamp,
+                                     price=exit_px,score=score),
+                                dict(session=r.session,symbol=r.symbol,side="buy_scheduled_preclose",
+                                     timestamp=cutoff,price=entry_px,exit_factor=adjust)])
         eq=eq*factor if not invalid else np.nan
         daily.append(dict(session=r.session,target=r.symbol,equity=eq,
-                          ret=factor-1 if not invalid else np.nan,
-                          reference_factor=r.ref_factor,overnight_gap=entry_gap,
-                          exit_factor=adjust,cash_at_close=cash_prev,
-                          exit_price=exit_px,status=status,valid_valuation=not invalid,
-                          exit_advantage=adjust-1 if cash_prev else np.nan))
-    d=pd.DataFrame(daily)
-    r=d.ret
-    final=float(d.equity.iloc[-1])
+            ret=factor-1 if not invalid else np.nan,reference_factor=r.ref_factor,
+            exit_factor=adjust,exit_price=exit_px,reentry_price=entry_px,status=status,
+            cash_at_close=False if status in ("hold","reentered","signal_without_fill") else None,
+            valid_valuation=not invalid,exit_advantage=adjust-1 if status=="reentered" else np.nan))
+    d=pd.DataFrame(daily);r=d.ret;final=float(d.equity.iloc[-1])
     peak=np.maximum.accumulate(np.r_[capital,d.equity])[1:]
     d["drawdown"]=d.equity/peak-1
-    return dict(capital_initial=capital,capital_final=final,
-                return_pct=100*(final/capital-1),
-                max_drawdown_daily=float(d.drawdown.min()) if not invalid else np.nan,
-                sharpe=float(r.mean()/r.std()*np.sqrt(252)) if not invalid and r.std()>0 else np.nan,
-                signals=int(d.status.isin(["cash","signal_without_fill"]).sum()),
-                sessions_with_exit=int(d.cash_at_close.sum()),
-                positive_exits=int(d.exit_advantage.gt(0).sum()),
-                premature_exits=int(d.exit_advantage.lt(0).sum()),
-                valid_valuation=not invalid,sessions=len(d)),d,pd.DataFrame(events)
+    return dict(capital_initial=capital,capital_final=final,return_pct=100*(final/capital-1),
+        max_drawdown_daily=float(d.drawdown.min()) if not invalid else np.nan,
+        sharpe=float(r.mean()/r.std()*np.sqrt(252)) if not invalid and r.std()>0 else np.nan,
+        signals=int(d.status.ne("hold").sum()),sessions_with_exit=int(d.status.eq("reentered").sum()),
+        positive_exits=int(d.exit_advantage.gt(0).sum()),premature_exits=int(d.exit_advantage.lt(0).sum()),
+        valid_valuation=not invalid,sessions=len(d)),d,pd.DataFrame(events)
+
+
+def oracle_candidates(frame,sessions):
+    """Apenas auditoria retrospectiva. Mesmo conjunto de checkpoints e
+    mesmo fill posterior da politica causal; sem usar high como fill."""
+    rows=[]
+    for (day,symbol),g in frame.groupby(["session","symbol"],sort=False):
+        key=(day,symbol)
+        raw=sessions.get(key)
+        if raw is None or raw.empty or not getattr(sessions,"scale_ok",{}).get(key,True):
+            continue
+        last=raw.iloc[-1]
+        if pd.isna(last.open) or last.open<=0:continue
+        valid=raw[(raw.timestamp<last.timestamp)&raw.open.notna()&raw.open.gt(0)]
+        times=valid.timestamp.astype("int64").to_numpy()
+        for row in g[g.horario].itertuples(index=False):
+            i=np.searchsorted(times,row.timestamp.value,side="right")
+            if i>=len(valid):continue
+            fill=valid.iloc[i]
+            rows.append(dict(session=day,symbol=symbol,timestamp=row.timestamp,
+                fill_timestamp=fill.timestamp,minutes_elapsed=row.minutes_elapsed,
+                sell_price=float(fill.open),reentry_price=float(last.open),
+                reentry_timestamp=last.timestamp,ratio=float(fill.open/last.open)))
+    if not rows:raise ValueError("Sem checkpoints conciliados para Oracle")
+    return pd.DataFrame(rows)
+
+
+def oracle_map(candidates,frequency,cost):
+    d=candidates[candidates.minutes_elapsed.mod(frequency).eq(0)].copy()
+    d["net_factor"]=d.ratio*(1-cost)/(1+cost)
+    best=d.sort_values(["session","net_factor","timestamp"],ascending=[True,False,True]).drop_duplicates("session")
+    best=best.copy();best["opportunity"]=best.net_factor.gt(1)
+    signals={(r.session,r.symbol,r.timestamp):-1. for r in best[best.opportunity].itertuples(index=False)}
+    return signals,best
 
 
 def smoke():
@@ -738,7 +752,7 @@ def smoke():
     past=kalman_features(noisy).iloc[:40]
     assert past.k_slope.notna().any()
     np.testing.assert_allclose(past,kalman_features(full).iloc[:40],equal_nan=True)
-    # Ancora: sem saida, fatores oficiais. Com saida, retirar overnight.
+    # Ancora: sem saida, fatores oficiais. Com saida, recompra antes do fechamento.
     nextday="2026-07-29"
     g2=g.copy()
     g2["timestamp"]=g2.timestamp+pd.Timedelta(days=1)
@@ -750,8 +764,12 @@ def smoke():
     a,_,_=anchored_replay(ref,m,{},cost=0.)
     assert np.isclose(a["capital_final"],9900.)
     b,_,e=anchored_replay(ref,m,{("2026-07-28","DEMO",ts[11]):-1.},cost=0.)
-    assert np.isclose(b["capital_final"],9000.)
-    assert e.side.tolist()==["sell_protection","reentry_open"]
+    assert np.isclose(b["capital_final"],9900.)
+    assert e.side.tolist()==["sell_protection","buy_scheduled_preclose"]
+    # Venda a 100 e recompra a 90: ganho proporcional de 100/90.
+    g.loc[12,["open","close"]]=100.
+    b,_,e=anchored_replay(ref,m,{("2026-07-28","DEMO",ts[11]):-1.},cost=0.)
+    assert np.isclose(b["capital_final"],11000.)
     # Multiplicar toda a serie intradiaria por 40 nao deve produzir ganhos ficticios.
     scaled={key:g.assign(open=g.open*40,close=g.close*40) for key,g in m.items()}
     c,_,_=anchored_replay(ref,scaled,{("2026-07-28","DEMO",ts[11]):-1.},cost=0.)
@@ -869,12 +887,12 @@ def run():
             "capital_initial_test":CAPITAL,"extra_cost_per_side":COST,
             "volume_participation_proxy":PARTICIPATION,"selected_risk":selected,
             "first_layer":"MCT decision_session earlier than execution session, frozen selection",
-            "cash_rule":"no same-day reentry, next session opening only",
+            "cash_rule":"one protection exit, scheduled reentry of known Winner target at final bar open, next official opening selection",
             "control":"official daily factors re-scaled; not independent replication",
             "limitations":["anchored overlay assumes proportional full fills; base fees retained conservatively even when cash avoids a sale",
                            "restricted replay separate; next-open/previous volume are execution proxies",
                            "SPLIT adjusted SIP; closing auction differences remain; dividends not independently reconciled; no certification",
-                           "no independent closing Winner signal in daily export; no closing auction reentry",
+                           "no independent closing Winner signal in daily export; scheduled preclose buy of same target is a separate proxy",
                            "models and cadence selected on validation; fold3 is exploratory because previous research inspected this period"],
             "validation_sessions_missing_final":int((~coverage.loc[coverage.session.isin(va),"final_bar"]).sum()),
             "validation_scale_discrepancies":int((~coverage.loc[coverage.session.isin(va),"scale_ok"]).sum()),
