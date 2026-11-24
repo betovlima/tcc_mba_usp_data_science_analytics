@@ -72,3 +72,20 @@ O resultado distingue resposta HTTP bem-sucedida de disponibilidade da barra exa
 O ZIP e atualizado atomicamente apos o primeiro ciclo, a cada cinco ciclos e ao terminar ou receber Ctrl+C. Preserva todos os demais arquivos validos do ZIP e substitui os arquivos `feed_monitor_*` pela rodada corrente (nao acumula duas rodadas do monitor). Uma interrupcao abrupta preserva o ultimo checkpoint; para terminar antes do fechamento prefira Ctrl+C. Se iniciar tarde, o manifesto e os slots ausentes identificam cobertura parcial. Nao interrompa o script por fechamento forcado do Spyder se puder usar Ctrl+C.
 
 Arquivos: `feed_monitor_manifesto.json`, `feed_monitor_consultas.csv`, `feed_monitor_barras_recebidas.csv`, `feed_monitor_slots_ausentes.csv`, `feed_monitor_resumo.csv`, `feed_monitor_minutos_pareados.csv`, `feed_monitor_comparacao.csv`, codigo e log. O resultado continua em `output/pesquisa_saida_intradiaria_adaptativa.zip`. Validar dados antes de treinar ou integrar qualquer politica de venda.
+
+## Yahoo Finance versus Alpaca
+
+Mesmo script, branch e ZIP. Diagnostico separado da pesquisa de modelos e do monitor continuo. A biblioteca yfinance nao e API oficial e os termos do Yahoo restringem coleta automatizada sem permissao previa. So use a coleta direta se autorizado pelo provedor; o argumento nao concede permissao. Alternativamente, importe CSV obtido e utilizado de forma autorizada, com colunas timestamp (ISO 8601 com fuso), symbol, open, high, low, close, volume.
+
+```bash
+python pesquisar_saida_intradiaria_adaptativa_spyder.py --yahoo-self-test
+# Somente com permissao de coleta automatizada:
+python -m pip install yfinance
+python pesquisar_saida_intradiaria_adaptativa_spyder.py --yahoo-test --yahoo-authorized
+# Alternativa com dados autorizados ja disponiveis:
+python pesquisar_saida_intradiaria_adaptativa_spyder.py --yahoo-test --yahoo-csv cotacoes_yahoo.csv
+```
+
+No Spyder use %run com os mesmos argumentos. Usa ate cinco pregoes completos dentro dos ultimos sete dias corridos, DNN/CAPR/MKSI/NVDA/AMS, candles de 1 minuto agregados em 1/5/15/30/60 minutos. Alpaca RAW IEX/SIP e Yahoo auto_adjust=False; auditoria de escala (nao e stop) exclui sessoes sem conciliacao do Oracle. Mede cobertura, diferencas de preco/volume/extremos/horarios, idade da ultima observacao, concordancia direcional e erros em suporte comum dos tres feeds. Oracle retrospectivo usa fills SIP e mesmos dias comparaveis, nao constitui modelo operacional. Se mercado aberto apos 30 minutos, modo direto testa tambem snapshots recentes Yahoo e IEX e SIP atrasado 20 minutos. CSV nao testa disponibilidade Yahoo recente. Snapshot unico nao mede latencia continua.
+
+Arquivos yahoo_test_* sao adicionados ao mesmo ZIP preservando resultados anteriores validos. Nao altera MCT, nao envia ordens, nao contrata planos. Nao redistribua dados de terceiros sem permissao aplicavel. A execucao normal e o monitor Alpaca nao mudam.
