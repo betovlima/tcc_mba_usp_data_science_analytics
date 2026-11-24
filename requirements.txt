@@ -21,3 +21,6 @@ pytest>=8,<9
 
 # Qualidade estatica
 ruff>=0.8,<1
+
+# Calendario NYSE para sessoes reduzidas e feriados (pesquisa intradiaria)
+exchange-calendars>=4.8,<5
