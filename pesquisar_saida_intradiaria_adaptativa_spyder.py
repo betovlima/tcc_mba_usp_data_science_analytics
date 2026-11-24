@@ -24,7 +24,7 @@ SEED = 20261123
 CAPITAL = 10000.
 COST = .001  # custo por lado, nao gatilho de stop
 PARTICIPATION = .01  # proxy de capacidade usando volume ja conhecido
-METHODS = ("kalman", "multirrolling", "bocpd", "lightgbm", "kalman_lightgbm", "lightgbm_excursions")
+METHODS = ("kalman", "multirrolling", "bocpd", "lightgbm", "kalman_lightgbm", "lightgbm_excursions", "cusum_adaptive", "quantile_lightgbm", "regime_recovery", "recovery_survival")
 RISKS = (0., .25, .5, 1.)
 FEATURES = list(base.FEATURES)
 KFEATURES = ["k_slope", "k_accel", "k_gap"]
@@ -313,7 +313,49 @@ def frame_features(bars,pos):
         with np.errstate(invalid="ignore",divide="ignore"):
             f.loc[g.index[:-1],"mfe"]=np.maximum(0.,np.log(future_hi/op[1:]))
             f.loc[g.index[:-1],"mae"]=np.maximum(0.,np.log(op[1:]/future_lo))
-    f["horario"] &= grouped.timestamp.shift(-1).notna()
+    # Cada barra e avaliada apenas apos encerrar. Cadencias escolhidas na validacao.
+    ny=f.timestamp.dt.tz_convert("America/New_York")
+    f["minutes_elapsed"]=ny.dt.hour*60+ny.dt.minute-570+5
+    # base.preparar cria grade ate fechamento; load_data corta pelo calendario.
+    f["remaining_minutes"]=(grouped.timestamp.transform("max")-f.timestamp).dt.total_seconds()/60
+    recent=grouped.close.transform(lambda c:c.rolling(6,min_periods=6).count())
+    f["horario"]=f.close.notna() & recent.eq(6) & grouped.timestamp.shift(-1).notna()
+    f["cusum_pos"]=np.nan;f["cusum_neg"]=np.nan
+    f["recovery_steps"]=np.nan
+    f["recovery_observed"]=np.nan
+    f["regime"]=np.nan
+    for _,g in f.groupby(["symbol","session"],sort=False):
+        # Volatilidade anterior normaliza inovacoes; k=.5 em unidades de sigma.
+        sigma=g.r1.rolling(24,min_periods=6).std().shift(1)
+        z=g.r1/sigma.replace(0,np.nan)
+        up=down=0.
+        cp=[];cn=[]
+        for v in z:
+            if not np.isfinite(v):
+                up=down=0.;cp.append(np.nan);cn.append(np.nan);continue
+            up=max(0.,up+float(v)-.5)
+            down=max(0.,down-float(v)-.5)
+            cp.append(up);cn.append(down)
+        f.loc[g.index,"cusum_pos"]=cp;f.loc[g.index,"cusum_neg"]=cn
+        highs=g.high.to_numpy(float);closes=g.close.to_numpy(float)
+        peak=g.high.cummax().to_numpy(float)
+        # Tempo ate recuperar maximo conhecido no momento da decisao.
+        # Censura administrativa no fechamento; lacunas nao viram recuperacao.
+        for i in range(len(g)-1):
+            path=highs[i+1:]
+            if not np.isfinite(peak[i]) or not np.isfinite(closes[i]) or not np.isfinite(path).all():
+                continue
+            if closes[i]>=peak[i]:
+                continue  # nao esta em drawdown
+            hit=np.flatnonzero(path>=peak[i])
+            f.loc[g.index[i],"recovery_steps"]=int(hit[0]+1) if len(hit) else len(path)
+            f.loc[g.index[i],"recovery_observed"]=int(bool(len(hit)))
+        # Regime futuro: variacao de preco comparada ao ruido esperado.
+        remain=len(g)-1-np.arange(len(g))
+        band=g.vol12.to_numpy(float)*np.sqrt(remain)
+        y=g.target.to_numpy(float)
+        valid=np.isfinite(band)&np.isfinite(y)
+        f.loc[g.index[valid],"regime"]=np.where(y[valid]>band[valid],2,np.where(y[valid]<-band[valid],0,1))
     return f
 
 
@@ -332,7 +374,7 @@ def make_scores(f, train_days, val_days, test_days):
     from sklearn.preprocessing import StandardScaler
     from sklearn.impute import SimpleImputer
     from sklearn.linear_model import Ridge
-    from lightgbm import LGBMRegressor
+    from lightgbm import LGBMRegressor, LGBMClassifier
     tr = f[f.session.isin(train_days)]
     variance = tr.r1.dropna().var()
     if not np.isfinite(variance) or variance<=0:
@@ -349,42 +391,114 @@ def make_scores(f, train_days, val_days, test_days):
             "bocpd":["bocpd","vol12","time_frac"],
             "lightgbm":FEATURES,
             "kalman_lightgbm":FEATURES+KFEATURES+["rolling","bocpd"],
-            "lightgbm_excursions":FEATURES+KFEATURES+["rolling","bocpd","peak_drawdown","efficiency"]}
+            "lightgbm_excursions":FEATURES+KFEATURES+["rolling","bocpd","peak_drawdown","efficiency"],
+            "cusum_adaptive":["cusum_pos","cusum_neg","vol12","time_frac","peak_drawdown","efficiency"],
+            "quantile_lightgbm":FEATURES+KFEATURES+["rolling","bocpd","peak_drawdown","efficiency","cusum_pos","cusum_neg"],
+            "regime_recovery":FEATURES+KFEATURES+["rolling","bocpd","peak_drawdown","efficiency","cusum_pos","cusum_neg"],
+            "recovery_survival":FEATURES+KFEATURES+["rolling","bocpd","peak_drawdown","efficiency","cusum_pos","cusum_neg"]}
     out = {}
     for name in METHODS:
         log(f"Treinando {name}: {len(tr)} checkpoints")
         x = tr[cols[name]].replace([np.inf,-np.inf],np.nan)
         z = ev[cols[name]].replace([np.inf,-np.inf],np.nan)
-        preds = ev[["session","symbol","timestamp","target"]].copy()
-        labels=("target","mae","mfe") if name=="lightgbm_excursions" else ("target","downside")
+        preds = ev[["session","symbol","timestamp","target","minutes_elapsed"]].copy()
+        labels=("target","mae","mfe") if name in ("lightgbm_excursions","recovery_survival","regime_recovery") else ("target","downside")
         for label in labels:
             model = (LGBMRegressor(n_estimators=100,num_leaves=7,max_depth=3,
                      learning_rate=.04,min_child_samples=35,random_state=SEED,
-                     n_jobs=1,verbosity=-1) if "lightgbm" in name else
+                     n_jobs=1,verbosity=-1) if "lightgbm" in name or name in ("regime_recovery","recovery_survival") else
                      make_pipeline(SimpleImputer(strategy="median"),StandardScaler(),Ridge(alpha=20.)))
             valid=tr[label].notna()
             if valid.sum()<100:raise ValueError(f"Amostra insuficiente {name}/{label}")
             model.fit(x.loc[valid],tr.loc[valid,label])
             preds[{"target":"mean","downside":"risk","mae":"risk","mfe":"expected_mfe"}[label]]=model.predict(z)
+        if name=="quantile_lightgbm":
+            for alpha,col in ((.1,"q10"),(.5,"q50"),(.9,"q90")):
+                model=LGBMRegressor(objective="quantile",alpha=alpha,n_estimators=120,
+                     num_leaves=7,max_depth=3,learning_rate=.04,min_child_samples=50,
+                     random_state=SEED,n_jobs=1,verbosity=-1)
+                model.fit(x,tr.target)
+                preds[col]=model.predict(z)
+            ordered=np.sort(preds[["q10","q50","q90"]].to_numpy(),axis=1)
+            preds[["q10","q50","q90"]]=ordered
+            preds["risk"]=(-preds.q10).clip(lower=0)
+        if name=="regime_recovery":
+            valid=tr.regime.notna()
+            if tr.loc[valid,"regime"].nunique()!=3:
+                raise ValueError("Amostra insuficiente para tres regimes")
+            model=LGBMClassifier(n_estimators=100,num_leaves=7,max_depth=3,
+                 learning_rate=.04,min_child_samples=50,random_state=SEED,n_jobs=1,verbosity=-1)
+            model.fit(x.loc[valid],tr.loc[valid,"regime"].astype(int))
+            prob=model.predict_proba(z)
+            for i,cl in enumerate(model.classes_):
+                preds[["p_down","p_sideways","p_up"][int(cl)]]=prob[:,i]
+            # Magnitudes condicionais no treino; expectativa ponderada por regime.
+            means=tr.loc[valid].groupby("regime").target.mean()
+            preds["mean"]=sum(preds[col]*float(means.loc[k]) for k,col in enumerate(["p_down","p_sideways","p_up"]))
+            valid=tr.recovery_observed.notna()
+            if tr.loc[valid,"recovery_observed"].nunique()!=2:
+                raise ValueError("Amostra insuficiente para recuperacao")
+            recovery=LGBMClassifier(n_estimators=80,num_leaves=7,max_depth=3,
+                 learning_rate=.04,min_child_samples=50,random_state=SEED,n_jobs=1,verbosity=-1)
+            recovery.fit(x.loc[valid],tr.loc[valid,"recovery_observed"].astype(int))
+            preds["p_recovery"]=recovery.predict_proba(z)[:,1]
+        if name=="recovery_survival":
+            # Risco discreto por intervalos de 30 min (6 barras). Uma linha
+            # por intervalo em risco; censura no fechamento, sem usar o
+            # tempo efetivo futuro como feature. Somente a duracao planejada.
+            rows=[];labels=[]
+            valid=tr.recovery_steps.notna() & tr.recovery_observed.notna()
+            for idx,r in tr.loc[valid].iterrows():
+                duration=int(r.recovery_steps);hit=int(r.recovery_observed)
+                for start in range(0,duration,6):
+                    width=min(6,int(r.remaining_minutes/5)-start)
+                    if width<=0:break
+                    # Intervalo final parcial censurado nao vira nao-evento completo.
+                    event=bool(hit and duration<=start+width)
+                    if not event and duration<start+width:break
+                    vals=x.loc[idx].to_dict();vals["hazard_bin"]=start//6;vals["hazard_width"]=width
+                    rows.append(vals);labels.append(int(event))
+                    if event:break
+            if len(rows)<100 or len(set(labels))!=2:
+                raise ValueError("Amostra insuficiente para sobrevivencia")
+            model=LGBMClassifier(n_estimators=80,num_leaves=7,max_depth=3,
+                 learning_rate=.04,min_child_samples=50,random_state=SEED,n_jobs=1,verbosity=-1)
+            hx=pd.DataFrame(rows)
+            model.fit(hx,labels)
+            # Horizonte conhecido: numero de barras restantes segundo calendario.
+            remaining=ev["remaining_minutes"]
+            survival=np.ones(len(ev))
+            for start in range(0,78,6):
+                width=np.minimum(6,np.maximum(0,(remaining.to_numpy()/5).astype(int)-start))
+                active=width>0
+                if not active.any():break
+                zz=z.loc[active].copy()
+                zz["hazard_bin"]=start//6;zz["hazard_width"]=width[active]
+                hazard=model.predict_proba(zz[hx.columns])[:,1]
+                survival[active]*=1-hazard
+            preds["p_recovery"]=1-survival
+        preds["actual_recovery"]=ev.recovery_observed
+        preds["actual_regime"]=ev.regime
         preds["actual_mae"]=ev.mae
         preds["actual_mfe"]=ev.mfe
         preds["risk"] = preds.risk.clip(lower=0)
         # Nao autorizar ordem com estado de tendencia completamente ausente.
         essential = {"kalman":"k_slope","multirrolling":"rolling","bocpd":"bocpd",
-                     "lightgbm":"r6","kalman_lightgbm":"k_slope","lightgbm_excursions":"k_slope"}[name]
+                     "lightgbm":"r6","kalman_lightgbm":"k_slope","lightgbm_excursions":"k_slope","cusum_adaptive":"cusum_neg","quantile_lightgbm":"r6","regime_recovery":"r6","recovery_survival":"r6"}[name]
         preds = preds[z[essential].notna()] if essential in z else preds
         out[name] = preds
     return out
 
 
-def signal_map(preds, risk):
+def signal_map(preds, risk, frequency=60):
     if risk is None:
         return {}
+    preds=preds[preds.minutes_elapsed.mod(frequency).eq(0)] if "minutes_elapsed" in preds else preds
     # Permanecer vs vender: vender custa COST; sem stop por % de preco.
     score = preds["mean"] - risk*preds["risk"] - np.log(1-COST)
     if "expected_mfe" in preds:
         # Potencial favoravel estimado nao e lucro realizavel; peso fixo moderado.
-        score += .25*preds.expected_mfe.clip(lower=0)
+        score += .25*preds.expected_mfe.clip(lower=0)*preds.get("p_recovery",1.)
     return {(r.session,r.symbol,r.timestamp):float(v)
             for r,v in zip(preds.itertuples(index=False),score) if np.isfinite(v)}
 
@@ -660,26 +774,40 @@ def run():
     for name,p in pred.items():
         v=p[p.session.isin(va)];t=p[p.session.isin(te)]
         candidates=[]
-        for risk in (None,*RISKS):
-            stat,_,_=anchored_replay(select,sessions,signal_map(v,risk))
+        for frequency,risk in [(60,None)]+[(f,r) for f in FREQUENCIES for r in RISKS]:
+            stat,_,_=anchored_replay(select,sessions,signal_map(v,risk,frequency))
             objective=np.log(stat["capital_final"]/CAPITAL)+.5*stat["max_drawdown_daily"] if stat["valid_valuation"] else -np.inf
-            candidates.append((objective,risk))
-            grid.append(dict(method=name,risk=risk,objective=objective,**stat))
-        best=max(candidates,key=lambda x:x[0])[1]
-        selected[name]=best
-        maps[name]=signal_map(t,best)
+            candidates.append((objective,risk,frequency))
+            grid.append(dict(method=name,risk=risk,frequency=frequency,objective=objective,**stat))
+        _,best,frequency=max(candidates,key=lambda x:x[0])
+        selected[name]={"risk":best,"frequency":frequency}
+        maps[name]=signal_map(t,best,frequency)
         stat,d,e=anchored_replay(test,sessions,maps[name])
         actual=t.target.notna()
         stat["prediction_mae"]=float((t.loc[actual,"mean"]-t.loc[actual,"target"]).abs().mean()) if actual.any() else None
         if "expected_mfe" in t:
             stat["mfe_prediction_mae"]=float((t.expected_mfe-t.actual_mfe).abs().mean())
             stat["mae_prediction_mae"]=float((t.risk-t.actual_mae).abs().mean())
-        summary.append(dict(method=name,risk=best,**stat))
+        summary.append(dict(method=name,risk=best,frequency=frequency,**stat))
         curves.append(d.assign(method=name))
         if not e.empty:events.append(e.assign(method=name))
         forecasts.append(t.assign(method=name))
-        log(f"{name}: risco validado={best}; fold3 capital={stat['capital_final']:.2f}; saidas={stat['sessions_with_exit']}")
+        log(f"{name}: risco validado={best}; frequencia={frequency}; fold3 capital={stat['capital_final']:.2f}; saidas={stat['sessions_with_exit']}")
     result=pd.DataFrame(summary)
+    # Referencia preditiva zero e comparacao em suporte comum, sem selecionar no teste.
+    common=None
+    for p in forecasts:
+        keys=set(zip(p.session,p.symbol,p.timestamp))
+        common=keys if common is None else common & keys
+    predictive=[]
+    for p in forecasts:
+        q=p.loc[[k in common for k in zip(p.session,p.symbol,p.timestamp)]].dropna(subset=["target","mean"])
+        if q.empty:continue
+        predictive.append(dict(method=q.method.iloc[0],samples=len(q),
+            mae=float((q["mean"]-q.target).abs().mean()),
+            zero_mae=float(q.target.abs().mean()),
+            directional_accuracy=float((np.sign(q["mean"])==np.sign(q.target)).mean())))
+    files["qualidade_preditiva_suporte_comum.csv"]=csv(pd.DataFrame(predictive))
     result["delta_control_usd"]=result.capital_final-baseline["capital_final"]
     result["delta_control_pct"]=100*(result.capital_final/baseline["capital_final"]-1)
     # Replay separado com liquidez, a MESMA politica congelada. Pode ficar
