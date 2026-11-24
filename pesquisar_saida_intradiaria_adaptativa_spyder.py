@@ -956,6 +956,216 @@ def run():
     files["manifesto.json"]=json.dumps(status,ensure_ascii=False,indent=2,default=str).encode()
     return files
 
+# Diagnostico independente de acesso e representatividade IEX/SIP.
+# Nao altera os modelos, nao envia ordens, nao requer plano pago.
+FEED_SYMBOLS=("DNN","CAPR","MKSI","NVDA")
+FEED_FREQUENCIES=(1,5,15,30,60)
+
+
+def feed_grid(raw, start, end):
+    idx=pd.date_range(start,end,freq="min",inclusive="left",name="timestamp")
+    cols=["open","high","low","close","volume"]
+    if raw is None or raw.empty:
+        return pd.DataFrame(index=idx,columns=cols,dtype=float)
+    data=raw.copy()
+    if "timestamp" in data.columns:data=data.set_index("timestamp")
+    data.index=pd.to_datetime(data.index,utc=True)
+    data=data[~data.index.duplicated(keep="last")].sort_index()
+    return data[cols].apply(pd.to_numeric,errors="coerce").reindex(idx)
+
+
+def feed_aggregate(g, frequency):
+    # Janelas alinhadas a abertura regular, rotuladas pelo FIM da barra.
+    # Sem forward-fill de preco, sem inventar volume.
+    out=g.resample(f"{frequency}min",origin=g.index[0],label="right",closed="left").agg(
+        open=("open","first"),high=("high","max"),low=("low","min"),
+        close=("close","last"),volume=("volume",lambda x:x.sum(min_count=1)),
+        observed_minutes=("close","count"))
+    return out[out.index<=g.index[-1]+pd.Timedelta(minutes=1)]
+
+
+def feed_day_compare(sip,iex,day,symbol,frequency):
+    a=feed_aggregate(sip,frequency);b=feed_aggregate(iex,frequency)
+    j=a.add_prefix("sip_").join(b.add_prefix("iex_"),how="outer")
+    common=j.sip_close.notna() & j.iex_close.notna()
+    j["close_error_bps"]=10000*(j.iex_close/j.sip_close-1)
+    j["high_error_bps"]=10000*(j.iex_high/j.sip_high-1)
+    j["low_error_bps"]=10000*(j.iex_low/j.sip_low-1)
+    sr=np.log(j.sip_close/j.sip_close.shift())
+    ir=np.log(j.iex_close/j.iex_close.shift())
+    paired=sr.notna() & ir.notna()
+    j["sip_return"]=sr;j["iex_return"]=ir
+    j["direction_agrees"]=np.where(paired,np.sign(sr)==np.sign(ir),np.nan)
+    # Regra diagnostica SIMPLES e congelada: retorno negativo da janela.
+    # Nao e a politica Winner nem um modelo aprovado de venda.
+    j["negative_return_agrees"]=np.where(paired,(sr<0)==(ir<0),np.nan)
+    # Oracle: todos os fills avaliados em SIP, com mesma recompra 5min antes
+    # do fechamento. IEX apenas restringe os checkpoints observaveis.
+    # Espera de 1 min apos fechamento da barra como proxy de latencia.
+    reentry=sip.index[-1]-pd.Timedelta(minutes=4)
+    reprice=sip.loc[reentry,"open"]
+    ts=j.index+pd.Timedelta(minutes=1)
+    fills=sip.open.reindex(ts).to_numpy()
+    j["sip_fill_timestamp"]=ts
+    j["sip_fill_open"]=fills
+    j["oracle_net_factor"]=fills/reprice*(1-COST)/(1+COST) if pd.notna(reprice) and reprice>0 else np.nan
+    allowed=(j.index>=sip.index[0]+pd.Timedelta(minutes=30)) & (ts<reentry)
+    valid=allowed & j.sip_close.notna() & j.oracle_net_factor.notna()
+    def best(mask):
+        q=j.loc[mask,"oracle_net_factor"]
+        return max(1.,float(q.max())) if len(q) else np.nan
+    v_sip=float(sip.volume.sum(min_count=1));v_iex=float(iex.volume.sum(min_count=1))
+    result=dict(session=day,symbol=symbol,frequency=frequency,
+        expected_bars=len(j),sip_bars=int(j.sip_close.notna().sum()),
+        iex_bars=int(j.iex_close.notna().sum()),common_bars=int(common.sum()),
+        sip_minutes=int(sip.close.notna().sum()),iex_minutes=int(iex.close.notna().sum()),
+        expected_minutes=len(sip),sip_volume=v_sip,iex_volume=v_iex,
+        iex_volume_share=v_iex/v_sip if v_sip>0 else np.nan,
+        mean_abs_close_error_bps=float(j.loc[common,"close_error_bps"].abs().mean()),
+        p95_abs_close_error_bps=float(j.loc[common,"close_error_bps"].abs().quantile(.95)),
+        mean_abs_high_error_bps=float(j.loc[common,"high_error_bps"].abs().mean()),
+        mean_abs_low_error_bps=float(j.loc[common,"low_error_bps"].abs().mean()),
+        paired_returns=int(paired.sum()),direction_agreement=float(j.direction_agrees.mean()),
+        negative_return_agreement=float(j.negative_return_agrees.mean()),
+        oracle_sip_checkpoints=int(valid.sum()),
+        oracle_iex_checkpoints=int((valid & j.iex_close.notna()).sum()),
+        oracle_sip_factor=best(valid),oracle_iex_observable_factor=best(valid & j.iex_close.notna()),
+        reentry_timestamp=reentry,reentry_sip_open=reprice)
+    j=j.reset_index().assign(session=day,symbol=symbol,frequency=frequency)
+    return result,j
+
+
+def feed_test_smoke():
+    start=pd.Timestamp("2026-07-28T13:30:00Z")
+    end=start+pd.Timedelta(minutes=390)
+    idx=pd.date_range(start,end,freq="min",inclusive="left")
+    raw=pd.DataFrame(dict(open=100.,high=101.,low=99.,close=100.,volume=1000.),index=idx)
+    a=feed_grid(raw,start,end);b=feed_grid(raw.iloc[::2],start,end)
+    r,j=feed_day_compare(a,b,"2026-07-28","DEMO",1)
+    assert r["sip_bars"]==390 and r["iex_bars"]==195
+    assert r["iex_volume_share"]==.5 and r["mean_abs_close_error_bps"]==0.
+    assert r["oracle_sip_factor"]==1. and r["oracle_iex_observable_factor"]==1.
+    assert feed_aggregate(a,5).index[0]==start+pd.Timedelta(minutes=5)
+    # Falta de barra nao vira preco inventado.
+    assert b.close.isna().sum()==195
+    return "feed_diagnostic_synthetic_passed"
+
+
+def run_feed_test():
+    import exchange_calendars as xc
+    import time
+    now=pd.Timestamp.now(tz="UTC")
+    cutoff=now-pd.Timedelta(minutes=20)
+    date=now.tz_convert("America/New_York").date()
+    cal=xc.get_calendar("XNYS",start=pd.Timestamp(date)-pd.Timedelta(days=45),
+                       end=pd.Timestamp(date)+pd.Timedelta(days=7))
+    dates=[d for d in cal.sessions if cal.session_close(d)<=cutoff][-10:]
+    if len(dates)<10:raise ValueError("Calendario insuficiente")
+    start=cal.session_open(dates[0]);end=cal.session_close(dates[-1])
+    smoke_result=feed_test_smoke()
+    download,creds=base._market_reader_local()
+    errors=[];requests=[];grids={};live=[]
+    def query(symbol,feed,start,end,phase,adjustment="split"):
+        log(f"Teste {phase}: {symbol} {feed} 1Min {start} / {end}")
+        tic=time.monotonic();status="ok";message=""
+        try:
+            data=download(**creds,symbol=symbol,timeframe="1Min",start=start,end=end,
+                          feed=feed,adjustment=adjustment)
+            if data is None or data.empty:status="empty"
+        except Exception as exc:
+            status="error";data=None
+            # Apenas tipo de erro; nao exportar credenciais ou respostas brutas.
+            message=type(exc).__name__
+            msg=str(exc).lower()
+            if "subscription" in msg or "recent sip" in msg:message="subscription_restriction"
+            elif "429" in msg or "rate limit" in msg:message="rate_limit"
+            elif "401" in msg or "403" in msg:message="authentication_or_permission"
+            errors.append(dict(phase=phase,symbol=symbol,feed=feed,error=message))
+        requests.append(dict(phase=phase,symbol=symbol,feed=feed,status=status,
+            elapsed_seconds=time.monotonic()-tic,rows=0 if data is None else len(data),error=message))
+        return data,status
+    for sym in FEED_SYMBOLS:
+        for feed in ("sip","iex"):
+            data,status=query(sym,feed,start,end,"historical")
+            for d in dates:
+                day=str(d.date())
+                grids[(sym,feed,day)]=feed_grid(data,cal.session_open(d),cal.session_close(d))
+    rows=[];details=[];minute_frames=[]
+    for sym in FEED_SYMBOLS:
+        for d in dates:
+            day=str(d.date());a=grids[(sym,"sip",day)];b=grids[(sym,"iex",day)]
+            for feed,g in (("sip",a),("iex",b)):
+                minute_frames.append(g.reset_index().assign(session=day,symbol=sym,feed=feed))
+            for freq in FEED_FREQUENCIES:
+                r,j=feed_day_compare(a,b,day,sym,freq)
+                rows.append(r);details.append(j)
+    report=pd.DataFrame(rows);detail=pd.concat(details,ignore_index=True)
+    summary=[]
+    for (sym,freq),g in report.groupby(["symbol","frequency"]):
+        q=detail[(detail.symbol==sym)&(detail.frequency==freq)]
+        good=g.oracle_sip_factor.notna() & g.oracle_iex_observable_factor.notna()
+        # Soma log dos fatores somente nos dias comparaveis. Sem capitalizacao ficticia.
+        oracle_sip=float(np.log(g.loc[good,"oracle_sip_factor"]).sum())
+        oracle_iex=float(np.log(g.loc[good,"oracle_iex_observable_factor"]).sum())
+        summary.append(dict(symbol=sym,frequency=freq,sessions=len(g),
+            sip_coverage_pct=100*g.sip_bars.sum()/g.expected_bars.sum(),
+            iex_coverage_pct=100*g.iex_bars.sum()/g.expected_bars.sum(),
+            iex_volume_share_pct=100*g.iex_volume.sum(min_count=1)/g.sip_volume.sum(min_count=1),
+            mean_abs_close_error_bps=float(q.close_error_bps.abs().mean()),
+            p95_abs_close_error_bps=float(q.close_error_bps.abs().quantile(.95)),
+            paired_returns=int(g.paired_returns.sum()),direction_agreement_pct=100*float(q.direction_agrees.mean()),
+            negative_return_agreement_pct=100*float(q.negative_return_agrees.mean()),
+            oracle_comparable_sessions=int(good.sum()),oracle_sip_covered_sessions=int(g.oracle_sip_factor.notna().sum()),
+            oracle_iex_covered_sessions=int(g.oracle_iex_observable_factor.notna().sum()),
+            oracle_sip_log_gain=oracle_sip if good.any() else np.nan,
+            oracle_iex_observable_log_gain=oracle_iex if good.any() else np.nan,
+            oracle_fraction_on_common_days=oracle_iex/oracle_sip if oracle_sip>0 else np.nan))
+    # Prova de acesso recente via REST historico. So mede durante sessao
+    # regular, com pelo menos 10 min decorridos. Nao e teste WebSocket.
+    probe=pd.Timestamp.now(tz="UTC")
+    label=pd.Timestamp(probe.tz_convert("America/New_York").date())
+    regular=cal.is_session(label) and cal.session_open(label)+pd.Timedelta(minutes=10)<=probe<cal.session_close(label)
+    if regular:
+        for sym in FEED_SYMBOLS:
+            for feed in ("iex","sip"):
+                t=pd.Timestamp.now(tz="UTC").floor("min")
+                if t>=cal.session_close(label):break
+                data,status=query(sym,feed,t-pd.Timedelta(minutes=10),t,"recent",adjustment="raw")
+                last=pd.NaT if data is None or data.empty else pd.to_datetime(data.index,utc=True).max()
+                age=(pd.Timestamp.now(tz="UTC")-last-pd.Timedelta(minutes=1)).total_seconds() if pd.notna(last) else np.nan
+                live.append(dict(symbol=sym,feed=feed,status=status,last_bar_start=last,
+                    last_completed_bar_age_seconds=age,query_end=t))
+    else:
+        live.append(dict(status="outside_regular_session_or_first_10_minutes",checked_at=probe))
+    manifest=dict(test="IEX_vs_SIP_read_only",created_at=now.isoformat(),symbols=FEED_SYMBOLS,
+        frequencies=FEED_FREQUENCIES,sessions=[str(d.date()) for d in dates],historical_adjustment="split",
+        sip_historical_end_at_least_20min_old=True,recent_adjustment="raw",
+        regular_session_recent_probe=bool(regular),synthetic=smoke_result,
+        errors=errors,limitations=["historical IEX can include corrections unavailable live",
+        "recent REST probe is not continuous latency or websocket test",
+        "oracle uses future SIP fills, one minute execution delay, same reentry five minutes before close",
+        "oracle IEX limits checkpoints only; not a trained trading rule or realized execution",
+        "return sign agreement is a diagnostic baseline, not Winner model agreement",
+        "no orders, no subscription change"])
+    files={"feed_test_manifesto.json":json.dumps(manifest,indent=2,default=str).encode(),
+        "feed_test_resumo.csv":csv(pd.DataFrame(summary)),
+        "feed_test_diario.csv":csv(report),"feed_test_checkpoints.csv":csv(detail),
+        "feed_test_barras_1min.csv":csv(pd.concat(minute_frames,ignore_index=True)),
+        "feed_test_requisicoes.csv":csv(pd.DataFrame(requests)),
+        "feed_test_recente.csv":csv(pd.DataFrame(live))}
+    # Preservar resultados da pesquisa principal no MESMO ZIP se ja existir.
+    # Verificar integridade e hashes antes de reutilizar, substituir apenas diagnostico.
+    if OUT.exists():
+        with ZipFile(OUT) as z:
+            if z.testzip() is not None:raise ValueError("ZIP anterior corrompido")
+            hashes=json.loads(z.read("sha256.json"))
+            for name,h in hashes.items():
+                if hashlib.sha256(z.read(name)).hexdigest()!=h:raise ValueError("Hash anterior invalido")
+            prior={name:z.read(name) for name in z.namelist()
+                   if name!="sha256.json" and not name.startswith("feed_test_")}
+        prior.update(files);files=prior
+    return files
+
 
 if __name__=="__main__":
     OUT.parent.mkdir(parents=True,exist_ok=True)
@@ -968,11 +1178,14 @@ if __name__=="__main__":
         import sys
         if "--self-test" in sys.argv:
             print(smoke())
+            print(feed_test_smoke())
             sys.exit(0)
-        files=run()
+        feed_only="--feed-test" in sys.argv
+        files=run_feed_test() if feed_only else run()
         log("Pesquisa concluida. Gravando ZIP.")
-        files["execucao.log"]=LOG.read_bytes()
-        files["codigo_executado.py"]=Path(__file__).read_bytes()
+        prefix="feed_test_" if feed_only else ""
+        files[prefix+"execucao.log"]=LOG.read_bytes()
+        files[prefix+"codigo_executado.py"]=Path(__file__).read_bytes()
         pack(files)
         print("ZIP:",OUT)
     except Exception:
