@@ -1172,6 +1172,234 @@ def run_feed_test():
         prior.update(files);files=prior
     return files
 
+# Monitoramento prospectivo REST. Um unico pregao, sem ordens.
+# IEX atual e SIP atrasado; a coleta SIP continua 20 min apos fechar
+# para permitir comparar o mesmo minuto de negociacao.
+MONITOR_SYMBOLS=(*FEED_SYMBOLS,"AMS")
+MONITOR_DELAY=20
+MONITOR_GRACE=10
+MONITOR_LOOKBACK=30
+
+
+def monitor_jobs(slot,opening,closing,symbols=MONITOR_SYMBOLS):
+    jobs=[]
+    for feed,delay in (("iex",0),("sip",MONITOR_DELAY)):
+        end=slot-pd.Timedelta(minutes=delay)
+        if opening<end<=closing:
+            start=max(opening,end-pd.Timedelta(minutes=MONITOR_LOOKBACK))
+            jobs.extend((symbol,feed,delay,start,end) for symbol in symbols)
+    return jobs
+
+
+def monitor_error(exc):
+    # Nao exportar mensagens arbitrarias, URLs ou credenciais.
+    msg=str(exc).lower()
+    for tokens,category in (
+        (("subscription","recent sip"),"subscription_restriction"),
+        (("429","rate limit","too many requests"),"rate_limit"),
+        (("401","unauthorized"),"authentication"),
+        (("403","forbidden"),"permission"),
+        (("timeout","timed out"),"timeout"),
+        (("connection","network"),"connection"),
+        (("500","502","503","504"),"server_error")):
+        if any(t in msg for t in tokens):return category
+    return type(exc).__name__
+
+
+def monitor_observation(data,start,end,received):
+    target=end-pd.Timedelta(minutes=1)
+    grid=feed_grid(data,start,end)
+    valid=grid.close.notna() & np.isfinite(grid.close) & grid.close.gt(0)
+    latest=grid.loc[valid]
+    last=latest.index[-1] if len(latest) else pd.NaT
+    target_present=bool(valid.loc[target])
+    age=(received-last-pd.Timedelta(minutes=1)).total_seconds() if pd.notna(last) else np.nan
+    return dict(target_bar_start=target,target_present=target_present,
+        target_close=float(grid.loc[target,"close"]) if target_present else np.nan,
+        last_bar_start=last,last_close=float(latest.close.iloc[-1]) if len(latest) else np.nan,
+        age_seconds=age,lag_from_requested_end_seconds=(end-last-pd.Timedelta(minutes=1)).total_seconds()
+            if pd.notna(last) else np.nan,
+        observed_minutes=int(valid.sum()),expected_minutes=len(grid)),grid.loc[valid]
+
+
+def monitor_smoke():
+    opening=pd.Timestamp("2026-11-24T14:30:00Z")
+    closing=opening+pd.Timedelta(minutes=390)
+    assert len(monitor_jobs(opening+pd.Timedelta(minutes=1),opening,closing,("DEMO",)))==1
+    jobs=monitor_jobs(opening+pd.Timedelta(minutes=21),opening,closing,("DEMO",))
+    assert len(jobs)==2 and jobs[1][4]==opening+pd.Timedelta(minutes=1)
+    assert [j[1] for j in monitor_jobs(closing+pd.Timedelta(minutes=20),opening,closing,("DEMO",))]==["sip"]
+    assert not monitor_jobs(closing+pd.Timedelta(minutes=21),opening,closing,("DEMO",))
+    end=opening+pd.Timedelta(minutes=3)
+    raw=pd.DataFrame(dict(open=100.,high=100.,low=100.,close=100.,volume=1.),
+                     index=[opening,opening+pd.Timedelta(minutes=1),end])
+    row,g=monitor_observation(raw,opening,end,end+pd.Timedelta(seconds=10))
+    assert not row["target_present"] and row["age_seconds"]==70 and len(g)==2
+    row,_=monitor_observation(None,opening,end,end)
+    assert not row["target_present"] and pd.isna(row["age_seconds"])
+    return "monitor_synthetic_passed"
+
+
+def monitor_report(rows,skipped,expected_slots,opening,closing):
+    p=pd.DataFrame(rows)
+    if p.empty:return pd.DataFrame(),pd.DataFrame(),pd.DataFrame()
+    summary=[]
+    for (symbol,feed),g in p.groupby(["symbol","feed"],sort=True):
+        g=g.sort_values("slot")
+        fresh=g.target_present.fillna(False).astype(bool)
+        # Falta de chamada, erro HTTP e candle ausente sao coisas distintas.
+        # Uma sequencia interrompida por slot nao consultado nao e imputada.
+        longest=streak=0;prev=None
+        for r in g.itertuples():
+            if prev is not None and r.slot-prev!=pd.Timedelta(minutes=1):streak=0
+            streak=0 if r.target_present else streak+1
+            longest=max(longest,streak);prev=r.slot
+        expected=sum(1 for t in expected_slots if opening<t-pd.Timedelta(minutes=MONITOR_DELAY if feed=="sip" else 0)<=closing)
+        summary.append(dict(symbol=symbol,feed=feed,expected_polls=expected,polls=len(g),
+            successful_requests=int(g.status.isin(["ok","empty"]).sum()),
+            errors=int(g.status.eq("error").sum()),empty_responses=int(g.status.eq("empty").sum()),
+            exact_target_bars=int(fresh.sum()),target_availability_pct=100*fresh.mean(),
+            target_availability_of_expected_pct=100*fresh.sum()/expected if expected else np.nan,
+            longest_consecutive_missing_target_polls=longest,
+            median_age_seconds=float(g.age_seconds.median()),p95_age_seconds=float(g.age_seconds.quantile(.95)),
+            p95_excess_age_seconds=float(g.lag_from_requested_end_seconds.quantile(.95)),
+            p95_response_seconds=float(g.response_seconds.quantile(.95)),
+            p95_dispatch_lateness_seconds=float(g.dispatch_lateness_seconds.quantile(.95))))
+    # Mesmo minuto de mercado, observado em tempos DIFERENTES. Diagnostico
+    # retrospectivo, nao uma feature disponivel no instante IEX original.
+    cols=["symbol","target_bar_start","target_close","received_at","slot"]
+    iex=p[p.feed.eq("iex") & p.target_present][cols].rename(columns={
+        "target_close":"iex_close","received_at":"iex_received_at","slot":"iex_slot"})
+    sip=p[p.feed.eq("sip") & p.target_present][cols].rename(columns={
+        "target_close":"sip_close","received_at":"sip_received_at","slot":"sip_slot"})
+    paired=iex.merge(sip,on=["symbol","target_bar_start"],validate="one_to_one")
+    paired["price_difference_bps"]=10000*(paired.iex_close/paired.sip_close-1)
+    paired["receipt_difference_seconds"]=(paired.sip_received_at-paired.iex_received_at).dt.total_seconds()
+    comparison=[]
+    for symbol,g in paired.groupby("symbol",sort=True):
+        g=g.sort_values("target_bar_start")
+        adjacent=g.target_bar_start.diff().eq(pd.Timedelta(minutes=1))
+        ir=np.sign(g.iex_close.diff());sr=np.sign(g.sip_close.diff())
+        comparison.append(dict(symbol=symbol,paired_minutes=len(g),
+            mean_abs_price_error_bps=float(g.price_difference_bps.abs().mean()),
+            p95_abs_price_error_bps=float(g.price_difference_bps.abs().quantile(.95)),
+            adjacent_pairs=int(adjacent.sum()),
+            direction_agreement_pct=100*float((ir[adjacent]==sr[adjacent]).mean()),
+            median_receipt_difference_seconds=float(g.receipt_difference_seconds.median())))
+    return pd.DataFrame(summary),paired,pd.DataFrame(comparison)
+
+
+def run_feed_monitor():
+    import exchange_calendars as xc
+    import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    now=pd.Timestamp.now(tz="UTC")
+    day=now.tz_convert("America/New_York").date()
+    cal=xc.get_calendar("XNYS",start=pd.Timestamp(day)-pd.Timedelta(days=7),
+                       end=pd.Timestamp(day)+pd.Timedelta(days=7))
+    label=pd.Timestamp(day)
+    if not cal.is_session(label):
+        raise ValueError("Hoje nao e pregao XNYS. Execute em um dia de negociacao.")
+    opening=cal.session_open(label);closing=cal.session_close(label)
+    first=opening+pd.Timedelta(minutes=1)
+    last=closing+pd.Timedelta(minutes=MONITOR_DELAY)
+    grace=pd.Timedelta(seconds=MONITOR_GRACE)
+    if now>closing:
+        raise ValueError("Pregao regular ja encerrou. Inicie antes ou durante o proximo pregao.")
+    smoke_result=monitor_smoke()
+    download,creds=base._market_reader_local()
+    prior={}
+    if OUT.exists():
+        with ZipFile(OUT) as z:
+            if z.testzip() is not None:raise ValueError("ZIP anterior corrompido")
+            hashes=json.loads(z.read("sha256.json"))
+            if any(hashlib.sha256(z.read(n)).hexdigest()!=h for n,h in hashes.items()):
+                raise ValueError("Hash anterior invalido")
+            prior={n:z.read(n) for n in z.namelist() if n!="sha256.json" and not n.startswith("feed_monitor_")}
+    expected=list(pd.date_range(first,last,freq="min"))
+    rows=[];bars=[];skipped=[];done=set()
+    status="running"
+    def poll(slot,job):
+        symbol,feed,delay,start,end=job
+        sent=pd.Timestamp.now(tz="UTC")
+        tic=time.monotonic()
+        error="";state="ok";data=None
+        try:
+            data=download(**creds,symbol=symbol,timeframe="1Min",start=start,end=end,
+                          feed=feed,adjustment="raw")
+            if data is None or data.empty:state="empty"
+            received=pd.Timestamp.now(tz="UTC")
+            obs,g=monitor_observation(data,start,end,received)
+            if g.empty and state=="ok":state="empty"
+        except Exception as exc:
+            state="error";error=monitor_error(exc)
+            received=pd.Timestamp.now(tz="UTC")
+            obs,g=monitor_observation(None,start,end,received)
+        row=dict(session=str(day),symbol=symbol,feed=feed,slot=slot,
+            requested_delay_minutes=delay,query_start=start,query_end=end,
+            sent_at=sent,received_at=received,response_seconds=time.monotonic()-tic,
+            dispatch_lateness_seconds=max(0.,(sent-slot-grace).total_seconds()),
+            status=state,error=error,**obs)
+        # Arquivar a janela realmente recebida no instante da consulta.
+        # Repeticoes intencionais permitem estudar revisoes e barras tardias.
+        snapshot=g.reset_index().assign(symbol=symbol,feed=feed,slot=slot,received_at=received)
+        return row,snapshot
+    def checkpoint(state):
+        summary,paired,comp=monitor_report(rows,skipped,expected,opening,closing)
+        manifest=dict(test="prospective_rest_monitor",status=state,session=str(day),
+            started_at=now,updated_at=pd.Timestamp.now(tz="UTC"),opening=opening,closing=closing,
+            symbols=MONITOR_SYMBOLS,cadence_seconds=60,grace_seconds=MONITOR_GRACE,
+            sip_delay_minutes=MONITOR_DELAY,scheduled_slots=len(expected),finished_slots=len(done),
+            skipped_slots=len(skipped),request_count=len(rows),synthetic=smoke_result,
+            limitations=["REST polls not websocket or exchange latency; age is based on completed minute bar",
+                         "IEX and SIP are separate sources; same-minute price comparison is retrospective",
+                         "no backfill of missed live observations; skipped slots counted separately",
+                         "reader retries may exceed cadence; no concurrent batches; raw bars, no real orders"])
+        files=dict(prior)
+        files.update({"feed_monitor_manifesto.json":json.dumps(manifest,indent=2,default=str).encode(),
+            "feed_monitor_consultas.csv":csv(pd.DataFrame(rows)),
+            "feed_monitor_barras_recebidas.csv":csv(pd.concat(bars,ignore_index=True) if bars else pd.DataFrame()),
+            "feed_monitor_slots_ausentes.csv":csv(pd.DataFrame(skipped,columns=["slot","reason"])),
+            "feed_monitor_resumo.csv":csv(summary),"feed_monitor_minutos_pareados.csv":csv(paired),
+            "feed_monitor_comparacao.csv":csv(comp),
+            "feed_monitor_codigo_executado.py":Path(__file__).read_bytes(),
+            "feed_monitor_execucao.log":LOG.read_bytes()})
+        pack(files)
+    log(f"Monitor local {day}: abertura={opening} fechamento={closing}; SIP ate {last}; sem ordens")
+    log("Pode interromper com Ctrl+C; checkpoint parcial a cada cinco ciclos.")
+    pool=ThreadPoolExecutor(max_workers=5)
+    try:
+        for slot in expected:
+            current=pd.Timestamp.now(tz="UTC")
+            due=slot+grace
+            if current>=due+pd.Timedelta(minutes=1):
+                skipped.append(dict(slot=slot,reason="before_start" if due<now else "previous_cycle_overrun"))
+                continue
+            while current<due:
+                time.sleep(min(5.,max(0.,(due-current).total_seconds())))
+                current=pd.Timestamp.now(tz="UTC")
+            jobs=monitor_jobs(slot,opening,closing)
+            for future in as_completed([pool.submit(poll,slot,j) for j in jobs]):
+                row,snapshot=future.result();rows.append(row)
+                if not snapshot.empty:bars.append(snapshot)
+            done.add(slot)
+            recent=[r for r in rows[-len(jobs):] if r["status"]=="error"]
+            log(f"Slot {slot}: {len(jobs)} consultas, {len(recent)} erros; {len(done)} ciclos; {len(skipped)} ausentes")
+            if len(done)==1 or len(done)%5==0:checkpoint("running")
+        status="completed" if not skipped else "completed_partial_slots"
+    except KeyboardInterrupt:
+        status="interrupted"
+        log("Interrompido pelo operador; salvando observacoes ja recebidas.")
+    except Exception:
+        status="failed_partial"
+        log("Falha no monitor; salvando observacoes ja recebidas.")
+        raise
+    finally:
+        pool.shutdown(wait=False,cancel_futures=True)
+        checkpoint(status)
+    print("ZIP:",OUT)
+    return status
+
 
 if __name__=="__main__":
     OUT.parent.mkdir(parents=True,exist_ok=True)
@@ -1185,6 +1413,10 @@ if __name__=="__main__":
         if "--self-test" in sys.argv:
             print(smoke())
             print(feed_test_smoke())
+            print(monitor_smoke())
+            sys.exit(0)
+        if "--feed-monitor" in sys.argv:
+            run_feed_monitor()
             sys.exit(0)
         feed_only="--feed-test" in sys.argv
         files=run_feed_test() if feed_only else run()
