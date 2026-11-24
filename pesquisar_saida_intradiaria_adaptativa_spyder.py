@@ -633,6 +633,7 @@ def anchored_replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
     Custos extras proporcionais; taxas oficiais ja estao no retorno de base.
     """
     eq=float(capital);cash_prev=False;daily=[];events=[];invalid=False
+    previous_observed_close=None
     for r in pos.itertuples(index=False):
         previous_eq=eq
         factor=float(r.ref_factor)
@@ -643,19 +644,24 @@ def anchored_replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
             # Na rotacao, usar preco de venda exportado, nao preco de outro ativo.
             if pd.notna(r.ref_sell_open):
                 entry_px=float(r.ref_sell_open)
+                prior_close=r.ref_previous_close
+                gap_source="official_sell_and_previous_close"
             elif g is not None and pd.notna(g.open.iloc[0]):
                 entry_px=float(g.open.iloc[0])
-                if not getattr(sessions,"scale_ok",{}).get((r.session,r.symbol),True):
-                    invalid=True;status="unreconciled_reentry_scale"
-            if entry_px is None or not np.isfinite(r.ref_previous_close) or r.ref_previous_close<=0:
+                prior_close=previous_observed_close
+                gap_source="split_sip_open_and_previous_close"
+            else:
+                prior_close=None
+                gap_source="missing"
+            if entry_px is None or prior_close is None or not np.isfinite(prior_close) or prior_close<=0:
                 invalid=True;status="missing_reentry_open"
             else:
-                entry_gap=entry_px/r.ref_previous_close
+                entry_gap=entry_px/prior_close
                 factor/=entry_gap
                 factor*=1-cost
                 events.append(dict(session=r.session,symbol=r.symbol,side="reentry_open",
                                    price=entry_px,overnight_gap=entry_gap,
-                                   price_symbol=r.previous))
+                                   price_symbol=r.previous,gap_source=gap_source))
         cash_prev=False
         if g is not None:
             # Sinal no close da barra; fill no primeiro open observado posterior.
@@ -685,6 +691,7 @@ def anchored_replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
                   timestamp=fill.timestamp,price=exit_px,reference_close=r.ref_close,observed_close=close,
                   score=score,exit_factor=adjust))
                 break
+        previous_observed_close=float(g.close.iloc[-1]) if g is not None and pd.notna(g.close.iloc[-1]) else None
         eq=eq*factor if not invalid else np.nan
         daily.append(dict(session=r.session,target=r.symbol,equity=eq,
                           ret=factor-1 if not invalid else np.nan,
@@ -745,6 +752,10 @@ def smoke():
     b,_,e=anchored_replay(ref,m,{("2026-07-28","DEMO",ts[11]):-1.},cost=0.)
     assert np.isclose(b["capital_final"],9000.)
     assert e.side.tolist()==["sell_protection","reentry_open"]
+    # Multiplicar toda a serie intradiaria por 40 nao deve produzir ganhos ficticios.
+    scaled={key:g.assign(open=g.open*40,close=g.close*40) for key,g in m.items()}
+    c,_,_=anchored_replay(ref,scaled,{("2026-07-28","DEMO",ts[11]):-1.},cost=0.)
+    assert np.isclose(b["capital_final"],c["capital_final"])
     return "synthetic_passed_not_market_result"
 
 
@@ -806,7 +817,9 @@ def run():
         predictive.append(dict(method=q.method.iloc[0],samples=len(q),
             mae=float((q["mean"]-q.target).abs().mean()),
             zero_mae=float(q.target.abs().mean()),
-            directional_accuracy=float((np.sign(q["mean"])==np.sign(q.target)).mean())))
+            directional_accuracy=float((np.sign(q["mean"])==np.sign(q.target)).mean()),
+            recovery_brier=float(((q.p_recovery-q.actual_recovery)**2).mean()) if "p_recovery" in q else np.nan,
+            quantile_80pct_coverage=float(((q.target>=q.q10)&(q.target<=q.q90)).mean()) if "q10" in q else np.nan))
     files["qualidade_preditiva_suporte_comum.csv"]=csv(pd.DataFrame(predictive))
     result["delta_control_usd"]=result.capital_final-baseline["capital_final"]
     result["delta_control_pct"]=100*(result.capital_final/baseline["capital_final"]-1)
@@ -862,7 +875,9 @@ def run():
                            "restricted replay separate; next-open/previous volume are execution proxies",
                            "SPLIT adjusted SIP; closing auction differences remain; dividends not independently reconciled; no certification",
                            "no independent closing Winner signal in daily export; no closing auction reentry",
-                           "all models selected on validation, fold3 only for final comparison"],
+                           "models and cadence selected on validation; fold3 is exploratory because previous research inspected this period"],
+            "validation_sessions_missing_final":int((~coverage.loc[coverage.session.isin(va),"final_bar"]).sum()),
+            "validation_scale_discrepancies":int((~coverage.loc[coverage.session.isin(va),"scale_ok"]).sum()),
             "test_sessions_missing_final":int((~cov.final_bar).sum()),
             "test_missing_rotation_quote":int((~cov.rotation_quote).sum()),
             "test_close_discrepancies_over_tolerance":mismatches,
