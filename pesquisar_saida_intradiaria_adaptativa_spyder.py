@@ -1784,13 +1784,13 @@ def stop_direct(tr,ev):
     day_codes,days=pd.factorize(tr.session,sort=False)
     reward=tr.reward.to_numpy(float)
     def objective(w):
-        realized=stop_first_reward(day_codes,reward,x@w[1:]+w[0],len(days))
+        realized=stop_first_reward(day_codes,reward,np.einsum("ij,j->i",x,w[1:])+w[0],len(days))
         return -realized.mean()+.00005*np.mean(w[1:]**2)
     opt=differential_evolution(objective,[(-3.,3.)]*(len(cols)+1),
                                maxiter=25,popsize=6,seed=SEED,polish=False,workers=1)
     zero=np.r_[-1.,np.zeros(len(cols))]
     w=opt.x if objective(opt.x)<objective(zero) else zero
-    return z@w[1:]+w[0],dict(weights=dict(zip(["intercept"]+cols,map(float,w))),
+    return np.einsum("ij,j->i",z,w[1:])+w[0],dict(weights=dict(zip(["intercept"]+cols,map(float,w))),
                              train_objective=float(objective(w)),search_evaluations=int(opt.nfev))
 
 
@@ -1881,7 +1881,8 @@ def run_optimal_stopping():
     np.testing.assert_allclose(full.equity,pos.strategy_equity,rtol=1e-10)
     baseline,bd,_=anchored_replay(test,sessions,{},capital=prior)
     vb,_,_=anchored_replay(validation,sessions,{})
-    oracle=oracle_candidates(f,sessions)
+    # Mesmo requisito causal de contexto dos modelos no Oracle desta rodada.
+    oracle=oracle_candidates(f.assign(horario=f.horario & f.r6.notna()),sessions)
     oracle_rows=[];oracle_curves=[];forecasts={};train_audit=[]
     for frequency in FREQUENCIES:
         for period,scope,capital in (("validation",validation,CAPITAL),("fold3",test,prior),("full_hindsight",pos,source["initial"])):
@@ -1952,6 +1953,11 @@ def run_optimal_stopping():
         train=tr,validation=va,test=te,selected=selected,training_audit=train_audit,
         features=STOP_FEATURES,capital_before_fold3=prior,cost_per_side=COST,
         cache_errors=sessions.errors,cache_hashes=sessions.hashes,
+        missing_sessions=sorted(sessions.missing),
+        test_missing_final_bars=int((~coverage.loc[coverage.session.isin(te),"final_bar"]).sum()),
+        test_scale_discrepancies=int((~coverage.loc[coverage.session.isin(te),"scale_ok"]).sum()),
+        anchored_valid=bool(result.valid_valuation.all()),
+        restricted_valid=bool(all(r["valid_valuation"] for r in restricted)),
         limitations=["fold3 repeatedly inspected; independent future evaluation required",
          "SIP historical features only, no Yahoo transfer validation or live availability proof",
          "optimal_stopping is one-step hold-to-reentry regression baseline; LSMC and FQI approximate dynamic policies",
@@ -1961,7 +1967,8 @@ def run_optimal_stopping():
          "next observed open fill proxy; no quote/spread or processing latency guarantee",
          "training reward only on reconciled observable oracle checkpoints; evaluation signals not filtered by future scale",
          "one exit per day; no intraday rotations; no fixed price stop; fixed time comparator only",
-         "all models may select HOLD in validation; no selection on fold3"])
+         "all models may select HOLD in validation; no selection on fold3",
+         "Oracle in this round uses matching causal r6 availability; earlier Oracle may have wider support"])
     files={"optimal_stop_manifesto.json":json.dumps(manifest,indent=2,default=str).encode(),
         "optimal_stop_comparacao.csv":csv(result),"optimal_stop_validacao.csv":csv(pd.DataFrame(grid)),
         "optimal_stop_oracle.csv":csv(pd.DataFrame(oracle_rows)),
