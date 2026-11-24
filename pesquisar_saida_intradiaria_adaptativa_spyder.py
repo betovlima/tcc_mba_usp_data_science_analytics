@@ -117,6 +117,7 @@ def load_reference():
     source = {"file":path.name,"sha256":hashlib.sha256(path.read_bytes()).hexdigest(),
               "job_id":manifest["job_id"],"strategy":manifest["strategy_profile_name"],
               "revision":manifest["strategy_profile_revision"],"assets":len(metrics["assets"]),
+              "asset_symbols":sorted(metrics["assets"]),
               "sessions":len(p),"initial":initial,"official_final":float(p.strategy_equity.iloc[-1]),
               "official_max_dd":metrics["strategy_maximum_drawdown"],
               "decision_precedes_session":True}
@@ -1489,13 +1490,25 @@ def run_yahoo_test():
            and cal.session_open(d)>=now-pd.Timedelta(days=7)][-5:]
     if not dates:raise ValueError("Nenhum pregao completo no recorte recente")
     start=cal.session_open(dates[0]);end=cal.session_close(dates[-1])
-    symbols=MONITOR_SYMBOLS
+    positions,reference=load_reference()
+    universe=reference["asset_symbols"]
+    if not universe or len(universe)!=len(set(universe)):
+        raise ValueError("Universo MCT vazio ou duplicado")
+    if any(not isinstance(x,str) or not x.strip() or x!=x.strip().upper() for x in universe):
+        raise ValueError("Simbolos invalidos na exportacao MCT")
+    symbols=list(MONITOR_SYMBOLS) if "--yahoo-pilot" in sys.argv else universe
+    if not set(symbols).issubset(universe):raise ValueError("Piloto fora do universo MCT")
     download,creds=base._market_reader_local()
     requests=[];grids={};recent=[]
+    yahoo_rate_limited=False
+    log(f"Universo exportado MCT: {len(universe)}; diagnostico: {len(symbols)} ativos")
     def query(symbol,source,a,b,phase):
+        nonlocal yahoo_rate_limited
         tic=time.monotonic();status="ok";error="";raw=None
         try:
-            if source=="yahoo":
+            if source=="yahoo" and yahoo_rate_limited:
+                status="skipped";error="prior_rate_limit"
+            elif source=="yahoo":
                 if imported is not None:
                     raw=yahoo_normalize(imported[imported.symbol.eq(symbol)])
                 else:
@@ -1505,7 +1518,8 @@ def run_yahoo_test():
             else:
                 raw=download(**creds,symbol=symbol,timeframe="1Min",start=a,end=b,
                              feed=source,adjustment="raw")
-            if raw is None or raw.empty:status="empty"
+            if status=="skipped":pass
+            elif raw is None or raw.empty:status="empty"
             else:
                 raw=raw.copy()
                 raw.index=pd.to_datetime(raw.index,utc=True)
@@ -1513,24 +1527,41 @@ def run_yahoo_test():
                 if raw.empty:status="empty"
         except Exception as exc:
             status="error";error=monitor_error(exc);raw=None
+            if source=="yahoo" and (error=="rate_limit" or "ratelimit" in type(exc).__name__.lower()):
+                yahoo_rate_limited=True;error="rate_limit"
+                log("Yahoo limitou consultas; restantes serao marcadas como nao consultadas, sem contornar limite.")
         received=pd.Timestamp.now(tz="UTC")
         requests.append(dict(symbol=symbol,source=source,phase=phase,status=status,error=error,
             query_start=a,query_end=b,received_at=received,rows=0 if raw is None else len(raw),
             response_seconds=time.monotonic()-tic))
         log(f"Yahoo comparison {phase} {symbol} {source}: {status}, {requests[-1]['rows']} barras")
         return raw,status,received
-    for symbol in symbols:
+    for i,symbol in enumerate(symbols,1):
+        log(f"Historico {i}/{len(symbols)}: {symbol}")
         for source in ("sip","iex","yahoo"):
             raw,status,_=query(symbol,source,start,end,"historical")
+            if source=="yahoo" and imported is None and not yahoo_rate_limited:
+                time.sleep(1.)
             for d in dates:
                 grids[symbol,source,str(d.date())]=feed_grid(raw,cal.session_open(d),cal.session_close(d))
-    rows=[];details=[];minutes=[];support=[]
+    rows=[];details=[];minutes=[];support=[];volume_audit=[]
     for symbol in symbols:
         for d in dates:
             date=str(d.date())
             sip=grids[symbol,"sip",date];iex=grids[symbol,"iex",date];yahoo=grids[symbol,"yahoo",date]
             for source,g in (("sip",sip),("iex",iex),("yahoo",yahoo)):
                 minutes.append(g.reset_index().assign(symbol=symbol,session=date,source=source))
+                if source=="sip":continue
+                valid=sip.volume.gt(0)&g.volume.notna()&g.volume.ge(0)&sip.close.notna()&g.close.notna()
+                ratio=g.loc[valid,"volume"]/sip.loc[valid,"volume"]
+                volume_audit.append(dict(symbol=symbol,session=date,source=source,
+                    paired_positive_sip_minutes=int(valid.sum()),
+                    ratio_median=float(ratio.median()),ratio_p95=float(ratio.quantile(.95)),
+                    ratio_max=float(ratio.max()),minutes_ratio_over_10=int(ratio.gt(10).sum()),
+                    minutes_ratio_over_100=int(ratio.gt(100).sum()),
+                    max_ratio_timestamp=ratio.idxmax() if len(ratio) else pd.NaT,
+                    max_ratio_source_volume=float(g.loc[ratio.idxmax(),"volume"]) if len(ratio) else np.nan,
+                    max_ratio_sip_volume=float(sip.loc[ratio.idxmax(),"volume"]) if len(ratio) else np.nan))
             for frequency in FEED_FREQUENCIES:
                 a,ja=yahoo_pair(sip,iex,date,symbol,frequency,"iex")
                 b,jb=yahoo_pair(sip,yahoo,date,symbol,frequency,"yahoo")
@@ -1577,11 +1608,44 @@ def run_yahoo_test():
             oracle_comparable_sessions=int(good.sum()),oracle_sip_log_gain=denom if good.any() else np.nan,
             oracle_source_log_gain=num if good.any() else np.nan,
             oracle_fraction=num/denom if denom>0 else np.nan))
-    # Snapshot recente: nao confundir dados historicos com acesso live.
+    # Consolidacao de todos os ativos, inclusive falhas e ausencia de negocios.
+    summary_frame=pd.DataFrame(summary)
+    request_frame=pd.DataFrame(requests)
+    audit=pd.DataFrame(volume_audit)
+    matrix=[]
+    for symbol in symbols:
+        row={"symbol":symbol,"sessions":len(dates),
+             "historical_winner_sessions":int(positions.symbol.eq(symbol).sum())}
+        for source in ("sip","iex","yahoo"):
+            g=request_frame[(request_frame.symbol==symbol)&(request_frame.source==source)&request_frame.phase.eq("historical")]
+            row[source+"_request_status"]=g.status.iloc[0]
+            row[source+"_request_error"]=g.error.iloc[0]
+        for source in ("iex","yahoo"):
+            q=summary_frame[(summary_frame.symbol==symbol)&(summary_frame.source==source)]
+            for frequency in (1,5,15,30,60):
+                r=q[q.frequency.eq(frequency)].iloc[0]
+                for key in ("source_coverage_pct","sip_coverage_pct","common_mae_bps",
+                            "common_direction_agreement_pct","common_bars","p95_last_observed_minute_age",
+                            "oracle_fraction","oracle_comparable_sessions","scale_ok_sessions"):
+                    row[f"{source}_{frequency}m_{key}"]=r[key]
+            a=audit[(audit.symbol==symbol)&(audit.source==source)]
+            row[source+"_volume_ratio_over_10_minutes"]=int(a.minutes_ratio_over_10.sum())
+            row[source+"_volume_ratio_over_100_minutes"]=int(a.minutes_ratio_over_100.sum())
+            row[source+"_max_volume_ratio"]=float(a.ratio_max.max())
+        row["yahoo_minus_iex_5m_coverage_pp"]=row["yahoo_5m_source_coverage_pct"]-row["iex_5m_source_coverage_pct"]
+        row["yahoo_minus_iex_5m_common_mae_bps"]=row["yahoo_5m_common_mae_bps"]-row["iex_5m_common_mae_bps"]
+        row["historical_status"]=("request_failure_or_skipped" if any(row[f+"_request_status"] in ("error","skipped") for f in ("sip","iex","yahoo")) else
+            "no_sip_reference" if row["yahoo_5m_sip_coverage_pct"]==0 else
+            "no_common_support" if row["yahoo_5m_common_bars"]==0 else "observed")
+        matrix.append(row)
+    matrix=pd.DataFrame(matrix).sort_values("symbol")
+    # Snapshot recente: por padrao apenas piloto e ultimo alvo Winner;
+    # opcionalmente todos, consultas sequenciais em horarios diferentes.
+    probe_symbols=symbols if "--yahoo-recent-all" in sys.argv else [x for x in dict.fromkeys([*MONITOR_SYMBOLS,positions.symbol.iloc[-1]]) if x in symbols]
     t=pd.Timestamp.now(tz="UTC");label=pd.Timestamp(t.tz_convert("America/New_York").date())
     regular=cal.is_session(label) and cal.session_open(label)+pd.Timedelta(minutes=30)<=t<cal.session_close(label)
-    if regular:
-        for symbol in symbols:
+    if regular and "--yahoo-historical-only" not in sys.argv:
+        for symbol in probe_symbols:
             for source,delay in (("iex",0),("sip",20),("yahoo",0)):
                 if source=="yahoo" and imported is not None:continue
                 now2=pd.Timestamp.now(tz="UTC")
@@ -1592,12 +1656,18 @@ def run_yahoo_test():
                 obs,_=monitor_observation(raw,start2,end2,received)
                 recent.append(dict(symbol=symbol,source=source,status=status,
                     requested_delay_minutes=delay,received_at=received,query_end=end2,**obs))
-    if not recent:recent.append(dict(status="outside_regular_session_or_first_30_minutes",checked_at=t))
+    if not recent:recent.append(dict(status="historical_only" if "--yahoo-historical-only" in sys.argv else "outside_regular_session_or_first_30_minutes",checked_at=t))
     manifest=dict(test="yahoo_vs_alpaca",created_at=now,symbols=symbols,
+        reference_mct=reference,universe_size=len(universe),tested_symbols=len(symbols),
+        historical_requests_expected=3*len(symbols),historical_requests_ok=int(request_frame.status.eq("ok").sum()),
+        historical_requests_empty=int(request_frame.status.eq("empty").sum()),
+        historical_requests_error=int(request_frame.status.eq("error").sum()),
+        historical_requests_skipped=int(request_frame.status.eq("skipped").sum()),
+        recent_probe_symbols=probe_symbols,yahoo_rate_limited=yahoo_rate_limited,
         sessions=[str(d.date()) for d in dates],frequencies=FEED_FREQUENCIES,
         yahoo_mode="authorized_csv" if imported is not None else "authorized_yfinance",
         yfinance_version=None if imported is not None else yf.__version__,
-        recent_probe=bool(regular),synthetic=yahoo_test_smoke(),
+        recent_probe=any(r.get("symbol") for r in recent),synthetic=yahoo_test_smoke(),
         limitations=["Yahoo unofficial; permission and data license required",
         "Alpaca RAW and Yahoo auto_adjust=False; split handling may differ, audit price scale",
         "historical data may include later corrections; recent snapshot does not prove continuous latency",
@@ -1605,7 +1675,9 @@ def run_yahoo_test():
         "oracle uses future SIP prices; not realized returns or a trained signal",
         "no orders or production changes"])
     files={"yahoo_test_manifesto.json":json.dumps(manifest,indent=2,default=str).encode(),
-        "yahoo_test_resumo.csv":csv(pd.DataFrame(summary)),
+        "yahoo_test_resumo.csv":csv(summary_frame),
+        "yahoo_test_universo.csv":csv(matrix),
+        "yahoo_test_auditoria_volume.csv":csv(audit),
         "yahoo_test_diario.csv":csv(report),"yahoo_test_checkpoints.csv":csv(detail),
         "yahoo_test_suporte_comum.csv":csv(common),
         "yahoo_test_barras_1min.csv":csv(pd.concat(minutes,ignore_index=True)),
