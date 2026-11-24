@@ -102,3 +102,21 @@ python pesquisar_saida_intradiaria_adaptativa_spyder.py --yahoo-test --yahoo-csv
 A referencia MCT original deve estar na raiz do TCC (ou indicar --mct-zip CAMINHO). O manifesto inclui hash, lista completa e quantidade de ativos, bem como contadores de consultas historicas. Com 75 ativos, 225 consultas logicas previstas (75 por fonte; retentativas internas podem aumentar chamadas). Se Yahoo sinalizar rate limit, as consultas Yahoo restantes sao marcadas como skipped; nao tentar contornar restricao. Nenhum resultado parcial significa cobertura zero real do mercado. 
 
 Novos arquivos: yahoo_test_universo.csv (uma linha por ativo, status das tres consultas, cobertura por frequencia, comparacao em suporte comum, escala, Oracle, ocorrencias historicas na carteira e anomalias de volume); yahoo_test_auditoria_volume.csv (por ativo, sessao e fonte, razoes de volume no mesmo minuto, mediana, p95, maximo, contagens acima de 10x e 100x, horario do maximo). Razoes extremas sao flags de auditoria e nao prova de volume acumulado; nao corrigir ou imputar automaticamente. Nenhum ativo e excluido silenciosamente. Dados historicos nao certificam disponibilidade ao vivo. Mesmo ZIP, sem alterar a estrategia ou criar novas versoes.
+
+
+## Optimal stopping: rodada de decisao economica
+
+```bash
+python pesquisar_saida_intradiaria_adaptativa_spyder.py --optimal-stop-self-test
+python pesquisar_saida_intradiaria_adaptativa_spyder.py --optimal-stop
+```
+
+Spyder: %run pesquisar_saida_intradiaria_adaptativa_spyder.py --optimal-stop. Mesmo ZIP, branch e exportacao MCT; --mct-zip CAMINHO se necessario. Preserva resultados anteriores validos e substitui apenas optimal_stop_*. Usa cache SPLIT/SIP 5Min, sem volume ou VWAP como features. Sem chamadas Yahoo, sem ordens e sem alteracao Winner. O volume SIP e utilizado apenas no replay separado de capacidade.
+
+Recompensa por venda = log(preco de venda / preco de recompra) + log((1-c)/(1+c)), c=0.001 por lado; permanecer sem vender = zero ganho incremental. Preco de venda = proximo open observado apos sinal; recompra programada no open da ultima barra do mesmo ativo. A selecao Winner da abertura seguinte permanece congelada. A exportacao nao permite inferir sinal Winner independente de fechamento. Esses fills sao proxies, nao execucoes reais.
+
+Metodos: (1) optimal_stopping = regressao de uma etapa da vantagem de vender agora contra hold ate recompra; (2) LSMC = inducao retroativa com regressoes Ridge do payoff de vender e do payoff realizado de continuar pela politica de treino; (3) FQI = regressoes LightGBM e 12 iteracoes Bellman aproximadas, sem garantia de convergencia; (4) decision_focused = busca direta regularizada de politica linear sobre ganho log diario da primeira venda; (5) Expected Shortfall = estimativa da cauda inferior condicional a 10% de manter, com subparticao cronologica do treino para quantil e excesso de perda. Baselines: Control sem intervencao e venda em horario fixo (somente comparador). Sem gatilho percentual fixo.
+
+Cadencias 5/15/30/60 min; minimo de seis barras recentes e r6 observavel. Oracle com mesma elegibilidade causal, mas decisao retrospectiva e fills SIP; pode diferir do Oracle anterior por suporte. Treino/validacao/teste preservam particao existente, dois embargos, fold3 exploratorio ja inspecionado. As politicas usam somente estados disponiveis ate o checkpoint. Recompensas futuras usadas somente no treino/auditoria. Selecao na validacao por log capital + 0.5 drawdown; HOLD concorre e vence empate. Uma venda por dia, sem rotacao intradiaria. Teste com capital acumulado oficial, sem overlay antes do fold3. Replay de capacidade separado (1% do volume anterior) e sensibilidades de 5/10/25/50 bps por lado. Ausencia de dados e discrepancia de escala registradas.
+
+Arquivos optimal_stop_comparacao.csv, optimal_stop_validacao.csv, optimal_stop_oracle.csv, optimal_stop_oracle_curvas.csv, optimal_stop_previsoes.csv, optimal_stop_patrimonio.csv, optimal_stop_ordens.csv, optimal_stop_cobertura.csv, optimal_stop_liquidez*.csv, optimal_stop_custos.csv e manifesto/log/codigo. A rodada nao demonstra transferibilidade Yahoo, nem generalizacao independente; testar futuramente em dados novos.
