@@ -52,3 +52,23 @@ Oracle diagnóstico: mesmo fill SIP observado 1 minuto depois do checkpoint, mes
 Se executado durante o pregão regular, após os primeiros dez minutos, testa também consultas REST 1Min dos últimos dez minutos nos feeds IEX e SIP, registra a idade da última barra completa e eventuais restrições de assinatura. Fora desse período, realiza apenas a comparação histórica. REST recente não certifica latência contínua de WebSocket; histórico pode conter correções posteriores.
 
 Mesmo ZIP de saída: acrescenta `feed_test_resumo.csv`, `feed_test_diario.csv`, `feed_test_checkpoints.csv`, `feed_test_barras_1min.csv`, `feed_test_requisicoes.csv`, `feed_test_recente.csv`, `feed_test_manifesto.json`, código e log do diagnóstico. Se o ZIP anterior existir e seus hashes estiverem válidos, preserva os demais resultados e substitui somente os arquivos feed_test_. A execução normal sem o argumento continua realizando a pesquisa original. Nenhuma credencial é gravada no ZIP.
+
+
+## Monitoramento prospectivo durante um pregao
+
+Mesmo script, branch e ZIP. Modo separado, sem backtest, sem enviar ordens, usando as credenciais da API Alpaca local:
+
+```bash
+python pesquisar_saida_intradiaria_adaptativa_spyder.py --feed-monitor-self-test
+python pesquisar_saida_intradiaria_adaptativa_spyder.py --feed-monitor
+```
+
+No Spyder: `%run pesquisar_saida_intradiaria_adaptativa_spyder.py --feed-monitor`.
+
+Inicie antes da abertura (o processo local aguarda a primeira barra fechada) ou durante o pregao regular. O calendario XNYS determina abertura, fechamento, feriados e sessoes curtas. Depois do encerramento regular, novas execucoes sao recusadas. Deixe o computador e o processo Python ligados. O monitor consulta DNN, CAPR, MKSI, NVDA e AMS, uma vez por minuto, 10 segundos apos a conclusao da barra. Usa IEX recente e SIP com 20 minutos de atraso, sem tentar acessar SIP recente repetidamente. O SIP continua ate 20 minutos apos o fechamento para parear os ultimos minutos da sessao. Em pregao normal sao 390 observacoes programadas por feed e por ativo, 3900 consultas logicas, com ate dez por minuto (retentativas internas da API podem aumentar as chamadas reais). Cinco workers, sem sobreposicao entre ciclos. Ciclos perdidos sao registrados, nao preenchidos retroativamente. Nao usar credenciais em logs.
+
+O resultado distingue resposta HTTP bem-sucedida de disponibilidade da barra exata, idade da ultima barra, atraso adicional sobre o cutoff solicitado, tempo de resposta, erros classificados, intervalos sem barra e ciclos omitidos. O pareamento IEX/SIP usa o mesmo minuto de mercado recebido em momentos diferentes: nao e uma feature conhecida previamente. Cada consulta arquiva as barras efetivamente retornadas, inclusive repeticoes, permitindo investigar correcoes. A medicao e de polling REST e nao certifica latencia de WebSocket.
+
+O ZIP e atualizado atomicamente apos o primeiro ciclo, a cada cinco ciclos e ao terminar ou receber Ctrl+C. Preserva todos os demais arquivos validos do ZIP e substitui os arquivos `feed_monitor_*` pela rodada corrente (nao acumula duas rodadas do monitor). Uma interrupcao abrupta preserva o ultimo checkpoint; para terminar antes do fechamento prefira Ctrl+C. Se iniciar tarde, o manifesto e os slots ausentes identificam cobertura parcial. Nao interrompa o script por fechamento forcado do Spyder se puder usar Ctrl+C.
+
+Arquivos: `feed_monitor_manifesto.json`, `feed_monitor_consultas.csv`, `feed_monitor_barras_recebidas.csv`, `feed_monitor_slots_ausentes.csv`, `feed_monitor_resumo.csv`, `feed_monitor_minutos_pareados.csv`, `feed_monitor_comparacao.csv`, codigo e log. O resultado continua em `output/pesquisa_saida_intradiaria_adaptativa.zip`. Validar dados antes de treinar ou integrar qualquer politica de venda.
