@@ -55,7 +55,9 @@ def pack(files):
 # Arquivo exportado pelo MCT: coloque na raiz, ou informe --mct-zip CAMINHO.
 # Nunca usar silenciosamente as posicoes congeladas antigas.
 MCT_ZIP = ROOT / "market_cycle_trader_20261124T005959-1a1fa2f1.zip"
-CACHE = ROOT / "dados_intraday" / "raw_sip_5min_full_month"
+CACHE = ROOT / "dados_intraday" / "split_sip_5min_full_month"
+FREQUENCIES = (5, 15, 30, 60)
+PRICE_TOLERANCE = .03  # auditoria de escala, nao gatilho de negociacao
 
 
 def load_reference():
@@ -126,9 +128,10 @@ class SessionStore(dict):
     """Cache mensal INTEGRAL. Busca tardia para qualquer posicao residual.
     Nunca limita a coleta aos dias em que o ticker e o alvo Winner.
     """
-    def __init__(self, calendar):
+    def __init__(self, calendar, last_session):
         super().__init__()
         self.calendar=calendar
+        self.last_session=str(last_session)
         self.months=set()
         self.missing=set()
         self.hashes={}
@@ -148,25 +151,43 @@ class SessionStore(dict):
             try:
                 self.load_month(symbol,month)
             except Exception as exc:
-                self.errors.append({"symbol":symbol,"month":month,"error":type(exc).__name__})
-                log(f"Falha de dados {symbol}/{month}: {type(exc).__name__}")
+                # Registrar mensagem sem credenciais ou headers de autenticacao.
+                import re
+                msg=str(exc)
+                msg=re.sub(r"(?i)(api[_ -]?key|secret|authorization|token)(\\s*[:=]\\s*)[^\\s,;]+",r"\\1\\2[redacted]",msg)
+                if self.reader is not None:
+                    for secret in self.reader[1].values():
+                        if secret:msg=msg.replace(str(secret),"[redacted]")
+                msg=msg[:500]
+                self.errors.append({"symbol":symbol,"month":month,"error":type(exc).__name__,"message":msg})
+                log(f"Falha de dados {symbol}/{month}: {type(exc).__name__}: {msg}")
         if key not in self:
             self.missing.add(key)
         return super().get(key,default)
 
     def load_month(self,symbol,month):
         CACHE.mkdir(parents=True,exist_ok=True)
-        path=CACHE/f"{symbol}_{month}.csv"
+        start=pd.Timestamp(month+"-01",tz="America/New_York").tz_convert("UTC")
+        cutoff=self.calendar.session_close(pd.Timestamp(self.last_session))
+        end=min((start.tz_convert("America/New_York")+pd.offsets.MonthBegin(1)).tz_convert("UTC"),cutoff)
+        if end<=start:
+            raise ValueError("Mes fora do recorte do backtest")
+        suffix=f"_{self.last_session}" if month==self.last_session[:7] else ""
+        path=CACHE/f"{symbol}_{month}{suffix}.csv"
         if not path.exists():
             if self.reader is None:
                 self.reader=base._market_reader_local()
             download,creds=self.reader
-            start=pd.Timestamp(month+"-01",tz="America/New_York")
-            end=start+pd.offsets.MonthBegin(1)
-            log(f"Alpaca RAW SIP 5Min: {symbol}/{month} (mes completo)")
-            raw=download(**creds,symbol=symbol,timeframe="5Min",
-                         start=start.tz_convert("UTC"),end=end.tz_convert("UTC"),
-                         feed="sip",adjustment="raw")
+            log(f"Alpaca SPLIT SIP 5Min: {symbol}/{month} ate {end}")
+            import time
+            for attempt in range(3):
+                try:
+                    raw=download(**creds,symbol=symbol,timeframe="5Min",
+                                 start=start,end=end,feed="sip",adjustment="split")
+                    break
+                except Exception:
+                    if attempt==2:raise
+                    time.sleep(2**attempt)
             if raw is None or raw.empty:
                 raise ValueError("Sem cotacoes")
             raw=raw.reset_index()
@@ -198,31 +219,8 @@ def load_data():
     # Margem de um mes para os arquivos mensais completos nas duas pontas.
     cal=xc.get_calendar("XNYS",start=pd.Timestamp(pos.session.min())-pd.Timedelta(days=35),
                         end=pd.Timestamp(pos.session.max())+pd.Timedelta(days=35))
-    sessions=SessionStore(cal)
-    # Reaproveitar os caches da pesquisa anterior como fonte por sessao.
-    # A consulta mensal integral entra apenas quando a sessao nao esta presente.
-    legacy=sorted((base.INPUT/"cotacoes_5min").glob("*.csv"))
-    legacy+=sorted((base.INPUT/"rotacoes_adaptativas"/"cotacoes_5min").glob("*.csv"))
-    if legacy:
-        log(f"Reutilizando {len(legacy)} arquivos de cache anterior")
-        frames=[]
-        for path in legacy:
-            raw=pd.read_csv(path)
-            if raw.empty:continue
-            sessions.hashes[str(path.relative_to(ROOT))]=hashlib.sha256(path.read_bytes()).hexdigest()
-            frames.append(raw)
-        if frames:
-            raw=pd.concat(frames,ignore_index=True)
-            raw["timestamp"]=pd.to_datetime(raw.timestamp,utc=True)
-            raw["symbol"]=raw.symbol.astype(str).str.upper()
-            raw=raw.drop_duplicates()
-            if raw.duplicated(["symbol","timestamp"]).any():
-                raise ValueError("Caches anteriores com barras conflitantes")
-            for (day,symbol),g in base.preparar(raw).groupby(["session","symbol"],sort=False):
-                label=pd.Timestamp(day)
-                if cal.first_session.date()<=label.date()<=cal.last_session.date() and cal.is_session(label):
-                    g=g[g.timestamp<cal.session_close(label)].sort_values("timestamp").reset_index(drop=True)
-                    if not g.empty:sessions[(day,symbol)]=g
+    # Nao misturar caches RAW e SPLIT. O cache RAW anterior fica intacto.
+    sessions=SessionStore(cal,pos.session.max())
     coverage=[];parts=[]
     for row in pos.itertuples(index=False):
         label=pd.Timestamp(row.session)
@@ -238,9 +236,14 @@ def load_data():
           final_bar=bool(np.isfinite(close)),
           reference_close=row.ref_close,observed_close=close,
           close_difference_pct=100*(close/row.ref_close-1) if np.isfinite(close) else np.nan,
+          scale_ok=bool(np.isfinite(close) and abs(close/row.ref_close-1)<=PRICE_TOLERANCE),
           rotation_quote=bool(old is not None and old.open.notna().any())))
     if not parts:raise FileNotFoundError("Sem candles intradiarios; confira credenciais e cache")
-    return pos,pd.concat(parts,ignore_index=True),sessions,pd.DataFrame(coverage),source
+    audit=pd.DataFrame(coverage)
+    source["intraday_adjustment"]="split"
+    source["price_scale_tolerance"]=PRICE_TOLERANCE
+    sessions.scale_ok={(r.session,r.symbol):r.scale_ok for r in audit.itertuples(index=False)}
+    return pos,pd.concat(parts,ignore_index=True),sessions,audit,source
 
 
 def kalman_features(g):
@@ -528,6 +531,8 @@ def anchored_replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
                 entry_px=float(r.ref_sell_open)
             elif g is not None and pd.notna(g.open.iloc[0]):
                 entry_px=float(g.open.iloc[0])
+                if not getattr(sessions,"scale_ok",{}).get((r.session,r.symbol),True):
+                    invalid=True;status="unreconciled_reentry_scale"
             if entry_px is None or not np.isfinite(r.ref_previous_close) or r.ref_previous_close<=0:
                 invalid=True;status="missing_reentry_open"
             else:
@@ -550,11 +555,20 @@ def anchored_replay(pos,sessions,signals,capital=CAPITAL,cost=COST):
                     break
                 fill=after.iloc[0]
                 exit_px=float(fill.open)
-                adjust=exit_px/r.ref_close*(1-cost)
+                # Preco de saida e fechamento da mesma fonte, mesma escala.
+                # Nao ajustar retrospectivamente features ou aceitar ganho de split.
+                close=g.close.iloc[-1]
+                if not np.isfinite(close) or close<=0:
+                    invalid=True;status="missing_exit_session_close"
+                    break
+                if not getattr(sessions,"scale_ok",{}).get((r.session,r.symbol),True):
+                    invalid=True;status="unreconciled_exit_scale"
+                    break
+                adjust=exit_px/float(close)*(1-cost)
                 factor*=adjust;cash_prev=True;status="cash"
                 events.append(dict(session=r.session,symbol=r.symbol,side="sell_protection",
                   signal_timestamp=b.timestamp+pd.Timedelta(minutes=5),
-                  timestamp=fill.timestamp,price=exit_px,reference_close=r.ref_close,
+                  timestamp=fill.timestamp,price=exit_px,reference_close=r.ref_close,observed_close=close,
                   score=score,exit_factor=adjust))
                 break
         eq=eq*factor if not invalid else np.nan
@@ -703,7 +717,7 @@ def run():
     buffer=io.BytesIO();fig.savefig(buffer,format="png",dpi=150);plt.close(fig)
     files["comparacao_patrimonio.png"]=buffer.getvalue()
     cov=coverage[coverage.session.isin(te)]
-    mismatches=int(cov.close_difference_pct.abs().gt(.1).sum())
+    mismatches=int(cov.close_difference_pct.abs().gt(100*PRICE_TOLERANCE).sum())
     status={"status":"completed_research_proxy" if cov.final_bar.all() and cov.rotation_quote.all()
             and result.valid_valuation.all() and not sessions.missing and mismatches==0
             and all(x["valid_valuation"] for x in restricted) else "partial_data_or_unreconciled_prices",
@@ -718,12 +732,13 @@ def run():
             "control":"official daily factors re-scaled; not independent replication",
             "limitations":["anchored overlay assumes proportional full fills; base fees retained conservatively even when cash avoids a sale",
                            "restricted replay separate; next-open/previous volume are execution proxies",
-                           "RAW close discrepancies audited; corporate actions not independently reconciled; no certification",
+                           "SPLIT adjusted SIP; closing auction differences remain; dividends not independently reconciled; no certification",
                            "no independent closing Winner signal in daily export; no closing auction reentry",
                            "all models selected on validation, fold3 only for final comparison"],
             "test_sessions_missing_final":int((~cov.final_bar).sum()),
             "test_missing_rotation_quote":int((~cov.rotation_quote).sum()),
-            "test_close_discrepancies_over_0_1pct":mismatches}
+            "test_close_discrepancies_over_tolerance":mismatches,
+            "test_close_discrepancies_over_0_1pct":int(cov.close_difference_pct.abs().gt(.1).sum())}
     files["manifesto.json"]=json.dumps(status,ensure_ascii=False,indent=2,default=str).encode()
     return files
 
